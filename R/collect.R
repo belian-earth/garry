@@ -10,11 +10,12 @@ NULL
 #'
 #' @param x A `LazyRaster`.
 #' @param plan_only Return the `Plan` instead of executing?
-#' @return A `Plan` (for now; executed results from Phase 5).
+#' @return With `plan_only = TRUE`, the `Plan`. Otherwise the
+#'   materialised result: a `[y, x]` matrix for raster sinks, a scalar
+#'   for global reductions.
 #' @export
 collect <- function(x, plan_only = FALSE) {
   p <- plan_lazy(x)
   if (plan_only) return(p)
-  .garry_error("execution arrives in Phase 5; use collect(x, plan_only = TRUE)",
-               "garry_not_implemented_error")
+  execute_plan(p)
 }

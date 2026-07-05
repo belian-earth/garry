@@ -12,7 +12,9 @@ collect(x, plan_only = FALSE)
 \item{plan_only}{Return the \code{Plan} instead of executing?}
 }
 \value{
-A \code{Plan} (for now; executed results from Phase 5).
+With \code{plan_only = TRUE}, the \code{Plan}. Otherwise the
+materialised result: a \verb{[y, x]} matrix for raster sinks, a scalar
+for global reductions.
 }
 \description{
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}

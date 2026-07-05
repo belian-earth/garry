@@ -40,5 +40,6 @@ Collate:
     'collect.R'
     'dot.R'
     'gdal_adapter.R'
+    'executor.R'
     'lazy_raster.R'
     'zzz.R'

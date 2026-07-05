@@ -8,7 +8,9 @@
 #
 # The pure-R path is NOT a user execution path (one-compute-path rule):
 # it is the permanent test oracle, and it lets planner golden tests run
-# without anvl installed.
+# without anvl installed. Traced dispatch (Phase 5): every op checks
+# .g_traced() and routes AnvlArray / tracer values to nv_*; plain R
+# arrays take the oracle path.
 #
 # Semantics contract (matches anvl/XLA, verified in the spike):
 # - nodata is NaN (decision D8); `nan_rm = TRUE` reductions skip it;
@@ -18,6 +20,57 @@
 # - g_cast to integer truncates toward zero (XLA convert semantics).
 # ---------------------------------------------------------------------------
 
+# Is this value an anvl array or tracer value (vs a plain R array)?
+.g_traced <- function(x) {
+  inherits(x, c("AnvlArray", "GraphBox", "AnvlBox"))
+}
+
+.require_anvl <- function() {
+  if (!requireNamespace("anvl", quietly = TRUE))
+    stop("the anvl package is required for execution; install it from ",
+         "https://r-xla.r-universe.dev", call. = FALSE)
+}
+
+# Promote a plain R scalar to the traced operand's dtype.
+.g_scalar_like <- function(x, value) {
+  anvl::nv_scalar_like(x, value)
+}
+
+# -- Executor bridge (the only anvl entry points outside the ops) ------------
+
+#' JIT-compile a stage closure via anvl (executor bridge).
+#'
+#' @param f Stage closure.
+#' @return A compiled function (anvl `JitFunction`).
+#' @export
+g_jit <- function(f) {
+  .require_anvl()
+  anvl::jit(f)
+}
+
+#' Upload an R array to an AnvlArray of the given garry dtype.
+#'
+#' @param x R array/matrix.
+#' @param dtype garry dtype string (anvl-aligned).
+#' @return An `AnvlArray`.
+#' @export
+g_upload <- function(x, dtype) {
+  .require_anvl()
+  anvl::nv_array(x, dtype)
+}
+
+#' Download an AnvlArray (or a nested list of them) to R arrays.
+#'
+#' @param x `AnvlArray` or (nested) list.
+#' @return R array / nested list of R arrays.
+#' @export
+g_download <- function(x) {
+  # Order matters: an AnvlArray is itself a list internally.
+  if (.g_traced(x)) return(anvl::as_array(x))
+  if (is.list(x)) return(lapply(x, g_download))
+  x
+}
+
 #' Elementwise select: `yes` where `cond`, else `no`.
 #'
 #' @param cond Logical array.
@@ -25,6 +78,11 @@
 #' @return Array shaped like `cond`.
 #' @export
 g_ifelse <- function(cond, yes, no) {
+  if (.g_traced(cond)) {
+    if (is.numeric(yes) && length(yes) == 1L) yes <- .g_scalar_like(no, yes)
+    if (is.numeric(no) && length(no) == 1L) no <- .g_scalar_like(yes, no)
+    return(anvl::nv_ifelse(cond, yes, no))
+  }
   ifelse(cond, yes, no)
 }
 
@@ -34,6 +92,7 @@ g_ifelse <- function(cond, yes, no) {
 #' @return Logical array.
 #' @export
 g_is_nodata <- function(x) {
+  if (.g_traced(x)) return(anvl::nv_is_nan(x))
   is.na(x)   # TRUE for both NaN and NA_real_
 }
 
@@ -47,6 +106,11 @@ g_is_nodata <- function(x) {
 g_pad <- function(x, h, value = 0) {
   h <- as.integer(h)
   if (h == 0L) return(x)
+  if (.g_traced(x)) {
+    return(anvl::nv_pad(x, .g_scalar_like(x, value),
+                        edge_padding_low = c(h, h),
+                        edge_padding_high = c(h, h)))
+  }
   out <- matrix(value, nrow(x) + 2L * h, ncol(x) + 2L * h)
   out[(h + 1L):(h + nrow(x)), (h + 1L):(h + ncol(x))] <- x
   out
@@ -65,6 +129,13 @@ g_pad <- function(x, h, value = 0) {
 #' @return An `out_nrow x out_ncol` matrix.
 #' @export
 g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
+  if (.g_traced(xpad)) {
+    return(anvl::nv_static_slice(
+      xpad,
+      start_indices = c(1L + h + dy, 1L + h + dx),
+      limit_indices = c(out_nrow + h + dy, out_ncol + h + dx),
+      strides = c(1L, 1L)))
+  }
   xpad[(1L + h + dy):(out_nrow + h + dy),
        (1L + h + dx):(out_ncol + h + dx), drop = FALSE]
 }
@@ -80,6 +151,7 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
 #' @export
 g_cast <- function(x, dtype) {
   stopifnot(dtype_valid(dtype))
+  if (.g_traced(x)) return(anvl::nv_convert(x, dtype))
   fam <- .dtype_family(dtype)
   out <- if (fam == "float") {
     x + 0
@@ -116,18 +188,24 @@ NULL
 #' @rdname g-reductions
 #' @export
 g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
+  if (.g_traced(x))
+    return(anvl::nv_reduce_sum(x, dims = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))
 }
 
 #' @rdname g-reductions
 #' @export
 g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
+  if (.g_traced(x))
+    return(anvl::nv_mean(x, dims = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) mean(.nan_filter(v, nan_rm)))
 }
 
 #' @rdname g-reductions
 #' @export
 g_min <- function(x, dims = NULL, nan_rm = FALSE) {
+  if (.g_traced(x))
+    return(anvl::nv_reduce_min(x, dims = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
     if (length(v) == 0L) Inf else min(v)   # XLA init value, no warning
@@ -137,6 +215,8 @@ g_min <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @rdname g-reductions
 #' @export
 g_max <- function(x, dims = NULL, nan_rm = FALSE) {
+  if (.g_traced(x))
+    return(anvl::nv_reduce_max(x, dims = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
     if (length(v) == 0L) -Inf else max(v)
@@ -146,6 +226,8 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @rdname g-reductions
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
+  if (.g_traced(x))
+    return(anvl::nv_median(x, dim = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) {
     m <- stats::median(v, na.rm = nan_rm)
     if (is.na(m)) NaN else m               # all-nodata -> NaN, never NA
@@ -155,6 +237,10 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @rdname g-reductions
 #' @export
 g_count <- function(x, dims = NULL) {
+  if (.g_traced(x)) {
+    valid <- anvl::nv_convert(anvl::nv_not(anvl::nv_is_nan(x)), "f32")
+    return(anvl::nv_reduce_sum(valid, dims = dims))
+  }
   .g_reduce(x, dims, function(v) sum(!is.na(v)))
 }
 
@@ -176,21 +262,37 @@ g_count <- function(x, dims = NULL) {
 #' @name g-bitwise
 NULL
 
-#' @rdname g-bitwise
-#' @export
-g_bitand <- function(a, b) .bitw(bitwAnd, a, b)
+# Promote a plain R integer scalar to the traced operand's dtype.
+.g_int_like <- function(a, b) {
+  if (.g_traced(b)) return(b)
+  .g_scalar_like(a, as.integer(b))
+}
 
 #' @rdname g-bitwise
 #' @export
-g_bitor <- function(a, b) .bitw(bitwOr, a, b)
+g_bitand <- function(a, b) {
+  if (.g_traced(a)) return(anvl::nv_and(a, .g_int_like(a, b)))
+  .bitw(bitwAnd, a, b)
+}
 
 #' @rdname g-bitwise
 #' @export
-g_bitxor <- function(a, b) .bitw(bitwXor, a, b)
+g_bitor <- function(a, b) {
+  if (.g_traced(a)) return(anvl::nv_or(a, .g_int_like(a, b)))
+  .bitw(bitwOr, a, b)
+}
+
+#' @rdname g-bitwise
+#' @export
+g_bitxor <- function(a, b) {
+  if (.g_traced(a)) return(anvl::nv_xor(a, .g_int_like(a, b)))
+  .bitw(bitwXor, a, b)
+}
 
 #' @rdname g-bitwise
 #' @export
 g_bitnot <- function(a) {
+  if (.g_traced(a)) return(anvl::nv_not(a))
   out <- bitwNot(as.integer(a))
   if (!is.null(dim(a))) dim(out) <- dim(a)
   out
@@ -198,8 +300,14 @@ g_bitnot <- function(a) {
 
 #' @rdname g-bitwise
 #' @export
-g_shiftl <- function(a, n) .bitw(bitwShiftL, a, n)
+g_shiftl <- function(a, n) {
+  if (.g_traced(a)) return(anvl::nv_shift_left(a, .g_int_like(a, n)))
+  .bitw(bitwShiftL, a, n)
+}
 
 #' @rdname g-bitwise
 #' @export
-g_shiftr <- function(a, n) .bitw(bitwShiftR, a, n)
+g_shiftr <- function(a, n) {
+  if (.g_traced(a)) return(anvl::nv_shift_right_logical(a, .g_int_like(a, n)))
+  .bitw(bitwShiftR, a, n)
+}
