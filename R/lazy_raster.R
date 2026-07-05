@@ -140,16 +140,26 @@ for (op_name in c("+", "-", "*", "/")) {
 
 #' Focal (stencil) op.
 #'
+#' `fn` receives a LIST of (2r+1)^2 shifted arrays, row-major over
+#' (dy, dx) offsets, and returns one array: the whole neighbourhood is
+#' processed vectorised across every pixel at once. This convention is
+#' what lets the same closure run under the pure-R oracle and under
+#' anvl's jit() (D10/D14). Example, a 3x3 sum:
+#' `function(sh) Reduce("+", sh)`.
+#'
+#' Cells beyond the raster edge are NaN (nodata) — v1 supports only this
+#' `boundary = "nodata"` policy; reflect/wrap arrive with Phase 9.
+#'
 #' @param x        LazyRaster.
-#' @param fn       R function taking a (2h+1) x (2h+1) neighbourhood (or a
-#'                 whole padded chunk, depending on the kernel convention
-#'                 settled in Phase 5) and returning the centre value.
-#' @param radius   Halo in pixels.
-#' @param boundary One of "constant", "reflect", "nearest", "wrap", "none".
+#' @param fn       Function over the list of shifted arrays (see above).
+#' @param radius   Halo in pixels (mandatory: the footprint cannot be
+#'                 inferred from `fn`; decision D14).
+#' @param boundary Boundary policy; only "nodata" in v1.
 #'
 #' @export
-focal <- function(x, fn, radius, boundary = "reflect") {
+focal <- function(x, fn, radius, boundary = "nodata") {
   stopifnot(S7::S7_inherits(x, LazyRaster))
+  boundary <- match.arg(boundary, "nodata")
   id <- graph_add(
     x@graph,
     FocalNode,
@@ -188,6 +198,32 @@ reduce_over <- function(x, op, over, nan_rm = TRUE) {
     nan_rm  = isTRUE(nan_rm)
   )
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
+}
+
+#' Lazily resample/reproject onto a target grid.
+#'
+#' Injects a WarpNode (a barrier, executed as a GDAL VRT warp in Phase
+#' 4b). Alignment stays explicit: binary ops never auto-resample.
+#'
+#' @param x A `LazyRaster`.
+#' @param to Target grid: a `GridSpec` or another `LazyRaster`.
+#' @param resampling GDAL resampling method.
+#' @return A `LazyRaster` on the target grid.
+#' @export
+align <- function(x, to, resampling = "bilinear") {
+  stopifnot(S7::S7_inherits(x, LazyRaster))
+  target <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
+  stopifnot(S7::S7_inherits(target, GridSpec))
+  target <- .grid_retype(target, x@grid@dtype)
+  id <- graph_add(
+    x@graph,
+    WarpNode,
+    parents     = x@node_id,
+    grid        = target,
+    target_grid = target,
+    resampling  = resampling
+  )
+  LazyRaster(graph = x@graph, node_id = id, grid = target)
 }
 
 # `print` via S7

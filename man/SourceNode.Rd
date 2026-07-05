@@ -10,7 +10,8 @@ SourceNode(
   grid = GridSpec(),
   path = character(0),
   band = integer(0),
-  nodata = integer(0)
+  nodata = integer(0),
+  block_dim = integer(0)
 )
 }
 \arguments{
@@ -25,6 +26,9 @@ SourceNode(
 \item{band}{1-based band index.}
 
 \item{nodata}{Length-0 (absent) or length-1 nodata sentinel value.}
+
+\item{block_dim}{Native GDAL block size (length 2), or length 0 if
+unknown; the chunking pass snaps chunk sizes to it.}
 }
 \value{
 A \code{SourceNode}.

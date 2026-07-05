@@ -4,19 +4,27 @@
 \alias{focal}
 \title{Focal (stencil) op.}
 \usage{
-focal(x, fn, radius, boundary = "reflect")
+focal(x, fn, radius, boundary = "nodata")
 }
 \arguments{
 \item{x}{LazyRaster.}
 
-\item{fn}{R function taking a (2h+1) x (2h+1) neighbourhood (or a
-whole padded chunk, depending on the kernel convention
-settled in Phase 5) and returning the centre value.}
+\item{fn}{Function over the list of shifted arrays (see above).}
 
-\item{radius}{Halo in pixels.}
+\item{radius}{Halo in pixels (mandatory: the footprint cannot be
+inferred from \code{fn}; decision D14).}
 
-\item{boundary}{One of "constant", "reflect", "nearest", "wrap", "none".}
+\item{boundary}{Boundary policy; only "nodata" in v1.}
 }
 \description{
-Focal (stencil) op.
+\code{fn} receives a LIST of (2r+1)^2 shifted arrays, row-major over
+(dy, dx) offsets, and returns one array: the whole neighbourhood is
+processed vectorised across every pixel at once. This convention is
+what lets the same closure run under the pure-R oracle and under
+anvl's jit() (D10/D14). Example, a 3x3 sum:
+\code{function(sh) Reduce("+", sh)}.
+}
+\details{
+Cells beyond the raster edge are NaN (nodata) — v1 supports only this
+\code{boundary = "nodata"} policy; reflect/wrap arrive with Phase 9.
 }
