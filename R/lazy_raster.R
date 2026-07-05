@@ -191,6 +191,39 @@ reduce_over <- function(x, op, over, nan_rm = TRUE) {
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
 
+#' Linear focal op with an explicit kernel (differentiable).
+#'
+#' The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
+#' weighted sum over the window. Unlike `focal()` with an arbitrary
+#' `fn`, a kernel focal is differentiable with respect to its weights:
+#' pass the returned LazyRaster as `wrt` to `lazy_value_and_grad()`.
+#'
+#' @param x A `LazyRaster`.
+#' @param weights Square odd-sided numeric matrix, rows = dy, cols = dx.
+#' @param boundary Boundary policy; only "nodata" in v1.
+#' @return A `LazyRaster`.
+#' @export
+focal_kernel <- function(x, weights, boundary = "nodata") {
+  stopifnot(S7::S7_inherits(x, LazyRaster))
+  boundary <- match.arg(boundary, "nodata")
+  weights <- as.matrix(weights)
+  stopifnot(nrow(weights) == ncol(weights), nrow(weights) %% 2L == 1L)
+  radius <- (nrow(weights) - 1L) %/% 2L
+  # Flatten row-major over (dy, dx) to match the shift enumeration.
+  w <- as.numeric(t(weights))
+  id <- graph_add(
+    x@graph,
+    FocalNode,
+    parents  = x@node_id,
+    grid     = x@grid,
+    fn       = function(sh) stop("kernel focal is evaluated from weights"),
+    radius   = radius,
+    boundary = boundary,
+    weights  = w
+  )
+  LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
+}
+
 #' Lazily resample/reproject onto a target grid.
 #'
 #' Injects a WarpNode (a barrier, executed as a GDAL VRT warp in Phase

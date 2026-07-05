@@ -11,7 +11,8 @@ FocalNode(
   grid = GridSpec(),
   fn = function() NULL,
   radius = integer(0),
-  boundary = character(0)
+  boundary = character(0),
+  weights = integer(0)
 )
 }
 \arguments{
@@ -21,11 +22,15 @@ FocalNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{fn}{Neighbourhood function.}
+\item{fn}{Neighbourhood function (over the list of shifted arrays).}
 
 \item{radius}{Halo radius in pixels.}
 
 \item{boundary}{Boundary policy.}
+
+\item{weights}{Optional linear kernel, flattened row-major over
+(dy, dx), length (2*radius+1)^2. When present the op is the
+weighted sum and is differentiable wrt the weights (Phase 6).}
 }
 \value{
 A \code{FocalNode}.

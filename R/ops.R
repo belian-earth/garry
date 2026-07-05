@@ -48,6 +48,18 @@ g_jit <- function(f) {
   anvl::jit(f)
 }
 
+#' Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
+#'
+#' @param f Function returning a scalar float; first argument is the
+#'   differentiation target.
+#' @param wrt Name of the argument to differentiate with respect to.
+#' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
+#' @export
+g_value_and_gradient <- function(f, wrt) {
+  .require_anvl()
+  anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
+}
+
 #' Upload an R array to an AnvlArray of the given garry dtype.
 #'
 #' @param x R array/matrix.
@@ -161,6 +173,21 @@ g_cast <- function(x, dtype) {
     trunc(x)
   }
   out
+}
+
+#' Extract element `i` of a 1-D array as a scalar (static index).
+#'
+#' @param v 1-D array (e.g. a flattened kernel).
+#' @param i 1-based static index.
+#' @return Scalar.
+#' @export
+g_index_scalar <- function(v, i) {
+  if (.g_traced(v)) {
+    return(anvl::nv_reshape(
+      anvl::nv_static_slice(v, start_indices = i, limit_indices = i,
+                            strides = 1L), integer(0)))
+  }
+  v[[i]]
 }
 
 # -- Reductions ---------------------------------------------------------------

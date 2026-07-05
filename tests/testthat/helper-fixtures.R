@@ -56,3 +56,20 @@ fixture_3857_f64 <- function() {
   .fixture_env$m3857 <- f
   f
 }
+
+# f32 random noise (identifiable for kernel-recovery tests: convolution
+# of a LINEAR surface is invariant to symmetric mass-1 kernels, so the
+# gradient fixture must not be used for convergence tests).
+fixture_random_f32 <- function() {
+  if (!is.null(.fixture_env$rand)) return(.fixture_env$rand)
+  f <- file.path(tempdir(), "garry-fixture-rand.tif")
+  set.seed(99)
+  ds <- gdalraster::create("GTiff", f, 80, 60, 1, "Float32",
+                           return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 10, 0, 4600000, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, 80, 60, runif(80 * 60))
+  ds$close()
+  .fixture_env$rand <- f
+  f
+}

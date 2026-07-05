@@ -64,7 +64,12 @@ NULL
     shifts <- lapply(seq_len(nrow(offsets)), function(i) {
       g_shift_slice(x, offsets$dy[i], offsets$dx[i], nr, nc, r)
     })
-    node@fn(shifts)
+    if (length(node@weights) > 0L) {
+      Reduce(`+`, Map(function(s2, w) s2 * w, shifts,
+                      as.list(node@weights)))
+    } else {
+      node@fn(shifts)
+    }
   } else if (S7::S7_inherits(node, ReduceNode)) {
     margins <- .dim_margins(parent_dim_names, node@over)
     .apply_reduce(node@op, pv[[1L]], margins, node@nan_rm)
@@ -74,22 +79,47 @@ NULL
   }
 }
 
+# Trim `d` cells of padding from every side (centered slice).
+.trim_to_pad <- function(x, d) {
+  d <- as.integer(d)
+  if (d == 0L) return(x)
+  g_shift_slice(x, 0L, 0L, nrow(x) - 2L * d, ncol(x) - 2L * d, d)
+}
+
 # Composed closure for a compute stage: runs members in ascending (topo)
-# order, returns the named list of exports.
-.compose_stage_fn <- function(graph, members, input_nodes, exports) {
+# order, returns the named list of exports. Each value carries a
+# remaining-pad count: inputs start at the stage halo, focal members
+# consume `radius`, and map members that join branches with different
+# pads trim the larger to the common minimum (the halo contract in
+# plan.R generalised to DAGs).
+.compose_stage_fn <- function(graph, members, input_nodes, exports, halo) {
   force(graph); force(members); force(input_nodes); force(exports)
+  force(halo)
   function(inputs) {
     vals <- new.env(parent = emptyenv())
+    pads <- new.env(parent = emptyenv())
     for (i in seq_along(input_nodes)) {
-      assign(.key(input_nodes[[i]]), inputs[[i]], envir = vals)
+      k <- .key(input_nodes[[i]])
+      assign(k, inputs[[i]], envir = vals)
+      assign(k, halo, envir = pads)
     }
     for (id in members) {
       node <- graph_get(graph, id)
       pv <- lapply(node@parents, function(p) get(.key(p), envir = vals))
+      pp <- vapply(node@parents, function(p) get(.key(p), envir = pads),
+                   integer(1))
+      if (S7::S7_inherits(node, FocalNode)) {
+        out_pad <- pp[[1L]] - node@radius
+      } else {
+        out_pad <- min(pp)
+        pv <- Map(function(v, d) .trim_to_pad(v, d - out_pad), pv,
+                  as.list(pp))
+      }
       pgrid <- graph_get(graph, node@parents[[1L]])@grid
       assign(.key(id),
              .eval_node(node, pv, parent_dim_names = names(pgrid@dims)),
              envir = vals)
+      assign(.key(id), as.integer(out_pad), envir = pads)
     }
     stats::setNames(
       lapply(exports, function(e) get(.key(e), envir = vals)),
@@ -277,8 +307,9 @@ plan_lazy <- function(x) {
     s <- protos[[i]]
     node <- graph_get(graph, s$members[[1L]])
     if (s$kind == "compute") {
-      s$fn <- .compose_stage_fn(graph, s$members, s$input_nodes, s$exports)
       s$halo <- .stage_halo(graph, s$members, s$input_nodes)
+      s$fn <- .compose_stage_fn(graph, s$members, s$input_nodes,
+                                s$exports, s$halo)
       if (s$halo > 0L) {
         in_kinds <- vapply(s$inputs, function(j) protos[[j]]$kind,
                            character(1))

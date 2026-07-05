@@ -89,9 +89,12 @@ MapNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param fn Neighbourhood function.
+#' @param fn Neighbourhood function (over the list of shifted arrays).
 #' @param radius Halo radius in pixels.
 #' @param boundary Boundary policy.
+#' @param weights Optional linear kernel, flattened row-major over
+#'   (dy, dx), length (2*radius+1)^2. When present the op is the
+#'   weighted sum and is differentiable wrt the weights (Phase 6).
 #' @return A `FocalNode`.
 #' @export
 FocalNode <- S7::new_class(
@@ -100,8 +103,16 @@ FocalNode <- S7::new_class(
   properties = list(
     fn       = S7::class_function,
     radius   = S7::class_integer,
-    boundary = S7::class_character
-  )
+    boundary = S7::class_character,
+    weights  = S7::class_numeric
+  ),
+  validator = function(self) {
+    k <- (2L * self@radius + 1L)^2
+    if (length(self@weights) > 0L && length(self@weights) != k)
+      return(sprintf("`weights` must have length %d for radius %d", k,
+                     self@radius))
+    NULL
+  }
 )
 
 #' Reduction over named dims. Barrier: forces materialisation of its inputs.
