@@ -5,7 +5,7 @@ Authors@R:
     person("TBD", "TBD", email = "tbd@example.org", role = c("aut", "cre"))
 Description: Experimental. Lazy raster arrays with CRS/transform-aware
     semantics, chunked execution via mirai, and JIT-compiled kernels via
-    anvil (XLA). Compute graph IR is R-native; GDAL handles IO via
+    anvl (XLA). Compute graph IR is R-native; GDAL handles IO via
     gdalraster; grid math via vaster.
 License: TBD
 Encoding: UTF-8
@@ -16,10 +16,10 @@ Imports:
     vaster,
     gdalraster,
     mirai,
-    anvil
+    anvl
 Remotes:
     hypertidy/vaster,
-    r-xla/anvil
+    r-xla/anvl
 Suggests:
     testthat (>= 3.0.0)
 Config/testthat/edition: 3

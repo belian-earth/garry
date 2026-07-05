@@ -269,6 +269,13 @@ to them. Specifically:
 **Exit**: one-page note documenting what anvil can and cannot express.
 Feeds Phase 2's IR design.
 
+**Done 2026-07-04, verdict GO** — see `design/anvil-spike.md` and
+`design/spike/*.R`. Headlines: package is `anvl`; plain R operators
+trace; stencils via pad + shifted slices (no reduce_window exposed);
+NaN-sentinel nodata with `nan_rm` reductions; kernel-recovery gradient
+converges; ragged edge chunks are fine (max 4 shapes); fusion is
+load-bearing because R↔device transfer dominates trivial maps.
+
 ### Phase 1 — Grid primitives
 `GridSpec` + validators; `ChunkGrid` on top of vaster (chunk enumeration,
 halo neighborhoods, block snapping). Cross-grid mapping (output chunk →
@@ -337,17 +344,19 @@ kernels. If it clicks, the rest is execution engineering on known rails.
 - **Minimum R version** (S7 + mirai + anvil implications).
 - **License** (match vrtility / gdalraster).
 - **CRS representation**: WKT2 vs proj string vs both. Hard to change later.
-- **Focal op declaration**: do users declare `radius` explicitly, or does
-  `focal()` enforce it? Kernel footprint cannot be inferred from an
-  arbitrary R function.
+- **Focal op declaration** — *answered (spike)*: `focal()` requires an
+  explicit `radius`; footprint cannot be inferred from an arbitrary R
+  function.
 - **Auto-rechunk policy**: when halo > chunk, do we silently rechunk or
   require the user to opt in?
 - **Scaling target**: single-fat-host vs truly distributed. Both in scope;
   halo-store and scheduler tuning differ.
-- **Expression surface inside `jit()`**: exact subset of R that anvil can
-  trace. Spike must enumerate.
-- **Focal stencil ergonomics**: whether anvil's indexing supports clean
-  stencil expressions or whether we need a `stencil()` helper that
-  expands to reshape + index patterns.
+- **Expression surface inside `jit()`** — *answered (spike)*: plain R
+  arithmetic and Math/Summary generics on traced values, plus the ~160
+  `nv_*` ops. garry wraps these in its own op vocabulary for backend
+  insulation.
+- **Focal stencil ergonomics** — *answered (spike)*: no reduce_window
+  exposed; a `stencil()` helper expands to pad + shifted static slices,
+  which XLA fuses. Consider upstreaming `nv_reduce_window` later.
 - **AnvilArray lifecycle**: allocator behaviour under high chunk
   throughput; need to avoid per-chunk GPU allocation storms.
