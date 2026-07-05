@@ -2,24 +2,27 @@ Package: garry
 Title: Lazy, Spatial-Aware Raster Arrays with JIT-Compiled Kernels
 Version: 0.0.0.9000
 Authors@R:
-    person("TBD", "TBD", email = "tbd@example.org", role = c("aut", "cre"))
+    person("Hugh", "Graham", email = "hugh@belian.earth", role = c("aut", "cre"))
 Description: Experimental. Lazy raster arrays with CRS/transform-aware
     semantics, chunked execution via mirai, and JIT-compiled kernels via
     anvl (XLA). Compute graph IR is R-native; GDAL handles IO via
     gdalraster; grid math via vaster.
-License: TBD
+License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
+Depends:
+    R (>= 4.3)
 Imports:
     S7,
     vaster,
     gdalraster,
-    mirai,
-    anvl
+    mirai
 Remotes:
-    hypertidy/vaster,
-    r-xla/anvl
+    hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
+    r-xla/anvl@b724533
 Suggests:
+    anvl,
+    terra,
     testthat (>= 3.0.0)
 Config/testthat/edition: 3
