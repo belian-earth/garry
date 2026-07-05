@@ -12,9 +12,13 @@ NULL
 #
 # The source table IS the mosaic index: stac_gti_index() writes it as a
 # GTI-readable layer, and lazy_stac_stack() opens one FILTERed slice
-# per datetime group (D18). For Planetary Computer reads prefer GDAL's
-# own signing (VSICURL_PC_URL_SIGNING=YES): pre-signed hrefs expire
-# mid-run on long distributed jobs; GDAL renews per request.
+# per datetime group (D18). Planetary Computer signing, measured on the
+# HLS benchmark: PRE-SIGN hrefs before stac_sources() (one cached SAS
+# token per collection, e.g. rstac::items_sign 'sign_planetary_computer'
+# - vrtility's approach). Per-URL GDAL signing
+# (VSICURL_PC_URL_SIGNING=YES) causes a signing-request storm across
+# daemon fleets and MPC 429 rate limits; reserve it for jobs long
+# enough (>~45 min) that pre-signed tokens would expire mid-run.
 # ---------------------------------------------------------------------------
 
 .require_rstac <- function() {
