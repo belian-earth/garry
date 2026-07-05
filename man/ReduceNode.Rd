@@ -8,8 +8,9 @@ ReduceNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
-  fn = function() NULL,
-  over = character(0)
+  op = character(0),
+  over = character(0),
+  nan_rm = logical(0)
 )
 }
 \arguments{
@@ -19,13 +20,17 @@ ReduceNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{fn}{Reducing function.}
+\item{op}{Reduction name, e.g. "mean" (see \code{.reduce_ops}).}
 
 \item{over}{Names of dims to reduce over.}
+
+\item{nan_rm}{Skip NaN (nodata) values?}
 }
 \value{
 A \code{ReduceNode}.
 }
 \description{
-Reduction over named dims. Barrier: forces materialisation of its inputs.
+\code{op} is a name from \code{.reduce_ops}, not an arbitrary function: the
+planner needs op identity to decide algebraic decomposition (D12) and
+output dtype, and the executor maps it to the ops vocabulary.
 }

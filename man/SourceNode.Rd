@@ -2,14 +2,15 @@
 % Please edit documentation in R/node.R
 \name{SourceNode}
 \alias{SourceNode}
-\title{A GDAL-readable source: path + band.}
+\title{A GDAL-readable source: path + band + optional nodata sentinel.}
 \usage{
 SourceNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
   path = character(0),
-  band = integer(0)
+  band = integer(0),
+  nodata = integer(0)
 )
 }
 \arguments{
@@ -22,10 +23,14 @@ SourceNode(
 \item{path}{Path or VSI URL readable by GDAL.}
 
 \item{band}{1-based band index.}
+
+\item{nodata}{Length-0 (absent) or length-1 nodata sentinel value.}
 }
 \value{
 A \code{SourceNode}.
 }
 \description{
-A GDAL-readable source: path + band.
+A declared \code{nodata} on an integer source promotes the source's output
+dtype to f32 so NaN can carry nodata downstream (decision D8); the
+executor rewrites \code{value == nodata} to NaN at read time.
 }

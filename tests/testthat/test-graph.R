@@ -11,7 +11,7 @@ test_that("graph build and topo-sort works", {
                         fn = function(n) mean(n), radius = 1L,
                         boundary = "reflect")
   red_id   <- graph_add(g, ReduceNode, parents = focal_id, grid = gs,
-                        fn = function(x) mean(x), over = "x")
+                        op = "mean", over = "x", nan_rm = TRUE)
 
   order <- graph_toposort(g)
   expect_equal(order, c(src_id, map_id, focal_id, red_id))

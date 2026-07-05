@@ -118,3 +118,67 @@ graph_replace <- function(graph, id, node) {
   graph@nodes[[.key(id)]] <- node
   invisible(node)
 }
+
+#' Import the subgraph reachable from `root_id` in `src` into `dst`.
+#'
+#' Node ids are renumbered; a SourceNode identical in (path, band, nodata,
+#' grid, dtype) to one already in `dst` is deduplicated (decision D6).
+#' Graphs are append-only (rewrites swap nodes in place, ids never
+#' reorder), so ascending id order within the reachable set is a valid
+#' topological order.
+#'
+#' @param dst Destination `Graph` (modified by reference).
+#' @param src Source `Graph`.
+#' @param root_id Id in `src` whose ancestry is imported.
+#' @return The id of the imported root in `dst`.
+#' @export
+graph_import <- function(dst, src, root_id) {
+  if (identical(dst@nodes, src@nodes)) return(root_id)
+
+  # Reachable set via reverse DFS over parents.
+  seen <- integer(0)
+  stack <- root_id
+  while (length(stack) > 0L) {
+    id <- stack[[1L]]
+    stack <- stack[-1L]
+    if (id %in% seen) next
+    seen <- c(seen, id)
+    stack <- c(stack, graph_get(src, id)@parents)
+  }
+  seen <- sort(seen)
+
+  dst_sources <- Filter(function(n) S7::S7_inherits(n, SourceNode),
+                        lapply(graph_ids(dst), function(i) graph_get(dst, i)))
+
+  id_map <- new.env(parent = emptyenv())
+  for (id in seen) {
+    node <- graph_get(src, id)
+    if (S7::S7_inherits(node, SourceNode)) {
+      dup <- Find(function(s) .source_identical(s, node), dst_sources)
+      if (!is.null(dup)) {
+        id_map[[.key(id)]] <- dup@id
+        next
+      }
+    }
+    new_parents <- vapply(node@parents,
+                          function(p) id_map[[.key(p)]], integer(1))
+    new_id <- dst@nodes$.next_id
+    node@id <- new_id
+    node@parents <- as.integer(new_parents)
+    dst@nodes[[.key(new_id)]] <- node
+    dst@nodes$.next_id <- new_id + 1L
+    id_map[[.key(id)]] <- new_id
+    if (S7::S7_inherits(node, SourceNode))
+      dst_sources <- c(dst_sources, list(node))
+  }
+  id_map[[.key(root_id)]]
+}
+
+# Internal: are two SourceNodes the same physical source?
+.source_identical <- function(a, b) {
+  identical(a@path, b@path) &&
+    identical(a@band, b@band) &&
+    identical(a@nodata, b@nodata) &&
+    grid_equal(a@grid, b@grid) &&
+    identical(a@grid@dtype, b@grid@dtype)
+}

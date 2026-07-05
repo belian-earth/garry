@@ -62,7 +62,46 @@ S7::method(output_grid, StackNode)  <- function(node, parent_grids) parent_grids
 S7::method(output_grid, FusedNode)  <- function(node, parent_grids) parent_grids[[1L]]
 S7::method(output_grid, WarpNode)   <- function(node, parent_grids) node@target_grid
 S7::method(output_grid, ReduceNode) <- function(node, parent_grids) {
-  # Sketch: drops the reduced dim(s). A full impl edits `dim` and `extent`
-  # coherently; here we pass the parent grid through and flag a TODO.
-  parent_grids[[1L]]
+  .reduce_grid(parent_grids[[1L]], node@op, node@over)
+}
+
+# Output dtype of a reduction (decision D7/D12): float-producing ops
+# promote integers to f32; count is i32; any/all are pred; the algebraic
+# extremes/sums keep their input dtype.
+.reduce_dtype <- function(op, dtype) {
+  if (op %in% c("mean", "median", "quantile", "sd", "var")) {
+    if (.dtype_family(dtype) == "float") dtype else "f32"
+  } else if (op == "count") {
+    "i32"
+  } else if (op %in% c("any", "all")) {
+    "pred"
+  } else {
+    dtype
+  }
+}
+
+# Grid algebra of a reduction (decision D7): reducing t/band drops the
+# entry; reducing x/y collapses the axis to 1 with extent preserved and
+# resolution rescaled to the full span.
+.reduce_grid <- function(pg, op, over) {
+  dims <- pg@dims
+  unknown <- setdiff(over, names(dims))
+  if (length(unknown) > 0L)
+    stop("cannot reduce over missing dim(s): ",
+         paste(unknown, collapse = ", "))
+
+  gt <- pg@transform
+  if ("x" %in% over) {
+    gt[2L] <- gt[2L] * dims[["x"]]
+    dims[["x"]] <- 1L
+  }
+  if ("y" %in% over) {
+    gt[6L] <- gt[6L] * dims[["y"]]
+    dims[["y"]] <- 1L
+  }
+  drop_dims <- setdiff(intersect(over, c("t", "band")), character(0))
+  dims <- dims[!names(dims) %in% drop_dims]
+
+  GridSpec(crs = pg@crs, transform = gt, extent = pg@extent,
+           dims = dims, dtype = .reduce_dtype(op, pg@dtype))
 }

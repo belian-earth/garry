@@ -119,6 +119,9 @@ crs_equal <- function(a, b) {
 
 # -- GridSpec -----------------------------------------------------------------
 
+# Allowed dim names, in default assignment order (decision D7).
+.dim_names <- c("x", "y", "t", "band")
+
 #' Spatial grid specification.
 #'
 #' The constructor canonicalises `crs` to GDAL WKT, so two GridSpecs built
@@ -143,12 +146,15 @@ GridSpec <- S7::new_class(
   constructor = function(crs, transform, extent, dims, dtype) {
     if (!is.character(crs) || length(crs) != 1L || !nzchar(crs))
       stop("`crs` must be a single non-empty string")
+    nm <- names(dims)              # as.integer() strips names; keep them
+    dims <- as.integer(dims)
+    names(dims) <- if (is.null(nm)) .dim_names[seq_along(dims)] else nm
     S7::new_object(
       S7::S7_object(),
       crs       = .canon_crs(crs),
       transform = as.numeric(transform),
       extent    = as.numeric(extent),
-      dims      = as.integer(dims),
+      dims      = dims,
       dtype     = dtype
     )
   },
@@ -160,8 +166,14 @@ GridSpec <- S7::new_class(
     if (self@extent[1L] >= self@extent[3L] ||
         self@extent[2L] >= self@extent[4L])
       return("`extent` must satisfy xmin < xmax and ymin < ymax")
-    if (length(self@dims) < 2L || any(self@dims <= 0L))
-      return("`dim` must have at least two positive entries (nx, ny)")
+    if (length(self@dims) < 2L || length(self@dims) > 4L ||
+        any(self@dims <= 0L))
+      return("`dims` must have 2-4 positive entries")
+    nm <- names(self@dims)
+    if (is.null(nm) || !identical(nm[1:2], c("x", "y")) ||
+        anyDuplicated(nm) || !all(nm %in% .dim_names))
+      return(paste0("`dims` must be named: first two \"x\", \"y\"; ",
+                    "extras from \"t\", \"band\""))
     if (!dtype_valid(self@dtype))
       return(paste0("`dtype` must be one of: ",
                     paste(.garry_dtypes, collapse = ", ")))
@@ -272,4 +284,12 @@ grid_equal <- function(a, b, tol = 1e-9) {
     all(abs(a@extent - b@extent) < tol) &&
     length(a@dims) == length(b@dims) &&
     all(a@dims == b@dims)
+}
+
+# Internal: same grid, different dtype (dtype promotion on binary ops,
+# float promotion on reductions and nodata sources).
+.grid_retype <- function(grid, dtype) {
+  if (identical(grid@dtype, dtype)) return(grid)
+  GridSpec(crs = grid@crs, transform = grid@transform,
+           extent = grid@extent, dims = grid@dims, dtype = dtype)
 }

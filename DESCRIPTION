@@ -33,5 +33,6 @@ Collate:
     'generics.R'
     'graph.R'
     'lazy_raster.R'
+    'ops.R'
     'options.R'
     'zzz.R'

@@ -51,7 +51,7 @@ test_that("as_vaster_extent reorders to (xmin, xmax, ymin, ymax)", {
 test_that("vaster round-trip agrees with garry's transform math", {
   g <- grid_spec("EPSG:4326", extent = c(0, -10, 10, 0), dims = c(10L, 10L))
   ve <- as_vaster_extent(g)
-  d  <- g@dims[1:2]
+  d  <- unname(g@dims[1:2])
 
   # Centre of the top-left pixel: vaster cell 1 (row-major from top-left).
   expect_equal(vaster::cell_from_xy(d, ve, cbind(0.5, -0.5)), 1L)

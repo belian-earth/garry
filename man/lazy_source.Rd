@@ -4,7 +4,7 @@
 \alias{lazy_source}
 \title{Build a LazyRaster from a GDAL source.}
 \usage{
-lazy_source(path, band = 1L, graph = graph_new())
+lazy_source(path, band = 1L, graph = graph_new(), nodata = NULL)
 }
 \arguments{
 \item{path}{Path or VSI URL readable by GDAL.}
@@ -12,6 +12,9 @@ lazy_source(path, band = 1L, graph = graph_new())
 \item{band}{1-based band index.}
 
 \item{graph}{\code{Graph} to add the source to; defaults to a fresh graph.}
+
+\item{nodata}{Optional nodata sentinel. An integer source with a
+declared nodata is promoted to f32 (NaN carries nodata, decision D8).}
 }
 \value{
 A \code{LazyRaster}.

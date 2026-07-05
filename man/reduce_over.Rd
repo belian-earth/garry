@@ -4,18 +4,23 @@
 \alias{reduce_over}
 \title{Reduction over named dims.}
 \usage{
-reduce_over(x, fn, over)
+reduce_over(x, op, over, nan_rm = TRUE)
 }
 \arguments{
 \item{x}{A \code{LazyRaster}.}
 
-\item{fn}{Reducing function.}
+\item{op}{Reduction name, e.g. \code{"mean"}.}
 
-\item{over}{Names of dims to reduce over.}
+\item{over}{Names of dims to reduce over (subset of \code{names(dims)}).}
+
+\item{nan_rm}{Skip NaN (nodata) values?}
 }
 \value{
-A \code{LazyRaster}.
+A \code{LazyRaster} on the reduced grid.
 }
 \description{
-Reduction over named dims.
+\code{op} is a reduction name (see \code{.reduce_ops}), not a function: the
+planner needs op identity for algebraic decomposition (D12) and dtype
+rules. \code{nan_rm = TRUE} (the default) skips nodata, matching R's
+\code{na.rm = TRUE} under the NaN-sentinel model (D8).
 }
