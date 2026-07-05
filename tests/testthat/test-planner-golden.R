@@ -9,8 +9,8 @@
 }
 
 test_that("golden: two-source NDVI fuses into one compute stage", {
-  a <- lazy_source("nir.tif")
-  b <- lazy_source("red.tif")
+  a <- lazy_source_stub("nir.tif")
+  b <- lazy_source_stub("red.tif")
   ndvi <- (a - b) / (a + b)
   p <- collect(ndvi, plan_only = TRUE)
 
@@ -24,7 +24,7 @@ test_that("golden: two-source NDVI fuses into one compute stage", {
 })
 
 test_that("golden: source -> map -> focal -> reduce(mean over x,y)", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   f <- focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
   p <- collect(r, plan_only = TRUE)
@@ -39,8 +39,8 @@ test_that("golden: source -> map -> focal -> reduce(mean over x,y)", {
 })
 
 test_that("golden: cross-graph add plans like a shared-graph add", {
-  a <- lazy_source("x.tif")
-  b <- lazy_source("y.tif")            # separate graph: auto-merge (D6)
+  a <- lazy_source_stub("x.tif")
+  b <- lazy_source_stub("y.tif")            # separate graph: auto-merge (D6)
   p <- collect(a + b, plan_only = TRUE)
 
   expect_identical(.stage_sig(p), list(
@@ -51,7 +51,7 @@ test_that("golden: cross-graph add plans like a shared-graph add", {
 })
 
 test_that("golden: align -> map produces a warp barrier stage", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   target <- grid_spec("EPSG:4326", extent = c(0, -100, 100, 0),
                       dims = c(50L, 50L))
   m <- align(a, target) * 2
@@ -66,7 +66,7 @@ test_that("golden: align -> map produces a warp barrier stage", {
 })
 
 test_that("golden: diamond on one source stays in one compute stage", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   d <- (a + 1) * (a * 2)
   p <- collect(d, plan_only = TRUE)
   expect_identical(.stage_sig(p), list(

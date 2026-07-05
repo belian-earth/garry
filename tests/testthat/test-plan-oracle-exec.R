@@ -15,8 +15,8 @@ test_that("NDVI executes identically chunked and whole", {
   data <- list("nir.tif" = nir, "red.tif" = red)
   want <- (nir - red) / (nir + red)
 
-  a <- lazy_source("nir.tif")
-  b <- lazy_source("red.tif")
+  a <- lazy_source_stub("nir.tif")
+  b <- lazy_source_stub("red.tif")
   ndvi <- (a - b) / (a + b)
 
   for (px in c(17 * 17, 32 * 32, 64 * 48, 1e6)) {
@@ -42,7 +42,7 @@ test_that("map -> focal -> global mean executes identically chunked", {
   conv <- conv / 9                       # NaN ring at the edges
   want <- mean(conv, na.rm = TRUE)
 
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   f <- focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"), nan_rm = TRUE)
 
@@ -60,7 +60,7 @@ test_that("stacked focals execute identically chunked (halo 3)", {
   data <- list("x.tif" = m)
 
   sum9 <- function(sh) Reduce(`+`, sh)
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   f2 <- focal(focal(a, sum9, 1L), sum9, 2L)
 
   ref1 <- {
@@ -91,7 +91,7 @@ test_that("global min/max/sum/count reduce correctly across chunks", {
   m <- matrix(runif(100 * 100), 100, 100)
   m[sample(length(m), 500)] <- NaN
   data <- list("x.tif" = m)
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
 
   cases <- list(
     list(op = "sum",   want = sum(m, na.rm = TRUE)),

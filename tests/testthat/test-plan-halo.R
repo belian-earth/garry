@@ -3,7 +3,7 @@
 # by enlarged read windows).
 
 test_that("stacked focals accumulate halo in one stage", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   f1 <- focal(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   f2 <- focal(f1, fn = function(sh) Reduce(`+`, sh) / 25, radius = 2L)
   p <- collect(f2, plan_only = TRUE)
@@ -17,7 +17,7 @@ test_that("stacked focals accumulate halo in one stage", {
 })
 
 test_that("halo resets across a reduce barrier", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   f <- focal(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
   p <- collect(r, plan_only = TRUE)
@@ -29,7 +29,7 @@ test_that("halo resets across a reduce barrier", {
 })
 
 test_that("map-only stages carry no halo", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   p <- collect(a * 2 + 1, plan_only = TRUE)
   for (s in p@stages) expect_identical(s@halo, 0L)
 })

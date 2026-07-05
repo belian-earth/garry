@@ -1,8 +1,8 @@
 # Decision D6 lock: binary ops auto-merge graphs; identical sources dedup.
 
 test_that("a + b across separate graphs works and dedups the source", {
-  a <- lazy_source("x.tif")
-  b <- lazy_source("x.tif")           # separate graph, same source
+  a <- lazy_source_stub("x.tif")
+  b <- lazy_source_stub("x.tif")           # separate graph, same source
   expect_false(identical(a@graph@nodes, b@graph@nodes))
 
   c <- a + b
@@ -17,8 +17,8 @@ test_that("a + b across separate graphs works and dedups the source", {
 })
 
 test_that("distinct sources stay distinct after merge", {
-  a <- lazy_source("x.tif")
-  b <- lazy_source("y.tif")
+  a <- lazy_source_stub("x.tif")
+  b <- lazy_source_stub("y.tif")
   c <- a + b
   ids <- graph_ids(c@graph)
   sources <- Filter(function(i) S7::S7_inherits(graph_get(c@graph, i), SourceNode), ids)
@@ -28,12 +28,12 @@ test_that("distinct sources stay distinct after merge", {
 
 test_that("diamond sharing survives import", {
   # b's graph: src -> m1, src -> m2, m1 + m2 (diamond on one source).
-  b0 <- lazy_source("y.tif")
+  b0 <- lazy_source_stub("y.tif")
   m1 <- b0 + 1
   m2 <- b0 * 2
   d  <- m1 + m2
 
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   out <- a + d
 
   g <- out@graph
@@ -57,8 +57,8 @@ test_that("diamond sharing survives import", {
 })
 
 test_that("the right operand remains usable after a merge", {
-  a <- lazy_source("x.tif")
-  b <- lazy_source("y.tif")
+  a <- lazy_source_stub("x.tif")
+  b <- lazy_source_stub("y.tif")
   invisible(a + b)
   # b's own graph is untouched; further composition on b still works.
   b2 <- b * 3
@@ -67,8 +67,8 @@ test_that("the right operand remains usable after a merge", {
 })
 
 test_that("same-graph operands do not import", {
-  a <- lazy_source("x.tif")
-  b <- lazy_source("y.tif", graph = a@graph)
+  a <- lazy_source_stub("x.tif")
+  b <- lazy_source_stub("y.tif", graph = a@graph)
   c <- a + b
   expect_length(graph_ids(c@graph), 3L)   # 2 sources + map, nothing copied
 })

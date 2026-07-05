@@ -13,14 +13,15 @@ lazy_source(path, band = 1L, graph = graph_new(), nodata = NULL)
 
 \item{graph}{\code{Graph} to add the source to; defaults to a fresh graph.}
 
-\item{nodata}{Optional nodata sentinel. An integer source with a
-declared nodata is promoted to f32 (NaN carries nodata, decision D8).}
+\item{nodata}{Optional nodata sentinel overriding the file metadata.}
 }
 \value{
 A \code{LazyRaster}.
 }
 \description{
-Stubbed grid inspection for the Phase 1/2 sketch: a real implementation
-reads CRS/transform/extent/dims via gdalraster. \code{graph} defaults to a
-fresh graph; pass an existing one to share.
+Grid, dtype, native block size, and file nodata come from GDAL via
+the adapter (\code{gdal_grid_spec()}). A user-supplied \code{nodata} overrides
+the file's. An integer source with nodata is promoted to f32 so NaN
+can carry nodata downstream (decision D8); the sentinel-to-NaN
+rewrite happens at read time in the adapter.
 }

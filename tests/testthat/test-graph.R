@@ -21,8 +21,8 @@ test_that("graph build and topo-sort works", {
 })
 
 test_that("LazyRaster composes via operators", {
-  a <- lazy_source("x.tif")
-  b <- lazy_source("y.tif", graph = a@graph)   # share the graph
+  a <- lazy_source_stub("x.tif")
+  b <- lazy_source_stub("y.tif", graph = a@graph)   # share the graph
   c <- a + b
   d <- focal(c, fn = function(n) mean(n), radius = 1L)
 

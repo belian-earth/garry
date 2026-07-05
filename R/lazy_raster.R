@@ -31,44 +31,35 @@ LazyRaster <- S7::new_class(
 
 #' Build a LazyRaster from a GDAL source.
 #'
-#' Stubbed grid inspection for the Phase 1/2 sketch: a real implementation
-#' reads CRS/transform/extent/dims via gdalraster. `graph` defaults to a
-#' fresh graph; pass an existing one to share.
+#' Grid, dtype, native block size, and file nodata come from GDAL via
+#' the adapter (`gdal_grid_spec()`). A user-supplied `nodata` overrides
+#' the file's. An integer source with nodata is promoted to f32 so NaN
+#' can carry nodata downstream (decision D8); the sentinel-to-NaN
+#' rewrite happens at read time in the adapter.
 #'
 #' @param path Path or VSI URL readable by GDAL.
 #' @param band 1-based band index.
 #' @param graph `Graph` to add the source to; defaults to a fresh graph.
-#' @param nodata Optional nodata sentinel. An integer source with a
-#'   declared nodata is promoted to f32 (NaN carries nodata, decision D8).
+#' @param nodata Optional nodata sentinel overriding the file metadata.
 #' @return A `LazyRaster`.
 #' @export
 lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL) {
-  grid <- .read_grid_stub(path)
-  nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+  meta <- gdal_grid_spec(path, band = as.integer(band))
+  grid <- meta$grid
+  nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
   if (length(nodata) == 1L && .dtype_family(grid@dtype) != "float")
     grid <- .grid_retype(grid, "f32")
   id <- graph_add(
     graph,
     SourceNode,
-    parents = integer(0),
-    grid    = grid,
-    path    = path,
-    band    = as.integer(band),
-    nodata  = nodata
+    parents   = integer(0),
+    grid      = grid,
+    path      = path,
+    band      = as.integer(band),
+    nodata    = nodata,
+    block_dim = meta$block_dim
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
-}
-
-# Placeholder for the Phase 4 gdalraster adapter. Returns a default grid
-# so Phase 2 code paths are exercisable end-to-end on stubs.
-.read_grid_stub <- function(path) {
-  GridSpec(
-    crs       = "EPSG:4326",
-    transform = c(0, 1, 0, 0, 0, -1),
-    extent    = c(0, -100, 100, 0),
-    dims       = c(100L, 100L),
-    dtype     = "f32"
-  )
 }
 
 # ---------------------------------------------------------------------------

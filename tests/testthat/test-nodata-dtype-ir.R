@@ -3,7 +3,7 @@
 
 # Helper: stub source with a chosen dtype.
 .lazy_source_typed <- function(path, dtype, nodata = NULL, graph = graph_new()) {
-  lr <- lazy_source(path, graph = graph, nodata = nodata)
+  lr <- lazy_source_stub(path, graph = graph, nodata = nodata)
   # Rewrite the stub node's dtype (the real adapter reads it from GDAL).
   n <- graph_get(lr@graph, lr@node_id)
   grid <- garry:::.grid_retype(n@grid, dtype)

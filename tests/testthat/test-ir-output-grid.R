@@ -60,7 +60,7 @@ test_that("reduce over unknown dims errors", {
 })
 
 test_that("full pipeline grids: Source -> Map -> Focal -> Reduce", {
-  a <- lazy_source("x.tif")            # stub: 100x100 f32, EPSG:4326
+  a <- lazy_source_stub("x.tif")            # stub: 100x100 f32, EPSG:4326
   m <- a + 1
   f <- focal(m, fn = function(n) mean(n), radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
@@ -75,6 +75,6 @@ test_that("full pipeline grids: Source -> Map -> Focal -> Reduce", {
 })
 
 test_that("reduce_over rejects unknown ops at node construction", {
-  a <- lazy_source("x.tif")
+  a <- lazy_source_stub("x.tif")
   expect_error(reduce_over(a, "medoid", c("x", "y")), "op")
 })

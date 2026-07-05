@@ -14,7 +14,8 @@ Depends:
     R (>= 4.3)
 Imports:
     S7,
-    gdalraster
+    gdalraster,
+    methods
 Remotes:
     hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
     r-xla/anvl@b724533
@@ -38,5 +39,6 @@ Collate:
     'passes.R'
     'collect.R'
     'dot.R'
+    'gdal_adapter.R'
     'lazy_raster.R'
     'zzz.R'
