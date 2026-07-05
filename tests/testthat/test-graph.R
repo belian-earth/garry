@@ -1,7 +1,7 @@
 test_that("graph build and topo-sort works", {
   g  <- graph_new()
   gs <- GridSpec(crs = "EPSG:4326", transform = c(0, 1, 0, 0, 0, -1),
-                 extent = c(0, -10, 10, 0), dim = c(10L, 10L), dtype = "f32")
+                 extent = c(0, -10, 10, 0), dims = c(10L, 10L), dtype = "f32")
 
   src_id   <- graph_add(g, SourceNode, parents = integer(0), grid = gs,
                         path = "x.tif", band = 1L)

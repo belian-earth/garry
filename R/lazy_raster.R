@@ -1,3 +1,7 @@
+#' @include graph.R node.R grid.R
+#' @keywords internal
+NULL
+
 # ---------------------------------------------------------------------------
 # LazyRaster: user-facing array-like over the IR graph.
 #
@@ -7,6 +11,10 @@
 
 #' Lazy raster array.
 #'
+#' @param graph The shared IR `Graph`.
+#' @param node_id Integer id of this raster's node.
+#' @param grid Cached `GridSpec` for fast dim/crs access.
+#' @return A `LazyRaster`.
 #' @export
 LazyRaster <- S7::new_class(
   "LazyRaster",
@@ -24,9 +32,13 @@ LazyRaster <- S7::new_class(
 #' Build a LazyRaster from a GDAL source.
 #'
 #' Stubbed grid inspection for the Phase 1/2 sketch: a real implementation
-#' reads CRS/transform/extent/dim via gdalraster. `graph` defaults to a
+#' reads CRS/transform/extent/dims via gdalraster. `graph` defaults to a
 #' fresh graph; pass an existing one to share.
 #'
+#' @param path Path or VSI URL readable by GDAL.
+#' @param band 1-based band index.
+#' @param graph `Graph` to add the source to; defaults to a fresh graph.
+#' @return A `LazyRaster`.
 #' @export
 lazy_source <- function(path, band = 1L, graph = graph_new()) {
   grid <- .read_grid_stub(path)
@@ -48,7 +60,7 @@ lazy_source <- function(path, band = 1L, graph = graph_new()) {
     crs       = "EPSG:4326",
     transform = c(0, 1, 0, 0, 0, -1),
     extent    = c(0, -100, 100, 0),
-    dim       = c(100L, 100L),
+    dims       = c(100L, 100L),
     dtype     = "f32"
   )
 }
@@ -128,6 +140,10 @@ focal <- function(x, fn, radius, boundary = "reflect") {
 
 #' Reduction over named dims.
 #'
+#' @param x A `LazyRaster`.
+#' @param fn Reducing function.
+#' @param over Names of dims to reduce over.
+#' @return A `LazyRaster`.
 #' @export
 reduce_over <- function(x, fn, over) {
   stopifnot(S7::S7_inherits(x, LazyRaster))
@@ -147,7 +163,7 @@ S7::method(print, LazyRaster) <- function(x, ...) {
   cat("<LazyRaster>\n")
   cat("  node_id:", x@node_id, "\n")
   cat("  crs:    ", x@grid@crs, "\n")
-  cat("  dim:    ", paste(x@grid@dim, collapse = " x "), "\n")
+  cat("  dim:    ", paste(x@grid@dims, collapse = " x "), "\n")
   cat("  dtype:  ", x@grid@dtype, "\n")
   cat("  nodes:  ", length(graph_ids(x@graph)), "in graph\n")
   invisible(x)

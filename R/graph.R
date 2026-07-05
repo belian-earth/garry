@@ -12,6 +12,8 @@
 
 #' Compute graph.
 #'
+#' @param nodes Environment holding the node table and id counter.
+#' @return A `Graph`.
 #' @export
 Graph <- S7::new_class(
   "Graph",
@@ -22,6 +24,7 @@ Graph <- S7::new_class(
 
 #' Create an empty graph.
 #'
+#' @return A `Graph` with no nodes.
 #' @export
 graph_new <- function() {
   env <- new.env(parent = emptyenv(), hash = TRUE)
@@ -35,8 +38,10 @@ graph_new <- function() {
 #' Add a node. `ctor` is an S7 node constructor; `...` are its properties
 #' (the `id` property is assigned here and passed automatically).
 #'
-#' Returns the assigned id.
-#'
+#' @param graph A `Graph`.
+#' @param ctor S7 node class constructor.
+#' @param ... Properties passed to `ctor`.
+#' @return The assigned integer id.
 #' @export
 graph_add <- function(graph, ctor, ...) {
   id   <- graph@nodes$.next_id
@@ -48,6 +53,9 @@ graph_add <- function(graph, ctor, ...) {
 
 #' Look up a node by id.
 #'
+#' @param graph A `Graph`.
+#' @param id Integer node id.
+#' @return The `Node`, or `NULL` if absent.
 #' @export
 graph_get <- function(graph, id) {
   graph@nodes[[.key(id)]]
@@ -55,6 +63,8 @@ graph_get <- function(graph, id) {
 
 #' All node ids in the graph, in insertion order.
 #'
+#' @param graph A `Graph`.
+#' @return Sorted integer vector of node ids.
 #' @export
 graph_ids <- function(graph) {
   keys <- ls(graph@nodes, all.names = TRUE)
@@ -64,6 +74,8 @@ graph_ids <- function(graph) {
 
 #' Topological sort of all node ids. Errors on cycles.
 #'
+#' @param graph A `Graph`.
+#' @return Integer node ids in topological order.
 #' @export
 graph_toposort <- function(graph) {
   ids <- graph_ids(graph)
@@ -97,6 +109,10 @@ graph_toposort <- function(graph) {
 
 #' Replace a node in place (for rewrite passes).
 #'
+#' @param graph A `Graph`.
+#' @param id Integer id of the node to replace.
+#' @param node The replacement `Node`.
+#' @return The replacement node, invisibly.
 #' @export
 graph_replace <- function(graph, id, node) {
   graph@nodes[[.key(id)]] <- node

@@ -10,19 +10,28 @@ Description: Experimental. Lazy raster arrays with CRS/transform-aware
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
 Depends:
     R (>= 4.3)
 Imports:
     S7,
-    vaster,
-    gdalraster,
-    mirai
+    gdalraster
 Remotes:
     hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
     r-xla/anvl@b724533
 Suggests:
     anvl,
+    mirai,
     terra,
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    vaster
 Config/testthat/edition: 3
+Config/roxygen2/version: 8.0.0
+Collate: 
+    'grid.R'
+    'chunk_grid.R'
+    'node.R'
+    'generics.R'
+    'graph.R'
+    'lazy_raster.R'
+    'options.R'
+    'zzz.R'

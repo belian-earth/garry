@@ -1,8 +1,12 @@
+#' @include grid.R
+#' @keywords internal
+NULL
+
 # ---------------------------------------------------------------------------
 # ChunkGrid: partitions a GridSpec into executable chunks.
 #
-# Wraps vaster's pixel-index primitives. Produces chunk enumerations and
-# halo-padded windows. 2D now; time/band treated as outer dims by callers.
+# Produces chunk enumerations and halo-padded windows. 2D now; time/band
+# treated as outer dims by callers.
 #
 # Conventions (internal): 0-based pixel offsets on input to gdalraster;
 # 1-based indexing stays inside R-facing utilities. Translation lives here
@@ -11,6 +15,11 @@
 
 #' A chunk partition of a GridSpec.
 #'
+#' @param grid The `GridSpec` being partitioned.
+#' @param chunk_dim Integer length 2: chunk size (cx, cy) in pixels.
+#' @param block_dim Integer length 2: native GDAL block size, for snapping.
+#' @param halo Single non-negative integer halo radius in pixels.
+#' @return A `ChunkGrid`.
 #' @export
 ChunkGrid <- S7::new_class(
   "ChunkGrid",
@@ -33,6 +42,9 @@ ChunkGrid <- S7::new_class(
 
 #' Snap requested chunk size to a multiple of native block size.
 #'
+#' @param chunk_dim Requested chunk size, integer length 2.
+#' @param block_dim Native block size, integer length 2.
+#' @return Integer length 2, block-aligned and at least one block.
 #' @export
 snap_to_blocks <- function(chunk_dim, block_dim) {
   as.integer(pmax(block_dim, ceiling(chunk_dim / block_dim) * block_dim))
@@ -40,15 +52,22 @@ snap_to_blocks <- function(chunk_dim, block_dim) {
 
 #' Enumerate chunks.
 #'
-#' Returns a data frame of (ix, iy, x_off, y_off, x_size, y_size) for every
-#' chunk. Offsets are 0-based. Sizes are clipped at the grid edge.
+#' Returns a data frame of (ix, iy, x_off, y_off, x_size, y_size, shape_id)
+#' for every chunk. Offsets are 0-based. Sizes are clipped at the grid
+#' edge. `shape_id` classifies each chunk as "interior", "right",
+#' "bottom", or "corner" — a regular chunk grid produces at most these
+#' four distinct shapes (decision D4: no pad-to-uniform; the executor's
+#' kernel cache sees <= 4 shapes per stage).
 #'
+#' @param cg A `ChunkGrid`.
+#' @param ... Passed to methods.
+#' @return A data frame with one row per chunk.
 #' @export
 chunk_iter <- S7::new_generic("chunk_iter", "cg")
 
 S7::method(chunk_iter, ChunkGrid) <- function(cg) {
-  nx <- cg@grid@dim[1L]
-  ny <- cg@grid@dim[2L]
+  nx <- cg@grid@dims[1L]
+  ny <- cg@grid@dims[2L]
   cx <- cg@chunk_dim[1L]
   cy <- cg@chunk_dim[2L]
 
@@ -63,6 +82,14 @@ S7::method(chunk_iter, ChunkGrid) <- function(cg) {
   grid$y_off  <- y_starts[grid$iy]
   grid$x_size <- pmin(cx, nx - grid$x_off)
   grid$y_size <- pmin(cy, ny - grid$y_off)
+
+  # Compare against the effective chunk size so a single-column/row grid
+  # (chunk larger than raster) counts as interior, not clipped.
+  clipped_x <- grid$x_size < min(cx, nx)
+  clipped_y <- grid$y_size < min(cy, ny)
+  grid$shape_id <- ifelse(clipped_x & clipped_y, "corner",
+                   ifelse(clipped_x, "right",
+                   ifelse(clipped_y, "bottom", "interior")))
   grid
 }
 
@@ -73,6 +100,10 @@ S7::method(chunk_iter, ChunkGrid) <- function(cg) {
 #' `pad_right`, `pad_bottom`). Kernels trim by these values to recover the
 #' unpadded output.
 #'
+#' @param cg A `ChunkGrid`.
+#' @param ... Method arguments: `x_off`, `y_off`, `x_size`, `y_size`, the
+#'   0-based unpadded chunk window.
+#' @return A list with the padded window and per-side pads.
 #' @export
 chunk_window_with_halo <- S7::new_generic("chunk_window_with_halo", "cg")
 
@@ -80,8 +111,8 @@ S7::method(chunk_window_with_halo, ChunkGrid) <- function(cg,
                                                           x_off, y_off,
                                                           x_size, y_size) {
   h  <- cg@halo
-  nx <- cg@grid@dim[1L]
-  ny <- cg@grid@dim[2L]
+  nx <- cg@grid@dims[1L]
+  ny <- cg@grid@dims[2L]
 
   x_lo <- max(0L, x_off - h)
   y_lo <- max(0L, y_off - h)
@@ -100,50 +131,77 @@ S7::method(chunk_window_with_halo, ChunkGrid) <- function(cg,
   )
 }
 
-#' Map an output-chunk window on `out_grid` back to the minimal input window
-#' required on `in_grid`. Used by WarpNode during planning.
+# ---------------------------------------------------------------------------
+# Cross-grid window mapping.
+#
+# Decision D5: this is a PLANNING ESTIMATE only, and it must CONTAIN the
+# true input window (over-estimates are safe, under-estimates are bugs).
+# Execution-time window math for warps is owned by GDAL's warper (Phase
+# 4b); nothing downstream may treat these windows as exact.
+# ---------------------------------------------------------------------------
+
+# World bounds (xmin, ymin, xmax, ymax) of a 0-based pixel window on a
+# north-up grid.
+.window_world_bounds <- function(grid, x_off, y_off, x_size, y_size) {
+  gt <- grid@transform
+  c(gt[1L] + x_off * gt[2L],
+    gt[4L] + (y_off + y_size) * gt[6L],
+    gt[1L] + (x_off + x_size) * gt[2L],
+    gt[4L] + y_off * gt[6L])
+}
+
+#' Map an output-chunk window on `out_grid` to the minimal input window
+#' required on `in_grid`.
 #'
-#' Pure geometry: takes two GridSpecs whose transforms may differ, plus an
-#' output window in cells on `out_grid`, and returns the input window in
-#' cells on `in_grid`.
+#' Same CRS: exact affine math (north-up grids, so window corners are
+#' extremal). Different CRS: bounds are transformed with
+#' `gdalraster::transform_bounds()`, which densifies the boundary so
+#' curved edges (e.g. parallels in a transverse Mercator zone) cannot
+#' shrink the window; a safety margin of `garry_opt("window_margin")`
+#' input cells is then added.
 #'
+#' Returns a list (x_off, y_off, x_size, y_size), 0-based, clipped to
+#' `in_grid`. A window fully outside `in_grid` returns zero sizes.
+#'
+#' @param out_grid,in_grid `GridSpec`s of the consumer and producer.
+#' @param x_off,y_off,x_size,y_size 0-based output window on `out_grid`.
+#' @param margin Safety margin in input cells; defaults to 0 for same-CRS
+#'   windows and `garry_opt("window_margin")` across CRS.
+#' @return A list with the 0-based input window.
 #' @export
 cross_grid_window <- function(out_grid, in_grid,
-                              x_off, y_off, x_size, y_size) {
-  # Corners of the output window in world coords via out_grid's transform.
-  corners_px_x <- c(x_off, x_off + x_size)
-  corners_px_y <- c(y_off, y_off + y_size)
+                              x_off, y_off, x_size, y_size,
+                              margin = NULL) {
+  bounds <- .window_world_bounds(out_grid, x_off, y_off, x_size, y_size)
 
-  gt_out <- out_grid@transform
-  world_x <- gt_out[1L] + corners_px_x * gt_out[2L] + corners_px_y * gt_out[3L]
-  world_y <- gt_out[4L] + corners_px_x * gt_out[5L] + corners_px_y * gt_out[6L]
+  same_crs <- crs_equal(out_grid@crs, in_grid@crs)
+  if (!same_crs) {
+    bounds <- gdalraster::transform_bounds(bounds, out_grid@crs, in_grid@crs)
+    if (is.null(margin)) margin <- garry_opt("window_margin")
+  }
+  if (is.null(margin)) margin <- 0L
 
-  # Inverse of in_grid's transform, applied to the world corners.
-  gt_in <- in_grid@transform
-  det   <- gt_in[2L] * gt_in[6L] - gt_in[3L] * gt_in[5L]
-  if (abs(det) < 1e-12) stop("input grid transform is singular")
-  inv_a <-  gt_in[6L] / det
-  inv_b <- -gt_in[3L] / det
-  inv_d <- -gt_in[5L] / det
-  inv_e <-  gt_in[2L] / det
+  gt <- in_grid@transform
+  # North-up: x from xmin/xmax, y rows from ymax downwards (gt[6] < 0).
+  px_lo <- floor((bounds[1L] - gt[1L]) / gt[2L])
+  px_hi <- ceiling((bounds[3L] - gt[1L]) / gt[2L])
+  py_lo <- floor((bounds[4L] - gt[4L]) / gt[6L])
+  py_hi <- ceiling((bounds[2L] - gt[4L]) / gt[6L])
 
-  dx <- world_x - gt_in[1L]
-  dy <- world_y - gt_in[4L]
-  in_px_x <- dx * inv_a + dy * inv_b
-  in_px_y <- dx * inv_d + dy * inv_e
+  px_lo <- px_lo - margin; py_lo <- py_lo - margin
+  px_hi <- px_hi + margin; py_hi <- py_hi + margin
 
-  ix_lo <- floor(min(in_px_x))
-  iy_lo <- floor(min(in_px_y))
-  ix_hi <- ceiling(max(in_px_x))
-  iy_hi <- ceiling(max(in_px_y))
-
-  nx <- in_grid@dim[1L]
-  ny <- in_grid@dim[2L]
+  nx <- in_grid@dims[1L]
+  ny <- in_grid@dims[2L]
+  x_lo <- min(max(0, px_lo), nx)
+  y_lo <- min(max(0, py_lo), ny)
+  x_hi <- max(min(nx, px_hi), x_lo)
+  y_hi <- max(min(ny, py_hi), y_lo)
 
   list(
-    x_off  = as.integer(max(0L, ix_lo)),
-    y_off  = as.integer(max(0L, iy_lo)),
-    x_size = as.integer(min(nx, ix_hi) - max(0L, ix_lo)),
-    y_size = as.integer(min(ny, iy_hi) - max(0L, iy_lo))
+    x_off  = as.integer(x_lo),
+    y_off  = as.integer(y_lo),
+    x_size = as.integer(x_hi - x_lo),
+    y_size = as.integer(y_hi - y_lo)
   )
 }
