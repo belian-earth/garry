@@ -4,17 +4,23 @@
 \alias{collect}
 \title{Materialise a LazyRaster (or inspect its plan).}
 \usage{
-collect(x, plan_only = FALSE)
+collect(x, plan_only = FALSE, path = NULL, nodata = NULL)
 }
 \arguments{
 \item{x}{A \code{LazyRaster}.}
 
 \item{plan_only}{Return the \code{Plan} instead of executing?}
+
+\item{path}{Optional GTiff destination; the result is written chunk
+by chunk and the path returned invisibly.}
+
+\item{nodata}{Optional sentinel for the written file (NaN demotes to
+it; required for integer outputs containing nodata).}
 }
 \value{
-With \code{plan_only = TRUE}, the \code{Plan}. Otherwise the
-materialised result: a \verb{[y, x]} matrix for raster sinks, a scalar
-for global reductions.
+With \code{plan_only = TRUE}, the \code{Plan}. With \code{path}, the path,
+invisibly. Otherwise the materialised result: a \verb{[y, x]} matrix
+for raster sinks, a scalar for global reductions.
 }
 \description{
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}

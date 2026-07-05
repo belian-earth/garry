@@ -180,6 +180,12 @@ plan_lazy <- function(x) {
 
     } else if (S7::S7_inherits(node, WarpNode)) {
       pin <- node@parents[[1L]]
+      if (!S7::S7_inherits(graph_get(graph, pin), SourceNode))
+        .garry_error(paste0(
+          "warping a computed raster is not supported in v1: align() ",
+          "sources before computing on them, or materialise to disk ",
+          "first (collect(x, path = ...))."),
+          "garry_warp_unsupported_error")
       node_stage[[.key(id)]] <-
         new_proto("warp", id, node@target_grid,
                   node_stage[[.key(pin)]], pin)

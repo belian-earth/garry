@@ -10,12 +10,16 @@ NULL
 #'
 #' @param x A `LazyRaster`.
 #' @param plan_only Return the `Plan` instead of executing?
-#' @return With `plan_only = TRUE`, the `Plan`. Otherwise the
-#'   materialised result: a `[y, x]` matrix for raster sinks, a scalar
-#'   for global reductions.
+#' @param path Optional GTiff destination; the result is written chunk
+#'   by chunk and the path returned invisibly.
+#' @param nodata Optional sentinel for the written file (NaN demotes to
+#'   it; required for integer outputs containing nodata).
+#' @return With `plan_only = TRUE`, the `Plan`. With `path`, the path,
+#'   invisibly. Otherwise the materialised result: a `[y, x]` matrix
+#'   for raster sinks, a scalar for global reductions.
 #' @export
-collect <- function(x, plan_only = FALSE) {
+collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL) {
   p <- plan_lazy(x)
   if (plan_only) return(p)
-  execute_plan(p)
+  execute_plan(p, path = path, nodata = nodata)
 }

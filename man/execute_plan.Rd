@@ -4,15 +4,23 @@
 \alias{execute_plan}
 \title{Execute a Plan on the anvl backend (single-threaded).}
 \usage{
-execute_plan(plan)
+execute_plan(plan, path = NULL, nodata = NULL)
 }
 \arguments{
 \item{plan}{A \code{Plan}.}
+
+\item{path}{Optional GTiff destination: the sink raster is written
+chunk by chunk instead of returned in memory.}
+
+\item{nodata}{Optional sentinel recorded in the output and used to
+demote NaN on write (required for integer outputs containing NaN).}
 }
 \value{
-The sink stage's value: a matrix/array for raster sinks, a
-scalar for global reductions. When \code{options(garry.exec_stats = TRUE)}, the result carries a \code{garry_exec_stats} attribute with the
-distinct input shapes submitted per stage (kernel-cache accounting).
+The sink stage's value (matrix for raster sinks, scalar for
+global reductions), or \code{path} invisibly when writing. When
+\code{options(garry.exec_stats = TRUE)}, in-memory results carry a
+\code{garry_exec_stats} attribute with the distinct input shapes
+submitted per stage (kernel-cache accounting).
 }
 \description{
 Execute a Plan on the anvl backend (single-threaded).

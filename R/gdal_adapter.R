@@ -103,3 +103,92 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
   v[is.na(v) & !is.nan(v)] <- NaN        # GDAL-side masked values
   matrix(v, nrow = y_size, byrow = TRUE)
 }
+
+# Reverse dtype map for writing.
+.gdal_dtype_rev <- c(
+  u8 = "Byte", i8 = "Int8",
+  u16 = "UInt16", i16 = "Int16",
+  u32 = "UInt32", i32 = "Int32",
+  u64 = "UInt64", i64 = "Int64",
+  f32 = "Float32", f64 = "Float64"
+)
+
+#' Build a warped VRT of a source onto an exact target grid.
+#'
+#' Delegates every pixel of cross-CRS math to the GDAL warper (decision
+#' D5): `-te`/`-ts` pin the output grid exactly to `target_grid`.
+#' Float targets without a source nodata get `-dstnodata nan` so area
+#' outside the source footprint reads as NaN, not 0 (D8).
+#'
+#' @param src_path Source path/VSI URL.
+#' @param band 1-based source band (the VRT has this single band).
+#' @param target_grid `GridSpec` to warp onto.
+#' @param resampling GDAL resampling method name.
+#' @param src_nodata Source sentinel (length 0 or 1), from the SourceNode.
+#' @return Path to the VRT file (in `tempdir()`).
+#' @export
+gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
+                          src_nodata = numeric(0)) {
+  vrt <- tempfile(fileext = ".vrt")
+  num <- function(v) sprintf("%.17g", v)
+  args <- c("-of", "VRT",
+            "-te", num(target_grid@extent[1L]), num(target_grid@extent[2L]),
+                   num(target_grid@extent[3L]), num(target_grid@extent[4L]),
+            "-ts", target_grid@dims[["x"]], target_grid@dims[["y"]],
+            "-r", resampling,
+            "-b", band,
+            "-et", "0")   # exact transformer: correctness over warp speed
+  if (length(src_nodata) == 0L &&
+      .dtype_family(target_grid@dtype) == "float") {
+    args <- c(args, "-dstnodata", "nan")
+  }
+  ok <- gdalraster::warp(src_path, vrt, t_srs = target_grid@crs,
+                         cl_arg = args, quiet = TRUE)
+  if (!isTRUE(ok)) stop("gdalwarp to VRT failed for ", src_path)
+  vrt
+}
+
+#' Create an output GTiff for a grid (single band).
+#'
+#' @param path Destination path.
+#' @param grid Output `GridSpec`.
+#' @param nodata Optional sentinel to record in metadata.
+#' @param options GTiff creation options.
+#' @return An open dataset object; caller must `$close()`.
+#' @export
+gdal_create_output <- function(path, grid, nodata = numeric(0),
+                               options = c("COMPRESS=DEFLATE")) {
+  dt <- .gdal_dtype_rev[[grid@dtype]]
+  if (is.null(dt)) stop("cannot write dtype: ", grid@dtype)
+  ds <- gdalraster::create("GTiff", path,
+                           grid@dims[["x"]], grid@dims[["y"]], 1L, dt,
+                           options = options, return_obj = TRUE)
+  ds$setGeoTransform(grid@transform)
+  ds$setProjection(grid@crs)
+  if (length(nodata) == 1L) ds$setNoDataValue(1L, nodata)
+  ds
+}
+
+#' Write a garry-oriented matrix into an open output dataset.
+#'
+#' NaN cells demote to `nodata` when given (D8 reversed at the sink);
+#' writing NaN into an integer band without a sentinel is an error.
+#'
+#' @param ds Open dataset from `gdal_create_output()`.
+#' @param x_off,y_off 0-based destination offsets.
+#' @param m `[y, x]` matrix.
+#' @param dtype Output dtype (for the NaN check).
+#' @param nodata Optional sentinel for NaN demotion.
+#' @return Invisibly, `NULL`.
+#' @export
+gdal_write_window <- function(ds, x_off, y_off, m, dtype,
+                              nodata = numeric(0)) {
+  if (length(nodata) == 1L) {
+    m[is.na(m)] <- nodata
+  } else if (anyNA(m) && .dtype_family(dtype) != "float") {
+    stop("result contains nodata (NaN) but no `nodata` sentinel was ",
+         "given for integer output dtype ", dtype)
+  }
+  ds$write(1L, x_off, y_off, ncol(m), nrow(m), as.numeric(t(m)))
+  invisible(NULL)
+}

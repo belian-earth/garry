@@ -20,12 +20,12 @@ NULL
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8).
-.exec_read_padded <- function(node, cg, core) {
+.exec_read_padded <- function(path, band, nodata, cg, core) {
   H <- cg@halo
   w <- chunk_window_with_halo(cg, core$x_off, core$y_off,
                               core$x_size, core$y_size)
-  sub <- gdal_read_window(node@path, node@band, w$x_off, w$y_off,
-                          w$x_size, w$y_size, nodata = node@nodata)
+  sub <- gdal_read_window(path, band, w$x_off, w$y_off,
+                          w$x_size, w$y_size, nodata = nodata)
   if (H == 0L) return(sub)
   buf <- matrix(NaN, core$y_size + 2L * H, core$x_size + 2L * H)
   r0 <- H - w$pad_top
@@ -49,12 +49,17 @@ NULL
 #' Execute a Plan on the anvl backend (single-threaded).
 #'
 #' @param plan A `Plan`.
-#' @return The sink stage's value: a matrix/array for raster sinks, a
-#'   scalar for global reductions. When `options(garry.exec_stats =
-#'   TRUE)`, the result carries a `garry_exec_stats` attribute with the
-#'   distinct input shapes submitted per stage (kernel-cache accounting).
+#' @param path Optional GTiff destination: the sink raster is written
+#'   chunk by chunk instead of returned in memory.
+#' @param nodata Optional sentinel recorded in the output and used to
+#'   demote NaN on write (required for integer outputs containing NaN).
+#' @return The sink stage's value (matrix for raster sinks, scalar for
+#'   global reductions), or `path` invisibly when writing. When
+#'   `options(garry.exec_stats = TRUE)`, in-memory results carry a
+#'   `garry_exec_stats` attribute with the distinct input shapes
+#'   submitted per stage (kernel-cache accounting).
 #' @export
-execute_plan <- function(plan) {
+execute_plan <- function(plan, path = NULL, nodata = NULL) {
   .require_anvl()
   graph <- plan@graph
   out <- vector("list", length(plan@stages))
@@ -64,15 +69,38 @@ execute_plan <- function(plan) {
     Find(function(p) nid %in% p@members, plan@stages)
   }
 
+  # A source stage consumed only by warp stages never needs reading:
+  # the warper pulls pixels from the file itself.
+  warp_only <- vapply(plan@stages, function(s) {
+    consumers <- Filter(function(t2) s@id %in% t2@inputs, plan@stages)
+    s@kind == "source_read" && length(consumers) > 0L &&
+      all(vapply(consumers, function(t2) t2@kind == "warp", logical(1))) &&
+      plan@sink != s@id
+  }, logical(1))
+
   for (s in plan@stages) {
     it <- chunk_iter(s@chunks)
 
     if (s@kind == "source_read") {
+      if (warp_only[[s@id]]) next
       node <- graph_get(graph, s@members[[1L]])
       key <- .key(node@id)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
-        stats::setNames(list(.exec_read_padded(node, s@chunks, it[j, ])),
-                        key)
+        stats::setNames(
+          list(.exec_read_padded(node@path, node@band, node@nodata,
+                                 s@chunks, it[j, ])), key)
+      })
+
+    } else if (s@kind == "warp") {
+      wnode <- graph_get(graph, s@members[[1L]])
+      snode <- graph_get(graph, wnode@parents[[1L]])
+      vrt <- gdal_warp_vrt(snode@path, snode@band, wnode@target_grid,
+                           wnode@resampling, src_nodata = snode@nodata)
+      key <- .key(wnode@id)
+      out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
+        stats::setNames(
+          list(.exec_read_padded(vrt, 1L, snode@nodata, s@chunks,
+                                 it[j, ])), key)
       })
 
     } else if (s@kind %in% c("compute", "reduce_partial")) {
@@ -104,8 +132,7 @@ execute_plan <- function(plan) {
       out[[s@id]] <- list(s@fn(partials))
 
     } else {
-      .garry_error(paste0("stage kind not executable yet: ", s@kind,
-                          " (warp execution arrives in Phase 4b)"),
+      .garry_error(paste0("stage kind not executable: ", s@kind),
                    "garry_not_implemented_error")
     }
   }
@@ -114,16 +141,35 @@ execute_plan <- function(plan) {
   key <- .key(sink@members[[length(sink@members)]])
   chunks <- lapply(out[[sink@id]], `[[`, key)
   it <- chunk_iter(sink@chunks)
+  # Sink chunks may still carry source/warp output padding.
+  sink_pad <- .exec_out_pad(sink)
+
+  if (!is.null(path)) {
+    if (nrow(it) == 1L && !is.matrix(chunks[[1L]]))
+      .garry_error("cannot write a scalar reduction to a raster file",
+                   "garry_plan_error")
+    nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+    ds <- gdal_create_output(path, sink@grid, nodata = nodata)
+    on.exit(ds$close(), add = TRUE)
+    for (j in seq_len(nrow(it))) {
+      gdal_write_window(ds, it$x_off[j], it$y_off[j],
+                        .exec_trim(chunks[[j]], sink_pad),
+                        dtype = sink@grid@dtype, nodata = nodata)
+    }
+    return(invisible(path))
+  }
 
   result <- if (nrow(it) == 1L) {
     v <- chunks[[1L]]
+    if (is.matrix(v)) v <- .exec_trim(v, sink_pad)
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
   } else {
     dims <- sink@grid@dims
     full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
     for (j in seq_len(nrow(it))) {
       full[(it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
-           (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <- chunks[[j]]
+           (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <-
+        .exec_trim(chunks[[j]], sink_pad)
     }
     full
   }
