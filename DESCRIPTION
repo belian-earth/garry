@@ -22,6 +22,7 @@ Remotes:
 Suggests:
     anvl,
     mirai,
+    rstac,
     terra,
     testthat (>= 3.0.0),
     vaster
@@ -44,4 +45,5 @@ Collate:
     'gradient.R'
     'lazy_raster.R'
     'scheduler.R'
+    'stac.R'
     'zzz.R'
