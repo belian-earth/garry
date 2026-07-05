@@ -200,3 +200,89 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
   ds$write(1L, x_off, y_off, ncol(m), nrow(m), as.numeric(t(m)))
   invisible(NULL)
 }
+
+# ---------------------------------------------------------------------------
+# GTI (GDAL Raster Tile Index) support: the mosaic layer (decision D18).
+# One datetime-attributed index serves every time slice via the FILTER
+# open option; SORT_FIELD gives deterministic overlap resolution; mixed
+# per-tile CRS is reprojected by the driver onto the pinned target grid.
+# ---------------------------------------------------------------------------
+
+#' Create a GTI tile index layer from a source table.
+#'
+#' `entries` must have a `location` column (paths / VSI URLs) and either
+#' a `geom` column (WKT polygons in `crs`) or `xmin`/`ymin`/`xmax`/`ymax`
+#' columns. All other columns become index fields (numeric -> Real,
+#' otherwise String); a `datetime` column enables per-slice FILTERs and
+#' SORT_FIELD ordering.
+#'
+#' @param entries data.frame describing one tile per row.
+#' @param path Index path (".gti.gpkg" or ".gti.fgb" recommended).
+#' @param crs CRS of the index geometries (any GDAL-interpretable form).
+#' @param layer Layer name.
+#' @return `path`, invisibly.
+#' @export
+gti_index_create <- function(entries, path, crs, layer = "index") {
+  stopifnot(is.data.frame(entries), "location" %in% names(entries))
+  has_geom <- "geom" %in% names(entries)
+  if (!has_geom)
+    stopifnot(all(c("xmin", "ymin", "xmax", "ymax") %in% names(entries)))
+
+  field_cols <- setdiff(names(entries),
+                        c("geom", "xmin", "ymin", "xmax", "ymax"))
+  defn <- gdalraster::ogr_def_layer("POLYGON",
+                                    srs = gdalraster::srs_to_wkt(crs))
+  for (col in field_cols) {
+    defn[[col]] <- gdalraster::ogr_def_field(
+      if (is.numeric(entries[[col]])) "OFTReal" else "OFTString")
+  }
+  fmt <- if (grepl("\\.fgb$", path)) "FlatGeobuf" else "GPKG"
+  if (!gdalraster::ogr_ds_create(fmt, path, layer = layer,
+                                 layer_defn = defn))
+    stop("failed to create GTI index dataset: ", path)
+
+  v <- methods::new(gdalraster::GDALVector, path, layer, read_only = FALSE)
+  on.exit(v$close(), add = TRUE)
+  for (i in seq_len(nrow(entries))) {
+    ft <- as.list(entries[i, field_cols, drop = FALSE])
+    ft$geom <- if (has_geom) entries$geom[[i]] else {
+      gdalraster::bbox_to_wkt(as.numeric(
+        entries[i, c("xmin", "ymin", "xmax", "ymax")]))
+    }
+    if (!v$createFeature(ft))
+      stop("failed to write index feature ", i)
+  }
+  invisible(path)
+}
+
+#' Build GTI open options pinning a target grid and slice filter.
+#'
+#' @param grid Optional `GridSpec`: pins SRS, resolution, and extent so
+#'   every slice opens on exactly this grid.
+#' @param filter Optional OGR SQL WHERE clause selecting index features
+#'   (e.g. one datetime slice).
+#' @param sort_field,sort_asc Optional deterministic overlap ordering
+#'   (highest value on top when ascending).
+#' @return Character vector of "KEY=VALUE" open options.
+#' @export
+gti_open_options <- function(grid = NULL, filter = NULL,
+                             sort_field = NULL, sort_asc = TRUE) {
+  num <- function(v) sprintf("%.17g", v)
+  oo <- character(0)
+  if (!is.null(grid)) {
+    oo <- c(oo,
+            paste0("SRS=", grid@crs),
+            paste0("RESX=", num(grid@transform[2L])),
+            paste0("RESY=", num(-grid@transform[6L])),
+            paste0("MINX=", num(grid@extent[1L])),
+            paste0("MINY=", num(grid@extent[2L])),
+            paste0("MAXX=", num(grid@extent[3L])),
+            paste0("MAXY=", num(grid@extent[4L])))
+  }
+  if (!is.null(filter)) oo <- c(oo, paste0("FILTER=", filter))
+  if (!is.null(sort_field)) {
+    oo <- c(oo, paste0("SORT_FIELD=", sort_field),
+            paste0("SORT_FIELD_ASC=", if (isTRUE(sort_asc)) "YES" else "NO"))
+  }
+  oo
+}

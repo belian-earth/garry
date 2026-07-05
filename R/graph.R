@@ -179,6 +179,7 @@ graph_import <- function(dst, src, root_id) {
   identical(a@path, b@path) &&
     identical(a@band, b@band) &&
     identical(a@nodata, b@nodata) &&
+    identical(a@open_options, b@open_options) &&
     grid_equal(a@grid, b@grid) &&
     identical(a@grid@dtype, b@grid@dtype)
 }
