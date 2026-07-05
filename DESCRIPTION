@@ -43,4 +43,5 @@ Collate:
     'executor.R'
     'gradient.R'
     'lazy_raster.R'
+    'scheduler.R'
     'zzz.R'

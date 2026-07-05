@@ -4,12 +4,14 @@
 \alias{g_upload}
 \title{Upload an R array to an AnvlArray of the given garry dtype.}
 \usage{
-g_upload(x, dtype)
+g_upload(x, dtype, device = NULL)
 }
 \arguments{
 \item{x}{R array/matrix.}
 
 \item{dtype}{garry dtype string (anvl-aligned).}
+
+\item{device}{Optional device (e.g. "cuda"); NULL uses the default.}
 }
 \value{
 An \code{AnvlArray}.

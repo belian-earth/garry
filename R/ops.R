@@ -41,11 +41,13 @@
 #' JIT-compile a stage closure via anvl (executor bridge).
 #'
 #' @param f Stage closure.
+#' @param device Optional device override (e.g. "cuda"); NULL uses the
+#'   anvl default device.
 #' @return A compiled function (anvl `JitFunction`).
 #' @export
-g_jit <- function(f) {
+g_jit <- function(f, device = NULL) {
   .require_anvl()
-  anvl::jit(f)
+  anvl::jit(f, device = device)
 }
 
 #' Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
@@ -64,11 +66,13 @@ g_value_and_gradient <- function(f, wrt) {
 #'
 #' @param x R array/matrix.
 #' @param dtype garry dtype string (anvl-aligned).
+#' @param device Optional device (e.g. "cuda"); NULL uses the default.
 #' @return An `AnvlArray`.
 #' @export
-g_upload <- function(x, dtype) {
+g_upload <- function(x, dtype, device = NULL) {
   .require_anvl()
-  anvl::nv_array(x, dtype)
+  if (is.null(device)) anvl::nv_array(x, dtype)
+  else anvl::nv_array(x, dtype, device = device)
 }
 
 #' Download an AnvlArray (or a nested list of them) to R arrays.

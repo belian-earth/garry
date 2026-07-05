@@ -4,10 +4,13 @@
 \alias{g_jit}
 \title{JIT-compile a stage closure via anvl (executor bridge).}
 \usage{
-g_jit(f)
+g_jit(f, device = NULL)
 }
 \arguments{
 \item{f}{Stage closure.}
+
+\item{device}{Optional device override (e.g. "cuda"); NULL uses the
+anvl default device.}
 }
 \value{
 A compiled function (anvl \code{JitFunction}).

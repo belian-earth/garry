@@ -4,7 +4,7 @@
 \alias{collect}
 \title{Materialise a LazyRaster (or inspect its plan).}
 \usage{
-collect(x, plan_only = FALSE, path = NULL, nodata = NULL)
+collect(x, plan_only = FALSE, path = NULL, nodata = NULL, distributed = FALSE)
 }
 \arguments{
 \item{x}{A \code{LazyRaster}.}
@@ -16,6 +16,10 @@ by chunk and the path returned invisibly.}
 
 \item{nodata}{Optional sentinel for the written file (NaN demotes to
 it; required for integer outputs containing nodata).}
+
+\item{distributed}{Execute across mirai daemons (requires
+\code{mirai::daemons()} to be set)? Results are identical to the
+single-threaded executor.}
 }
 \value{
 With \code{plan_only = TRUE}, the \code{Plan}. With \code{path}, the path,
