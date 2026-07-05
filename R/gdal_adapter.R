@@ -24,15 +24,20 @@ NULL
   Float32 = "f32", Float64 = "f64"
 )
 
-# Dataset handle cache: open once per path per process. Handles are
-# read-only; invalidate with .gdal_handle_reset() (tests, long sessions).
+# Dataset handle cache: open once per (path, open options) per process.
+# Handles are read-only; invalidate with .gdal_handle_reset() (tests,
+# long sessions).
 .gdal_handles <- new.env(parent = emptyenv())
 
-.gdal_handle <- function(path) {
-  key <- path
+.gdal_handle <- function(path, open_options = character(0)) {
+  key <- paste(c(path, open_options), collapse = "\x1f")
   h <- .gdal_handles[[key]]
   if (!is.null(h)) return(h)
-  h <- methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
+  h <- if (length(open_options) > 0L) {
+    methods::new(gdalraster::GDALRaster, path, TRUE, open_options)
+  } else {
+    methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
+  }
   .gdal_handles[[key]] <- h
   h
 }
@@ -48,11 +53,12 @@ NULL
 #'
 #' @param path Path or VSI URL readable by GDAL.
 #' @param band 1-based band index.
+#' @param open_options GDAL open options ("KEY=VALUE").
 #' @return A list: `grid` (`GridSpec`), `nodata` (length 0 or 1),
 #'   `block_dim` (integer length 2, x then y).
 #' @export
-gdal_grid_spec <- function(path, band = 1L) {
-  ds <- .gdal_handle(path)
+gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
+  ds <- .gdal_handle(path, open_options)
   gt <- ds$getGeoTransform()
   nx <- ds$getRasterXSize()
   ny <- ds$getRasterYSize()
@@ -90,11 +96,13 @@ gdal_grid_spec <- function(path, band = 1L) {
 #' @param band 1-based band index.
 #' @param x_off,y_off,x_size,y_size 0-based pixel window.
 #' @param nodata Length-0 or length-1 sentinel to promote to NaN.
+#' @param open_options GDAL open options ("KEY=VALUE").
 #' @return A numeric `y_size x x_size` matrix.
 #' @export
 gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
-                             nodata = numeric(0)) {
-  ds <- .gdal_handle(path)
+                             nodata = numeric(0),
+                             open_options = character(0)) {
+  ds <- .gdal_handle(path, open_options)
   v <- ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size)
   v <- as.numeric(v)
   if (length(nodata) == 1L) {

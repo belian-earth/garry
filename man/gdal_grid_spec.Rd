@@ -4,12 +4,14 @@
 \alias{gdal_grid_spec}
 \title{Inspect a GDAL source and build its GridSpec (plus read metadata).}
 \usage{
-gdal_grid_spec(path, band = 1L)
+gdal_grid_spec(path, band = 1L, open_options = character(0))
 }
 \arguments{
 \item{path}{Path or VSI URL readable by GDAL.}
 
 \item{band}{1-based band index.}
+
+\item{open_options}{GDAL open options ("KEY=VALUE").}
 }
 \value{
 A list: \code{grid} (\code{GridSpec}), \code{nodata} (length 0 or 1),

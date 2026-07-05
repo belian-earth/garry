@@ -4,7 +4,16 @@
 \alias{.daemon_run_source}
 \title{Daemon task body: read one padded source chunk into the store.}
 \usage{
-.daemon_run_source(path, band, nodata, cg, core, key, out_file)
+.daemon_run_source(
+  path,
+  band,
+  nodata,
+  cg,
+  core,
+  key,
+  out_file,
+  open_options = character(0)
+)
 }
 \arguments{
 \item{path, band, nodata}{Source identity.}

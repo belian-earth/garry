@@ -20,12 +20,14 @@ NULL
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8).
-.exec_read_padded <- function(path, band, nodata, cg, core) {
+.exec_read_padded <- function(path, band, nodata, cg, core,
+                              open_options = character(0)) {
   H <- cg@halo
   w <- chunk_window_with_halo(cg, core$x_off, core$y_off,
                               core$x_size, core$y_size)
   sub <- gdal_read_window(path, band, w$x_off, w$y_off,
-                          w$x_size, w$y_size, nodata = nodata)
+                          w$x_size, w$y_size, nodata = nodata,
+                          open_options = open_options)
   if (H == 0L) return(sub)
   buf <- matrix(NaN, core$y_size + 2L * H, core$x_size + 2L * H)
   r0 <- H - w$pad_top
@@ -44,6 +46,29 @@ NULL
 # windows; compute stages consume their padding and emit chunk cores.
 .exec_out_pad <- function(stage) {
   if (stage@kind %in% c("source_read", "warp")) stage@halo else 0L
+}
+
+# Assemble sink chunks into the full raster; stacks assemble to
+# (t, y, x) arrays (D17), 2D sinks to [y, x] matrices.
+.exec_assemble <- function(chunks, it, grid, sink_pad) {
+  dims <- grid@dims
+  outer_dims <- dims[!names(dims) %in% c("x", "y")]
+  if (length(outer_dims) == 0L) {
+    full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
+    for (j in seq_len(nrow(it))) {
+      full[(it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
+           (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <-
+        .exec_trim(chunks[[j]], sink_pad)
+    }
+    return(full)
+  }
+  stopifnot(length(outer_dims) == 1L, sink_pad == 0L)
+  full <- array(NA_real_, c(outer_dims[[1L]], dims[["y"]], dims[["x"]]))
+  for (j in seq_len(nrow(it))) {
+    full[, (it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
+         (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <- chunks[[j]]
+  }
+  full
 }
 
 #' Execute a Plan on the anvl backend (single-threaded).
@@ -88,7 +113,8 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
         stats::setNames(
           list(.exec_read_padded(node@path, node@band, node@nodata,
-                                 s@chunks, it[j, ])), key)
+                                 s@chunks, it[j, ],
+                                 open_options = node@open_options)), key)
       })
 
     } else if (s@kind == "warp") {
@@ -164,14 +190,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
     if (is.matrix(v)) v <- .exec_trim(v, sink_pad)
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
   } else {
-    dims <- sink@grid@dims
-    full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
-    for (j in seq_len(nrow(it))) {
-      full[(it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
-           (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <-
-        .exec_trim(chunks[[j]], sink_pad)
-    }
-    full
+    .exec_assemble(chunks, it, sink@grid, sink_pad)
   }
 
   if (isTRUE(getOption("garry.exec_stats", FALSE)))

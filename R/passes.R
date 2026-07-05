@@ -70,6 +70,8 @@ NULL
     } else {
       node@fn(shifts)
     }
+  } else if (S7::S7_inherits(node, StackNode)) {
+    g_stack(pv)
   } else if (S7::S7_inherits(node, ReduceNode)) {
     margins <- .dim_margins(parent_dim_names, node@over)
     .apply_reduce(node@op, pv[[1L]], margins, node@nan_rm)

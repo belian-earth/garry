@@ -4,7 +4,16 @@
 \alias{gdal_read_window}
 \title{Read a window from a GDAL source as a garry-oriented matrix.}
 \usage{
-gdal_read_window(path, band, x_off, y_off, x_size, y_size, nodata = numeric(0))
+gdal_read_window(
+  path,
+  band,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  nodata = numeric(0),
+  open_options = character(0)
+)
 }
 \arguments{
 \item{path}{Path or VSI URL readable by GDAL.}
@@ -14,6 +23,8 @@ gdal_read_window(path, band, x_off, y_off, x_size, y_size, nodata = numeric(0))
 \item{x_off, y_off, x_size, y_size}{0-based pixel window.}
 
 \item{nodata}{Length-0 or length-1 sentinel to promote to NaN.}
+
+\item{open_options}{GDAL open options ("KEY=VALUE").}
 }
 \value{
 A numeric \verb{y_size x x_size} matrix.

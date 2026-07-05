@@ -179,6 +179,22 @@ g_cast <- function(x, dtype) {
   out
 }
 
+#' Stack 2D layers into a (t, y, x) array (decision D17 layout).
+#'
+#' @param values List of same-shaped (y, x) matrices.
+#' @return A `length(values) x nrow x ncol` array.
+#' @export
+g_stack <- function(values) {
+  if (.g_traced(values[[1L]])) {
+    ex <- lapply(values, function(v) anvl::nv_unsqueeze(v, 1L))
+    return(do.call(anvl::nv_concatenate, c(ex, list(dimension = 1L))))
+  }
+  nr <- nrow(values[[1L]]); nc <- ncol(values[[1L]])
+  out <- array(NA_real_, c(length(values), nr, nc))
+  for (i in seq_along(values)) out[i, , ] <- values[[i]]
+  out
+}
+
 #' Extract element `i` of a 1-D array as a scalar (static index).
 #'
 #' @param v 1-D array (e.g. a flattened kernel).

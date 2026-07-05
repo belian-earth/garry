@@ -11,7 +11,8 @@ SourceNode(
   path = character(0),
   band = integer(0),
   nodata = integer(0),
-  block_dim = integer(0)
+  block_dim = integer(0),
+  open_options = character(0)
 )
 }
 \arguments{
@@ -29,6 +30,8 @@ SourceNode(
 
 \item{block_dim}{Native GDAL block size (length 2), or length 0 if
 unknown; the chunking pass snaps chunk sizes to it.}
+
+\item{open_options}{GDAL open options ("KEY=VALUE"), e.g. GTI FILTER.}
 }
 \value{
 A \code{SourceNode}.

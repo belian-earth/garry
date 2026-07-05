@@ -47,16 +47,18 @@ Node <- S7::new_class(
 #' @param nodata Length-0 (absent) or length-1 nodata sentinel value.
 #' @param block_dim Native GDAL block size (length 2), or length 0 if
 #'   unknown; the chunking pass snaps chunk sizes to it.
+#' @param open_options GDAL open options ("KEY=VALUE"), e.g. GTI FILTER.
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(
   "SourceNode",
   parent = Node,
   properties = list(
-    path      = S7::class_character,
-    band      = S7::class_integer,
-    nodata    = S7::class_numeric,
-    block_dim = S7::class_integer
+    path         = S7::class_character,
+    band         = S7::class_integer,
+    nodata       = S7::class_numeric,
+    block_dim    = S7::class_integer,
+    open_options = S7::class_character
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L)

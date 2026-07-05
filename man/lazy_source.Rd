@@ -4,7 +4,13 @@
 \alias{lazy_source}
 \title{Build a LazyRaster from a GDAL source.}
 \usage{
-lazy_source(path, band = 1L, graph = graph_new(), nodata = NULL)
+lazy_source(
+  path,
+  band = 1L,
+  graph = graph_new(),
+  nodata = NULL,
+  open_options = character(0)
+)
 }
 \arguments{
 \item{path}{Path or VSI URL readable by GDAL.}
@@ -14,6 +20,9 @@ lazy_source(path, band = 1L, graph = graph_new(), nodata = NULL)
 \item{graph}{\code{Graph} to add the source to; defaults to a fresh graph.}
 
 \item{nodata}{Optional nodata sentinel overriding the file metadata.}
+
+\item{open_options}{GDAL open options ("KEY=VALUE"), e.g. a GTI
+\code{FILTER} selecting one time slice of a tile index.}
 }
 \value{
 A \code{LazyRaster}.

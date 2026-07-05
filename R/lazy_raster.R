@@ -41,10 +41,14 @@ LazyRaster <- S7::new_class(
 #' @param band 1-based band index.
 #' @param graph `Graph` to add the source to; defaults to a fresh graph.
 #' @param nodata Optional nodata sentinel overriding the file metadata.
+#' @param open_options GDAL open options ("KEY=VALUE"), e.g. a GTI
+#'   `FILTER` selecting one time slice of a tile index.
 #' @return A `LazyRaster`.
 #' @export
-lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL) {
-  meta <- gdal_grid_spec(path, band = as.integer(band))
+lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
+                        open_options = character(0)) {
+  meta <- gdal_grid_spec(path, band = as.integer(band),
+                         open_options = open_options)
   grid <- meta$grid
   nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
   if (length(nodata) == 1L && .dtype_family(grid@dtype) != "float")
@@ -52,12 +56,51 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL) {
   id <- graph_add(
     graph,
     SourceNode,
-    parents   = integer(0),
-    grid      = grid,
-    path      = path,
-    band      = as.integer(band),
-    nodata    = nodata,
-    block_dim = meta$block_dim
+    parents      = integer(0),
+    grid         = grid,
+    path         = path,
+    band         = as.integer(band),
+    nodata       = nodata,
+    block_dim    = meta$block_dim,
+    open_options = open_options
+  )
+  LazyRaster(graph = graph, node_id = id, grid = grid)
+}
+
+#' Stack aligned rasters along a new outer dim (default time).
+#'
+#' All layers must share the spatial grid (align first otherwise);
+#' dtypes promote to a common type. Chunks carry the stack as
+#' (t, y, x) arrays (decision D17); temporal reductions
+#' (`reduce_over(x, "median", "t")`) then run chunk-locally.
+#'
+#' @param xs List of `LazyRaster`s on one grid.
+#' @param along Name of the new dim ("t" or "band").
+#' @return A `LazyRaster` with an extra dim.
+#' @export
+lazy_stack <- function(xs, along = "t") {
+  stopifnot(is.list(xs), length(xs) >= 1L)
+  along <- match.arg(along, c("t", "band"))
+  graph <- xs[[1L]]@graph
+  ids <- vapply(seq_along(xs), function(i) {
+    x <- xs[[i]]
+    stopifnot(S7::S7_inherits(x, LazyRaster))
+    if (!grid_equal(xs[[1L]]@grid, x@grid))
+      stop("layer ", i, " is not on the same grid; align() it first")
+    if (identical(graph@nodes, x@graph@nodes)) x@node_id
+    else graph_import(graph, x@graph, x@node_id)
+  }, integer(1))
+
+  grids <- lapply(seq_along(ids), function(i) graph_get(graph, ids[[i]])@grid)
+  node_tmp <- StackNode(id = 0L, parents = ids, grid = grids[[1L]],
+                        along = along)
+  grid <- output_grid(node_tmp, grids)
+  id <- graph_add(
+    graph,
+    StackNode,
+    parents = ids,
+    grid    = grid,
+    along   = along
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }

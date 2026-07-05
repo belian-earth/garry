@@ -32,6 +32,7 @@ S7::method(required_halo, FusedNode)  <- function(node) node@halo
 fusable <- S7::new_generic("fusable", "node")
 S7::method(fusable, MapNode)   <- function(node) TRUE
 S7::method(fusable, FocalNode) <- function(node) TRUE
+S7::method(fusable, StackNode) <- function(node) TRUE
 S7::method(fusable, Node)      <- function(node) FALSE   # default: barrier
 
 #' Does this node force a stage boundary?
@@ -58,7 +59,15 @@ output_grid <- S7::new_generic("output_grid", "node")
 S7::method(output_grid, SourceNode) <- function(node, parent_grids) node@grid
 S7::method(output_grid, MapNode)    <- function(node, parent_grids) parent_grids[[1L]]
 S7::method(output_grid, FocalNode)  <- function(node, parent_grids) parent_grids[[1L]]
-S7::method(output_grid, StackNode)  <- function(node, parent_grids) parent_grids[[1L]]
+S7::method(output_grid, StackNode)  <- function(node, parent_grids) {
+  pg <- parent_grids[[1L]]
+  dtype <- Reduce(dtype_promote, vapply(parent_grids, function(p) p@dtype,
+                                        character(1)))
+  dims <- c(pg@dims[c("x", "y")],
+            stats::setNames(length(parent_grids), node@along))
+  GridSpec(crs = pg@crs, transform = pg@transform, extent = pg@extent,
+           dims = dims, dtype = dtype)
+}
 S7::method(output_grid, FusedNode)  <- function(node, parent_grids) parent_grids[[1L]]
 S7::method(output_grid, WarpNode)   <- function(node, parent_grids) node@target_grid
 S7::method(output_grid, ReduceNode) <- function(node, parent_grids) {

@@ -244,12 +244,43 @@ every golden pipeline — same Plan, two executors);
 `test-mirai-scaling.R` (≥0.7xN for N in {2,4}, slow/nightly);
 `test-mirai-cuda.R` (skip-if-no-CUDA GPU pool smoke).
 
-## Phase 8 — STAC/collections
+## Phase 8 — STAC/collections (revised 2026-07-05 after rustac/GTI research)
 
-Port vrtility STAC ingest → `lazy_stack()`/collection constructors
-emitting Source/Warp/Stack nodes. Gate: `test-stac-composite.R` —
-reproduce a median STAC composite vs vrtility output within tolerance
-(median over t is within-chunk: allowed per Phase 3 lock).
+Architecture: STAC client -> geoparquet/OGR tile index -> GDAL GTI
+driver per time slice -> StackNode -> chunk-local temporal reduce.
+GTI replaces VRT at the mosaic layer (lazy opens, spatial filtering,
+native mixed-CRS reprojection, SORT_FIELD overlap control, datetime
+FILTER per slice); VRT remains for WarpNode. rustac R bindings are a
+separate future project (developmentseed/stacrsr slot); garry's
+discovery layer is a narrow swappable interface implemented on rstac.
+
+**8a — stacks, no network**: `lazy_stack()` + StackNode execution
+(fusable; chunks stack to (t, y, x); median/quantile over t already
+planner-legal); SourceNode gains GDAL open options (needed for GTI
+FILTER). Gate: test-stack.R — 3D collect vs manual, temporal
+median/mean vs terra::app, masked (bitmask -> NaN) median vs R
+reference, chunk invariance, mirai equivalence.
+
+**8b — GTI mosaic layer**: build a datetime-attributed OGR index
+(GPKG/GeoParquet; location, geometry, datetime, proj/RES metadata set
+to avoid tile probing) from a source table; time-slice sources open
+`GTI:` DSNs with FILTER + SORT_FIELD. Gate: test-gti.R — GTI mosaic ==
+gdalbuildvrt mosaic on single-CRS fixtures; mixed-CRS fixture mosaics
+correctly (impossible with plain VRT); FILTER slices select the right
+items. Floor: GDAL >= 3.10.
+
+**8c — discovery + parity**: port vrtility's stac layer (GET->POST
+fallback, paginated collection check, cloud/orbit/coverage filters,
+MPC signer with token cache) behind `stac_sources()` returning the
+rectangular source table (item x asset rows: href, datetime, proj:*,
+eo:cloud_cover, geometry). Prefer GDAL VSICURL_PC_URL_SIGNING for MPC
+reads (pre-signed hrefs can expire mid-run). Gate:
+test-stac-composite.R — reproduce the vrtility benchmark composite
+(benchmarks/benchmark_r_vrtility.R: HLS S30, PNG bbox, 2023, Fmask
+bitmask mask, warp to EPSG:20255 30 m, median) within tolerance from a
+CACHED item set (deterministic); live-network smoke kept out of CI.
+Performance target (bench, not gate): parity with vrtility ~20.7 s /
+ODC+dask ~28.4 s on that workload.
 
 ## Phase 9 — Ergonomics
 
@@ -278,6 +309,8 @@ numbers (59 ms 3x3-mean/2048^2; 410 us dispatch). Gate: snapshot tests
 | D14 | Device-side within stage; anvl LRU = kernel cache; stencil = pad+shift; radius mandatory | P5 | test-kernel-cache.R, test-chunk-invariance.R |
 | D15 | Gradient stops at Warp; no focal-median AD; nan_rm-vs-mask formulation | P6.0 | test-grad-nanrm.R, test-grad-barriers.R |
 | D16 | One process per GPU; distributed == single-threaded | P7 | test-mirai-equivalence.R |
+| D17 | Stack chunks are (t, y, x); StackNode is fusable; temporal reduces stay chunk-local | P8a | test-stack.R |
+| D18 | Mosaic layer = GTI over datetime-attributed OGR/geoparquet index (FILTER per slice, SORT_FIELD overlaps); VRT only for warps; discovery behind a swappable client interface (rstac now, rustac-r later) | P8b/8c | test-gti.R, test-stac-composite.R |
 
 ## Risk register
 

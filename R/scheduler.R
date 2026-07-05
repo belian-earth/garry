@@ -35,8 +35,9 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_run_source <- function(path, band, nodata, cg, core, key,
-                               out_file) {
-  m <- .exec_read_padded(path, band, nodata, cg, core)
+                               out_file, open_options = character(0)) {
+  m <- .exec_read_padded(path, band, nodata, cg, core,
+                         open_options = open_options)
   saveRDS(stats::setNames(list(m), key), out_file)
   TRUE
 }
@@ -124,20 +125,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         vrt <- gdal_warp_vrt(snode@path, snode@band, wnode@target_grid,
                              wnode@resampling, src_nodata = snode@nodata)
         rpath <- vrt; rband <- 1L; rnodata <- snode@nodata
+        roo <- character(0)
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- node@path; rband <- node@band; rnodata <- node@nodata
+        roo <- node@open_options
       }
       skey <- .key(s@members[[1L]])
       for (j in seq_len(nrow(it))) {
         local({
           sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
-          p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey
+          p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
           add_task(sprintf("s%d_c%d", sid, jj), character(0), function() {
             mirai::mirai(
-              garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out),
+              garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
+                                        open_options = oo),
               p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-              out = chunk_file(sid, jj))
+              oo = oo, out = chunk_file(sid, jj))
           })
         })
       }
@@ -255,12 +259,5 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) return(v[1L, 1L])
     return(v)
   }
-  dims <- sink@grid@dims
-  full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
-  for (j in seq_len(nrow(it))) {
-    full[(it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
-         (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <-
-      .exec_trim(chunks[[j]], sink_pad)
-  }
-  full
+  .exec_assemble(chunks, it, sink@grid, sink_pad)
 }
