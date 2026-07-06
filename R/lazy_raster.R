@@ -67,6 +67,44 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
 
+#' Elementwise map over one or more aligned rasters.
+#'
+#' `fn` receives one traced array per input raster and returns one
+#' array; it runs fused inside the surrounding XLA stage. Write it with
+#' plain arithmetic and the `g_*` vocabulary (`g_ifelse`, `g_bitand`,
+#' `g_cast`, ...). Inputs must share a grid (`align()` first otherwise);
+#' graphs auto-merge (D6).
+#'
+#' The output dtype defaults to the promoted input dtype (D3); pass
+#' `dtype` when `fn` changes the value domain, e.g. `"f32"` for a mask
+#' that introduces NaN over an integer band.
+#'
+#' @param ... `LazyRaster` inputs (at least one).
+#' @param fn Function of as many arrays as there are inputs.
+#' @param dtype Optional output dtype override.
+#' @return A `LazyRaster`.
+#' @export
+lazy_map <- function(..., fn, dtype = NULL) {
+  xs <- list(...)
+  stopifnot(length(xs) >= 1L, is.function(fn))
+  graph <- xs[[1L]]@graph
+  ids <- vapply(seq_along(xs), function(i) {
+    x <- xs[[i]]
+    stopifnot(S7::S7_inherits(x, LazyRaster))
+    if (!grid_equal(xs[[1L]]@grid, x@grid))
+      stop("input ", i, " is not on the same grid; align() it first")
+    if (identical(graph@nodes, x@graph@nodes)) x@node_id
+    else graph_import(graph, x@graph, x@node_id)
+  }, integer(1))
+
+  out_dtype <- dtype %||% Reduce(dtype_promote, vapply(
+    seq_along(ids), function(i) graph_get(graph, ids[[i]])@grid@dtype,
+    character(1)))
+  grid <- .grid_retype(xs[[1L]]@grid, out_dtype)
+  id <- graph_add(graph, MapNode, parents = ids, grid = grid, fn = fn)
+  LazyRaster(graph = graph, node_id = id, grid = grid)
+}
+
 #' Stack aligned rasters along a new outer dim (default time).
 #'
 #' All layers must share the spatial grid (align first otherwise);

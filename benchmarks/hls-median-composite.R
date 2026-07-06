@@ -1,0 +1,102 @@
+# garry equivalent of vrtility/benchmarks/benchmark_r_vrtility.R
+#
+# Workload: HLS S30 (Planetary Computer) over the Kuamut-adjacent PNG
+# bbox, all of 2023; Fmask bits 0-3 (cirrus/cloud/adjacent/shadow)
+# masked to nodata; warped onto the EPSG:20255 30 m analysis grid;
+# per-day mosaics; temporal median composite per band; GTiff out.
+#
+# References measured on the same machine (vrtility/benchmarks):
+#   ODC + dask (Python): 28.35 s   (three bands, one pass)
+#   vrtility:            20.74 s   (three bands, one pass)
+#
+# Run:  Rscript benchmarks/hls-median-composite.R [n_daemons] [bands...]
+# e.g.  Rscript benchmarks/hls-median-composite.R 12 B04 B03 B02
+
+suppressMessages(library(garry))
+
+args <- commandArgs(trailingOnly = TRUE)
+n_daemons <- if (length(args) >= 1) as.integer(args[[1]]) else 12L
+bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
+
+# GDAL/network tuning. Pre-signed hrefs (below) beat per-URL GDAL
+# signing (VSICURL_PC_URL_SIGNING), which storms the MPC signing
+# endpoint across daemons into 429s; note pre-signed tokens expire
+# after ~1 h, so very long jobs should switch back to GDAL signing.
+Sys.setenv(GDAL_HTTP_MULTIPLEX = "YES", GDAL_HTTP_VERSION = "2")
+Sys.setenv(GDAL_HTTP_MAX_RETRY = "5", GDAL_HTTP_RETRY_DELAY = "1",
+           GDAL_HTTP_RETRY_CODES = "429,500,502,503")
+gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
+
+# The analysis grid: everything downstream is pinned to it exactly.
+target <- grid_spec(
+  "EPSG:20255",
+  extent = c(183060, 9144870, 220830, 9172800),
+  dims = c((220830 - 183060) / 30, (9172800 - 9144870) / 30),
+  dtype = "f32")
+
+# --- Discovery (not timed, matching the reference benchmarks) ---------------
+t_query <- system.time({
+  its <- stac_query(
+    bbox = c(144.13, -7.725, 144.47, -7.475),
+    stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
+    collection = "hls2-s30",
+    start_date = "2023-01-01",
+    end_date = "2023-12-31")
+  its <- rstac::items_sign(its, rstac::sign_planetary_computer())
+
+  src <- stac_sources(its, assets = c(bands, "Fmask")) |>
+    stac_drop_duplicates() |>
+    stac_time_slices("day")
+})
+slices <- sort(unique(src$slice))
+cat(sprintf("STAC query: %.2fs; %d item-assets, %d day slices\n",
+            t_query[["elapsed"]], nrow(src), length(slices)))
+
+mirai::daemons(n_daemons)
+
+options(garry.chunk_target_px = 1.4e6)
+
+t_all <- system.time({
+  # One GTI index per asset; each day is a FILTERed mosaic of that
+  # index, pinned to the target grid (mixed UTM zones warp per tile).
+  idx <- lapply(c(bands, "Fmask"), function(a)
+    stac_gti_index(src, a, crs = target@crs))
+  names(idx) <- c(bands, "Fmask")
+
+  slice_of <- function(asset, sl, nodata = NULL) {
+    lazy_source(
+      paste0("GTI:", idx[[asset]]),
+      nodata = nodata,
+      open_options = c(
+        gti_open_options(target,
+                         filter = sprintf("slice = '%s'", sl),
+                         sort_field = "datetime"),
+        "NUM_THREADS=2"))
+  }
+
+  for (band in bands) {
+    masked <- lapply(slices, function(sl) {
+      lazy_map(
+        slice_of(band, sl, nodata = -9999),   # reflectance: -9999 -> NaN
+        slice_of("Fmask", sl),                # u8 QA, no sentinel
+        dtype = "f32",
+        fn = function(x, f) {
+          bad <- g_bitand(g_cast(f, "i32"), 15L) > 0
+          g_ifelse(bad, NaN, x)
+        })
+    })
+
+    composite <- lazy_stack(masked) |>
+      reduce_over("median", "t", nan_rm = TRUE)
+
+    collect(composite,
+            path = sprintf("composite_garry_%s.tif", band),
+            nodata = -9999,
+            distributed = TRUE)
+    cat("  band", band, "done\n")
+  }
+})
+cat(sprintf("processing time (garry, %s, %d daemons): %.2fs\n",
+            paste(bands, collapse = "+"), n_daemons, t_all[["elapsed"]]))
+mirai::daemons(0)

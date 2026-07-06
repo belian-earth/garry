@@ -62,7 +62,16 @@ g_value_and_gradient <- function(f, wrt) {
   anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
 }
 
+# anvl cannot build unsigned arrays from R numerics; upload through a
+# signed (or f64 for u64) carrier wide enough for the full value range.
+# Bitwise/comparison semantics are unchanged for the non-negative
+# values QA bands hold. Candidate upstream contribution.
+.anvl_upload_dtype <- c(u8 = "i16", u16 = "i32", u32 = "i64", u64 = "f64")
+
 #' Upload an R array to an AnvlArray of the given garry dtype.
+#'
+#' Unsigned dtypes upload via a wider signed carrier (see
+#' `.anvl_upload_dtype`): anvl cannot construct them from R numerics.
 #'
 #' @param x R array/matrix.
 #' @param dtype garry dtype string (anvl-aligned).
@@ -71,6 +80,8 @@ g_value_and_gradient <- function(f, wrt) {
 #' @export
 g_upload <- function(x, dtype, device = NULL) {
   .require_anvl()
+  carrier <- unname(.anvl_upload_dtype[dtype])
+  if (!is.na(carrier)) dtype <- carrier
   if (is.null(device)) anvl::nv_array(x, dtype)
   else anvl::nv_array(x, dtype, device = device)
 }
