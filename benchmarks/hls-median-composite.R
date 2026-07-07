@@ -62,12 +62,17 @@ cat(sprintf("STAC query: %.2fs; %d item-assets, %d day slices\n",
 mirai::daemons(n_daemons)
 
 # Reads are whole-window (read_target_px decoupling: one GTI mosaic
-# open per slice x asset). The fused compute tail is serial after the
-# last read (every chunk needs every source's store split); fewer,
-# bigger chunks win because each compute chunk pays a fixed ~220-file
-# readRDS+upload cost (measured: 20 chunks of 256px = 10s tail, 6
-# chunks of 512px = 5.5s).
+# open per slice x asset). Per-band fused stages start as soon as
+# their own band's reads land (fusion never crosses a reduction into
+# a join), so only the last band's compute tail runs after the drain.
+# Fewer, bigger chunks win: each compute chunk pays a fixed
+# per-input-file cost (measured: 20 chunks of 256px = 10s tail, 6
+# chunks of 512px = 5.5s). The mori store keeps chunks in shared
+# memory: reads share whole windows once, computes slice zero-copy,
+# nothing round-trips the disk.
 options(garry.chunk_target_px = 1.4e6, garry.progress = TRUE)
+if (requireNamespace("mori", quietly = TRUE))
+  options(garry.store = "mori")
 
 t_all <- system.time({
   # One GTI index per asset; each day is a FILTERed mosaic of that

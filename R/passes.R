@@ -235,7 +235,14 @@ NULL
 #     executors match input chunks by index);
 #   - the merged stage must need no halo: focal members keep their own
 #     source/warp-fed stage (D11), and padded values never meet stack
-#     members inside one stage.
+#     members inside one stage;
+#   - fusion never crosses a reduction into a join: a stage whose
+#     consumed root is a ReduceNode does not fold into a consumer with
+#     other inputs. Folding it would widen every chunk's dependency
+#     frontier to the sibling subtrees' sources (e.g. three per-band
+#     medians joined by a band stack would all wait for ALL bands'
+#     reads), while keeping the boundary costs only the store
+#     round-trip of the reduced - smallest possible - output.
 .merge_stages <- function(protos, graph) {
   repeat {
     did_merge <- FALSE
@@ -248,6 +255,12 @@ NULL
       q <- consumers[[1L]]
       if (q$kind != "compute") next
       if (!.spatial_equal(p$grid, q$grid)) next
+      if (length(q$inputs) > 1L) {
+        roots <- intersect(p$members, q$input_nodes)
+        if (any(vapply(roots, function(m)
+          S7::S7_inherits(graph_get(graph, m), ReduceNode),
+          logical(1)))) next
+      }
       members <- sort(unique(c(p$members, q$members)))
       input_nodes <- setdiff(unique(c(p$input_nodes, q$input_nodes)),
                              members)

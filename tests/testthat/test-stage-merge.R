@@ -32,22 +32,38 @@ skip_if_not_installed("anvl")
            })
 }
 
-test_that("mask -> stack -> median -> band stack fuses to one compute stage", {
+test_that("mask -> stack -> median fuses per band; the band-stack join stays a boundary", {
   fx <- .merge_fixtures()
   composite_of <- function(band) {
     masked <- lapply(c(0, 100), function(off)
       .masked_slice(band, fx$qa, off))
     reduce_over(lazy_stack(masked), "median", "t", nan_rm = TRUE)
   }
+
+  # A single composite still fuses completely into one stage.
+  p1 <- collect(composite_of(fx$b1), plan_only = TRUE)
+  kinds1 <- vapply(p1@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds1 == "compute"), 1L)
+
   out <- lazy_stack(list(composite_of(fx$b1), composite_of(fx$b2)),
                     along = "band")
 
+  # Fusion never crosses a reduction into a join: each band's
+  # mask -> stack -> median fuses to ONE stage, but the medians do not
+  # fold into the band stack, so band 1's compute chunks depend only
+  # on band 1's (+ QA) reads and overlap band 2's read drain.
   p <- collect(out, plan_only = TRUE)
   kinds <- vapply(p@stages, function(s) s@kind, character(1))
-  expect_identical(sum(kinds == "compute"), 1L)     # everything fused
+  expect_identical(sum(kinds == "compute"), 3L)     # 2 bands + band stack
   expect_identical(sum(kinds == "source_read"), 3L) # b1, b2, qa (dedup)
-  fused <- p@stages[[which(kinds == "compute")]]
-  expect_identical(p@sink, fused@id)
+  sink <- p@stages[[p@sink]]
+  expect_identical(length(sink@inputs), 2L)         # the two band stages
+  for (sid in sink@inputs) {
+    s <- p@stages[[sid]]
+    in_kinds <- kinds[s@inputs]
+    expect_true(all(in_kinds == "source_read"))     # band + qa only
+    expect_identical(length(s@inputs), 2L)
+  }
 
   # Correctness vs base R.
   got <- collect(out)
@@ -71,17 +87,16 @@ test_that("mask -> stack -> median -> band stack fuses to one compute stage", {
 })
 
 test_that("diamond producers fuse once their consumers share a stage", {
-  # `shared` feeds both stacks. After the two composites fuse into the
-  # sink, its consumers are ONE stage, so it merges too; the composed
-  # closure evaluates each member once, so the value is reused, not
-  # recomputed.
+  # `shared` feeds two maps inside ONE composite. After the maps fold
+  # into the stack+median stage, `shared`'s consumers are ONE stage,
+  # so it merges too; the composed closure evaluates each member once,
+  # so the value is reused, not recomputed.
   fx <- .merge_fixtures()
   shared <- .masked_slice(fx$b1, fx$qa, 0)
-  c1 <- reduce_over(lazy_stack(list(shared, .masked_slice(fx$b1, fx$qa, 5))),
-                    "median", "t", nan_rm = TRUE)
-  c2 <- reduce_over(lazy_stack(list(shared, .masked_slice(fx$b1, fx$qa, 9))),
-                    "median", "t", nan_rm = TRUE)
-  out <- lazy_stack(list(c1, c2), along = "band")
+  v1 <- lazy_map(shared, dtype = "f32", fn = function(x) x + 5)
+  v2 <- lazy_map(shared, dtype = "f32", fn = function(x) x + 9)
+  out <- reduce_over(lazy_stack(list(v1, v2)), "median", "t",
+                     nan_rm = TRUE)
 
   p <- collect(out, plan_only = TRUE)
   kinds <- vapply(p@stages, function(s) s@kind, character(1))
@@ -89,11 +104,41 @@ test_that("diamond producers fuse once their consumers share a stage", {
   expect_true(shared@node_id %in% p@stages[[p@sink]]@members)
 
   got <- collect(out)
-  expect_identical(dim(got), c(2L, 9L, 12L))
-  # median of (m, m + off) = m + off/2: bands differ by (9 - 5) / 2.
-  ok <- !is.nan(got[1, , ])
-  expect_equal(got[2, , ][ok] - got[1, , ][ok],
-               rep(2, sum(ok)), tolerance = 1e-5)
+  expect_identical(dim(got), c(9L, 12L))
+  # median of (m + 5, m + 9) = m + 7.
+  b1 <- gdal_read_window(fx$b1, 1L, 0L, 0L, 12L, 9L)
+  q <- gdal_read_window(fx$qa, 1L, 0L, 0L, 12L, 9L)
+  want <- b1 + 7
+  want[bitwAnd(as.integer(q), 2L) > 0] <- NaN
+  expect_identical(is.nan(got), is.nan(want))
+  ok <- !is.nan(want)
+  expect_equal(got[ok], want[ok], tolerance = 1e-5)
+})
+
+test_that("a reduce feeding a multi-input map stays a stage boundary", {
+  # NDVI-like join of two composites: the medians stay materialised
+  # (fusing them would make every chunk of the join wait on BOTH
+  # subtrees' reads); the join map is its own stage.
+  fx <- .merge_fixtures()
+  composite_of <- function(band) {
+    masked <- lapply(c(0, 100), function(off)
+      .masked_slice(band, fx$qa, off))
+    reduce_over(lazy_stack(masked), "median", "t", nan_rm = TRUE)
+  }
+  out <- lazy_map(composite_of(fx$b1), composite_of(fx$b2),
+                  dtype = "f32", fn = function(a, b) b - a)
+  p <- collect(out, plan_only = TRUE)
+  kinds <- vapply(p@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds == "compute"), 3L)
+
+  got <- collect(out)
+  b1 <- gdal_read_window(fx$b1, 1L, 0L, 0L, 12L, 9L)
+  q <- gdal_read_window(fx$qa, 1L, 0L, 0L, 12L, 9L)
+  want <- (b1 * 10 + 50) - (b1 + 50)     # b2 = 10*b1; both + off/2
+  want[bitwAnd(as.integer(q), 2L) > 0] <- NaN
+  expect_identical(is.nan(got), is.nan(want))
+  ok <- !is.nan(want)
+  expect_equal(got[ok], want[ok], tolerance = 1e-4)
 })
 
 test_that("focal stages do not merge (halo guard) and still execute", {

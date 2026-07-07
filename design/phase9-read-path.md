@@ -21,6 +21,22 @@ Same-sitting result, two interleaved pairs: vrtility main
 (< 10 GB gate). Full detail in benchmarks/README.md ("What the 2.1x
 actually was").
 
+Same-night follow-up (second wave): (1) stage-merge gained the
+"fusion never crosses a reduction into a join" guard - per-band
+medians stay materialised below the band stack, so each band's fused
+tail overlaps the next band's read drain (36.0 s same-sitting vs
+vrtility 34.9/36.6 s); the guarded boundary sits exactly where data
+is smallest. (2) `garry.store = "mori"`: chunk store in POSIX shared
+memory (zero disk churn, ~30-byte handles through mirai); daemons pin
+regions in a registry (mori unlinks on creator GC), reads share
+pre-split part lists (consumer-side range subsetting of a mapped
+matrix materialises the whole window - measured 2x cgroup peak),
+regions release when the last consuming stage finishes. Equivalence
+gates: both stores across all pipeline shapes plus the benchmark
+shape in test-mirai-equivalence.R. Jit warm-up during the drain was
+considered and rejected: mirai cannot route to a daemon, so a warm
+task displaces a read for the length of the compile.
+
 The original scope follows, for the record.
 
 ## Goal

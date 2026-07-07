@@ -23,6 +23,7 @@ Remotes:
 Suggests:
     anvl,
     mirai,
+    mori,
     rstac,
     terra,
     testthat (>= 3.0.0),

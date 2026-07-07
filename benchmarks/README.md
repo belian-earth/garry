@@ -11,26 +11,45 @@ sitting, against a vrtility baseline measured in that sitting.
 
 ## Results
 
-2026-07-07 night, graph-build fix (declared-grid sources; two
-interleaved runs each, same sitting):
+2026-07-08 small hours, reduce-join fusion boundary + mori store
+(final interleaved trio, same sitting; cgroup v2 `memory.peak` for
+the whole scope, which counts shared pages once):
 
-| pipeline | bands | wall time | fleet peak RSS |
+| pipeline | bands | wall time | cgroup peak |
 |---|---|---|---|
-| vrtility main (15 daemons) | 3 | 34.9 / 36.6 s | - |
-| garry, fused plan (12 daemons) | 3 | 42.1 / 41.1 s | 8.1 GB |
+| vrtility main (15 daemons) | 3 | 33.4 s | 6.9 GB |
+| garry, mori store (12 daemons) | 3 | 42.2 s | 10.0 GB |
+| garry, rds store (12 daemons) | 3 | 42.9 s | 8.5 GB |
 
-The ratio is 1.12-1.21x (mean 1.16x), meeting the Phase 9b gate of
-1.2x. Both pipelines transfer the same volume (garry 646 MB, vrtility
-688 MB) and the residual difference is garry's serial tail: compute
-chunks can only start once every source read has landed (a fused
-chunk needs every source's store split), so the last ~5.5 s of XLA
-median plus ~3.5 s of host-side build/plan sit after a read drain
-that already runs at the link's parallel ceiling. vrtility overlaps
-its median (a GDAL pixel function evaluated during the read) with the
-drain, paying nothing extra. See "What the 2.1x actually was" below.
+Earlier the same night under a better network window the ratio
+touched parity: vrtility 34.9 / 36.6 s vs garry (rds, reduce-join
+boundary) 36.0 s. WiFi drift across the night moved vrtility between
+33.4-39.7 s and garry between 36.0-54.3 s; interleave runs and
+compare ratios within a trio only. Correctness held at cor 0.992
+(mad 13.9) vs the vrtility B04 composite throughout.
 
-Earlier 2026-07-07 evening, stage-merge pass + decoupled reads:
-vrtility 31.0 s, garry 65.4 s (6.9 GB). Earlier same day, before the
+What changed tonight, in order of effect:
+
+1. Declared-grid sources (see "What the 2.1x actually was"): the
+   graph-build metadata storm is gone; host build+plan is ~3.5 s.
+2. Fusion never crosses a reduction into a join: each band's
+   mask -> stack -> median fuses to one stage, but medians stay
+   materialised below the band stack. Each band's compute tail then
+   starts as soon as ITS reads land, overlapping the next band's
+   drain (task log: B04 computes ran 12.9-18.6 s into a 27.6 s
+   drain). Only the last band's ~4.5 s tail is serial. Cost: three
+   store round-trips of the already-reduced composites (~28 MB).
+3. `options(garry.store = "mori")`: chunk store in POSIX shared
+   memory (mori package). Reads share their windows once; consumers
+   extract their pre-split part element zero-copy; nothing touches
+   disk (the rds store round-trips ~2 GB per run through tempdir()).
+   Read regions release as soon as every consuming stage finishes.
+   Wall time is within run noise of rds tonight (the drain is
+   network-bound either way); the win is no disk churn and no
+   tempdir dependency, at ~1.5 GB of shm while stages are in flight.
+
+2026-07-07 evening, stage-merge pass + decoupled reads: vrtility
+31.0 s, garry 65.4 s (6.9 GB). Earlier same day, before the
 stage-merge pass (slower network hour): vrtility 37.9 s, garry
 merged-plan-only 73.5 s. 2026-07-05, faster connection: ODC + dask
 28.4 s, vrtility 20.7 s, garry per-band collects 131.7 s.
@@ -90,12 +109,20 @@ Correctness: garry's B04 vs vrtility's agrees at correlation 0.992
 (mean abs diff ~14 reflectance units; nearest-vs-bilinear tile
 resampling and per-day-slice vs per-item stacking).
 
-Remaining levers, in order of size: overlap the fused tail with the
-read drain (needs per-chunk read completion, which the whole-window
-read model deliberately avoids); trim the ~2.4 s of graph build +
-planner passes (S7 `@` and `%in%` dominate the profile); faster
-storage for the chunk store splits. All are second-order next to the
-read drain, which is bandwidth-bound.
+Remaining levers: trim the ~2.4 s of graph build + planner passes
+(S7 `@` and `%in%` dominate the profile), and the last band's
+compute tail (its XLA compile could in principle warm during the
+drain, but mirai cannot route tasks to specific daemons, so a warm
+task would displace a read for as long as it compiles - a net loss;
+measured reasoning in the phase 9b notes). Both are second-order
+next to the read drain, which is bandwidth-bound.
+
+A mori-store lesson worth keeping: consumer-side RANGE subsetting of
+a mapped shared matrix materialises the whole window per input (R's
+subscript path, not a memcpy) - on the benchmark that was multiple
+GB of transient daemon heap and a ~2x cgroup peak. Element
+extraction from a shared list is the zero-copy path, which is why
+reads share their windows pre-split.
 
 ## Memory postmortem (2026-07-07)
 
