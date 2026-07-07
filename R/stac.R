@@ -161,7 +161,7 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
 #' @return The index path, invisibly.
 #' @export
 stac_gti_index <- function(sources, asset,
-                           path = tempfile(fileext = ".gti.gpkg"),
+                           path = tempfile(fileext = ".gti.fgb"),
                            crs = "EPSG:4326") {
   stopifnot("slice" %in% names(sources))
   rows <- sources[sources$asset == asset, , drop = FALSE]
@@ -171,12 +171,17 @@ stac_gti_index <- function(sources, asset,
   entries$cloud_cover[is.na(entries$cloud_cover)] <- -1
   if (!crs_equal(gdalraster::srs_to_wkt(crs),
                  gdalraster::srs_to_wkt("EPSG:4326"))) {
-    for (i in seq_len(nrow(entries))) {
-      b <- gdalraster::transform_bounds(
-        as.numeric(entries[i, c("xmin", "ymin", "xmax", "ymax")]),
-        "EPSG:4326", crs)
-      entries[i, c("xmin", "ymin", "xmax", "ymax")] <- as.list(b)
-    }
+    # PROJ selects coordinate operations per bbox (~ms each), but tiled
+    # collections repeat a handful of footprints (HLS: fixed MGRS
+    # squares), so transform the unique bboxes and fan back out.
+    bb <- as.matrix(entries[, c("xmin", "ymin", "xmax", "ymax")])
+    key <- do.call(paste, c(as.data.frame(bb), sep = "\x1f"))
+    first <- !duplicated(key)
+    b <- gdalraster::transform_bounds(bb[first, , drop = FALSE],
+                                      "EPSG:4326", crs)
+    if (!is.matrix(b)) b <- matrix(b, nrow = 1L)   # one unique bbox
+    entries[, c("xmin", "ymin", "xmax", "ymax")] <-
+      b[match(key, key[first]), , drop = FALSE]
   }
   gti_index_create(entries, path, crs = crs)
   invisible(path)
@@ -205,6 +210,14 @@ lazy_stac_stack <- function(sources, grid, asset,
   sources <- stac_time_slices(sources, granularity)
   idx <- stac_gti_index(sources, asset, crs = grid@crs)
   slices <- sort(unique(sources$slice[sources$asset == asset]))
+  # One metadata probe per asset, not per slice: every slice opens the
+  # same index pinned to the same grid, so the only unknowns (source
+  # dtype, native block, file nodata) are shared. Per-slice discovery
+  # costs a remote COG header fetch each, serially, on the host.
+  meta <- gdal_grid_spec(paste0("GTI:", idx),
+                         open_options = gti_open_options(grid))
+  if (is.null(nodata) && length(meta$nodata) == 1L)
+    nodata <- meta$nodata
   graph <- graph_new()
   layers <- lapply(slices, function(sl) {
     lazy_source(
@@ -214,7 +227,9 @@ lazy_stac_stack <- function(sources, grid, asset,
       open_options = gti_open_options(
         grid,
         filter = sprintf("slice = '%s'", sl),
-        sort_field = sort_field))
+        sort_field = sort_field),
+      grid = meta$grid,
+      block_dim = meta$block_dim)
   })
   list(stack = lazy_stack(layers), slices = slices, index = idx)
 }

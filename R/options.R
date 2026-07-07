@@ -26,7 +26,11 @@
   # the same source blocks regardless of window size, so small read
   # windows amplify transfer); compute chunks slice out of the read
   # buffer. Applies only to halo-free plans.
-  read_target_px = 3.2e7
+  read_target_px = 3.2e7,
+  # Path to a CSV the distributed scheduler appends per-task
+  # launch/done timestamps to (plus drain_end/host_end marks), for
+  # profiling where a plan's wall time goes. NULL disables.
+  task_log = NULL
 )
 
 #' Read a garry policy option.

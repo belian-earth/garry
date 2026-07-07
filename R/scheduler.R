@@ -247,6 +247,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
     any(vapply(tasks, function(t) t$state != "done", logical(1)))
   }
   progress <- isTRUE(garry_opt("progress"))
+  task_log <- garry_opt("task_log")
+  log_line <- if (is.null(task_log)) function(...) NULL else {
+    function(event, key) cat(sprintf("%.3f,%s,%s\n", unclass(Sys.time()),
+                                     event, key),
+                             file = task_log, append = TRUE)
+  }
   n_total <- length(tasks)
   last_report <- Sys.time()
   while (remaining()) {
@@ -256,6 +262,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       if (t$state == "pending" && is_ready(t)) {
         inflight[[k]] <- t$launch()
         tasks[[k]]$state <- "running"
+        log_line("launch", k)
       }
     }
     if (length(inflight) == 0L)
@@ -271,6 +278,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         done <- c(done, k)
         inflight[[k]] <- NULL
         harvested <- TRUE
+        log_line("done", k)
       }
     }
     if (progress &&
@@ -283,6 +291,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   }
 
   # Host-side: combines, then sink retrieval (mirrors execute_plan).
+  log_line("drain_end", "-")
+  on.exit(log_line("host_end", "-"), add = TRUE)
   read_chunk <- function(sid, j) readRDS(chunk_file(sid, j))
   out_of <- function(s) {
     it <- chunk_iter(s@chunks)

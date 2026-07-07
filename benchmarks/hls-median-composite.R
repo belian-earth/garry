@@ -62,9 +62,11 @@ cat(sprintf("STAC query: %.2fs; %d item-assets, %d day slices\n",
 mirai::daemons(n_daemons)
 
 # Reads are whole-window (read_target_px decoupling: one GTI mosaic
-# open per slice x asset); compute chunks size themselves to the
-# per-worker RAM budget, so the fused mask->stack->median tail runs as
-# several tasks that overlap the source-read drain.
+# open per slice x asset). The fused compute tail is serial after the
+# last read (every chunk needs every source's store split); fewer,
+# bigger chunks win because each compute chunk pays a fixed ~220-file
+# readRDS+upload cost (measured: 20 chunks of 256px = 10s tail, 6
+# chunks of 512px = 5.5s).
 options(garry.chunk_target_px = 1.4e6, garry.progress = TRUE)
 
 t_all <- system.time({
@@ -74,6 +76,13 @@ t_all <- system.time({
     stac_gti_index(src, a, crs = target@crs))
   names(idx) <- c(bands, "Fmask")
 
+  # One metadata probe per asset (dtype / native block); the 220
+  # per-slice sources then declare their grid instead of each opening
+  # the mosaic to rediscover it (~0.1s x 220, serial, on the host).
+  meta <- lapply(idx, function(p)
+    gdal_grid_spec(paste0("GTI:", p),
+                   open_options = gti_open_options(target)))
+
   slice_of <- function(asset, sl, nodata = NULL) {
     lazy_source(
       paste0("GTI:", idx[[asset]]),
@@ -82,7 +91,9 @@ t_all <- system.time({
         gti_open_options(target,
                          filter = sprintf("slice = '%s'", sl),
                          sort_field = "datetime"),
-        "NUM_THREADS=2"))
+        "NUM_THREADS=2"),
+      grid = meta[[asset]]$grid,
+      block_dim = meta[[asset]]$block_dim)
   }
 
   # One composite per band; then ONE collect over the band stack. The

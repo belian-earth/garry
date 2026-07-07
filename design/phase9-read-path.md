@@ -1,5 +1,28 @@
 # Phase 9b session scope: the read path
 
+## OUTCOME (2026-07-07 night session — gate met)
+
+All three hypotheses below were measured and refuted; the "extra
+~25 s of read time" did not exist. The per-task timing log (new
+`garry.task_log` option) showed the read drain matched the isolated
+read workload exactly (32 s, link-bandwidth-bound at ~20 MB/s
+aggregate); the gap was host-side graph build: 220 serial GTI opens
+for metadata discovery (~0.1 s each) plus ~3.6 s of per-bbox PROJ
+operation selection and GPKG writes in `stac_gti_index()`.
+
+Fixes: `lazy_source(grid =, block_dim =)` declared-grid path with
+once-per-asset metadata probing; unique-footprint `transform_bounds`
+batching + FlatGeobuf index. Neither candidate design (Option A
+per-item sources, Option B read tuning) was needed; GTI stays.
+
+Same-sitting result, two interleaved pairs: vrtility main
+34.9 / 36.6 s, garry 42.1 / 41.1 s -> 1.12-1.21x (mean 1.16x, gate
+1.2x). cor 0.992 vs vrtility B04 unchanged, fleet peak RSS 8.1 GB
+(< 10 GB gate). Full detail in benchmarks/README.md ("What the 2.1x
+actually was").
+
+The original scope follows, for the record.
+
 ## Goal
 
 Close the remaining benchmark gap to vrtility on the HLS median

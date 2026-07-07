@@ -7,7 +7,7 @@
 stac_gti_index(
   sources,
   asset,
-  path = tempfile(fileext = ".gti.gpkg"),
+  path = tempfile(fileext = ".gti.fgb"),
   crs = "EPSG:4326"
 )
 }

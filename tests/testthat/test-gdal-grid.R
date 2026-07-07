@@ -57,3 +57,31 @@ test_that("chunking snaps to the native block size of a real source", {
                    c(0L, 0L))
   expect_true(all(src@chunks@chunk_dim >= compute@chunks@chunk_dim))
 })
+
+test_that("declared-grid lazy_source matches discovery and skips the open", {
+  f <- fixture_i16_nodata()
+  meta <- gdal_grid_spec(f)
+  discovered <- lazy_source(f, nodata = -9999)
+  declared <- lazy_source(f, nodata = -9999,
+                          grid = meta$grid, block_dim = meta$block_dim)
+
+  nd <- graph_get(discovered@graph, discovered@node_id)
+  nc <- graph_get(declared@graph, declared@node_id)
+  expect_true(grid_equal(nd@grid, nc@grid))     # incl. f32 promotion
+  expect_identical(nd@nodata, nc@nodata)
+  expect_identical(nd@block_dim, nc@block_dim)
+  expect_identical(collect(declared), collect(discovered))
+
+  # No GDAL open happens at graph build: a path that cannot be opened
+  # only fails at execution.
+  ghost <- lazy_source(file.path(tempdir(), "garry-no-such-file.tif"),
+                       grid = meta$grid)
+  expect_s3_class(ghost, "garry::LazyRaster")
+  suppressWarnings(expect_error(collect(ghost)))
+
+  # With a declared grid, file nodata is not consulted: the i16
+  # fixture's -9999 stays raw unless passed explicitly.
+  raw <- lazy_source(f, grid = meta$grid)
+  expect_identical(graph_get(raw@graph, raw@node_id)@nodata, numeric(0))
+  expect_identical(raw@grid@dtype, "i16")
+})

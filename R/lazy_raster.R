@@ -37,20 +37,43 @@ LazyRaster <- S7::new_class(
 #' can carry nodata downstream (decision D8); the sentinel-to-NaN
 #' rewrite happens at read time in the adapter.
 #'
+#' Passing `grid` skips the GDAL open entirely: no metadata is read
+#' until execution. Use it when the dataset's grid is known by
+#' construction, e.g. GTI mosaics pinned to a target grid via
+#' `gti_open_options()`, where opening every time slice just to
+#' rediscover the grid costs a remote COG header fetch per slice
+#' (measured: ~0.1 s each, serial, on the host). `grid` must describe
+#' the dataset exactly as `path` + `open_options` open it, including
+#' the source dtype; it is trusted, not checked. With `grid` given,
+#' file nodata is NOT consulted (pass `nodata` explicitly if the
+#' source has a sentinel).
+#'
 #' @param path Path or VSI URL readable by GDAL.
 #' @param band 1-based band index.
 #' @param graph `Graph` to add the source to; defaults to a fresh graph.
 #' @param nodata Optional nodata sentinel overriding the file metadata.
 #' @param open_options GDAL open options ("KEY=VALUE"), e.g. a GTI
 #'   `FILTER` selecting one time slice of a tile index.
+#' @param grid Optional `GridSpec` declaring the source's grid and
+#'   dtype, skipping metadata discovery (see Details).
+#' @param block_dim Optional native block size (x, y), only meaningful
+#'   with `grid`; defaults to unconstrained.
 #' @return A `LazyRaster`.
 #' @export
 lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
-                        open_options = character(0)) {
-  meta <- gdal_grid_spec(path, band = as.integer(band),
-                         open_options = open_options)
-  grid <- meta$grid
-  nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
+                        open_options = character(0), grid = NULL,
+                        block_dim = NULL) {
+  if (is.null(grid)) {
+    meta <- gdal_grid_spec(path, band = as.integer(band),
+                           open_options = open_options)
+    grid <- meta$grid
+    nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
+    block_dim <- meta$block_dim
+  } else {
+    stopifnot(S7::S7_inherits(grid, GridSpec))
+    nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+    block_dim <- if (is.null(block_dim)) integer(0) else as.integer(block_dim)
+  }
   if (length(nodata) == 1L && .dtype_family(grid@dtype) != "float")
     grid <- .grid_retype(grid, "f32")
   id <- graph_add(
@@ -61,7 +84,7 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
     path         = path,
     band         = as.integer(band),
     nodata       = nodata,
-    block_dim    = meta$block_dim,
+    block_dim    = block_dim,
     open_options = open_options
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
