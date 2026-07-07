@@ -2,7 +2,7 @@
 % Please edit documentation in R/gdal_adapter.R
 \name{gdal_create_output}
 \alias{gdal_create_output}
-\title{Create an output GTiff for a grid (single band).}
+\title{Create an output GTiff for a grid.}
 \usage{
 gdal_create_output(
   path,
@@ -16,7 +16,7 @@ gdal_create_output(
 
 \item{grid}{Output \code{GridSpec}.}
 
-\item{nodata}{Optional sentinel to record in metadata.}
+\item{nodata}{Optional sentinel to record in metadata (all bands).}
 
 \item{options}{GTiff creation options.}
 }
@@ -24,5 +24,6 @@ gdal_create_output(
 An open dataset object; caller must \verb{$close()}.
 }
 \description{
-Create an output GTiff for a grid (single band).
+A single non-spatial dim ("t" or "band") maps to GTiff bands; more
+than one is an error.
 }

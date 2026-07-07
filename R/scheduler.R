@@ -189,6 +189,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   remaining <- function() {
     any(vapply(tasks, function(t) t$state != "done", logical(1)))
   }
+  progress <- isTRUE(garry_opt("progress"))
+  n_total <- length(tasks)
+  last_report <- Sys.time()
   while (remaining()) {
     for (k in names(tasks)) {
       if (length(inflight) >= cap) break
@@ -212,6 +215,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         inflight[[k]] <- NULL
         harvested <- TRUE
       }
+    }
+    if (progress &&
+        difftime(Sys.time(), last_report, units = "secs") > 5) {
+      cat(sprintf("  garry: %d/%d tasks done, %d in flight\n",
+                  length(done), n_total, length(inflight)))
+      last_report <- Sys.time()
     }
     if (!harvested) Sys.sleep(0.002)
   }
@@ -242,20 +251,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   it <- chunk_iter(sink@chunks)
   sink_pad <- .exec_out_pad(sink)
 
-  if (!is.null(path)) {
-    if (nrow(it) == 1L && !is.matrix(chunks[[1L]]))
-      .garry_error("cannot write a scalar reduction to a raster file",
-                   "garry_plan_error")
-    nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
-    ds <- gdal_create_output(path, sink@grid, nodata = nodata)
-    on.exit(ds$close(), add = TRUE)
-    for (j in seq_len(nrow(it))) {
-      gdal_write_window(ds, it$x_off[j], it$y_off[j],
-                        .exec_trim(chunks[[j]], sink_pad),
-                        dtype = sink@grid@dtype, nodata = nodata)
-    }
-    return(invisible(path))
-  }
+  if (!is.null(path))
+    return(.exec_write_sink(chunks, it, sink, path, nodata))
 
   if (nrow(it) == 1L) {
     v <- chunks[[1L]]

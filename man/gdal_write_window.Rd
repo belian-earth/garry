@@ -4,7 +4,7 @@
 \alias{gdal_write_window}
 \title{Write a garry-oriented matrix into an open output dataset.}
 \usage{
-gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0))
+gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
 }
 \arguments{
 \item{ds}{Open dataset from \code{gdal_create_output()}.}
@@ -16,6 +16,8 @@ gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0))
 \item{dtype}{Output dtype (for the NaN check).}
 
 \item{nodata}{Optional sentinel for NaN demotion.}
+
+\item{band}{1-based destination band.}
 }
 \value{
 Invisibly, \code{NULL}.

@@ -14,6 +14,7 @@ Depends:
     R (>= 4.3)
 Imports:
     S7,
+    codetools,
     gdalraster,
     methods
 Remotes:

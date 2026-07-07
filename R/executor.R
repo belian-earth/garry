@@ -48,6 +48,60 @@ NULL
   if (stage@kind %in% c("source_read", "warp")) stage@halo else 0L
 }
 
+# Stage ids are creation-ordered, not topologically ordered: fusion can
+# attach a later-created source stage as an input to an earlier compute
+# stage (e.g. a map opens a stage, then lazy_map imports a second
+# source). Execution must follow stage dependencies, not ids.
+.stage_topo_order <- function(plan) {
+  n <- length(plan@stages)
+  done <- logical(n)
+  ord <- integer(0)
+  while (length(ord) < n) {
+    ready <- vapply(seq_len(n), function(i) {
+      !done[[i]] && all(done[plan@stages[[i]]@inputs])
+    }, logical(1))
+    if (!any(ready))
+      .garry_error("stage graph has a cycle", "garry_plan_error")
+    done[ready] <- TRUE
+    ord <- c(ord, which(ready))
+  }
+  ord
+}
+
+# Write sink chunks to a GTiff (shared by both executors). 2D chunks
+# write to band 1; (outer, y, x) chunks write one GTiff band per outer
+# layer (t or band, D17). Only source/warp sinks carry padding, and
+# those are always 2D, so stacked chunks never need trimming.
+.exec_write_sink <- function(chunks, it, sink, path, nodata) {
+  first <- chunks[[1L]]
+  rank3 <- is.array(first) && length(dim(first)) == 3L
+  if (nrow(it) == 1L && !is.matrix(first) && !rank3)
+    .garry_error("cannot write a scalar reduction to a raster file",
+                 "garry_plan_error")
+  sink_pad <- .exec_out_pad(sink)
+  nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+  ds <- gdal_create_output(path, sink@grid, nodata = nodata)
+  on.exit(ds$close(), add = TRUE)
+  for (j in seq_len(nrow(it))) {
+    ch <- chunks[[j]]
+    if (is.matrix(ch)) {
+      gdal_write_window(ds, it$x_off[j], it$y_off[j],
+                        .exec_trim(ch, sink_pad),
+                        dtype = sink@grid@dtype, nodata = nodata)
+    } else {
+      stopifnot(sink_pad == 0L)
+      for (b in seq_len(dim(ch)[[1L]])) {
+        m <- ch[b, , , drop = FALSE]
+        dim(m) <- dim(ch)[2:3]
+        gdal_write_window(ds, it$x_off[j], it$y_off[j], m,
+                          dtype = sink@grid@dtype, nodata = nodata,
+                          band = b)
+      }
+    }
+  }
+  invisible(path)
+}
+
 # Assemble sink chunks into the full raster; stacks assemble to
 # (t, y, x) arrays (D17), 2D sinks to [y, x] matrices.
 .exec_assemble <- function(chunks, it, grid, sink_pad) {
@@ -103,7 +157,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
       plan@sink != s@id
   }, logical(1))
 
-  for (s in plan@stages) {
+  for (s in plan@stages[.stage_topo_order(plan)]) {
     it <- chunk_iter(s@chunks)
 
     if (s@kind == "source_read") {
@@ -170,20 +224,8 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
   # Sink chunks may still carry source/warp output padding.
   sink_pad <- .exec_out_pad(sink)
 
-  if (!is.null(path)) {
-    if (nrow(it) == 1L && !is.matrix(chunks[[1L]]))
-      .garry_error("cannot write a scalar reduction to a raster file",
-                   "garry_plan_error")
-    nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
-    ds <- gdal_create_output(path, sink@grid, nodata = nodata)
-    on.exit(ds$close(), add = TRUE)
-    for (j in seq_len(nrow(it))) {
-      gdal_write_window(ds, it$x_off[j], it$y_off[j],
-                        .exec_trim(chunks[[j]], sink_pad),
-                        dtype = sink@grid@dtype, nodata = nodata)
-    }
-    return(invisible(path))
-  }
+  if (!is.null(path))
+    return(.exec_write_sink(chunks, it, sink, path, nodata))
 
   result <- if (nrow(it) == 1L) {
     v <- chunks[[1L]]

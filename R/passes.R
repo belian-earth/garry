@@ -88,15 +88,59 @@ NULL
   g_shift_slice(x, 0L, 0L, nrow(x) - 2L * d, ncol(x) - 2L * d, d)
 }
 
+# Rebind a user node fn onto a minimal environment holding only its
+# free variables (found via codetools), parented on globalenv(). Node
+# fns otherwise capture their construction environment, which typically
+# references LazyRasters and through them the ENTIRE graph: one such
+# closure serialized at ~117 MB in a 500-node plan, and every mirai
+# task ships its stage closure, so daemons accumulated a full graph
+# copy per stage (machine OOM). g_* calls resolve through globalenv()
+# (garry attached), exactly as on daemons today.
+.slim_fn <- function(fn) {
+  if (!is.function(fn) || is.primitive(fn)) return(fn)
+  env <- environment(fn)
+  if (is.null(env) || identical(env, globalenv()) ||
+      isNamespace(env)) return(fn)
+  g <- codetools::findGlobals(fn, merge = FALSE)
+  e <- new.env(parent = globalenv())
+  for (v in unique(c(g$variables, g$functions))) {
+    # Copy only bindings that live BELOW globalenv/namespace boundaries
+    # (true captures); package and global bindings resolve at run time.
+    scope <- env
+    while (!identical(scope, globalenv()) && !identical(scope, emptyenv()) &&
+           !isNamespace(scope)) {
+      if (exists(v, envir = scope, inherits = FALSE)) {
+        assign(v, get(v, envir = scope), envir = e)
+        break
+      }
+      scope <- parent.env(scope)
+    }
+  }
+  environment(fn) <- e
+  fn
+}
+
 # Composed closure for a compute stage: runs members in ascending (topo)
 # order, returns the named list of exports. Each value carries a
 # remaining-pad count: inputs start at the stage halo, focal members
 # consume `radius`, and map members that join branches with different
 # pads trim the larger to the common minimum (the halo contract in
 # plan.R generalised to DAGs).
+#
+# The closure captures per-member SPECS extracted from the graph, never
+# the graph itself: stage closures are serialized to daemons per task,
+# and a graph capture multiplies the whole plan into every payload (see
+# .slim_fn). rm() below keeps the closure environment minimal.
 .compose_stage_fn <- function(graph, members, input_nodes, exports, halo) {
-  force(graph); force(members); force(input_nodes); force(exports)
-  force(halo)
+  specs <- lapply(members, function(id) {
+    node <- graph_get(graph, id)
+    if (S7::S7_inherits(node, MapNode) || S7::S7_inherits(node, FocalNode))
+      node@fn <- .slim_fn(node@fn)
+    list(id = id, node = node,
+         pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims))
+  })
+  force(input_nodes); force(exports); force(halo)
+  rm(graph, members)
   function(inputs) {
     vals <- new.env(parent = emptyenv())
     pads <- new.env(parent = emptyenv())
@@ -105,8 +149,8 @@ NULL
       assign(k, inputs[[i]], envir = vals)
       assign(k, halo, envir = pads)
     }
-    for (id in members) {
-      node <- graph_get(graph, id)
+    for (sp in specs) {
+      node <- sp$node
       pv <- lapply(node@parents, function(p) get(.key(p), envir = vals))
       pp <- vapply(node@parents, function(p) get(.key(p), envir = pads),
                    integer(1))
@@ -117,11 +161,10 @@ NULL
         pv <- Map(function(v, d) .trim_to_pad(v, d - out_pad), pv,
                   as.list(pp))
       }
-      pgrid <- graph_get(graph, node@parents[[1L]])@grid
-      assign(.key(id),
-             .eval_node(node, pv, parent_dim_names = names(pgrid@dims)),
+      assign(.key(sp$id),
+             .eval_node(node, pv, parent_dim_names = sp$pdims),
              envir = vals)
-      assign(.key(id), as.integer(out_pad), envir = pads)
+      assign(.key(sp$id), as.integer(out_pad), envir = pads)
     }
     stats::setNames(
       lapply(exports, function(e) get(.key(e), envir = vals)),

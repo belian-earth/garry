@@ -25,6 +25,9 @@ bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
 Sys.setenv(GDAL_HTTP_MULTIPLEX = "YES", GDAL_HTTP_VERSION = "2")
 Sys.setenv(GDAL_HTTP_MAX_RETRY = "5", GDAL_HTTP_RETRY_DELAY = "1",
            GDAL_HTTP_RETRY_CODES = "429,500,502,503")
+# GDAL's block cache defaults to 5% of RAM PER PROCESS; every daemon
+# inherits this env, so cap it or n_daemons x 5% eats the machine.
+Sys.setenv(GDAL_CACHEMAX = "256")
 gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
 
@@ -55,7 +58,7 @@ cat(sprintf("STAC query: %.2fs; %d item-assets, %d day slices\n",
 
 mirai::daemons(n_daemons)
 
-options(garry.chunk_target_px = 1.4e6)
+options(garry.chunk_target_px = 1.4e6, garry.progress = TRUE)
 
 t_all <- system.time({
   # One GTI index per asset; each day is a FILTERed mosaic of that
@@ -75,7 +78,11 @@ t_all <- system.time({
         "NUM_THREADS=2"))
   }
 
-  for (band in bands) {
+  # One composite per band; then ONE collect over the band stack. The
+  # merged graph dedups the shared Fmask sources (read once, not per
+  # band), and a single plan puts every band's reads into the scheduler
+  # ready-queue together, keeping the network saturated end to end.
+  composites <- lapply(bands, function(band) {
     masked <- lapply(slices, function(sl) {
       lazy_map(
         slice_of(band, sl, nodata = -9999),   # reflectance: -9999 -> NaN
@@ -86,16 +93,17 @@ t_all <- system.time({
           g_ifelse(bad, NaN, x)
         })
     })
+    lazy_stack(masked) |> reduce_over("median", "t", nan_rm = TRUE)
+  })
 
-    composite <- lazy_stack(masked) |>
-      reduce_over("median", "t", nan_rm = TRUE)
+  out <- if (length(composites) == 1L) composites[[1L]]
+         else lazy_stack(composites, along = "band")
 
-    collect(composite,
-            path = sprintf("composite_garry_%s.tif", band),
-            nodata = -9999,
-            distributed = TRUE)
-    cat("  band", band, "done\n")
-  }
+  cat("graph built; planning + executing...\n")
+  collect(out,
+          path = "composite_garry.tif",
+          nodata = -9999,
+          distributed = TRUE)
 })
 cat(sprintf("processing time (garry, %s, %d daemons): %.2fs\n",
             paste(bands, collapse = "+"), n_daemons, t_all[["elapsed"]]))

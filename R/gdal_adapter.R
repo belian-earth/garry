@@ -24,29 +24,40 @@ NULL
   Float32 = "f32", Float64 = "f64"
 )
 
-# Dataset handle cache: open once per (path, open options) per process.
-# Handles are read-only; invalidate with .gdal_handle_reset() (tests,
-# long sessions).
-.gdal_handles <- new.env(parent = emptyenv())
+# Dataset handle cache: open once per (path, open options) per process,
+# LRU-capped. An open dataset is not free: a GTI/warped mosaic pins
+# warper buffers, VSICURL caches and block-cache pages, so a daemon
+# that reads many distinct slices grows without bound if handles are
+# never closed (measured: multi-GB per daemon, machine OOM). Eviction
+# closes the least-recently-used handle; reopening is milliseconds.
+.gdal_cache <- new.env(parent = emptyenv())
+.gdal_cache$handles <- list()   # named, insertion-ordered = LRU order
 
 .gdal_handle <- function(path, open_options = character(0)) {
   key <- paste(c(path, open_options), collapse = "\x1f")
-  h <- .gdal_handles[[key]]
-  if (!is.null(h)) return(h)
+  h <- .gdal_cache$handles[[key]]
+  if (!is.null(h)) {
+    .gdal_cache$handles[[key]] <- NULL          # move to MRU position
+    .gdal_cache$handles[[key]] <- h
+    return(h)
+  }
   h <- if (length(open_options) > 0L) {
     methods::new(gdalraster::GDALRaster, path, TRUE, open_options)
   } else {
     methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
   }
-  .gdal_handles[[key]] <- h
+  cap <- garry_opt("handle_cache_max")
+  while (length(.gdal_cache$handles) >= cap) {
+    try(.gdal_cache$handles[[1L]]$close(), silent = TRUE)
+    .gdal_cache$handles[[1L]] <- NULL
+  }
+  .gdal_cache$handles[[key]] <- h
   h
 }
 
 .gdal_handle_reset <- function() {
-  for (k in ls(.gdal_handles, all.names = TRUE)) {
-    try(.gdal_handles[[k]]$close(), silent = TRUE)
-    rm(list = k, envir = .gdal_handles)
-  }
+  for (h in .gdal_cache$handles) try(h$close(), silent = TRUE)
+  .gdal_cache$handles <- list()
 }
 
 #' Inspect a GDAL source and build its GridSpec (plus read metadata).
@@ -156,11 +167,14 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
   vrt
 }
 
-#' Create an output GTiff for a grid (single band).
+#' Create an output GTiff for a grid.
+#'
+#' A single non-spatial dim ("t" or "band") maps to GTiff bands; more
+#' than one is an error.
 #'
 #' @param path Destination path.
 #' @param grid Output `GridSpec`.
-#' @param nodata Optional sentinel to record in metadata.
+#' @param nodata Optional sentinel to record in metadata (all bands).
 #' @param options GTiff creation options.
 #' @return An open dataset object; caller must `$close()`.
 #' @export
@@ -168,12 +182,18 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
                                options = c("COMPRESS=DEFLATE")) {
   dt <- .gdal_dtype_rev[[grid@dtype]]
   if (is.null(dt)) stop("cannot write dtype: ", grid@dtype)
+  outer <- grid@dims[!names(grid@dims) %in% c("x", "y")]
+  if (length(outer) > 1L)
+    stop("cannot write a grid with more than one non-spatial dim (",
+         paste(names(outer), collapse = ", "), ")")
+  n_bands <- if (length(outer) == 1L) as.integer(outer[[1L]]) else 1L
   ds <- gdalraster::create("GTiff", path,
-                           grid@dims[["x"]], grid@dims[["y"]], 1L, dt,
+                           grid@dims[["x"]], grid@dims[["y"]], n_bands, dt,
                            options = options, return_obj = TRUE)
   ds$setGeoTransform(grid@transform)
   ds$setProjection(grid@crs)
-  if (length(nodata) == 1L) ds$setNoDataValue(1L, nodata)
+  if (length(nodata) == 1L)
+    for (b in seq_len(n_bands)) ds$setNoDataValue(b, nodata)
   ds
 }
 
@@ -187,17 +207,19 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
 #' @param m `[y, x]` matrix.
 #' @param dtype Output dtype (for the NaN check).
 #' @param nodata Optional sentinel for NaN demotion.
+#' @param band 1-based destination band.
 #' @return Invisibly, `NULL`.
 #' @export
 gdal_write_window <- function(ds, x_off, y_off, m, dtype,
-                              nodata = numeric(0)) {
+                              nodata = numeric(0), band = 1L) {
   if (length(nodata) == 1L) {
     m[is.na(m)] <- nodata
   } else if (anyNA(m) && .dtype_family(dtype) != "float") {
     stop("result contains nodata (NaN) but no `nodata` sentinel was ",
          "given for integer output dtype ", dtype)
   }
-  ds$write(1L, x_off, y_off, ncol(m), nrow(m), as.numeric(t(m)))
+  ds$write(as.integer(band), x_off, y_off, ncol(m), nrow(m),
+           as.numeric(t(m)))
   invisible(NULL)
 }
 

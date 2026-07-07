@@ -13,7 +13,14 @@
   # Safety margin, in input cells, added to cross-CRS planning windows.
   # Planning windows must CONTAIN the true window (decision D5); the
   # margin absorbs residual densification error.
-  window_margin = 2L
+  window_margin = 2L,
+  # Print task-completion progress from the distributed scheduler.
+  # Long network-bound plans are otherwise silent for minutes.
+  progress = FALSE,
+  # Max open GDAL dataset handles per process (LRU-evicted, closed on
+  # eviction). Open warped/GTI mosaics pin warper + cache memory; on
+  # daemons this bounds it. Reopening an evicted dataset is cheap.
+  handle_cache_max = 4L
 )
 
 #' Read a garry policy option.
