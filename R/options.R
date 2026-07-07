@@ -36,7 +36,13 @@
   # chunks in POSIX shared memory (zero-copy across same-host daemons,
   # no producer-side split, no disk churn; needs the mori package and
   # the run's working set to fit in RAM).
-  store = "rds"
+  store = "rds",
+  # What a failed source read does: "error" aborts the plan; "nodata"
+  # logs a warning and yields an all-NaN window, so one bad object /
+  # expired token / 404 costs a hole in the composite instead of the
+  # whole run (odc-stac's fail_on_error=FALSE, stackstac's
+  # errors_as_nodata).
+  read_fail = "error"
 )
 
 #' Read a garry policy option.

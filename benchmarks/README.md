@@ -11,9 +11,28 @@ sitting, against a vrtility baseline measured in that sitting.
 
 ## Results
 
-2026-07-08 small hours, reduce-join fusion boundary + mori store
-(final interleaved trio, same sitting; cgroup v2 `memory.peak` for
-the whole scope, which counts shared pages once):
+2026-07-08 ~00:30, ODC baseline added (same-sitting triple; cgroup
+v2 `memory.peak` for the whole scope, which counts shared pages
+once). The ODC run does MORE compute (morphological mask cleanup)
+and is the historical best-in-class:
+
+| pipeline | bands | wall time | cgroup peak | transferred |
+|---|---|---|---|---|
+| vrtility main (15 daemons) | 3 | 33.2 s | 6.9 GB | - |
+| ODC + dask (20-thread pool) | 3 | 35.6 s | 4.3 GB | 648 MB |
+| garry, mori store (12 daemons) | 3 | 41.9 s | 10.4 GB | 649 MB |
+
+Transfer volume is identical to ODC and the read drain is at the
+link ceiling under every config measured (chunk-size, GTI threads,
+daemon count, HTTP version: all dead levers — see
+design/phase10-odc-gaps.md). garry's remaining gap is its
+network-idle serial segments (host build ~3.5 s, last band's compute
+tail ~4.5 s, write) and its memory footprint (12 R+XLA processes vs
+one 20-thread process). The gap analysis and prioritised plan live
+in design/phase10-odc-gaps.md.
+
+Earlier that night, reduce-join fusion boundary + mori store
+(interleaved trio):
 
 | pipeline | bands | wall time | cgroup peak |
 |---|---|---|---|

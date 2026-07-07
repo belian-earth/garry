@@ -23,8 +23,12 @@ bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
 # endpoint across daemons into 429s; note pre-signed tokens expire
 # after ~1 h, so very long jobs should switch back to GDAL signing.
 Sys.setenv(GDAL_HTTP_MULTIPLEX = "YES", GDAL_HTTP_VERSION = "2")
-Sys.setenv(GDAL_HTTP_MAX_RETRY = "5", GDAL_HTTP_RETRY_DELAY = "1",
-           GDAL_HTTP_RETRY_CODES = "429,500,502,503")
+# odc-stac's measured retry cadence (10 x 0.5s), plus the timeouts odc
+# omits: a stalled request should fail fast and retry, not hang a
+# daemon.
+Sys.setenv(GDAL_HTTP_MAX_RETRY = "10", GDAL_HTTP_RETRY_DELAY = "0.5",
+           GDAL_HTTP_RETRY_CODES = "429,500,502,503",
+           GDAL_HTTP_TIMEOUT = "60", GDAL_HTTP_CONNECTTIMEOUT = "10")
 # GDAL's block cache defaults to 5% of RAM PER PROCESS; every daemon
 # inherits this env, so cap it or n_daemons x 5% eats the machine.
 Sys.setenv(GDAL_CACHEMAX = "256")

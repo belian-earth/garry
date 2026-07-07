@@ -25,9 +25,16 @@ NULL
   H <- cg@halo
   w <- chunk_window_with_halo(cg, core$x_off, core$y_off,
                               core$x_size, core$y_size)
-  sub <- gdal_read_window(path, band, w$x_off, w$y_off,
-                          w$x_size, w$y_size, nodata = nodata,
-                          open_options = open_options)
+  sub <- tryCatch(
+    gdal_read_window(path, band, w$x_off, w$y_off,
+                     w$x_size, w$y_size, nodata = nodata,
+                     open_options = open_options),
+    error = function(e) {
+      if (!identical(garry_opt("read_fail"), "nodata")) stop(e)
+      warning("read failed, filling with nodata: ", path, " (",
+              conditionMessage(e), ")", call. = FALSE)
+      matrix(NaN, w$y_size, w$x_size)
+    })
   if (H == 0L) return(sub)
   buf <- matrix(NaN, core$y_size + 2L * H, core$x_size + 2L * H)
   r0 <- H - w$pad_top

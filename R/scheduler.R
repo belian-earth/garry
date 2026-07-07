@@ -225,7 +225,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
   # User stage closures call the g_* vocabulary unqualified; make sure
   # the package is attached on every daemon (idempotent, once per call).
-  mirai::everywhere(suppressMessages(library(garry)))
+  # Read policy is resolved host-side and shipped: daemons don't
+  # inherit host options.
+  mirai::everywhere({
+    suppressMessages(library(garry))
+    options(garry.read_fail = rf)
+  }, rf = garry_opt("read_fail"))
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))

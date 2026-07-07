@@ -62,3 +62,20 @@ test_that("scalar reduction sinks return scalars", {
   expect_length(got, 1L)
   expect_equal(got, max(m), tolerance = 1e-3)   # f32 rounding on 4060
 })
+
+test_that("read_fail = 'nodata' turns a dead source into NaN, not an abort", {
+  skip_if_not_installed("anvl")
+  f <- fixture_gradient_f32()
+  meta <- gdal_grid_spec(f)
+  ghost <- lazy_source(file.path(tempdir(), "garry-gone.tif"),
+                       grid = meta$grid, block_dim = meta$block_dim)
+  old <- options(garry.read_fail = "nodata")
+  on.exit(options(old))
+  got <- suppressWarnings(collect(ghost + 1))
+  expect_true(all(is.nan(got)))
+  expect_identical(dim(got), unname(meta$grid@dims[c("y", "x")]))
+
+  # default remains a hard error
+  options(garry.read_fail = "error")
+  suppressWarnings(expect_error(collect(ghost + 1)))
+})
