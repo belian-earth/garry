@@ -2,6 +2,7 @@
 
 export(.daemon_run_compute)
 export(.daemon_run_source)
+export(.daemon_run_source_split)
 export(ChunkGrid)
 export(FocalNode)
 export(FusedNode)

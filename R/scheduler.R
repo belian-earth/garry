@@ -38,7 +38,35 @@ NULL
                                out_file, open_options = character(0)) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
                          open_options = open_options)
-  saveRDS(stats::setNames(list(m), key), out_file)
+  # Store files are transient same-host scratch: gzip costs hundreds of
+  # ms per chunk and buys nothing.
+  saveRDS(stats::setNames(list(m), key), out_file, compress = FALSE)
+  TRUE
+}
+
+#' Daemon task body: read one coarse source window, split it into
+#' per-compute-chunk store files.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
+#' @param path,band,nodata Source identity.
+#' @param cg Read-granularity `ChunkGrid` (halo-free); `core` the read
+#'   chunk row; `key` the node key.
+#' @param parts List of per-compute-chunk windows: `r0`/`c0` 0-based
+#'   offsets within the read buffer, `nr`/`nc` sizes, `file` the store
+#'   file.
+#' @return `TRUE`.
+#' @keywords internal
+#' @export
+.daemon_run_source_split <- function(path, band, nodata, cg, core, key,
+                                     parts, open_options = character(0)) {
+  m <- .exec_read_padded(path, band, nodata, cg, core,
+                         open_options = open_options)
+  for (p in parts) {
+    saveRDS(stats::setNames(list(
+      m[(p$r0 + 1L):(p$r0 + p$nr), (p$c0 + 1L):(p$c0 + p$nc),
+        drop = FALSE]), key), p$file, compress = FALSE)
+  }
   TRUE
 }
 
@@ -65,7 +93,7 @@ NULL
     g_upload(.exec_trim(readRDS(f)[[k]], tr), dt)
   }, in_files, in_keys, trims, dtypes)
   res <- g_download(jf(unname(inputs)))
-  saveRDS(res, out_file)
+  saveRDS(res, out_file, compress = FALSE)
   TRUE
 }
 
@@ -102,7 +130,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   on.exit(unlink(store, recursive = TRUE), add = TRUE)
   chunk_file <- function(sid, j) file.path(store, sprintf("s%d_c%d.rds", sid, j))
 
-  producer_of <- function(nid) Find(function(p) nid %in% p@members, plan@stages)
 
   warp_only <- vapply(plan@stages, function(s) {
     consumers <- Filter(function(t2) s@id %in% t2@inputs, plan@stages)
@@ -116,6 +143,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   add_task <- function(key, deps, launch) {
     tasks[[key]] <<- list(deps = deps, launch = launch, state = "pending")
   }
+  # For coarse-reading (split) source stages: task key per compute chunk.
+  source_deps <- new.env(parent = emptyenv())
 
   for (s in plan@stages) {
     if (s@kind == "reduce_combine") next
@@ -136,33 +165,61 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         roo <- node@open_options
       }
       skey <- .key(s@members[[1L]])
-      for (j in seq_len(nrow(it))) {
-        local({
-          sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
-          p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-          add_task(sprintf("s%d_c%d", sid, jj), character(0), function() {
-            mirai::mirai(
-              garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
-                                        open_options = oo),
-              p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-              oo = oo, out = chunk_file(sid, jj))
+      split_cg <- .exec_split_cg(plan, s)
+      if (is.null(split_cg)) {
+        for (j in seq_len(nrow(it))) {
+          local({
+            sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
+            p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
+            add_task(sprintf("s%d_c%d", sid, jj), character(0), function() {
+              mirai::mirai(
+                garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
+                                          open_options = oo),
+                p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
+                oo = oo, out = chunk_file(sid, jj))
+            })
           })
-        })
+        }
+      } else {
+        # Coarse reads that split into per-compute-chunk store files.
+        # Compute chunk j's dependency is the READ task covering it.
+        its <- chunk_iter(split_cg)
+        dep_of <- character(nrow(its))
+        for (r in seq_len(nrow(it))) {
+          members <- .exec_split_members(its, it[r, ])
+          dep_of[members] <- sprintf("s%d_r%d", s@id, r)
+          local({
+            sid <- s@id; rr <- r; cg <- s@chunks; core <- it[rr, ]
+            p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
+            parts <- lapply(members, function(j) {
+              list(r0 = its$y_off[[j]] - core$y_off,
+                   c0 = its$x_off[[j]] - core$x_off,
+                   nr = its$y_size[[j]], nc = its$x_size[[j]],
+                   file = chunk_file(sid, j))
+            })
+            add_task(sprintf("s%d_r%d", sid, rr), character(0), function() {
+              mirai::mirai(
+                garry::.daemon_run_source_split(p2, b2, nd, cg, core, k2,
+                                                parts, open_options = oo),
+                p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
+                parts = parts, oo = oo)
+            })
+          })
+        }
+        source_deps[[.key(s@id)]] <- dep_of
       }
 
     } else {  # compute / reduce_partial
-      in_meta <- lapply(s@input_nodes, function(nid) {
-        prod <- producer_of(nid)
-        list(sid = prod@id, pad = .exec_out_pad(prod),
-             dtype = graph_get(graph, nid)@grid@dtype)
-      })
+      in_meta <- .exec_in_meta(graph, s, plan@stages)
       for (j in seq_len(nrow(it))) {
         local({
           sid <- s@id; jj <- j; fn <- s@fn; halo <- s@halo
           meta <- in_meta
           ck <- sprintf("r%d_s%d", run_id, sid)   # per-run jit cache key
-          deps <- vapply(meta, function(m) sprintf("s%d_c%d", m$sid, jj),
-                         character(1))
+          deps <- vapply(meta, function(m) {
+            dep <- source_deps[[.key(m$id)]]
+            if (is.null(dep)) sprintf("s%d_c%d", m$id, jj) else dep[[jj]]
+          }, character(1))
           in_keys <- vapply(s@input_nodes, .key, character(1))
           add_task(sprintf("s%d_c%d", sid, jj), unique(deps), function() {
             mirai::mirai(
@@ -170,7 +227,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                                           trims, dtypes, out),
               ck = ck, fn = fn,
               in_files = vapply(meta, function(m)
-                chunk_file(m$sid, jj), character(1)),
+                chunk_file(m$id, jj), character(1)),
               in_keys = in_keys,
               trims = vapply(meta, function(m)
                 as.integer(m$pad - halo), integer(1)),

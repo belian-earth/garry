@@ -220,6 +220,59 @@ NULL
   }
 }
 
+# -- Stage-merge pass (Phase 9) ------------------------------------------------
+
+# Fuse compute stages into their consumers, to fixpoint: a compute
+# stage consumed by EXACTLY ONE other compute stage folds its members
+# into that consumer, so the whole chain runs as one XLA program and
+# the producer's chunk-store round-trip disappears (e.g. per-slice
+# mask maps fuse into the stack+median stage that consumes them).
+#
+# Guards (v1):
+#   - single consumer, both stages "compute" (multi-consumer producers
+#     stay materialised: fusing them would duplicate work);
+#   - spatially identical grids, so chunk tables stay aligned (the
+#     executors match input chunks by index);
+#   - the merged stage must need no halo: focal members keep their own
+#     source/warp-fed stage (D11), and padded values never meet stack
+#     members inside one stage.
+.merge_stages <- function(protos, graph) {
+  repeat {
+    did_merge <- FALSE
+    for (i in seq_along(protos)) {
+      p <- protos[[i]]
+      if (is.null(p) || p$kind != "compute") next
+      consumers <- Filter(function(q) !is.null(q) && p$id %in% q$inputs,
+                          protos)
+      if (length(consumers) != 1L) next
+      q <- consumers[[1L]]
+      if (q$kind != "compute") next
+      if (!.spatial_equal(p$grid, q$grid)) next
+      members <- sort(unique(c(p$members, q$members)))
+      input_nodes <- setdiff(unique(c(p$input_nodes, q$input_nodes)),
+                             members)
+      if (.stage_halo(graph, members, input_nodes) > 0L) next
+      protos[[q$id]]$members <- members
+      protos[[q$id]]$input_nodes <- input_nodes
+      protos[[q$id]]$inputs <-
+        setdiff(unique(c(p$inputs, q$inputs)), p$id)
+      protos[p$id] <- list(NULL)
+      did_merge <- TRUE
+    }
+    if (!did_merge) break
+  }
+  # Compact dead slots and renumber ids (inputs remapped to match).
+  live <- which(!vapply(protos, is.null, logical(1)))
+  remap <- integer(length(protos))
+  remap[live] <- seq_along(live)
+  lapply(seq_along(live), function(j) {
+    s <- protos[[live[[j]]]]
+    s$id <- j
+    s$inputs <- sort(unique(remap[s$inputs]))
+    s
+  })
+}
+
 # -- The planner ---------------------------------------------------------------
 
 #' Plan a LazyRaster: run all planner passes and export a Plan.
@@ -336,6 +389,9 @@ plan_lazy <- function(x) {
     }
   }
 
+  # ---- Stage-merge pass -------------------------------------------------------
+  protos <- .merge_stages(protos, graph)
+
   # ---- Phase B: finalise -----------------------------------------------------
 
   # Exports: members referenced by other stages' input_nodes, plus tail.
@@ -387,21 +443,27 @@ plan_lazy <- function(x) {
     protos[[i]]$halo <- if (length(halos)) max(0L, halos) else 0L
   }
 
+  chunk_dim <- .plan_chunk_dim(graph, protos)
   stage_objs <- lapply(protos, function(s) {
     Stage(
       id = as.integer(s$id), kind = s$kind,
       members = as.integer(s$members), fn = s$fn,
       halo = as.integer(s$halo), grid = s$grid,
       chunks = .chunk_for(s$grid, .stage_block(graph, protos, s), s$halo,
-                          s$kind),
+                          s$kind, chunk_dim),
       device = "cpu",
       inputs = as.integer(s$inputs),
       input_nodes = as.integer(s$input_nodes)
     )
   })
 
-  Plan(stages = stage_objs, sink = node_stage[[.key(x@node_id)]],
-       graph = graph)
+  # The merge pass renumbers stages; find the sink by membership. A
+  # spatially-reduced root is a member of BOTH its reduce_partial and
+  # reduce_combine stages; the combine stage (created later) is the
+  # sink, so take the last match.
+  sinks <- Filter(function(s) x@node_id %in% s$members, protos)
+  Plan(stages = stage_objs,
+       sink = as.integer(sinks[[length(sinks)]]$id), graph = graph)
 }
 
 # Reachable ids from a sink, ascending (= topo in an append-only graph).
@@ -452,19 +514,63 @@ plan_lazy <- function(x) {
   c(1L, 1L)
 }
 
-# Chunk-size policy (D14): aim for garry_opt("chunk_target_px") pixels,
-# capped by the per-worker RAM budget, snapped to native blocks.
-.chunk_for <- function(grid, block, halo, kind) {
+.gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
+.lcm2 <- function(a, b) as.integer(a / .gcd2(a, b) * b)
+
+# Plan-wide chunk dim: ONE spatial tiling for every stage, because the
+# executors align input chunks by index, so chunk tables must tile
+# identically across stages (sources with different native blocks
+# would otherwise snap to different chunk heights). The target aims
+# for garry_opt("chunk_target_px") but is capped by the per-worker RAM
+# budget against the WORST per-pixel footprint of any stage: a fused
+# stage holds device copies of its stacked members (outer dims, e.g.
+# t = 55) plus one input buffer per input node. Snapping uses the LCM
+# of all stages' native blocks per axis; incommensurable blocks fall
+# back to no snapping (alignment is correctness, block snap is only a
+# read optimisation).
+.plan_chunk_dim <- function(graph, protos) {
+  bytes_per_px <- vapply(protos, function(s) {
+    outer_max <- max(vapply(s$members, function(id) {
+      d <- graph_get(graph, id)@grid@dims
+      prod(d[!names(d) %in% c("x", "y")])
+    }, numeric(1)))
+    n_in <- max(1L, length(s$input_nodes))
+    # ~2 f32 device copies of the widest member + input chunks held as
+    # R doubles. Calibrated against a measured 55-layer median stage
+    # with 110 inputs (~1.5 KB/px). An estimate, not a bound.
+    8 * outer_max + 8 * n_in + 16
+  }, numeric(1))
+  px_cap <- garry_opt("ram_budget_mb") * 2^20 / max(bytes_per_px)
+  target <- max(1, min(garry_opt("chunk_target_px"), px_cap))
+  side <- max(1L, as.integer(floor(sqrt(target))))
+
+  blocks <- lapply(protos, function(s) .stage_block(graph, protos, s))
+  block <- vapply(1:2, function(ax) {
+    l <- Reduce(.lcm2, vapply(blocks, `[[`, integer(1), ax), 1L)
+    if (l > 2L * side) 1L else l
+  }, integer(1))
+  snap_to_blocks(c(side, side), block)
+}
+
+# Chunk-size policy (D14): tile a stage's grid by the plan-wide
+# chunk dim. Halo-free source/warp stages read COARSER: their chunk
+# dim is an integer multiple of the compute chunk dim sized toward
+# garry_opt("read_target_px"), and consumers slice their window out of
+# the read buffer (windowed reads of warped mosaics decompress the
+# same source blocks whatever the window, so small read windows
+# amplify transfer). With a halo the read table stays identical to the
+# compute table: a compute chunk's halo may not straddle read chunks.
+.chunk_for <- function(grid, block, halo, kind, chunk_dim) {
   if (kind == "reduce_combine") {
     return(ChunkGrid(grid = grid,
                      chunk_dim = unname(grid@dims[c("x", "y")]),
                      block_dim = c(1L, 1L), halo = 0L))
   }
-  bytes <- max(4L, .dtype_width(grid@dtype) %/% 8L)
-  px_cap <- garry_opt("ram_budget_mb") * 2^20 / (bytes * 4)
-  target <- min(garry_opt("chunk_target_px"), px_cap)
-  side <- max(1L, as.integer(floor(sqrt(target))))
-  chunk <- snap_to_blocks(c(side, side), block)
-  ChunkGrid(grid = grid, chunk_dim = chunk, block_dim = block,
+  if (kind %in% c("source_read", "warp") && halo == 0L) {
+    f <- max(1L, as.integer(floor(sqrt(
+      garry_opt("read_target_px") / prod(as.numeric(chunk_dim))))))
+    chunk_dim <- chunk_dim * f
+  }
+  ChunkGrid(grid = grid, chunk_dim = chunk_dim, block_dim = block,
             halo = as.integer(halo))
 }

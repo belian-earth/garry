@@ -286,6 +286,15 @@ grid_equal <- function(a, b, tol = 1e-9) {
     all(a@dims == b@dims)
 }
 
+# Internal: same CRS, spatial dims and affine transform; non-spatial
+# dims and dtype ignored (a stack and its median share spatial
+# geometry). Used by the planner's stage-merge pass.
+.spatial_equal <- function(a, b, tol = 1e-9) {
+  crs_equal(a@crs, b@crs) &&
+    all(abs(a@transform - b@transform) < tol) &&
+    identical(unname(a@dims[c("x", "y")]), unname(b@dims[c("x", "y")]))
+}
+
 # Internal: same grid, different dtype (dtype promotion on binary ops,
 # float promotion on reductions and nodata sources).
 .grid_retype <- function(grid, dtype) {

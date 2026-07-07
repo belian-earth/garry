@@ -47,7 +47,13 @@ test_that("chunking snaps to the native block size of a real source", {
   old <- options(garry.chunk_target_px = 300)   # side 17 -> snaps to 32
   on.exit(options(old))
   p <- collect(lr + 0L, plan_only = TRUE)
+  compute <- Find(function(s) s@kind == "compute", p@stages)
+  expect_identical(compute@chunks@chunk_dim, c(32L, 32L))
+  # Halo-free source reads are coarser: an integer multiple of the
+  # compute tiling (read-granularity decoupling).
   src <- p@stages[[1L]]
-  expect_identical(src@chunks@chunk_dim, c(32L, 32L))
   expect_identical(src@chunks@block_dim, c(16L, 16L))
+  expect_identical(unname(src@chunks@chunk_dim %% compute@chunks@chunk_dim),
+                   c(0L, 0L))
+  expect_true(all(src@chunks@chunk_dim >= compute@chunks@chunk_dim))
 })

@@ -48,6 +48,47 @@ NULL
   if (stage@kind %in% c("source_read", "warp")) stage@halo else 0L
 }
 
+# Per-input fetch metadata for a compute/reduce_partial stage. Stage
+# outputs are always stored at the plan-wide compute chunk granularity
+# (coarse source reads split on write), so consumers index by chunk.
+.exec_in_meta <- function(graph, s, plan_stages) {
+  producer_of <- function(nid) {
+    Find(function(p) nid %in% p@members, plan_stages)
+  }
+  lapply(s@input_nodes, function(nid) {
+    prod <- producer_of(nid)
+    list(id = prod@id, pad = .exec_out_pad(prod),
+         dtype = graph_get(graph, nid)@grid@dtype)
+  })
+}
+
+# Split table for a coarse-reading source/warp stage: the consumer's
+# (finer) chunk table on the producer's grid, or NULL when tables
+# already agree. Read tasks read at their own coarse granularity and
+# write one store value per compute chunk (read-granularity
+# decoupling); the planner only coarsens halo-free stages.
+.exec_split_cg <- function(plan, s) {
+  cons <- Filter(function(t2)
+    s@id %in% t2@inputs &&
+      t2@kind %in% c("compute", "reduce_partial"), plan@stages)
+  if (length(cons) == 0L) return(NULL)
+  cg <- cons[[1L]]@chunks
+  if (all(cg@chunk_dim == s@chunks@chunk_dim)) return(NULL)
+  stopifnot(s@chunks@halo == 0L,
+            all(s@chunks@chunk_dim %% cg@chunk_dim == 0L))
+  ChunkGrid(grid = s@grid, chunk_dim = cg@chunk_dim,
+            block_dim = s@chunks@block_dim, halo = 0L)
+}
+
+# Compute-chunk rows covered by read-chunk row `r` (both tile the same
+# grid; read boundaries land on compute boundaries).
+.exec_split_members <- function(its, rrow) {
+  which(its$x_off >= rrow$x_off &
+        its$x_off < rrow$x_off + rrow$x_size &
+        its$y_off >= rrow$y_off &
+        its$y_off < rrow$y_off + rrow$y_size)
+}
+
 # Stage ids are creation-ordered, not topologically ordered: fusion can
 # attach a later-created source stage as an input to an earlier compute
 # stage (e.g. a map opens a stage, then lazy_map imports a second
@@ -144,10 +185,6 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
   out <- vector("list", length(plan@stages))
   stats <- lapply(plan@stages, function(s) character(0))
 
-  producer_of <- function(nid) {
-    Find(function(p) nid %in% p@members, plan@stages)
-  }
-
   # A source stage consumed only by warp stages never needs reading:
   # the warper pulls pixels from the file itself.
   warp_only <- vapply(plan@stages, function(s) {
@@ -160,36 +197,48 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
   for (s in plan@stages[.stage_topo_order(plan)]) {
     it <- chunk_iter(s@chunks)
 
-    if (s@kind == "source_read") {
-      if (warp_only[[s@id]]) next
-      node <- graph_get(graph, s@members[[1L]])
-      key <- .key(node@id)
-      out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
-        stats::setNames(
-          list(.exec_read_padded(node@path, node@band, node@nodata,
-                                 s@chunks, it[j, ],
-                                 open_options = node@open_options)), key)
-      })
-
-    } else if (s@kind == "warp") {
-      wnode <- graph_get(graph, s@members[[1L]])
-      snode <- graph_get(graph, wnode@parents[[1L]])
-      vrt <- gdal_warp_vrt(snode@path, snode@band, wnode@target_grid,
-                           wnode@resampling, src_nodata = snode@nodata)
-      key <- .key(wnode@id)
-      out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
-        stats::setNames(
-          list(.exec_read_padded(vrt, 1L, snode@nodata, s@chunks,
-                                 it[j, ])), key)
-      })
+    if (s@kind %in% c("source_read", "warp")) {
+      if (s@kind == "source_read" && warp_only[[s@id]]) next
+      if (s@kind == "warp") {
+        wnode <- graph_get(graph, s@members[[1L]])
+        snode <- graph_get(graph, wnode@parents[[1L]])
+        rpath <- gdal_warp_vrt(snode@path, snode@band, wnode@target_grid,
+                               wnode@resampling, src_nodata = snode@nodata)
+        rband <- 1L; rnodata <- snode@nodata; roo <- character(0)
+        key <- .key(wnode@id)
+      } else {
+        node <- graph_get(graph, s@members[[1L]])
+        rpath <- node@path; rband <- node@band; rnodata <- node@nodata
+        roo <- node@open_options
+        key <- .key(node@id)
+      }
+      split_cg <- .exec_split_cg(plan, s)
+      if (is.null(split_cg)) {
+        out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
+          stats::setNames(
+            list(.exec_read_padded(rpath, rband, rnodata, s@chunks,
+                                   it[j, ], open_options = roo)), key)
+        })
+      } else {
+        # Coarse read, split into compute-chunk values on arrival.
+        its <- chunk_iter(split_cg)
+        out[[s@id]] <- vector("list", nrow(its))
+        for (r in seq_len(nrow(it))) {
+          buf <- .exec_read_padded(rpath, rband, rnodata, s@chunks,
+                                   it[r, ], open_options = roo)
+          for (j in .exec_split_members(its, it[r, ])) {
+            r0 <- its$y_off[[j]] - it$y_off[[r]]
+            c0 <- its$x_off[[j]] - it$x_off[[r]]
+            out[[s@id]][[j]] <- stats::setNames(list(
+              buf[(r0 + 1L):(r0 + its$y_size[[j]]),
+                  (c0 + 1L):(c0 + its$x_size[[j]]), drop = FALSE]), key)
+          }
+        }
+      }
 
     } else if (s@kind %in% c("compute", "reduce_partial")) {
       jf <- g_jit(s@fn)
-      in_meta <- lapply(s@input_nodes, function(nid) {
-        prod <- producer_of(nid)
-        list(id = prod@id, pad = .exec_out_pad(prod),
-             dtype = graph_get(graph, nid)@grid@dtype)
-      })
+      in_meta <- .exec_in_meta(graph, s, plan@stages)
       shapes <- character(0)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
         inputs <- lapply(seq_along(s@input_nodes), function(k) {

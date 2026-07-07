@@ -30,6 +30,9 @@ Sys.setenv(GDAL_HTTP_MAX_RETRY = "5", GDAL_HTTP_RETRY_DELAY = "1",
 Sys.setenv(GDAL_CACHEMAX = "256")
 gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
+# One 32 KB range at open captures a whole COG header (vs several 16 KB
+# probes); per-open cost dominates GTI slice reads.
+Sys.setenv(GDAL_INGESTED_BYTES_AT_OPEN = "32768")
 
 # The analysis grid: everything downstream is pinned to it exactly.
 target <- grid_spec(
@@ -58,6 +61,10 @@ cat(sprintf("STAC query: %.2fs; %d item-assets, %d day slices\n",
 
 mirai::daemons(n_daemons)
 
+# Reads are whole-window (read_target_px decoupling: one GTI mosaic
+# open per slice x asset); compute chunks size themselves to the
+# per-worker RAM budget, so the fused mask->stack->median tail runs as
+# several tasks that overlap the source-read drain.
 options(garry.chunk_target_px = 1.4e6, garry.progress = TRUE)
 
 t_all <- system.time({

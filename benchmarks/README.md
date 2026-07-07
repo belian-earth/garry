@@ -11,33 +11,40 @@ sitting, against a vrtility baseline measured in that sitting.
 
 ## Results
 
-2026-07-07, slower connection (baseline measured same sitting):
+2026-07-07 evening, stage-merge pass + decoupled reads (baseline
+measured same sitting):
 
 | pipeline | bands | wall time | fleet peak RSS |
 |---|---|---|---|
-| vrtility main (15 daemons) | 3 | 37.9 s | - |
-| garry, one merged plan (12 daemons) | 3 | 73.5 s | 8.0 GB |
+| vrtility main (15 daemons) | 3 | 31.0 s | - |
+| garry, fused plan (12 or 16 daemons) | 3 | 65.4 s | 6.9 GB |
 
-2026-07-05, faster connection:
+Earlier same day, before the stage-merge pass (slower network hour):
+vrtility 37.9 s, garry merged-plan-only 73.5 s. 2026-07-05, faster
+connection: ODC + dask 28.4 s, vrtility 20.7 s, garry per-band
+collects 131.7 s.
 
-| pipeline | bands | wall time |
-|---|---|---|
-| ODC + dask (Python) | 3 | 28.4 s |
-| vrtility (15 daemons) | 3 | 20.7 s |
-| garry, collect per band (12 daemons) | 3 | 131.7 s |
-| garry, collect per band (12 daemons) | 1 | 46.7-48.5 s |
+What the fused architecture changed: the planner's stage-merge pass
+folds single-consumer compute chains into their consumers, so
+mask -> stack -> median -> band stack runs as ONE XLA program per
+chunk (172 members, zero intermediate store round-trips); the chunk
+store is uncompressed (gzip cost hundreds of ms per chunk for
+nothing); and read granularity is decoupled from compute granularity
+(sources read whole windows once, split into per-compute-chunk store
+files on write, so the compute tail parallelises and overlaps the
+read drain without re-opening mosaics). Offline (local files) the
+identical workload dropped 59.9 s -> 14-19 s.
 
-The merged-plan run puts every band's reads into one scheduler queue
-(vrtility-style network flooding) and dedups the shared Fmask sources
-across bands, closing the gap from 6.4x to 1.9x. Correctness: garry's
-B04 vs vrtility's agrees at correlation 0.992, mean abs diff 13.9
-reflectance units; the residual is nearest-vs-bilinear tile resampling
-and per-day-slice vs per-item stacking.
+Correctness: garry's B04 vs vrtility's agrees at correlation 0.992
+(mean abs diff ~14 reflectance units; nearest-vs-bilinear tile
+resampling and per-day-slice vs per-item stacking).
 
-Remaining structural gap (Phase 9): mask stages still materialise
-through the chunk store before stacking. A planner stage-merge pass
-fusing mask -> stack -> median into one kernel per chunk deletes ~110
-store round-trips per band and is the main remaining lever.
+The remaining ~2x is isolated to the read path: 220 GTI per-slice
+warped window reads take ~55 s of the 65 s wall (identical at 12 and
+16 daemons, so throughput- not concurrency-bound), while vrtility
+moves the same pixels in ~31 s total. Next lever (Phase 9
+continuation): per-item reads with on-device mosaicking, or GTI read
+tuning.
 
 ## Memory postmortem (2026-07-07)
 
@@ -70,7 +77,8 @@ Rscript benchmarks/hls-median-composite.R 12 B04 B03 B02   # full workload
 Network required (Planetary Computer, anonymous + pre-signed hrefs).
 The STAC query is untimed, matching the reference benchmarks. The
 scheduler prints task progress (`options(garry.progress = TRUE)` is
-set in the script); a three-band run is ~400 tasks.
+set in the script); a three-band run is ~226 tasks (220 whole-window
+GTI reads + the fused compute chunks).
 
 Note on the vrtility baseline: `vrtility/benchmarks/benchmark_r_vrtility.R`
 names a `vrtility_median` GDAL pixel function that is not registered by

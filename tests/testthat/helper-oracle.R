@@ -36,22 +36,27 @@ oracle_exec <- function(plan, data) {
       node <- graph_get(graph, s@members[[1L]])
       m <- data[[node@path]]
       stopifnot(!is.null(m))
-      out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
-        stats::setNames(list(.read_padded(m, s@chunks, it[j, ])),
+      # Coarse-reading sources store per-compute-chunk values (the
+      # executors split on read); the oracle reads at the split
+      # granularity directly, which is equivalent on a matrix.
+      cg <- garry:::.exec_split_cg(plan, s)
+      if (is.null(cg)) cg <- s@chunks
+      itr <- chunk_iter(cg)
+      out[[s@id]] <- lapply(seq_len(nrow(itr)), function(j) {
+        stats::setNames(list(.read_padded(m, cg, itr[j, ])),
                         as.character(s@members[[1L]]))
       })
 
     } else if (s@kind == "compute" || s@kind == "reduce_partial") {
+      in_meta <- garry:::.exec_in_meta(graph, s, plan@stages)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
         inputs <- lapply(seq_along(s@input_nodes), function(k) {
           nid <- s@input_nodes[[k]]
-          prod_stage <- Find(function(p) nid %in% p@members, plan@stages)
-          v <- out[[prod_stage@id]][[j]][[as.character(nid)]]
-          # Output padding: source/warp stages emit halo-padded windows;
-          # compute stages consume their padding and emit chunk cores.
-          out_pad <- if (prod_stage@kind %in% c("source_read", "warp"))
-            prod_stage@halo else 0L
-          extra <- out_pad - s@halo
+          meta <- in_meta[[k]]
+          v <- out[[meta$id]][[j]][[as.character(nid)]]
+          # Output padding: source/warp stages emit halo-padded
+          # windows; compute stages consume theirs and emit cores.
+          extra <- meta$pad - s@halo
           stopifnot(extra >= 0L)
           .trim_pad(v, extra)
         })

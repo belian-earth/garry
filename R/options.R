@@ -20,7 +20,13 @@
   # Max open GDAL dataset handles per process (LRU-evicted, closed on
   # eviction). Open warped/GTI mosaics pin warper + cache memory; on
   # daemons this bounds it. Reopening an evicted dataset is cheap.
-  handle_cache_max = 4L
+  handle_cache_max = 4L,
+  # Pixels a single source/warp read task aims for. Reads are coarser
+  # than compute chunks (windowed reads of warped mosaics decompress
+  # the same source blocks regardless of window size, so small read
+  # windows amplify transfer); compute chunks slice out of the read
+  # buffer. Applies only to halo-free plans.
+  read_target_px = 3.2e7
 )
 
 #' Read a garry policy option.
