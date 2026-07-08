@@ -540,7 +540,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       local({
         src <- st$src[[rows[[k]]]]; dst <- st$dst[[rows[[k]]]]
         ex <- grid@extent; cr <- grid@crs; nd <- rnodata
-        add_task(key, character(0), "read", launch = function() {
+        add_task(key, character(0), "read", prio = 1L,
+                 launch = function() {
           mirai::mirai(
             garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd),
             src = src, dst = dst, ex = ex, cr = cr, nd = nd,
@@ -562,9 +563,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
   # Build the task table. Combine stages are host-side, handled at drain.
   tasks <- list()
-  add_task <- function(key, deps, pool, launch, mb = 0) {
+  add_task <- function(key, deps, pool, launch, mb = 0, prio = 2L) {
     tasks[[key]] <<- list(deps = deps, pool = pool, launch = launch,
-                          mb = mb, state = "pending")
+                          mb = mb, prio = prio, state = "pending")
   }
   # For coarse-reading (split) source stages: task key per compute chunk,
   # and (mori store) each compute chunk's element name in the shared
@@ -608,6 +609,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       }
       skey <- .key(s@members[[1L]])
       fetch_deps <- character(0)
+      read_pool <- "read"
+      task_mb_read <- 0
       if (s@kind == "source_read") {
         fp <- prepare_fetch(rpath, roo, rnodata, s@grid)
         if (!is.null(fp)) {
@@ -624,21 +627,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           local({
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
+            prof <- if (read_pool == "comp") comp_prof else read_prof
             key <- sprintf("s%d_c%d", sid, jj)
-            add_task(key, fetch_deps, "read", if (use_shm) function() {
+            add_task(key, fetch_deps, read_pool, mb = task_mb_read,
+                     launch = if (use_shm) function() {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, reg = sprintf("r%d_%s", run_id, key),
-                .compute = read_prof)
+                .compute = prof)
             } else function() {
               mirai::mirai(
                 garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
                                           open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, out = chunk_file(sid, jj),
-                .compute = read_prof)
+                .compute = prof)
             })
           })
         }
@@ -659,6 +664,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           local({
             sid <- s@id; rr <- r; cg <- s@chunks; core <- it[rr, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
+            prof <- if (read_pool == "comp") comp_prof else read_prof
             key <- sprintf("s%d_r%d", sid, rr)
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -669,7 +675,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                    elt = elt_of[[j]],
                    file = chunk_file(sid, j))
             })
-            add_task(key, fetch_deps, "read", if (use_shm) function() {
+            add_task(key, fetch_deps, read_pool, mb = task_mb_read,
+                     launch = if (use_shm) function() {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, parts = parts,
@@ -677,13 +684,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
                 k2 = k2, oo = oo, parts = parts,
                 reg = sprintf("r%d_%s", run_id, key),
-                .compute = read_prof)
+                .compute = prof)
             } else function() {
               mirai::mirai(
                 garry::.daemon_run_source_split(p2, b2, nd, cg, core, k2,
                                                 parts, open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                parts = parts, oo = oo, .compute = read_prof)
+                parts = parts, oo = oo, .compute = prof)
             })
           })
         }
@@ -838,6 +845,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
             add = TRUE)
   }
 
+  # Scan order: priority first (stable within a priority level).
+  # Fetch tasks are prio 1, everything else 2, so the read pool
+  # downloads flat-out while any fetch is pending and only then
+  # takes assembles — interleaving them measured the fleet at
+  # ~18 MB/s where pure fetching sustains 40-50 MB/s (a local
+  # assemble idles its reader's connection for ~1 s).
+  task_order <- names(tasks)[order(vapply(tasks, `[[`, integer(1),
+                                          "prio"))]
+
   # Polling ready-queue with per-pool in-flight caps; compute
   # launches additionally gated by the byte budget (always at least
   # one runs, so a single over-budget task cannot deadlock).
@@ -864,7 +880,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   n_total <- length(tasks)
   last_report <- Sys.time()
   while (remaining()) {
-    for (k in names(tasks)) {
+    for (k in task_order) {
       # Single pool: one shared bucket (pre-pool behavior). Pooled:
       # reads and computes throttle independently, so a saturated
       # read queue never blocks compute launches or vice versa.
@@ -913,7 +929,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         # Eager fetch-cache cleanup: a fetch-backed source stage's
         # window files unlink once its last read (assemble) task is
         # done — bounds the tmpfs cache to slices still assembling.
-        if (pool_k == "read" && startsWith(k, "s")) {
+        if (startsWith(k, "s")) {
           sk <- sub("^s(\\d+)_.*$", "\\1", k)
           left <- fetch_reads_left[[sk]]
           if (!is.null(left)) {

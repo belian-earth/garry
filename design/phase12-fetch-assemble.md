@@ -116,11 +116,35 @@ Measured (same sitting, fast link, morphology benchmark):
   (upload, dispatch, store, share) and CPU-bound XLA on a 20-core
   box. ODC bracket: 15.9 s.
 
-Next bottleneck (phase 12b candidates): per-chunk compute overheads
-— fold cheap source-fed kernels (the mask chain) into the assemble
-read task so 330 store round-trips disappear (compute-on-read; the
-column-local-fusion idea at its narrowest), and/or device="auto" so
-big medians use the GPU while tiny masks stay CPU.
+Saturation follow-up (user field observation, verified): the first
+implementation interleaved assembles onto the readers — every ~1 s
+local assemble idled a connection, and the fleet averaged
+~18-38 MB/s instead of the spike's 50+. Fix: task PRIORITY in the
+ready-queue scan (fetch tasks are prio 1) — the read pool downloads
+flat-out while any fetch is pending, then takes assembles. Measured
+in-benchmark: 616 MB in 14.3 s = 43 MB/s pure fetch phase. (Routing
+assembles to the compute pool instead was tried and REJECTED: it
+starved the compute side and left 16 readers idle for 28 s.)
+
+The wall is now pinned at ~38-40 s regardless of pool shape (16+6,
+16+10, 24+3 all equivalent; memory grows with pool size, 9-13 GB):
+the binding constraint is per-task COMPUTE overhead — 456
+assemble/mask/median tasks each paying extract + upload + dispatch
++ store + share around ~0.2 s of actual XLA. ODC's 15.9 s does the
+same math with ~zero per-task overhead (numpy in worker threads
+over shared task-graph memory). Static pool arithmetic says the
+ceiling is ~16-20 s (total CPU ~200 core-s over the box) — reaching
+it is 12b, not a config knob.
+
+Phase 12b (the compute-overhead levers, in order):
+1. Compute-on-read: fold cheap source-fed kernel chains (the mask
+   bitand + morphology) into the assemble task body so 330 mask
+   tasks and their store round-trips disappear — the column-local
+   fusion idea at its narrowest, applied where the data already is.
+2. device="auto" by task bytes: medians to the GPU, masks stay CPU
+   (global CUDA was net slower on mask PCIe traffic).
+3. Batch small tasks: one mirai task per (stage, several chunks)
+   for sub-100 ms kernels, amortising dispatch + jit-lookup + share.
 
 ## Implementation sketch (post-spike)
 
