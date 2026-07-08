@@ -1,8 +1,10 @@
 # Phase 10: what odc-stac + dask do that garry doesn't (yet)
 
 Source deep-dive of odc-stac, odc-loader, odc-geo, stackstac, and dask
-core (2026-07-08, shallow clones at that date), plus same-sitting
-measurements. The question driving it: ODC has always been a bit
+core, plus same-sitting measurements. File:line references are
+against these upstream commits (2026-07-08): odc-stac 9ebd9cd,
+odc-loader b1007e9, odc-geo eefbada, stackstac 3857190, dask e0be880
+— shallow-clone and `git checkout` these to line the refs up. The question driving it: ODC has always been a bit
 faster than vrtility, and garry's network saturation is visibly lower
 than both during a run.
 
