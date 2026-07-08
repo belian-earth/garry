@@ -213,7 +213,90 @@ NULL
   TRUE
 }
 
+#' Daemon task body: pre-compile stage closures for their modal chunk
+#' shape.
+#'
+#' Runs on compute-pool daemons at run start (see `garry_daemons()`),
+#' while the read pool owns the network drain: fills the per-daemon
+#' jit cache and triggers one dummy execution per stage so the XLA
+#' compile (~0.9 s/stage measured) never lands on a tail chunk.
+#' Get-or-create against the same cache keys the real tasks use;
+#' failures are swallowed (warm-up is an optimisation, never a
+#' correctness dependency).
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
+#' @param specs List of per-stage specs: `ck` cache key, `fn` stage
+#'   closure, `dtypes` per-input upload dtypes, `nr`/`nc` modal input
+#'   dims.
+#' @return `NULL`, invisibly.
+#' @keywords internal
+#' @export
+.daemon_warm_jit <- function(specs) {
+  for (sp in specs) {
+    tryCatch({
+      jf <- .daemon_cache[[sp$ck]]
+      if (is.null(jf)) {
+        jf <- g_jit(sp$fn)
+        .daemon_cache[[sp$ck]] <- jf
+      }
+      dummy <- lapply(sp$dtypes, function(dt)
+        g_upload(matrix(0, sp$nr, sp$nc), dt))
+      invisible(g_download(jf(unname(dummy))))
+      rm(dummy)
+    }, error = function(e) NULL)
+  }
+  gc(FALSE)
+  invisible(NULL)
+}
+
 # -- Host-side scheduler -------------------------------------------------------
+
+#' Set up split mirai daemon pools for distributed execution.
+#'
+#' Two pools instead of one: `read` daemons execute source/warp read
+#' tasks and never load anvl/PJRT (a reader stays at ~60 MB), while a
+#' small pool of `compute` daemons runs the fused XLA stages,
+#' confining the ~0.3-1 GB per-chunk working sets to few processes.
+#' `collect(distributed = TRUE)` detects the pools automatically and
+#' also pre-compiles stage kernels on the compute pool at run start
+#' (`garry_opt("jit_warmup")`). With no pools set up, it uses
+#' `mirai::daemons()`'s default pool for everything, as before.
+#'
+#' Size `read` for the network (enough concurrent streams to saturate
+#' the link; 12 measured right for the benchmark link) and `compute`
+#' for RAM (each concurrently executing chunk holds its working set;
+#' idle daemons cost base RSS only, so over-allocating `compute` for
+#' the post-drain tail is cheap — the scheduler throttles compute
+#' in-flight to `garry_opt("compute_inflight")` while reads are
+#' draining and opens the full pool afterwards).
+#'
+#' MALLOC thresholds and other env vars must be exported BEFORE this
+#' call: daemon processes read them at exec.
+#'
+#' @param read Number of read-pool daemons (0 tears the pool down).
+#' @param compute Number of compute-pool daemons (0 tears down).
+#' @param read_handles Open-handle cache depth on read daemons.
+#'   Readers open per-slice mosaics that are rarely revisited, and
+#'   every open warped mosaic pins warper and connection memory, so
+#'   the default keeps only the most recent handle (measured ~15
+#'   MB/daemon saved at no wall cost on the benchmark).
+#' @param ... Passed to `mirai::daemons()` for both pools.
+#' @return Invisibly, `list(read =, compute =)`.
+#' @export
+garry_daemons <- function(read, compute, read_handles = 1L, ...) {
+  if (!requireNamespace("mirai", quietly = TRUE))
+    stop("the mirai package is required for distributed execution")
+  mirai::daemons(read, .compute = "garry_read", ...)
+  mirai::daemons(compute, .compute = "garry_compute", ...)
+  if (read > 0L) {
+    w <- mirai::everywhere(options(garry.handle_cache_max = hc),
+                           hc = as.integer(read_handles),
+                           .compute = "garry_read")
+    invisible(lapply(w, function(m) m[]))
+  }
+  invisible(list(read = read, compute = compute))
+}
 
 #' Execute a Plan across mirai daemons.
 #'
@@ -228,21 +311,49 @@ NULL
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   if (!requireNamespace("mirai", quietly = TRUE))
     stop("the mirai package is required for distributed execution")
-  st <- mirai::status()
-  n_daemons <- if (is.numeric(st$connections)) st$connections else 0L
-  if (n_daemons < 1L)
-    .garry_error("no mirai daemons: call mirai::daemons(n) first",
-                 "garry_scheduler_error")
-  cap <- max(2L * n_daemons, 4L)
+  # Pooled mode (phase 11.1): when the garry_read/garry_compute mirai
+  # compute profiles both have daemons (garry_daemons()), read/warp
+  # tasks route to the read pool — where anvl/PJRT never loads, so a
+  # reader stays at ~60 MB — and compute tasks to a small pool of fat
+  # daemons, confining per-chunk working sets to few processes.
+  # Otherwise everything runs on mirai's default profile, exactly as
+  # before pools existed.
+  n_of <- function(p) {
+    st <- tryCatch(mirai::status(.compute = p), error = function(e) NULL)
+    if (is.null(st) || !is.numeric(st$connections)) 0L
+    else as.integer(st$connections)
+  }
+  n_read <- n_of("garry_read")
+  n_comp <- n_of("garry_compute")
+  pooled <- n_read > 0L && n_comp > 0L
+  if (!pooled) {
+    n_read <- n_comp <- n_of("default")
+    if (n_read < 1L)
+      .garry_error(paste0(
+        "no mirai daemons: call mirai::daemons(n) or ",
+        "garry_daemons(read, compute) first"), "garry_scheduler_error")
+  }
+  read_prof <- if (pooled) "garry_read" else "default"
+  comp_prof <- if (pooled) "garry_compute" else "default"
+  profiles <- unique(c(read_prof, comp_prof))
+  # Back-pressure. Single pool: one shared bucket (unchanged
+  # behavior). Pooled: reads as before; compute is throttled while
+  # reads are draining (each in-flight fused chunk holds ~0.3-1 GB;
+  # the balancer opens the full pool for the tail once the drain's
+  # footprint is gone).
+  cap_read <- max(2L * n_read, 4L)
+  cap_comp_drain <- garry_opt("compute_inflight") %||%
+    max(2L, as.integer(ceiling(n_comp / 2)))
 
   # User stage closures call the g_* vocabulary unqualified; make sure
   # the package is attached on every daemon (idempotent, once per call).
   # Read policy is resolved host-side and shipped: daemons don't
   # inherit host options.
-  mirai::everywhere({
-    suppressMessages(library(garry))
-    options(garry.read_fail = rf)
-  }, rf = garry_opt("read_fail"))
+  for (p in profiles)
+    mirai::everywhere({
+      suppressMessages(library(garry))
+      options(garry.read_fail = rf)
+    }, rf = garry_opt("read_fail"), .compute = p)
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))
@@ -257,9 +368,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   if (use_shm) {
     # Daemons pin every region they created for this run; release them
     # once the host is done with the results (regions outlive tasks,
-    # not the run). Host-side handles die with `chunk_vals`.
-    on.exit(try(mirai::everywhere(garry::.daemon_shm_clear()),
-                silent = TRUE), add = TRUE)
+    # not the run). Host-side handles die with `chunk_vals`. Both
+    # pools pin regions (readers: windows; computers: results).
+    on.exit(for (p in profiles)
+      try(mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
+          silent = TRUE), add = TRUE)
   }
   chunk_file <- function(sid, j) file.path(store, sprintf("s%d_c%d.rds", sid, j))
   chunk_vals <- new.env(parent = emptyenv())   # task key -> shared value
@@ -274,8 +387,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
   # Build the task table. Combine stages are host-side, handled at drain.
   tasks <- list()
-  add_task <- function(key, deps, launch) {
-    tasks[[key]] <<- list(deps = deps, launch = launch, state = "pending")
+  add_task <- function(key, deps, pool, launch) {
+    tasks[[key]] <<- list(deps = deps, pool = pool, launch = launch,
+                          state = "pending")
   }
   # For coarse-reading (split) source stages: task key per compute chunk,
   # and (mori store) each compute chunk's element name in the shared
@@ -290,6 +404,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   stage_left <- new.env(parent = emptyenv())     # stage -> open chunks
   stage_reads <- new.env(parent = emptyenv())    # stage -> read tasks
   read_users <- new.env(parent = emptyenv())     # read task -> n stages
+
+  # Jit warm-up specs, one per compute stage (pooled mode): the modal
+  # (full) chunk shape, compiled on every compute daemon at run start.
+  warm_specs <- list()
 
   # Task insertion follows the launch-order invariant: the ready-queue
   # scan below launches pending tasks in insertion order, so sibling
@@ -321,18 +439,20 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             key <- sprintf("s%d_c%d", sid, jj)
-            add_task(key, character(0), if (use_shm) function() {
+            add_task(key, character(0), "read", if (use_shm) function() {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, reg = sprintf("r%d_%s", run_id, key))
+                oo = oo, reg = sprintf("r%d_%s", run_id, key),
+                .compute = read_prof)
             } else function() {
               mirai::mirai(
                 garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
                                           open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, out = chunk_file(sid, jj))
+                oo = oo, out = chunk_file(sid, jj),
+                .compute = read_prof)
             })
           })
         }
@@ -358,20 +478,21 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                    elt = elt_of[[j]],
                    file = chunk_file(sid, j))
             })
-            add_task(key, character(0), if (use_shm) function() {
+            add_task(key, character(0), "read", if (use_shm) function() {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, parts = parts,
                                               open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
                 k2 = k2, oo = oo, parts = parts,
-                reg = sprintf("r%d_%s", run_id, key))
+                reg = sprintf("r%d_%s", run_id, key),
+                .compute = read_prof)
             } else function() {
               mirai::mirai(
                 garry::.daemon_run_source_split(p2, b2, nd, cg, core, k2,
                                                 parts, open_options = oo),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                parts = parts, oo = oo)
+                parts = parts, oo = oo, .compute = read_prof)
             })
           })
         }
@@ -381,6 +502,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
     } else {  # compute / reduce_partial
       in_meta <- .exec_in_meta(graph, s, plan@stages)
+      cd <- s@chunks@chunk_dim
+      warm_specs[[length(warm_specs) + 1L]] <- list(
+        ck = sprintf("r%d_s%d", run_id, s@id),
+        fn = s@fn,
+        dtypes = vapply(in_meta, function(m) m$dtype, character(1)),
+        nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * s@halo,
+        nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * s@halo)
       for (j in seq_len(nrow(it))) {
         local({
           sid <- s@id; jj <- j; fn <- s@fn; halo <- s@halo
@@ -400,7 +528,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
             as.integer(m$pad - halo), integer(1))
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- sprintf("s%d_c%d", sid, jj)
-          add_task(key, unique(in_deps), if (use_shm) function() {
+          add_task(key, unique(in_deps), "comp", if (use_shm) function() {
             # Handles resolve at launch time: dependencies are done, so
             # `chunk_vals` holds every input's shared object (a ~30-byte
             # name over the wire).
@@ -411,7 +539,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
               in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
               in_keys = shm_keys,
               trims = trims, dtypes = dtypes,
-              reg = sprintf("r%d_%s", run_id, key))
+              reg = sprintf("r%d_%s", run_id, key),
+              .compute = comp_prof)
           } else function() {
             mirai::mirai(
               garry::.daemon_run_compute(ck, fn, in_files, in_keys,
@@ -421,7 +550,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                 chunk_file(m$id, jj), character(1)),
               in_keys = in_keys,
               trims = trims, dtypes = dtypes,
-              out = chunk_file(sid, jj))
+              out = chunk_file(sid, jj),
+              .compute = comp_prof)
           })
           if (use_shm) {
             comp_stage_of[[key]] <- sid
@@ -453,17 +583,39 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       if (read_users[[rk]] == 0L) dead <- c(dead, rk)
     }
     if (length(dead) > 0L) {
-      try(mirai::everywhere(garry::.daemon_shm_drop(regs),
-                            regs = sprintf("r%d_%s", run_id, dead)),
-          silent = TRUE)
+      for (p in profiles)
+        try(mirai::everywhere(garry::.daemon_shm_drop(regs),
+                              regs = sprintf("r%d_%s", run_id, dead),
+                              .compute = p),
+            silent = TRUE)
       rm(list = intersect(dead, ls(chunk_vals)), envir = chunk_vals)
       gc(FALSE)   # host munmaps its handles; regions free once unlinked
     }
     invisible(NULL)
   }
 
-  # Polling ready-queue with in-flight cap.
+  # Pre-drain jit warm-up: compile each compute stage's modal shape on
+  # every compute-pool daemon while the read pool owns the drain
+  # (measured: cold 1.45 s vs warmed 0.61 s per tail chunk). Fired
+  # async — a daemon runs it before any compute task queued after it;
+  # the handle stays referenced until the run ends. Only in pooled
+  # mode: on a shared pool the warm task would displace a read (the
+  # phase 10 rejection).
+  warm_handle <- NULL
+  if (pooled && isTRUE(garry_opt("jit_warmup")) && length(warm_specs))
+    warm_handle <- mirai::everywhere(garry::.daemon_warm_jit(sp),
+                                     sp = warm_specs,
+                                     .compute = comp_prof)
+
+  # Polling ready-queue with per-pool in-flight caps.
   inflight <- list()
+  n_inflight <- c(read = 0L, comp = 0L)
+  reads_left <- sum(vapply(tasks, function(t) t$pool == "read",
+                           logical(1)))
+  cap_of <- function(pool) {
+    if (pool == "read") return(cap_read)
+    if (reads_left > 0L) cap_comp_drain else 2L * n_comp
+  }
   done <- character(0)
   is_ready <- function(t) all(t$deps %in% done)
   remaining <- function() {
@@ -480,13 +632,18 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   last_report <- Sys.time()
   while (remaining()) {
     for (k in names(tasks)) {
-      if (length(inflight) >= cap) break
+      # Single pool: one shared bucket (pre-pool behavior). Pooled:
+      # reads and computes throttle independently, so a saturated
+      # read queue never blocks compute launches or vice versa.
+      if (!pooled && length(inflight) >= cap_read) break
       t <- tasks[[k]]
-      if (t$state == "pending" && is_ready(t)) {
-        inflight[[k]] <- t$launch()
-        tasks[[k]]$state <- "running"
-        log_line("launch", k)
-      }
+      if (t$state != "pending") next
+      if (pooled && n_inflight[[t$pool]] >= cap_of(t$pool)) next
+      if (!is_ready(t)) next
+      inflight[[k]] <- t$launch()
+      n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
+      tasks[[k]]$state <- "running"
+      log_line("launch", k)
     }
     if (length(inflight) == 0L)
       .garry_error("scheduler deadlock: no runnable tasks",
@@ -501,6 +658,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         tasks[[k]]$state <- "done"
         done <- c(done, k)
         inflight[[k]] <- NULL
+        pool_k <- tasks[[k]]$pool
+        n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
+        if (pool_k == "read") reads_left <- reads_left - 1L
         harvested <- TRUE
         log_line("done", k)
         if (use_shm) release_reads(k)

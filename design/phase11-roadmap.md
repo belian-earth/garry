@@ -8,8 +8,30 @@ tail, workload parity, and an idle GPU. This is the tick-list; each
 item carries its rationale, expected size, and gate. Order is the
 recommended sequence.
 
-- [ ] **11.1 Split daemon pools: readers and computers, with a
-  memory-budgeted balancer.** mirai compute profiles
+- [x] **11.1 Split daemon pools: readers and computers, with a
+  memory-budgeted balancer.** DONE 2026-07-08. `garry_daemons(read,
+  compute)` creates garry_read/garry_compute mirai profiles; the
+  scheduler auto-detects them, routes read/warp vs compute tasks,
+  throttles compute in-flight during the drain
+  (garry_opt("compute_inflight"), default half the pool) and opens
+  the full pool for the tail; `.daemon_warm_jit` pre-compiles each
+  compute stage's modal shape on the pool at run start (cold 1.45 s
+  -> warmed 0.61 s per chunk). Read daemons never load PJRT.
+  Same-sitting: 12+3 pooled = 6.42 GB peak / 36.5 s (best wall AND
+  best peak; single-pool malloc baseline 7.03 GB / 36.8 s; morning
+  baseline 9.3-9.8 GB). Gated by test-mirai-pools.R (pooled ==
+  single-threaded, anvl-free readers, warm cache, fallback).
+  Spike findings that shaped it: everywhere() assignments do NOT
+  persist as daemon globals (ephemeral env — warm state must live in
+  garry:::.daemon_cache); reader RSS is 58 MB base but grows ~150 MB
+  over the drain (curl/TLS/PROJ churn, NOT the GDAL block cache and
+  NOT open handles — read_handles=1 saved only ~15 MB); active
+  compute daemons hold 1.1-1.4 GB DURING a real chunk (upload
+  coercion + XLA sort scratch across the thread pool), bigger than
+  the 0.3 GB offline sim. FOLLOW-ONS: attribute the reader drain
+  plateau (~150 MB x n_read is now the biggest block); PJRT CPU
+  client thread-pool sizing on compute daemons (anvl upstream
+  candidate) to cut sort scratch; both fold into 11.4's remit. mirai compute profiles
   (`daemons(n, .compute = "read")`) give task routing to pools.
   Read daemons never touch anvl/PJRT (~40-60 MB base vs ~108 MB);
   compute daemons are few and fat, confining the 0.3-1 GB per-chunk

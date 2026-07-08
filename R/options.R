@@ -42,7 +42,19 @@
   # expired token / 404 costs a hole in the composite instead of the
   # whole run (odc-stac's fail_on_error=FALSE, stackstac's
   # errors_as_nodata).
-  read_fail = "error"
+  read_fail = "error",
+  # Pooled scheduler (garry_daemons): max in-flight compute chunks
+  # WHILE reads are still draining. Each in-flight fused chunk holds
+  # a ~0.3-1 GB working set, so the compute pool is throttled during
+  # the drain and opened to the full pool for the tail (the freed
+  # read footprint funds the tail's parallelism). NULL = half the
+  # compute pool, minimum 2.
+  compute_inflight = NULL,
+  # Pooled scheduler: pre-compile each compute stage's modal chunk
+  # shape on every compute-pool daemon at run start, while the read
+  # pool owns the drain. Removes the first-execution compile
+  # (~0.9 s/stage measured) from the tail. Ignored without pools.
+  jit_warmup = TRUE
 )
 
 #' Read a garry policy option.

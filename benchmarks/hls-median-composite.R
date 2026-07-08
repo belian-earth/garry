@@ -9,13 +9,15 @@
 #   ODC + dask (Python): 28.35 s   (three bands, one pass)
 #   vrtility:            20.74 s   (three bands, one pass)
 #
-# Run:  Rscript benchmarks/hls-median-composite.R [n_daemons] [bands...]
-# e.g.  Rscript benchmarks/hls-median-composite.R 12 B04 B03 B02
+# Run:  Rscript benchmarks/hls-median-composite.R [daemons] [bands...]
+# daemons is "READ+COMPUTE" pools (default 12+3: 12 network streams,
+# 3 fat XLA daemons) or a single number for one shared pool.
+# e.g.  Rscript benchmarks/hls-median-composite.R 12+3 B04 B03 B02
 
 suppressMessages(library(garry))
 
 args <- commandArgs(trailingOnly = TRUE)
-n_daemons <- if (length(args) >= 1) as.integer(args[[1]]) else 12L
+daemons_arg <- if (length(args) >= 1) args[[1]] else "12+3"
 bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
 
 # GDAL/network tuning. Pre-signed hrefs (below) beat per-URL GDAL
@@ -74,7 +76,17 @@ slices <- sort(unique(src$slice))
 cat(sprintf("STAC query: %.2fs; %d item-assets, %d day slices\n",
             t_query[["elapsed"]], nrow(src), length(slices)))
 
-mirai::daemons(n_daemons)
+# Split pools (phase 11.1): readers never load PJRT (~60 MB base +
+# drain growth each) and saturate the link; 3 compute daemons confine
+# the fused chunks' working sets and get their stage kernels
+# pre-compiled while the drain runs. Measured 6.4 GB fleet peak vs
+# 9.3-9.8 single-pool, same-or-better wall.
+if (grepl("+", daemons_arg, fixed = TRUE)) {
+  np <- as.integer(strsplit(daemons_arg, "+", fixed = TRUE)[[1]])
+  garry_daemons(np[[1]], np[[2]])
+} else {
+  mirai::daemons(as.integer(daemons_arg))
+}
 
 # Reads are whole-window (read_target_px decoupling: one GTI mosaic
 # open per slice x asset). Per-band fused stages start as soon as
@@ -143,6 +155,7 @@ t_all <- system.time({
           nodata = -9999,
           distributed = TRUE)
 })
-cat(sprintf("processing time (garry, %s, %d daemons): %.2fs\n",
-            paste(bands, collapse = "+"), n_daemons, t_all[["elapsed"]]))
-mirai::daemons(0)
+cat(sprintf("processing time (garry, %s, daemons %s): %.2fs\n",
+            paste(bands, collapse = "+"), daemons_arg, t_all[["elapsed"]]))
+if (grepl("+", daemons_arg, fixed = TRUE)) garry_daemons(0, 0) else
+  mirai::daemons(0)
