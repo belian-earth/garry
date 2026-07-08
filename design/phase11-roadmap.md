@@ -184,6 +184,20 @@ died):
   1.4e6 is too fine everywhere (57.5 s). No single default is right
   across regimes.
 
+Second probe round (same sitting) — the saturation diagnosis:
+
+- **74% of a remote warped read is network wait.** The identical GTI
+  read: 0.52 s remote vs 0.14 s against local copies of the same
+  COGs. The warp is cheap; the cost is the GTiff reader fetching
+  ranges SEQUENTIALLY through the warper — the connection idles
+  between block round-trips, and a reader's duty cycle (~25%
+  transfer) is why the fleet never saturates any link.
+- **GDAL_NUM_THREADS is dead on both paths** at this window size:
+  through GTI+warp 0.81 -> 1.39 s, direct COG 0.27 -> 0.49 s. No
+  in-RasterIO range parallelism available; GDAL reads are blocking.
+- Direct COG native window: 0.27 s (0.07 open + 0.19 read), native
+  dtype = half the bytes of the f32 window.
+
 Standing levers, re-ranked:
 1. In-daemon read concurrency (async/multi-dataset interleave per
    reader): fine-grained tail tolerance without process cost —
