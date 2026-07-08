@@ -39,14 +39,18 @@ saturation gap and exactly the wall-time gap to ODC.
 
 ## Gap list (prioritised)
 
-1. **Memory: 10.4 GB vs ODC's 4.3 GB.** Structural: 12 R+XLA daemon
-   processes (each carrying an R session + PJRT runtime + GDAL
-   caches) vs one process with 20 threads. Levers short of a
-   re-architecture: bound XLA arena per daemon, drop GDAL_CACHEMAX
-   further on daemons (reads are one-shot; odc sets VSI_CACHE=False
-   for bulk reads on the same reasoning), fewer daemons once reads
-   are latency- not concurrency-bound, eager shm release (done).
-   Worth a dedicated session with per-daemon memory profiles.
+1. **Memory: 10.4 GB vs ODC's 4.3 GB** (SESSION DONE 2026-07-08,
+   details in design/phase10-memory.md). Fleet peak 9.3-9.8 ->
+   7.0 GB at wall parity. The dominant term was glibc malloc
+   retention of compute-chunk buffers (daemons sat at 1.2-1.7 GB
+   anon holding freed pages), fixed by MALLOC_MMAP_THRESHOLD_/
+   MALLOC_TRIM_THRESHOLD_=131072 in the daemon env plus gc(FALSE)
+   between compute tasks. Measured dead: GDAL_CACHEMAX trim (block
+   cache never fills on whole-window reads; gauge read 0), VSI_CACHE
+   (already FALSE by default), MALLOC_ARENA_MAX, and 8 daemons
+   (drain stretches; the link needs 12 streams). The remaining
+   ~2.7 GB to ODC is the process model (12 R+PJRT bases + per-
+   process working sets) — the v2 threads question.
 2. **Serial host segments** (DONE 2026-07-08). Offline repro of the
    benchmark graph (3 bands x 55 slices): build 0.72 s -> 0.46 s,
    plan 1.29 s -> 0.34 s. The wins, in order: consumers index in the

@@ -31,7 +31,18 @@ Sys.setenv(GDAL_HTTP_MAX_RETRY = "10", GDAL_HTTP_RETRY_DELAY = "0.5",
            GDAL_HTTP_TIMEOUT = "60", GDAL_HTTP_CONNECTTIMEOUT = "10")
 # GDAL's block cache defaults to 5% of RAM PER PROCESS; every daemon
 # inherits this env, so cap it or n_daemons x 5% eats the machine.
+# (Trimming below 256 measured inert in phase 10b: whole-window reads
+# stream through without ever filling the cache.)
 Sys.setenv(GDAL_CACHEMAX = "256")
+# Return freed compute buffers to the OS. glibc malloc retains large
+# freed allocations in arenas: a daemon that ran one fused chunk sat
+# at ~650 MB anon forever (measured), and consecutive chunks stacked
+# further. With a 128 KB mmap/trim threshold big buffers are mmap'd
+# and really freed (paired with the gc between compute tasks in the
+# scheduler); fleet peak 9.3-9.8 -> 7.0 GB at wall parity. Must be in
+# the env BEFORE daemons() so daemon processes inherit it at exec.
+Sys.setenv(MALLOC_MMAP_THRESHOLD_ = "131072",
+           MALLOC_TRIM_THRESHOLD_ = "131072")
 gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
 # One 32 KB range at open captures a whole COG header (vs several 16 KB

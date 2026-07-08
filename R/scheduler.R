@@ -171,6 +171,15 @@ NULL
   res <- g_download(jf(unname(inputs)))
   sh <- mori::share(res)
   .daemon_shm[[reg_key]] <- sh
+  # Release this chunk's device buffers and input copies now: nothing
+  # triggers gc between mirai tasks, so consecutive fused chunks on
+  # one daemon otherwise stack ~0.5 GB of dead buffers each (phase
+  # 10b: compute daemons measured at 1.2-1.7 GB anon vs a ~300 MB
+  # working set). Pair with MALLOC_MMAP_THRESHOLD_/
+  # MALLOC_TRIM_THRESHOLD_ in the daemon env so freed pages actually
+  # return to the OS (see benchmarks/hls-median-composite.R).
+  rm(inputs, res)
+  gc(FALSE)
   sh
 }
 
@@ -198,6 +207,9 @@ NULL
   }, in_files, in_keys, trims, dtypes)
   res <- g_download(jf(unname(inputs)))
   saveRDS(res, out_file, compress = FALSE)
+  # See .daemon_run_compute_shm: free chunk buffers between tasks.
+  rm(inputs, res)
+  gc(FALSE)
   TRUE
 }
 
