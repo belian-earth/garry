@@ -159,21 +159,46 @@ NET SLOWER than 6 CPU computers (39.3 vs 33.2): 330 tiny mask chunks
 pay PCIe + dispatch per task on 2 daemons — device placement should
 be per-stage by task size (medians yes, masks no), not global.
 
-Phase 12 levers, in expected order of value:
-1. Cut per-read fixed cost: per-item sources with daemon-held handle
-   reuse (9b rejected per-item WARPED VRTs on a slow link — overlap
-   fetch amplification; on a fast link the calculus reverses and the
-   9b measurement should be REDONE), or a GTI open-cost diet
-   (pre-fetched headers, shared FGB handle, warper reuse across
-   slices differing only in FILTER).
-2. In-daemon read concurrency: a reader that overlaps k opens/
-   transfers (async GDAL or multi-dataset interleave) multiplies
-   slots without multiplying processes — attacks the same ceiling
-   as "more readers" at ~zero memory cost.
-3. Per-stage device policy: garry.device = "auto" placing stages on
-   GPU only above a task-byte threshold.
-4. Reader footprint diet (fold of 11.4): ~250 MB/reader at peak is
-   what makes slot count expensive.
+Phase 12 levers — REVISED after the same-sitting read-cost probes
+(the first two hypotheses below were tested and the obvious one
+died):
+
+- **GTI is exonerated.** Probe (sequential, fast link): GTI slice
+  open 0.11 s + warped read 0.57 s; per-item warped VRT 0.08 + 0.70;
+  per-item NATIVE window 0.08 + 0.21. The wrapper costs nothing and
+  per-item warping wins nothing (9b's conclusion holds in both
+  regimes): the unit cost is the WARP itself. The truly direct
+  native read is 2.5x cheaper but only exists when the target grid
+  is the source grid — which the align() paste path already serves.
+  Keep GTI.
+- **Concurrent reads degrade only mildly** (0.68 -> 0.79-1.08 s at
+  12-way, no compute load). The benchmark's 1.9 s effective service
+  decomposes into: core contention with the compute pool's ~20-
+  thread-per-daemon XLA pools (renice of the compute pool: -4-8 s;
+  the PJRT thread-pool-size upstream ask is a DRAIN lever, not just
+  memory), and a LONG TAIL of slow reads (p90 12 s in-queue: cold
+  MPC objects / multi-tile slices stall a whole-slice read).
+- **read_target_px x reader-count interact**: finer reads (4e6)
+  helped 12 readers (52-61 -> 43.9 s) by smoothing the tail, hurt
+  20 readers (33.2 -> 41.0 s) where slots already absorb it;
+  1.4e6 is too fine everywhere (57.5 s). No single default is right
+  across regimes.
+
+Standing levers, re-ranked:
+1. In-daemon read concurrency (async/multi-dataset interleave per
+   reader): fine-grained tail tolerance without process cost —
+   the one structural answer to ODC's 20-thread pool (17.4 s
+   bracket vs garry's 33.2 s best tonight).
+2. Regime auto-tuning: a 2-3 s calibration read at run start
+   choosing reader count + read_target_px (slow link: few readers,
+   whole-slice reads, bandwidth-bound; fast link: many slots,
+   tail-aware granularity). The defaults cannot serve both regimes.
+3. PJRT CPU thread-pool sizing (upstream, drives drain contention
+   AND compute-daemon memory) + compute-pool renice as the interim
+   (cheap, measured).
+4. Per-stage device policy: garry.device = "auto" by task bytes
+   (global CUDA was net slower: tiny mask chunks pay PCIe/dispatch).
+5. Reader footprint diet (with 11.4's f32 store).
 
 ## Measured dead — do not re-litigate
 
