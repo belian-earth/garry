@@ -132,6 +132,49 @@ recommended sequence.
   RTX A1000; the full 3-band morphology benchmark ran end-to-end
   on CUDA (12 readers + 2 GPU computers).
 
+## Clean-window re-baseline (2026-07-08, fast link, interleaved)
+
+All runs same sitting, morphology ON for ODC and garry (equal work),
+cgroup peaks. The link offered 60+ MB/s (ODC brackets improved
+through the sitting: 21.7 -> 17.2 s).
+
+| run | wall | peak |
+|---|---|---|
+| ODC + dask (20 threads) | 21.7 / 17.2 s | 4.36 / 4.27 GB |
+| garry CPU 12r+3c | 60.7 / 52.0 s | 7.02 GB |
+| garry CPU 20r+6c | 33.2 s | 11.05 GB |
+| garry GPU 20r+2c | 39.3 s | 8.2 GB |
+
+THE REGIME FLIPPED. On the old ~23 MB/s link garry was
+bandwidth-bound and within 1.05x of ODC; on a fast link garry is
+PER-READ-FIXED-COST bound: each of the 220 coarse reads moves ~3 MB
+of payload (~50 ms at link speed) but takes ~1.9 s of service time —
+GTI per-slice open (FGB + per-tile COG header round-trips), warper
+init, decompress. 12 reader slots x overhead-dominated reads ≈
+20 MB/s regardless of the pipe; the task log shows the drain ends at
+t=35 and the network sits idle through a ~13 s median tail on 3
+computers. More slots help linearly but cost memory (20r+6c: -19 s,
++4 GB) and oversubscribe the 20-core box. Whole-GPU placement was
+NET SLOWER than 6 CPU computers (39.3 vs 33.2): 330 tiny mask chunks
+pay PCIe + dispatch per task on 2 daemons — device placement should
+be per-stage by task size (medians yes, masks no), not global.
+
+Phase 12 levers, in expected order of value:
+1. Cut per-read fixed cost: per-item sources with daemon-held handle
+   reuse (9b rejected per-item WARPED VRTs on a slow link — overlap
+   fetch amplification; on a fast link the calculus reverses and the
+   9b measurement should be REDONE), or a GTI open-cost diet
+   (pre-fetched headers, shared FGB handle, warper reuse across
+   slices differing only in FILTER).
+2. In-daemon read concurrency: a reader that overlaps k opens/
+   transfers (async GDAL or multi-dataset interleave) multiplies
+   slots without multiplying processes — attacks the same ceiling
+   as "more readers" at ~zero memory cost.
+3. Per-stage device policy: garry.device = "auto" placing stages on
+   GPU only above a task-byte threshold.
+4. Reader footprint diet (fold of 11.4): ~250 MB/reader at peak is
+   what makes slot count expensive.
+
 ## Measured dead — do not re-litigate
 
 Upload batching (0.08 s of a ~2 s chunk); finer chunks (fixed costs
