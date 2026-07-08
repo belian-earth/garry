@@ -20,3 +20,13 @@ A \code{LazyRaster} on the target grid.
 Injects a WarpNode (a barrier, executed as a GDAL VRT warp in Phase
 4b). Alignment stays explicit: binary ops never auto-resample.
 }
+\details{
+Paste fast path: when \code{x} is already exactly on the target grid
+(same CRS, transform, extent and dims; \code{grid_equal()}), \code{align()}
+is a no-op returning \code{x} — reads stay plain windowed reads, with no
+warp barrier splitting the plan. This is the single-CRS-zone
+workflow: pin the analysis grid to the sources' native grid and
+nothing warps. Unlike odc-stac's \code{ttol}, only EXACT equality
+pastes: a sub-pixel-shifted paste silently moves every pixel up to
+half a cell, so near-misses warp.
+}

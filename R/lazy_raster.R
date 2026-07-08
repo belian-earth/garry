@@ -333,6 +333,15 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' Injects a WarpNode (a barrier, executed as a GDAL VRT warp in Phase
 #' 4b). Alignment stays explicit: binary ops never auto-resample.
 #'
+#' Paste fast path: when `x` is already exactly on the target grid
+#' (same CRS, transform, extent and dims; `grid_equal()`), `align()`
+#' is a no-op returning `x` — reads stay plain windowed reads, with no
+#' warp barrier splitting the plan. This is the single-CRS-zone
+#' workflow: pin the analysis grid to the sources' native grid and
+#' nothing warps. Unlike odc-stac's `ttol`, only EXACT equality
+#' pastes: a sub-pixel-shifted paste silently moves every pixel up to
+#' half a cell, so near-misses warp.
+#'
 #' @param x A `LazyRaster`.
 #' @param to Target grid: a `GridSpec` or another `LazyRaster`.
 #' @param resampling GDAL resampling method.
@@ -343,6 +352,7 @@ align <- function(x, to, resampling = "bilinear") {
   target <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
   stopifnot(S7::S7_inherits(target, GridSpec))
   target <- .grid_retype(target, x@grid@dtype)
+  if (grid_equal(x@grid, target)) return(x)
   id <- graph_add(
     x@graph,
     WarpNode,

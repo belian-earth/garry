@@ -79,33 +79,37 @@ saturation gap and exactly the wall-time gap to ODC.
    omits (GDAL_HTTP_TIMEOUT=60, CONNECTTIMEOUT=10) in the benchmark
    env; consider making these garry-level defaults for vsicurl
    sources.
-6. **Overview selection for coarse targets.** odc computes
-   `read_shrink` and reads the matching COG overview explicitly —
-   the single biggest bandwidth lever when target res is coarser
-   than native. garry at native res never hits it, but A5-style
-   aggregation workflows will. Verify the GTI driver picks overviews
-   when the pinned grid is coarser (RESAMPLING open option +
-   overview-aware RasterIO), and gate it with a test; if GTI
-   doesn't, pre-select OVERVIEW_LEVEL per slice.
-7. **Paste-vs-warp fast path.** odc pastes (plain windowed read, no
-   warp) when CRS matches and alignment is within tolerance
-   (`ttol=0.9` for nearest). garry's benchmark grid (EPSG:20255)
-   forces per-tile warps of UTM sources — same as ODC's bilinear
-   warp here, so no benchmark gap — but document and test the
-   native-UTM-grid fast path for single-zone workflows.
-8. **Solar-day grouping.** `stac_time_slices("day")` truncates UTC
-   datetimes; odc groups by solar date at the geobox centroid
-   longitude. Same result for HLS at 144E, wrong near the
-   antimeridian. Add `granularity = "solar_day"` with a `lon`
-   argument.
-9. **Scheduler ordering.** dask orders tasks to minimise resident
-   memory (dask.order: depth-first completion of a chunk's producers
-   right before their consumer; LIFO ready stack with static
-   priority tie-break). garry's insertion-order launch happens to
-   match band order today, which is what makes the reduce-join
-   overlap work — encode that as an explicit invariant (or a
-   priority) rather than an accident of graph-build order, before
-   plans get more complex (multi-composite joins).
+6. **Overview selection for coarse targets** (VERIFIED 2026-07-08).
+   GDAL 3.13's GTI driver reads the matching overview when the
+   pinned grid is coarser than native, in both the same-CRS and
+   per-tile-warp paths — no open option needed (RESAMPLING is not a
+   GTI open option; GDAL warns and ignores it). No garry change;
+   gated by the poked-overview test in test-gti.R so a GDAL upgrade
+   cannot silently regress A5-style coarse aggregation reads.
+7. **Paste-vs-warp fast path** (DONE 2026-07-08). Two layers:
+   same-CRS aligned GTI mosaic reads were already plain windowed
+   reads (bit-exactness gated in test-gti.R), and `align()` now
+   no-ops when the target grid is `grid_equal()` to the source's —
+   previously it injected a WarpNode barrier (splitting the plan and
+   routing through VRT warp machinery) even for the identity grid.
+   Unlike odc's `ttol = 0.9`, only exact equality pastes: a
+   sub-pixel-shifted paste moves every pixel up to half a cell.
+   Gated in test-warp.R.
+8. **Solar-day grouping** (DONE 2026-07-08).
+   `stac_time_slices(granularity = "solar_day", lon = )` groups by
+   local solar date (UTC + lon x 240 s, odc's rule); `lon` defaults
+   to the circular mean of footprint centres, which resolves
+   antimeridian AOIs correctly. `lazy_stac_stack()` passes `lon`
+   through.
+9. **Scheduler ordering** (DONE 2026-07-08). `.stage_launch_order()`
+   (DFS postorder from the sink over stage inputs) now orders both
+   executors: a consumer's whole producer subtree enqueues
+   contiguously, sibling subtrees never interleave, so band k's
+   fused tail overlaps band k+1's read drain by construction —
+   an invariant (test-launch-order.R), not an accident of
+   graph-build order. Also removed a latent scheduler hazard: task-
+   table construction assumed producers were created before
+   consumers, which fusion does not guarantee for split sources.
 10. **Chunk byte budget.** dask targets 128 MiB per block and shrinks
     the SPATIAL extent (never time) when the stacked block exceeds
     it — same shape as garry's ram_budget px_cap. Validated; keep.

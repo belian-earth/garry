@@ -102,3 +102,34 @@ test_that("warping a computed raster raises the structured error", {
   expect_error(collect(align(m, .warp_target()), plan_only = TRUE),
                class = "garry_warp_unsupported_error")
 })
+
+test_that("align to the identical grid pastes: no WarpNode, no warp
+           stage, bit-exact reads (gap 7)", {
+  f <- fixture_gradient_f32()
+  g <- gdal_grid_spec(f)$grid
+  a <- lazy_source(f)
+
+  # no-op at the IR level (any resampling: nothing is resampled)
+  same <- align(a, g, resampling = "bilinear")
+  expect_identical(same@node_id, a@node_id)
+  expect_identical(align(a, a)@node_id, a@node_id)
+
+  p <- collect(same + 0, plan_only = TRUE)
+  expect_false(any(vapply(p@stages, function(s) s@kind == "warp",
+                          logical(1))))
+  expect_identical(collect(same),
+                   gdal_read_window(f, 1L, 0L, 0L,
+                                    unname(g@dims[["x"]]),
+                                    unname(g@dims[["y"]])))
+
+  # a half-pixel-shifted grid is NOT a paste: it must warp
+  g2 <- grid_spec(g@crs,
+                  extent = g@extent + g@transform[[2L]] / 2,
+                  dims = unname(g@dims[c("x", "y")]),
+                  dtype = g@dtype)
+  shifted <- align(a, g2, resampling = "nearest")
+  expect_false(identical(shifted@node_id, a@node_id))
+  p2 <- collect(shifted, plan_only = TRUE)
+  expect_true(any(vapply(p2@stages, function(s) s@kind == "warp",
+                         logical(1))))
+})

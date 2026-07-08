@@ -27,7 +27,8 @@ Suggests:
     rstac,
     terra,
     testthat (>= 3.0.0),
-    vaster
+    vaster,
+    withr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
 Collate: 

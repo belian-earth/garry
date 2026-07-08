@@ -188,3 +188,62 @@ test_that("lazy pipelines on GTI sources are chunk-invariant", {
   ok <- !is.nan(whole)
   expect_equal(got[ok], whole[ok], tolerance = 1e-7)
 })
+
+test_that("GTI reads the matching overview when the pinned grid is
+           coarser (gap 6: coarse-target bandwidth)", {
+  # Full-res data is 1.0 everywhere; the (single) overview level is
+  # overwritten with 2.0 after building, so the value read reveals
+  # which level GDAL used. A5-style aggregation workflows depend on
+  # this: at coarse target resolution the overview is the difference
+  # between reading kilobytes and reading the full-res tile.
+  skip_if_not_installed("withr")
+  dir <- withr::local_tempdir("gti-ovr")
+  src <- file.path(dir, "src.tif")
+  ds <- gdalraster::create("GTiff", src, 512, 512, 1, "Float32",
+                           return_obj = TRUE)
+  ds$setGeoTransform(c(600000, 30, 0, 9200000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32755"))
+  ds$write(1, 0, 0, 512, 512, rep(1.0, 512 * 512))
+  ds$close()
+  ds <- methods::new(gdalraster::GDALRaster, src, read_only = TRUE)
+  ds$buildOverviews("NEAREST", 2L, integer(0))
+  ds$close()
+  od <- methods::new(gdalraster::GDALRaster, paste0(src, ".ovr"),
+                     read_only = FALSE)
+  od$write(1, 0, 0, 256, 256, rep(2.0, 256 * 256))
+  od$close()
+
+  ext55 <- c(600000, 9200000 - 512 * 30, 600000 + 512 * 30, 9200000)
+  mk_index <- function(crs) {
+    e <- if (identical(crs, "EPSG:32755")) ext55 else
+      gdalraster::transform_bounds(ext55, "EPSG:32755", crs)
+    idx <- file.path(dir, paste0(gsub(":", "", crs), ".gti.fgb"))
+    gti_index_create(
+      data.frame(location = src, datetime = "2023-01-01T00:00:00Z",
+                 slice = "2023-01-01", cloud_cover = 0,
+                 xmin = e[1], ymin = e[2], xmax = e[3], ymax = e[4]),
+      idx, crs = crs)
+    idx
+  }
+  read_mean <- function(idx, grid) {
+    mean(gdal_read_window(paste0("GTI:", idx), 1L, 0L, 0L,
+                          unname(grid@dims[["x"]]),
+                          unname(grid@dims[["y"]]),
+                          open_options = gti_open_options(grid)))
+  }
+
+  # Same CRS: 2x-coarse pinned grid must hit the overview; the
+  # native-res control must not.
+  idx55 <- mk_index("EPSG:32755")
+  g <- function(crs, ext, n) grid_spec(crs, extent = ext,
+                                       dims = c(n, n), dtype = "f32")
+  expect_identical(read_mean(idx55, g("EPSG:32755", ext55, 256)), 2)
+  expect_identical(read_mean(idx55, g("EPSG:32755", ext55, 512)), 1)
+
+  # Cross-CRS (per-tile warp, the benchmark shape): the warper must
+  # also choose the overview.
+  idxw <- mk_index("EPSG:3857")
+  bb <- gdalraster::transform_bounds(ext55, "EPSG:32755", "EPSG:3857")
+  expect_gt(read_mean(idxw, g("EPSG:3857", bb, 256)), 1.9)
+  expect_lt(read_mean(idxw, g("EPSG:3857", bb, 512)), 1.1)
+})
