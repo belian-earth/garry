@@ -55,6 +55,39 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
   expect_gt(cache_n, 0L)
 })
 
+test_that("streaming distributed writes match single-threaded writes", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  garry_daemons(2, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  old <- options(garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+
+  f <- fixture_gradient_f32()
+  g <- gdal_grid_spec(f)$grid
+  nx <- unname(g@dims[["x"]]); ny <- unname(g@dims[["y"]])
+  # multiband (stacked) and single-band sinks
+  a <- lazy_source(f); b <- lazy_source(f)
+  cases <- list(
+    band2 = lazy_stack(list(a + 1, b * 2), along = "band"),
+    flat  = a * 2 + 1)
+  for (nm in names(cases)) {
+    p <- plan_lazy(cases[[nm]])
+    f_single <- tempfile(fileext = ".tif")
+    f_dist <- tempfile(fileext = ".tif")
+    execute_plan(p, path = f_single, nodata = -9999)
+    execute_plan_mirai(p, path = f_dist, nodata = -9999)
+    n_bands <- if (nm == "band2") 2L else 1L
+    for (bd in seq_len(n_bands)) {
+      expect_identical(
+        gdal_read_window(f_dist, bd, 0L, 0L, nx, ny),
+        gdal_read_window(f_single, bd, 0L, 0L, nx, ny),
+        label = paste("streamed write", nm, "band", bd))
+    }
+    unlink(c(f_single, f_dist))
+  }
+})
+
 test_that("no pools set up falls back to the default profile", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")

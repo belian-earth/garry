@@ -607,6 +607,27 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                                      sp = warm_specs,
                                      .compute = comp_prof)
 
+  # Streaming sink writes (phase 11.3): with a file destination, each
+  # sink chunk writes the moment it lands, so all but the last band's
+  # writes hide under the drain instead of running serially after it.
+  # (On error the partially written file is left behind; the
+  # single-threaded executor still writes at the end.)
+  sink <- plan@stages[[plan@sink]]
+  stream_write <- !is.null(path) && sink@kind != "reduce_combine"
+  sink_ds <- NULL
+  if (stream_write) {
+    sink_skey <- .key(sink@members[[length(sink@members)]])
+    sink_it <- chunk_iter(sink@chunks)
+    sink_spad <- .exec_out_pad(sink)
+    wnodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+    sink_task_j <- stats::setNames(
+      seq_len(nrow(sink_it)),
+      sprintf("s%d_c%d", sink@id, seq_len(nrow(sink_it))))
+    sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata)
+    on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
+            add = TRUE)
+  }
+
   # Polling ready-queue with per-pool in-flight caps.
   inflight <- list()
   n_inflight <- c(read = 0L, comp = 0L)
@@ -663,6 +684,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         if (pool_k == "read") reads_left <- reads_left - 1L
         harvested <- TRUE
         log_line("done", k)
+        if (stream_write && !is.na(sink_task_j[k])) {
+          j <- sink_task_j[[k]]
+          ch <- if (use_shm) chunk_vals[[k]][[sink_skey]]
+                else readRDS(chunk_file(sink@id, j))[[sink_skey]]
+          .exec_check_writable(ch, nrow(sink_it))
+          .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
+                            ch, sink_spad, sink@grid@dtype, wnodata)
+          log_line("write", k)
+        }
         if (use_shm) release_reads(k)
       }
     }
@@ -689,6 +719,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
     lapply(seq_len(nrow(it)), function(j) read_chunk(s@id, j))
   }
 
+  # Streaming write already put every sink chunk on disk as it landed.
+  if (stream_write) {
+    sink_ds$close()
+    sink_ds <- NULL
+    return(invisible(path))
+  }
+
   combine_vals <- new.env(parent = emptyenv())
   for (s in plan@stages) {
     if (s@kind != "reduce_combine") next
@@ -698,7 +735,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
     combine_vals[[.key(s@id)]] <- s@fn(partials)
   }
 
-  sink <- plan@stages[[plan@sink]]
   key <- .key(sink@members[[length(sink@members)]])
   chunks <- if (sink@kind == "reduce_combine") {
     list(combine_vals[[.key(sink@id)]][[key]])

@@ -132,36 +132,46 @@ NULL
   ord
 }
 
-# Write sink chunks to a GTiff (shared by both executors). 2D chunks
-# write to band 1; (outer, y, x) chunks write one GTiff band per outer
-# layer (t or band, D17). Only source/warp sinks carry padding, and
-# those are always 2D, so stacked chunks never need trimming.
-.exec_write_sink <- function(chunks, it, sink, path, nodata) {
-  first <- chunks[[1L]]
-  rank3 <- is.array(first) && length(dim(first)) == 3L
-  if (nrow(it) == 1L && !is.matrix(first) && !rank3)
+# Write one sink chunk to an open output dataset. 2D chunks write to
+# band 1; (outer, y, x) chunks write one GTiff band per outer layer
+# (t or band, D17). Only source/warp sinks carry padding, and those
+# are always 2D, so stacked chunks never need trimming.
+.exec_write_chunk <- function(ds, x_off, y_off, ch, sink_pad, dtype,
+                              nodata) {
+  if (is.matrix(ch)) {
+    gdal_write_window(ds, x_off, y_off, .exec_trim(ch, sink_pad),
+                      dtype = dtype, nodata = nodata)
+  } else {
+    stopifnot(sink_pad == 0L)
+    for (b in seq_len(dim(ch)[[1L]])) {
+      m <- ch[b, , , drop = FALSE]
+      dim(m) <- dim(ch)[2:3]
+      gdal_write_window(ds, x_off, y_off, m, dtype = dtype,
+                        nodata = nodata, band = b)
+    }
+  }
+  invisible(NULL)
+}
+
+.exec_check_writable <- function(ch, n_chunks) {
+  rank3 <- is.array(ch) && length(dim(ch)) == 3L
+  if (n_chunks == 1L && !is.matrix(ch) && !rank3)
     .garry_error("cannot write a scalar reduction to a raster file",
                  "garry_plan_error")
+}
+
+# Write sink chunks to a GTiff (single-threaded executor; the
+# distributed scheduler streams chunks through .exec_write_chunk as
+# they land instead).
+.exec_write_sink <- function(chunks, it, sink, path, nodata) {
+  .exec_check_writable(chunks[[1L]], nrow(it))
   sink_pad <- .exec_out_pad(sink)
   nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
   ds <- gdal_create_output(path, sink@grid, nodata = nodata)
   on.exit(ds$close(), add = TRUE)
   for (j in seq_len(nrow(it))) {
-    ch <- chunks[[j]]
-    if (is.matrix(ch)) {
-      gdal_write_window(ds, it$x_off[j], it$y_off[j],
-                        .exec_trim(ch, sink_pad),
-                        dtype = sink@grid@dtype, nodata = nodata)
-    } else {
-      stopifnot(sink_pad == 0L)
-      for (b in seq_len(dim(ch)[[1L]])) {
-        m <- ch[b, , , drop = FALSE]
-        dim(m) <- dim(ch)[2:3]
-        gdal_write_window(ds, it$x_off[j], it$y_off[j], m,
-                          dtype = sink@grid@dtype, nodata = nodata,
-                          band = b)
-      }
-    }
+    .exec_write_chunk(ds, it$x_off[j], it$y_off[j], chunks[[j]],
+                      sink_pad, sink@grid@dtype, nodata)
   }
   invisible(path)
 }
