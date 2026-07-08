@@ -274,7 +274,79 @@ gti_index_create <- function(entries, path, crs, layer = "index") {
     if (!v$createFeature(ft))
       stop("failed to write index feature ", i)
   }
+  # Sidecar for the distributed scheduler's fetch/assemble split
+  # (phase 12): the entries table lets the scheduler turn a remote
+  # slice-mosaic read into per-item window fetches plus a local
+  # reassembly (a location-rewritten copy of this index), without a
+  # vector-read round-trip against the index file.
+  saveRDS(list(entries = entries, crs = crs, layer = layer),
+          paste0(path, ".meta.rds"))
   invisible(path)
+}
+
+#' Copy one source's target-window bytes to a local file.
+#'
+#' The fetch half of the phase 12 fetch/assemble split: a plain
+#' `gdal_translate -srcwin` of the window intersecting `ext` (plus a
+#' warp-kernel `margin` in source pixels), native dtype and blocks —
+#' no warp, no mosaic on the remote path.
+#'
+#' @param location Source path/URL.
+#' @param out_file Local destination GTiff.
+#' @param ext,crs Target extent and CRS defining the window.
+#' @param margin Source-pixel margin around the window.
+#' @return `TRUE`, invisibly. Errors if the window is empty or the
+#'   source unreadable.
+#' @keywords internal
+gdal_fetch_window <- function(location, out_file, ext, crs,
+                              margin = 8L) {
+  ds <- methods::new(gdalraster::GDALRaster, location, read_only = TRUE)
+  gt <- ds$getGeoTransform()
+  b <- gdalraster::transform_bounds(ext, crs, ds$getProjection())
+  x0 <- max(0L, as.integer(floor((b[1] - gt[1]) / gt[2])) - margin)
+  y0 <- max(0L, as.integer(floor((b[4] - gt[4]) / gt[6])) - margin)
+  x1 <- min(ds$getRasterXSize(),
+            as.integer(ceiling((b[3] - gt[1]) / gt[2])) + margin)
+  y1 <- min(ds$getRasterYSize(),
+            as.integer(ceiling((b[2] - gt[4]) / gt[6])) + margin)
+  ds$close()
+  stopifnot(x1 > x0, y1 > y0)
+  # Uncompressed on purpose: the cache lives on tmpfs for one slice
+  # assembly, and re-encoding (DEFLATE) costs more CPU across a
+  # 20-plus-fetcher fleet than the bytes are worth (source blocks
+  # still arrive compressed; only the local copy is raw).
+  gdalraster::translate(
+    location, out_file,
+    cl_arg = c("-srcwin", x0, y0, x1 - x0, y1 - y0,
+               "-co", "TILED=YES", "-co", "COMPRESS=NONE", "-q"))
+  invisible(TRUE)
+}
+
+#' Write a small all-nodata window (failed-fetch placeholder).
+#'
+#' Int16 with the sentinel when `nodata` is declared, else Byte 255
+#' (the HLS QA fill convention): the local mosaic reads a hole where
+#' the object went missing instead of erroring.
+#'
+#' @param out_file Destination GTiff.
+#' @param ext,crs Window extent and CRS.
+#' @param nodata Length-0 or length-1 sentinel.
+#' @return `out_file`, invisibly.
+#' @keywords internal
+gdal_nodata_window <- function(out_file, ext, crs,
+                               nodata = numeric(0)) {
+  has_nd <- length(nodata) == 1L
+  ds <- gdalraster::create("GTiff", out_file, 16, 16, 1,
+                           if (has_nd) "Int16" else "Byte",
+                           return_obj = TRUE)
+  ds$setGeoTransform(c(ext[1], (ext[3] - ext[1]) / 16, 0,
+                       ext[4], 0, -(ext[4] - ext[2]) / 16))
+  ds$setProjection(gdalraster::srs_to_wkt(crs))
+  fill <- if (has_nd) as.numeric(nodata) else 255
+  if (has_nd) ds$setNoDataValue(1, fill)
+  ds$write(1, 0, 0, 16, 16, rep(fill, 256))
+  ds$close()
+  invisible(out_file)
 }
 
 #' Build GTI open options pinning a target grid and slice filter.

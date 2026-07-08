@@ -87,6 +87,41 @@ Projected benchmark wall: ~12 s saturated drain + overlapped
 assembly/compute + tail ≈ high-teens seconds — ODC territory — at
 byte parity, so no slow-link regression.
 
+## Implementation status (2026-07-08): SHIPPED, read path solved
+
+Implemented in the distributed scheduler: `gti_index_create()` writes
+an entries sidecar; `prepare_fetch()` turns a remote GTI source
+stage into per-item fetch tasks (`.daemon_fetch_window` /
+`gdal_fetch_window`: srcwin translate to tmpfs, uncompressed — the
+DEFLATE re-encode measured as wasted fleet CPU) plus a
+location-rewritten local index the unchanged read task assembles
+from; fetch failure under read_fail="nodata" writes a nodata
+placeholder window so a vanished object degrades to a hole;
+per-stage tmpfs refcounting unlinks windows when their slice's last
+assemble completes. `garry.fetch` = auto/direct/force ("force"
+enables offline tests over local fixtures). Gates in
+test-fetch-assemble.R: fetch-backed == direct results, auto skips
+local sources, failure degrades, cache cleans up.
+
+Measured (same sitting, fast link, morphology benchmark):
+- At matched pools (12+3) fetch wins clearly: 41.3 s / 6.8 GB vs
+  52-61 s / 7.0 GB direct.
+- At 24 readers the READ PATH IS SOLVED: all 392 fetches done by
+  t=18, all 220 assembles by t=20 (direct drain was ~35 s), long
+  tail gone.
+- BUT the wall stalls at ~37.6 s (24+3 and 20+8 alike; 20+8 costs
+  13 GB) because the bottleneck moved: the last ~16 s is the
+  COMPUTE side — 330 morphology mask chunks + 18 medians whose
+  ~133 s of task time is dominated by per-chunk fixed costs
+  (upload, dispatch, store, share) and CPU-bound XLA on a 20-core
+  box. ODC bracket: 15.9 s.
+
+Next bottleneck (phase 12b candidates): per-chunk compute overheads
+— fold cheap source-fed kernels (the mask chain) into the assemble
+read task so 330 store round-trips disappear (compute-on-read; the
+column-local-fusion idea at its narrowest), and/or device="auto" so
+big medians use the GPU while tiny masks stay CPU.
+
 ## Implementation sketch (post-spike)
 
 Planner: source stages over remote GTI indices gain a fetch

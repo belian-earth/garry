@@ -143,6 +143,44 @@ NULL
   sh
 }
 
+#' Daemon task body: fetch one item-asset's target-window bytes to a
+#' local file.
+#'
+#' The fetch half of the phase 12 fetch/assemble split: a plain
+#' `gdal_translate -srcwin` of the window intersecting the target
+#' extent (plus a warp-kernel margin), remote COG to local tmpfs,
+#' native dtype and blocks — no warp, no mosaic on the remote path.
+#' On failure with `garry.read_fail = "nodata"`, writes a small
+#' all-nodata placeholder covering the window so the local mosaic
+#' reads a hole instead of erroring (Int16 when a nodata sentinel is
+#' declared, Byte 255 otherwise — the HLS QA convention).
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
+#' @param location Source path/URL.
+#' @param out_file Local destination.
+#' @param ext,crs Target extent and CRS defining the window.
+#' @param nodata Optional sentinel for the failure placeholder.
+#' @param margin Source-pixel margin around the window.
+#' @return `TRUE`.
+#' @keywords internal
+#' @export
+.daemon_fetch_window <- function(location, out_file, ext, crs,
+                                 nodata = numeric(0), margin = 8L) {
+  ok <- tryCatch(
+    gdal_fetch_window(location, out_file, ext, crs, margin = margin),
+    error = function(e) e)
+  if (!isTRUE(ok)) {
+    if (!identical(garry_opt("read_fail"), "nodata"))
+      stop("fetch failed: ", location, " (", conditionMessage(ok), ")")
+    warning("fetch failed, writing nodata window: ", location, " (",
+            conditionMessage(ok), ")", call. = FALSE)
+    unlink(out_file)
+    gdal_nodata_window(out_file, ext, crs, nodata)
+  }
+  TRUE
+}
+
 #' Daemon task body: run one jitted stage closure on shared-memory
 #' inputs.
 #'
@@ -438,6 +476,82 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   chunk_file <- function(sid, j) file.path(store, sprintf("s%d_c%d.rds", sid, j))
   chunk_vals <- new.env(parent = emptyenv())   # task key -> shared value
 
+  # ---- fetch/assemble split (phase 12) --------------------------------
+  # GTI source stages over remote locations split into per-item-asset
+  # window FETCH tasks (plain gdal_translate -srcwin to tmpfs — many
+  # tiny blocking reads keep the link saturated where few big warped
+  # reads idle at ~25% duty cycle) plus the ordinary read task
+  # ASSEMBLING the mosaic from a location-rewritten local index at
+  # local speed. Requires the index sidecar gti_index_create() writes
+  # and garry's own "slice = '...'" FILTER form; anything else falls
+  # back to direct remote reads.
+  fetch_mode <- match.arg(garry_opt("fetch"), c("auto", "direct", "force"))
+  fetch_root <- NULL
+  fetch_state <- new.env(parent = emptyenv())  # orig index -> local info
+  fetch_n_idx <- 0L
+  fetch_made <- new.env(parent = emptyenv())   # fetch task key -> TRUE
+  fetch_files_of <- new.env(parent = emptyenv())  # sid -> files to unlink
+  fetch_reads_left <- new.env(parent = emptyenv())  # sid -> open read tasks
+  on.exit(if (!is.null(fetch_root))
+    unlink(fetch_root, recursive = TRUE), add = TRUE)
+
+  prepare_fetch <- function(rpath, roo, rnodata, grid) {
+    if (fetch_mode == "direct" || !startsWith(rpath, "GTI:")) return(NULL)
+    ipath <- sub("^GTI:", "", rpath)
+    st <- fetch_state[[ipath]]
+    if (is.null(st)) {
+      meta_f <- paste0(ipath, ".meta.rds")
+      if (!file.exists(meta_f)) return(NULL)
+      meta <- readRDS(meta_f)
+      ent <- meta$entries
+      if (!all(c("slice", "location") %in% names(ent))) return(NULL)
+      do_fetch <- if (fetch_mode == "force") rep(TRUE, nrow(ent))
+                  else grepl("^/vsi", ent$location)
+      if (!any(do_fetch)) return(NULL)
+      if (is.null(fetch_root)) {
+        base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
+        fetch_root <<- file.path(base, sprintf("garry-fetch-%d", run_id))
+        dir.create(fetch_root)
+      }
+      fetch_n_idx <<- fetch_n_idx + 1L
+      sub <- file.path(fetch_root, sprintf("i%d", fetch_n_idx))
+      dir.create(sub)
+      dst <- file.path(sub, sprintf("r%04d.tif", seq_len(nrow(ent))))
+      lent <- ent
+      lent$location <- ifelse(do_fetch, dst, ent$location)
+      lpath <- file.path(sub, basename(ipath))
+      gti_index_create(lent, lpath, crs = meta$crs,
+                       layer = meta$layer %||% "index")
+      st <- list(id = fetch_n_idx, local = paste0("GTI:", lpath),
+                 src = ent$location, dst = dst, do = do_fetch,
+                 slice = ent$slice)
+      fetch_state[[ipath]] <- st
+    }
+    fl <- grep("^FILTER=", roo, value = TRUE)
+    if (length(fl) != 1L) return(NULL)
+    slval <- regmatches(fl, regexec("^FILTER=slice = '(.*)'$", fl))[[1]][[2]]
+    if (is.na(slval)) return(NULL)
+    rows <- which(st$slice == slval & st$do)
+    keys <- sprintf("f%d_%d", st$id, rows)
+    for (k in seq_along(rows)) {
+      key <- keys[[k]]
+      if (!is.null(fetch_made[[key]])) next
+      fetch_made[[key]] <- TRUE
+      local({
+        src <- st$src[[rows[[k]]]]; dst <- st$dst[[rows[[k]]]]
+        ex <- grid@extent; cr <- grid@crs; nd <- rnodata
+        add_task(key, character(0), "read", launch = function() {
+          mirai::mirai(
+            garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd),
+            src = src, dst = dst, ex = ex, cr = cr, nd = nd,
+            .compute = read_prof)
+        })
+      })
+    }
+    list(deps = keys, local = st$local,
+         files = st$dst[rows])
+  }
+
 
   warp_only <- vapply(plan@stages, function(s) {
     consumers <- Filter(function(t2) s@id %in% t2@inputs, plan@stages)
@@ -493,14 +607,25 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         roo <- node@open_options
       }
       skey <- .key(s@members[[1L]])
+      fetch_deps <- character(0)
+      if (s@kind == "source_read") {
+        fp <- prepare_fetch(rpath, roo, rnodata, s@grid)
+        if (!is.null(fp)) {
+          fetch_deps <- fp$deps
+          rpath <- fp$local
+          fetch_files_of[[.key(s@id)]] <- fp$files
+        }
+      }
       split_cg <- .exec_split_cg(plan, s)
       if (is.null(split_cg)) {
+        if (length(fetch_deps))
+          fetch_reads_left[[.key(s@id)]] <- nrow(it)
         for (j in seq_len(nrow(it))) {
           local({
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             key <- sprintf("s%d_c%d", sid, jj)
-            add_task(key, character(0), "read", if (use_shm) function() {
+            add_task(key, fetch_deps, "read", if (use_shm) function() {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo),
@@ -526,6 +651,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         H2 <- 2L * split_cg@halo
         dep_of <- character(nrow(its))
         elt_of <- sprintf("%s\x1f%d", skey, seq_len(nrow(its)))
+        if (length(fetch_deps))
+          fetch_reads_left[[.key(s@id)]] <- nrow(it)
         for (r in seq_len(nrow(it))) {
           members <- .exec_split_members(its, it[r, ])
           dep_of[members] <- sprintf("s%d_r%d", s@id, r)
@@ -542,7 +669,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                    elt = elt_of[[j]],
                    file = chunk_file(sid, j))
             })
-            add_task(key, character(0), "read", if (use_shm) function() {
+            add_task(key, fetch_deps, "read", if (use_shm) function() {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, parts = parts,
@@ -783,6 +910,20 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           log_line("write", k)
         }
         if (use_shm) release_reads(k)
+        # Eager fetch-cache cleanup: a fetch-backed source stage's
+        # window files unlink once its last read (assemble) task is
+        # done — bounds the tmpfs cache to slices still assembling.
+        if (pool_k == "read" && startsWith(k, "s")) {
+          sk <- sub("^s(\\d+)_.*$", "\\1", k)
+          left <- fetch_reads_left[[sk]]
+          if (!is.null(left)) {
+            fetch_reads_left[[sk]] <- left - 1L
+            if (left <= 1L) {
+              unlink(fetch_files_of[[sk]])
+              rm(list = sk, envir = fetch_files_of)
+            }
+          }
+        }
       }
     }
     if (progress &&

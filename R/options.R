@@ -58,7 +58,16 @@
   # device) or "cuda" (requires the CUDA PJRT plugin; pair with a
   # small compute pool — concurrent chunks share the GPU's memory).
   # Reads and host-side combines are always CPU.
-  device = "cpu"
+  device = "cpu",
+  # Fetch/assemble split for GTI sources in the distributed scheduler
+  # (phase 12): "auto" fetches per-item native windows to local tmpfs
+  # first when the index holds remote (/vsi*) locations, then
+  # assembles the mosaic locally — a remote warped read is ~74%
+  # sequential network wait, so many tiny fetches saturate the link
+  # where few big warped reads cannot. "direct" reads remote mosaics
+  # as before; "force" fetches even local sources (testing; staging
+  # slow filesystems).
+  fetch = "auto"
 )
 
 #' Read a garry policy option.
