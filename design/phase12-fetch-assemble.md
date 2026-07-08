@@ -136,15 +136,57 @@ over shared task-graph memory). Static pool arithmetic says the
 ceiling is ~16-20 s (total CPU ~200 core-s over the box) — reaching
 it is 12b, not a config knob.
 
-Phase 12b (the compute-overhead levers, in order):
-1. Compute-on-read: fold cheap source-fed kernel chains (the mask
-   bitand + morphology) into the assemble task body so 330 mask
-   tasks and their store round-trips disappear — the column-local
-   fusion idea at its narrowest, applied where the data already is.
-2. device="auto" by task bytes: medians to the GPU, masks stay CPU
-   (global CUDA was net slower on mask PCIe traffic).
-3. Batch small tasks: one mirai task per (stage, several chunks)
-   for sub-100 ms kernels, amortising dispatch + jit-lookup + share.
+## 12b results (2026-07-08, same sitting, all interleaved with ODC)
+
+SHIPPED, three pieces, each measured on the morphology benchmark
+(16+6 pools, ODC brackets 16.5-16.7 s):
+1. COMPUTE-ON-READ: single-consumer source-fed compute stages
+   (guards: compute kind, cpu device, non-sink, one input stage,
+   sole consumer of the source, single export) execute inside the
+   source's read tasks — the kernel runs once per coarse window,
+   outputs split producer-side. Enabled by a PLANNER rule with its
+   own justification: a node bringing new external inputs into a
+   focal-bearing stage no longer fuses into it (halo stages stay
+   narrow; band sources had been inheriting the mask chain's halo-7
+   read windows). Weighted (differentiable) kernels exempt — the v1
+   gradient tape needs the single-stage pipeline. Mask tasks
+   330 -> 0; chunk tasks 236 -> 16. Wall 37.6 -> 32.2 s.
+2. PROFILE SPILL: pools are routing labels — comp-tagged tasks
+   prefer the compute pool but take idle read-pool slots once all
+   read-tagged work is done (never for non-cpu devices). Assembles
+   (comp-tagged) overlap the drain on the computers, then the
+   median tail runs on the whole fleet. With the byte-estimate fix
+   below: 32.2 -> 28.6 s. (Static routing of assembles to either
+   pool alone measured 32-46 s — both idle half the box.)
+3. Byte-estimate fix: assemble estimates used the UNCLIPPED coarse
+   chunk dim (~700 MB/task -> budget allowed 4 concurrent); clipped
+   to the grid it is ~27 MB, and the budget stopped strangling the
+   pipeline.
+
+Day's arc on this link (morphology benchmark, garry vs ODC ~16.5 s):
+direct reads 60.7 s -> fetch/assemble 41.3 -> +priority 39.8 ->
++compute-on-read 32.2 -> +spill 28.6 s at 10.5 GB. Remaining gap
+(1.7x): the 16-median tail (~8 s: 110 store extracts + upload +
+55-layer XLA median each) and the ~15 s fetch floor at ~43 MB/s.
+Next candidates: small-task batching (below), assemble-side median
+pre-stack, fetch coalescing per COG.
+
+Phase 12b (the compute-overhead levers) — CPU ONLY by decision:
+GPU wins are real but garry must not depend on them; smash the CPU
+bottlenecks first, reach for the GPU after.
+1. Compute-on-read: a single-consumer compute stage fed by exactly
+   one source stage executes inside the source's read task — the
+   kernel runs ONCE on the whole padded coarse window (one XLA call
+   per slice instead of six chunk tasks), outputs split
+   producer-side like any read. Deletes the 330 mask tasks, their
+   dispatch/extract/share overhead, and the raw-Fmask store traffic
+   outright; the compute pool's queue drops to the medians. Guards:
+   compute kind, not the sink, one input stage, source consumed by
+   nothing else, single export.
+2. Batch small tasks: one mirai task per (stage, chunk-group) for
+   sub-100 ms kernels, amortising dispatch + jit lookup + share —
+   only if a bottleneck survives lever 1.
+(deferred: device="auto" GPU placement.)
 
 ## Implementation sketch (post-spike)
 

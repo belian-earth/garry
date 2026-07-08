@@ -13,7 +13,8 @@
   key,
   reg_key,
   parts = NULL,
-  open_options = character(0)
+  open_options = character(0),
+  fuse = NULL
 )
 }
 \arguments{

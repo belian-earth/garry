@@ -43,10 +43,8 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
     }
   }
 
-  # Read daemons executed reads without ever loading anvl/PJRT.
-  anvl_on_read <- mirai::mirai("anvl" %in% loadedNamespaces(),
-                               .compute = "garry_read")[]
-  expect_false(anvl_on_read)
+  # (Read daemons MAY load anvl now: once all read-tagged work is
+  # done, comp-tagged tail tasks spill onto idle readers by design.)
 
   # Warm-up populated the compute pool's jit cache (per-run keys, so
   # >= one entry per run that had compute stages).

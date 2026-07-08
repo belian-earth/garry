@@ -60,6 +60,26 @@ NULL
 
 # -- Worker-side task bodies (run on daemons) ---------------------------------
 
+# Compute-on-read (phase 12b): apply a fused single-consumer stage
+# kernel to the whole padded read window, once, on the daemon that
+# read it. `fuse` is list(ck, fn, dtype, out_key): jit cache key
+# (content-addressed), stage closure, upload dtype, export node key.
+# Returns the kernel's single export (pad consumed: core-sized).
+.apply_fuse <- function(m, fuse) {
+  if (length(ls(.daemon_cache)) > 64L)
+    rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  jf <- .daemon_cache[[fuse$ck]]
+  if (is.null(jf)) {
+    jf <- g_jit(fuse$fn)
+    .daemon_cache[[fuse$ck]] <- jf
+  }
+  res <- g_download(jf(list(g_upload(m, fuse$dtype))))
+  out <- res[[1L]]
+  rm(res)
+  gc(FALSE)
+  out
+}
+
 #' Daemon task body: read one padded source chunk into the store.
 #'
 #' Internal (exported only so mirai daemons can address it via `::`).
@@ -71,9 +91,11 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_run_source <- function(path, band, nodata, cg, core, key,
-                               out_file, open_options = character(0)) {
+                               out_file, open_options = character(0),
+                               fuse = NULL) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
                          open_options = open_options)
+  if (!is.null(fuse)) m <- .apply_fuse(m, fuse)
   # Store files are transient same-host scratch: gzip costs hundreds of
   # ms per chunk and buys nothing.
   saveRDS(stats::setNames(list(m), key), out_file, compress = FALSE)
@@ -95,9 +117,11 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_run_source_split <- function(path, band, nodata, cg, core, key,
-                                     parts, open_options = character(0)) {
+                                     parts, open_options = character(0),
+                                     fuse = NULL) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
                          open_options = open_options)
+  if (!is.null(fuse)) m <- .apply_fuse(m, fuse)
   for (p in parts) {
     saveRDS(stats::setNames(list(
       m[(p$r0 + 1L):(p$r0 + p$nr), (p$c0 + 1L):(p$c0 + p$nc),
@@ -128,9 +152,11 @@ NULL
 #' @export
 .daemon_run_source_shm <- function(path, band, nodata, cg, core, key,
                                    reg_key, parts = NULL,
-                                   open_options = character(0)) {
+                                   open_options = character(0),
+                                   fuse = NULL) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
                          open_options = open_options)
+  if (!is.null(fuse)) m <- .apply_fuse(m, fuse)
   val <- if (is.null(parts)) stats::setNames(list(m), key) else {
     stats::setNames(
       lapply(parts, function(p)
@@ -441,7 +467,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   # medians (~350 MB each) self-limit. compute_inflight remains an
   # optional hard count cap on top.
   cap_read <- max(2L * n_read, 4L)
-  cap_comp <- garry_opt("compute_inflight") %||% (2L * n_comp)
+  cap_comp <- 2L * n_comp                    # comp-pool slot depth
+  cap_comp_opt <- garry_opt("compute_inflight")  # optional hard cap
   comp_budget_mb <- garry_opt("ram_budget_mb") * n_comp
 
   # User stage closures call the g_* vocabulary unqualified; make sure
@@ -541,11 +568,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         src <- st$src[[rows[[k]]]]; dst <- st$dst[[rows[[k]]]]
         ex <- grid@extent; cr <- grid@crs; nd <- rnodata
         add_task(key, character(0), "read", prio = 1L,
-                 launch = function() {
+                 launch = function(prof) {
           mirai::mirai(
             garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd),
             src = src, dst = dst, ex = ex, cr = cr, nd = nd,
-            .compute = read_prof)
+            .compute = prof)
         })
       })
     }
@@ -563,9 +590,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
   # Build the task table. Combine stages are host-side, handled at drain.
   tasks <- list()
-  add_task <- function(key, deps, pool, launch, mb = 0, prio = 2L) {
+  add_task <- function(key, deps, pool, launch, mb = 0, prio = 2L,
+                       dev = "cpu") {
     tasks[[key]] <<- list(deps = deps, pool = pool, launch = launch,
-                          mb = mb, prio = prio, state = "pending")
+                          mb = mb, prio = prio, dev = dev,
+                          state = "pending")
   }
   # For coarse-reading (split) source stages: task key per compute chunk,
   # and (mori store) each compute chunk's element name in the shared
@@ -581,6 +610,32 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   stage_reads <- new.env(parent = emptyenv())    # stage -> read tasks
   read_users <- new.env(parent = emptyenv())     # read task -> n stages
 
+  # Compute-on-read (phase 12b, CPU only): a compute stage with ONE
+  # input stage — a source read consumed by nobody else — and a
+  # single export executes inside the source's read tasks: the
+  # kernel runs once per read window and only its OUTPUT is stored
+  # and split. The per-chunk task fleet for source-fed kernel chains
+  # (mask cleanup: 330 tasks on the benchmark) disappears, with its
+  # dispatch, extract, upload and store round-trips.
+  fused_cid <- new.env(parent = emptyenv())   # fused compute sid -> TRUE
+  fuse_of <- new.env(parent = emptyenv())     # source sid -> fuse spec
+  for (C in plan@stages) {
+    if (C@kind != "compute" || C@id == plan@sink) next
+    if (!identical(C@device, "cpu")) next
+    if (length(C@inputs) != 1L || length(C@exports) != 1L) next
+    S <- plan@stages[[C@inputs[[1L]]]]
+    if (S@kind != "source_read" || warp_only[[S@id]]) next
+    if (sum(vapply(plan@stages, function(t2) S@id %in% t2@inputs,
+                   logical(1))) != 1L) next
+    fuse_of[[.key(S@id)]] <- list(
+      cid = C@id,
+      ck = paste0(.stage_kernel_sig(graph, C), "@", C@device),
+      fn = C@fn,
+      dtype = graph_get(graph, C@input_nodes[[1L]])@grid@dtype,
+      out_key = .key(C@exports[[1L]]))
+    fused_cid[[.key(C@id)]] <- TRUE
+  }
+
   # Jit warm-up specs, one per compute stage (pooled mode): the modal
   # (full) chunk shape, compiled on every compute daemon at run start.
   warm_specs <- list()
@@ -592,6 +647,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   for (s in plan@stages[.stage_launch_order(plan)]) {
     if (s@kind == "reduce_combine") next
     if (s@kind == "source_read" && warp_only[[s@id]]) next
+    if (!is.null(fused_cid[[.key(s@id)]])) next   # runs on its read
     it <- chunk_iter(s@chunks)
 
     if (s@kind %in% c("source_read", "warp")) {
@@ -608,6 +664,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         roo <- node@open_options
       }
       skey <- .key(s@members[[1L]])
+      fspec <- fuse_of[[.key(s@id)]]
+      oid <- s@id                    # store identity: fused stage id
+      if (!is.null(fspec)) {
+        oid <- fspec$cid
+        skey <- fspec$out_key
+      }
       fetch_deps <- character(0)
       read_pool <- "read"
       task_mb_read <- 0
@@ -617,32 +679,45 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           fetch_deps <- fp$deps
           rpath <- fp$local
           fetch_files_of[[.key(s@id)]] <- fp$files
+          # Fetch-backed assembles are local CPU (warp + any fused
+          # kernel): route them to the compute pool, which idles
+          # during the drain now that compute-on-read emptied it of
+          # per-chunk mask tasks — band 1 assembles DURING band 2's
+          # fetches and the read pool never stops downloading.
+          read_pool <- "comp"
+          task_mb_read <-
+            prod(pmin(as.numeric(s@chunks@chunk_dim),
+                      as.numeric(s@grid@dims[c("x", "y")]))) * 24 / 2^20
         }
       }
       split_cg <- .exec_split_cg(plan, s)
       if (is.null(split_cg)) {
         if (length(fetch_deps))
           fetch_reads_left[[.key(s@id)]] <- nrow(it)
+        if (!is.null(fspec))
+          source_deps[[.key(oid)]] <-
+            sprintf("s%d_c%d", s@id, seq_len(nrow(it)))
         for (j in seq_len(nrow(it))) {
           local({
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-            prof <- if (read_pool == "comp") comp_prof else read_prof
+            fs <- fspec; oid2 <- oid
             key <- sprintf("s%d_c%d", sid, jj)
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
-                     launch = if (use_shm) function() {
+                     launch = if (use_shm) function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
-                                              reg, open_options = oo),
+                                              reg, open_options = oo,
+                                              fuse = fs),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, reg = sprintf("r%d_%s", run_id, key),
+                oo = oo, reg = sprintf("r%d_%s", run_id, key), fs = fs,
                 .compute = prof)
-            } else function() {
+            } else function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
-                                          open_options = oo),
+                                          open_options = oo, fuse = fs),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, out = chunk_file(sid, jj),
+                oo = oo, out = chunk_file(oid2, jj), fs = fs,
                 .compute = prof)
             })
           })
@@ -653,7 +728,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         # slice their window zero-copy. Either way compute chunk j's
         # dependency is the READ task covering it.
         its <- chunk_iter(split_cg)
-        H2 <- 2L * split_cg@halo
+        # A fused kernel consumes the pad: its output is core-sized.
+        H2 <- if (is.null(fspec)) 2L * split_cg@halo else 0L
         dep_of <- character(nrow(its))
         elt_of <- sprintf("%s\x1f%d", skey, seq_len(nrow(its)))
         if (length(fetch_deps))
@@ -664,7 +740,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           local({
             sid <- s@id; rr <- r; cg <- s@chunks; core <- it[rr, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-            prof <- if (read_pool == "comp") comp_prof else read_prof
+            fs <- fspec; oid2 <- oid
             key <- sprintf("s%d_r%d", sid, rr)
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -673,29 +749,31 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                    c0 = its$x_off[[j]] - core$x_off,
                    nr = its$y_size[[j]] + H2, nc = its$x_size[[j]] + H2,
                    elt = elt_of[[j]],
-                   file = chunk_file(sid, j))
+                   file = chunk_file(oid2, j))
             })
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
-                     launch = if (use_shm) function() {
+                     launch = if (use_shm) function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, parts = parts,
-                                              open_options = oo),
+                                              open_options = oo,
+                                              fuse = fs),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
-                k2 = k2, oo = oo, parts = parts,
+                k2 = k2, oo = oo, parts = parts, fs = fs,
                 reg = sprintf("r%d_%s", run_id, key),
                 .compute = prof)
-            } else function() {
+            } else function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_split(p2, b2, nd, cg, core, k2,
-                                                parts, open_options = oo),
+                                                parts, open_options = oo,
+                                                fuse = fs),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                parts = parts, oo = oo, .compute = prof)
+                parts = parts, oo = oo, fs = fs, .compute = prof)
             })
           })
         }
-        source_deps[[.key(s@id)]] <- dep_of
-        source_elts[[.key(s@id)]] <- elt_of
+        source_deps[[.key(oid)]] <- dep_of
+        source_elts[[.key(oid)]] <- elt_of
       }
 
     } else {  # compute / reduce_partial
@@ -734,7 +812,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- sprintf("s%d_c%d", sid, jj)
           add_task(key, unique(in_deps), "comp", mb = task_mb,
-                   launch = if (use_shm) function() {
+                   dev = sdev,
+                   launch = if (use_shm) function(prof) {
             # Handles resolve at launch time: dependencies are done, so
             # `chunk_vals` holds every input's shared object (a ~30-byte
             # name over the wire).
@@ -749,8 +828,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
               trims = trims, dtypes = dtypes,
               reg = sprintf("r%d_%s", run_id, key),
               ok = out_keys, dv = sdev,
-              .compute = comp_prof)
-          } else function() {
+              .compute = prof)
+          } else function(prof) {
             mirai::mirai(
               garry::.daemon_run_compute(ck, fn, in_files, in_keys,
                                           trims, dtypes, out,
@@ -763,7 +842,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
               trims = trims, dtypes = dtypes,
               out = chunk_file(sid, jj),
               ok = out_keys, dv = sdev,
-              .compute = comp_prof)
+              .compute = prof)
           })
           if (use_shm) {
             comp_stage_of[[key]] <- sid
@@ -857,13 +936,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   # Polling ready-queue with per-pool in-flight caps; compute
   # launches additionally gated by the byte budget (always at least
   # one runs, so a single over-budget task cannot deadlock).
+  # Profile spill: pools are routing labels, and static membership
+  # wastes half the box in each phase (measured: 16 readers idle
+  # while 6 computers grind the tail, or vice versa). Comp-tagged
+  # tasks launch on the compute pool while it has slots; once ALL
+  # read-tagged work is done they also take idle read-pool slots —
+  # the tail runs on the whole fleet.
   inflight <- list()
-  n_inflight <- c(read = 0L, comp = 0L)
+  n_inflight <- c(read = 0L, comp = 0L)   # by task TAG (byte budget)
+  n_slot <- c(read = 0L, comp = 0L)       # by launched PROFILE slot
+  n_readwork_left <- sum(vapply(tasks, function(t) t$pool == "read",
+                                logical(1)))
   mb_inflight <- 0
   comp_ok <- function(t) {
-    n_inflight[["comp"]] < cap_comp &&
-      (n_inflight[["comp"]] == 0L ||
-         mb_inflight + t$mb <= comp_budget_mb)
+    if (!is.null(cap_comp_opt) &&
+        n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
+    n_inflight[["comp"]] == 0L ||
+      mb_inflight + t$mb <= comp_budget_mb
   }
   done <- character(0)
   is_ready <- function(t) all(t$deps %in% done)
@@ -887,12 +976,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       if (!pooled && length(inflight) >= cap_read) break
       t <- tasks[[k]]
       if (t$state != "pending") next
+      slot <- t$pool
       if (pooled) {
-        if (t$pool == "read" && n_inflight[["read"]] >= cap_read) next
-        if (t$pool == "comp" && !comp_ok(t)) next
+        if (t$pool == "read") {
+          if (n_slot[["read"]] >= cap_read) next
+        } else {
+          if (!comp_ok(t)) next
+          if (n_slot[["comp"]] < cap_comp) slot <- "comp"
+          else if (n_readwork_left == 0L && identical(t$dev, "cpu") &&
+                   n_slot[["read"]] < cap_read) slot <- "read"
+          else next
+        }
       }
       if (!is_ready(t)) next
-      inflight[[k]] <- t$launch()
+      inflight[[k]] <- t$launch(if (slot == "read") read_prof
+                                else comp_prof)
+      tasks[[k]]$slot <- slot
+      n_slot[[slot]] <- n_slot[[slot]] + 1L
       n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
       if (t$pool == "comp") mb_inflight <- mb_inflight + t$mb
       tasks[[k]]$state <- "running"
@@ -913,6 +1013,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         inflight[[k]] <- NULL
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
+        n_slot[[tasks[[k]]$slot]] <- n_slot[[tasks[[k]]$slot]] - 1L
+        if (pool_k == "read") n_readwork_left <- n_readwork_left - 1L
         if (pool_k == "comp") mb_inflight <- mb_inflight - tasks[[k]]$mb
         harvested <- TRUE
         log_line("done", k)

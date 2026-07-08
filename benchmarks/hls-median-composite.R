@@ -15,14 +15,15 @@
 #   vrtility:            20.74 s   (three bands, one pass)
 #
 # Run:  Rscript benchmarks/hls-median-composite.R [daemons] [bands...]
-# daemons is "READ+COMPUTE" pools (default 12+3: 12 network streams,
-# 3 fat XLA daemons) or a single number for one shared pool.
-# e.g.  Rscript benchmarks/hls-median-composite.R 12+3 B04 B03 B02
+# daemons is "READ+COMPUTE" pools (default 16+6: 16 fetch streams,
+# 6 XLA daemons; comp tasks spill to idle readers after the drain)
+# or a single number for one shared pool.
+# e.g.  Rscript benchmarks/hls-median-composite.R 16+6 B04 B03 B02
 
 suppressMessages(library(garry))
 
 args <- commandArgs(trailingOnly = TRUE)
-daemons_arg <- if (length(args) >= 1) args[[1]] else "12+3"
+daemons_arg <- if (length(args) >= 1) args[[1]] else "16+6"
 bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
 
 # GDAL/network tuning. Pre-signed hrefs (below) beat per-URL GDAL

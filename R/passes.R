@@ -324,11 +324,13 @@ plan_lazy <- function(x) {
   node_stage <- new.env(parent = emptyenv())    # node id -> stage id
   closed <- integer(0)                          # stages already consumed
 
-  new_proto <- function(kind, members, grid, inputs, input_nodes) {
+  new_proto <- function(kind, members, grid, inputs, input_nodes,
+                        has_focal = FALSE) {
     id <- length(protos) + 1L
     protos[[id]] <<- list(id = id, kind = kind, members = members,
                           grid = grid, inputs = unique(inputs),
-                          input_nodes = input_nodes, halo = 0L, fn = NULL)
+                          input_nodes = input_nodes, halo = 0L,
+                          fn = NULL, has_focal = has_focal)
     closed <<- unique(c(closed, inputs))
     id
   }
@@ -384,11 +386,33 @@ plan_lazy <- function(x) {
         protos[[s]]$kind == "compute" && !s %in% closed, logical(1))]
 
       if (length(compute_sids) == 1L) {
-        # Fuse into the single open compute ancestor.
         sid <- compute_sids
-        protos[[sid]]$members <- c(protos[[sid]]$members, id)
         ext <- parents[!parents %in% protos[[sid]]$members &
                        !parents %in% protos[[sid]]$input_nodes]
+        if (protos[[sid]]$has_focal && length(ext) > 0L) {
+          # Halo stages stay NARROW: fusing a node that brings new
+          # external inputs into a focal-bearing stage would put the
+          # stage's halo on every added source's reads (measured:
+          # band reads inheriting the mask chain's halo-7 windows)
+          # and widen its export set. Materialise the boundary
+          # instead; the merge pass cannot re-fold it (halo > 0).
+          # This is also what keeps source-fed kernel chains
+          # single-input/single-export for compute-on-read.
+          # Weighted (differentiable) kernels are EXEMPT — see the
+          # has_focal setters: the v1 gradient tape requires the
+          # whole loss pipeline in one compute stage.
+          node_stage[[.key(id)]] <-
+            new_proto("compute", id, .node_grid(node),
+                      vapply(parents, function(p) node_stage[[.key(p)]],
+                             integer(1)),
+                      parents,
+                      has_focal = S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+          next
+        }
+        # Fuse into the single open compute ancestor.
+        protos[[sid]]$members <- c(protos[[sid]]$members, id)
+        if (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+          protos[[sid]]$has_focal <- TRUE
         if (length(ext) > 0L) {
           ext_sids <- vapply(ext, function(p) node_stage[[.key(p)]],
                              integer(1))
@@ -407,10 +431,14 @@ plan_lazy <- function(x) {
         }, protos)
         if (is.null(joinable)) {
           node_stage[[.key(id)]] <-
-            new_proto("compute", id, .node_grid(node), parent_sids, parents)
+            new_proto("compute", id, .node_grid(node), parent_sids,
+                      parents,
+                      has_focal = S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
         } else {
           sid <- joinable$id
           protos[[sid]]$members <- c(protos[[sid]]$members, id)
+          if (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+            protos[[sid]]$has_focal <- TRUE
           protos[[sid]]$input_nodes <-
             unique(c(protos[[sid]]$input_nodes, parents))
           protos[[sid]]$grid <- .node_grid(node)
@@ -419,7 +447,9 @@ plan_lazy <- function(x) {
       } else {
         # Distinct compute ancestries meet: consume both, materialised.
         node_stage[[.key(id)]] <-
-          new_proto("compute", id, .node_grid(node), parent_sids, parents)
+          new_proto("compute", id, .node_grid(node), parent_sids,
+                    parents,
+                    has_focal = S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
       }
     }
   }

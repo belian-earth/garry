@@ -13,7 +13,8 @@ per-compute-chunk store files.}
   core,
   key,
   parts,
-  open_options = character(0)
+  open_options = character(0),
+  fuse = NULL
 )
 }
 \arguments{
