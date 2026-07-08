@@ -47,16 +47,30 @@ saturation gap and exactly the wall-time gap to ODC.
    for bulk reads on the same reasoning), fewer daemons once reads
    are latency- not concurrency-bound, eager shm release (done).
    Worth a dedicated session with per-daemon memory profiles.
-2. **Serial host segments.** Graph build + plan ~3.5 s (S7 `@` and
-   `%in%` dominate; planner passes are quadratic-ish over ~500
-   nodes). Target < 1 s: cache node lookups in the merge pass, avoid
-   repeated closure computation, profile-driven.
-3. **Last-band tail (~4.5 s).** Cannot overlap reads (nothing left to
-   read). Options: shrink per-chunk fixed cost (110 store
-   extractions + uploads per chunk; batch upload into one stacked
-   device transfer), or accept. Jit warm-up during the drain is
-   REJECTED: mirai cannot route a task to a chosen daemon, so a warm
-   task displaces a read for the length of a compile.
+2. **Serial host segments** (DONE 2026-07-08). Offline repro of the
+   benchmark graph (3 bands x 55 slices): build 0.72 s -> 0.46 s,
+   plan 1.29 s -> 0.34 s. The wins, in order: consumers index in the
+   merge pass (was an O(stages) scan per candidate per fixpoint
+   pass), `.stage_halo` all-zero fast path (was O(members^2) per
+   attempted merge on a growing member list), bucketed source-dedup
+   index in `graph_import` (was a linear scan of all sources per
+   import), attr()-based node accessors on hot paths (S7 `@` is ~4x
+   attr and was 38% of total).
+3. **Last-band tail (~4.5 s): ACCEPTED after measurement.** The
+   per-chunk cost is NOT extraction/upload: all 110 uploads take
+   0.08 s and XLA dispatch is async, so ~0.6-1.5 s per 512^2 chunk
+   sits in the nan_rm median execution (surfaces at g_download).
+   Batching uploads into stacked (y,x,n) transfers measured NEUTRAL
+   at best (host-side stack costs more than the saved per-call
+   overhead). Parallelising the tail with finer compute chunks
+   REGRESSES: offline benchmark-shaped run (local files, mori, 12
+   daemons) walls 10.8 s / 14.0 s / 18.5 s at 2 / 12 / 30 sink
+   chunks — per-chunk fixed costs (task launch, store parts, jit
+   lookups, dispatch) beat the parallelism gain. Fewer/larger chunks
+   remain optimal; the tail is the price of the last reduction.
+   Jit warm-up during the drain remains REJECTED: mirai cannot route
+   a task to a chosen daemon, so a warm task displaces a read for
+   the length of a compile.
 4. **Fail-soft reads** (DONE 2026-07-08): `garry.read_fail =
    "nodata"` fills a failed window with NaN instead of aborting the
    plan (odc `fail_on_error=False`, stackstac `errors_as_nodata`;

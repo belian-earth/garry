@@ -96,23 +96,39 @@ NULL
         its$y_off < rrow$y_off + rrow$y_size)
 }
 
-# Stage ids are creation-ordered, not topologically ordered: fusion can
-# attach a later-created source stage as an input to an earlier compute
-# stage (e.g. a map opens a stage, then lazy_map imports a second
-# source). Execution must follow stage dependencies, not ids.
-.stage_topo_order <- function(plan) {
+# Stage execution/launch order: depth-first postorder from the sink
+# over stage inputs. Stage ids are creation-ordered, not topologically
+# ordered (fusion can attach a later-created source stage as an input
+# to an earlier compute stage), so execution must follow dependencies.
+# Postorder adds the guarantee the distributed scheduler's overlap
+# depends on: a consumer's ENTIRE producer subtree enqueues
+# contiguously, sibling subtrees in input-id order, never interleaved.
+# For a multi-band plan (per-band reductions joined by a band stack)
+# band k's reads all launch before band k+1's, so each band's fused
+# tail overlaps the next band's read drain. This was previously an
+# accident of graph-build order; it is now an invariant (dask.order
+# solves the same problem with static priorities), gated by
+# test-launch-order.R.
+.stage_launch_order <- function(plan) {
   n <- length(plan@stages)
-  done <- logical(n)
-  ord <- integer(0)
-  while (length(ord) < n) {
-    ready <- vapply(seq_len(n), function(i) {
-      !done[[i]] && all(done[plan@stages[[i]]@inputs])
-    }, logical(1))
-    if (!any(ready))
+  state <- integer(n)          # 0 unvisited, 1 on stack, 2 emitted
+  ord <- integer(n)
+  pos <- 0L
+  visit <- function(i) {
+    if (state[[i]] == 2L) return(invisible(NULL))
+    if (state[[i]] == 1L)
       .garry_error("stage graph has a cycle", "garry_plan_error")
-    done[ready] <- TRUE
-    ord <- c(ord, which(ready))
+    state[[i]] <<- 1L
+    for (j in plan@stages[[i]]@inputs) visit(j)
+    state[[i]] <<- 2L
+    pos <<- pos + 1L
+    ord[[pos]] <<- i
+    invisible(NULL)
   }
+  visit(plan@sink)
+  # Completeness: stages unreachable from the sink (none in current
+  # plans) still execute, after the sink's subtree.
+  for (i in seq_len(n)) if (state[[i]] != 2L) visit(i)
   ord
 }
 
@@ -201,7 +217,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
       plan@sink != s@id
   }, logical(1))
 
-  for (s in plan@stages[.stage_topo_order(plan)]) {
+  for (s in plan@stages[.stage_launch_order(plan)]) {
     it <- chunk_iter(s@chunks)
 
     if (s@kind %in% c("source_read", "warp")) {

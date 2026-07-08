@@ -279,7 +279,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   stage_reads <- new.env(parent = emptyenv())    # stage -> read tasks
   read_users <- new.env(parent = emptyenv())     # read task -> n stages
 
-  for (s in plan@stages) {
+  # Task insertion follows the launch-order invariant: the ready-queue
+  # scan below launches pending tasks in insertion order, so sibling
+  # producer subtrees (e.g. per-band reads) enqueue contiguously and
+  # each band's fused tail overlaps the next band's read drain.
+  for (s in plan@stages[.stage_launch_order(plan)]) {
     if (s@kind == "reduce_combine") next
     if (s@kind == "source_read" && warp_only[[s@id]]) next
     it <- chunk_iter(s@chunks)
