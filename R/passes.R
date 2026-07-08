@@ -243,16 +243,29 @@ NULL
 #     medians joined by a band stack would all wait for ALL bands'
 #     reads), while keeping the boundary costs only the store
 #     round-trip of the reduced - smallest possible - output.
-.merge_stages <- function(protos, graph) {
+.merge_stages <- function(protos, graph, halos = NULL) {
   repeat {
     did_merge <- FALSE
+    # inputs -> consumer-stage index for this pass. Merges keep it a
+    # SUPERSET of the truth (q inherits p's inputs below), so every
+    # candidate is re-verified against the live protos before use;
+    # this replaces an O(stages) scan per candidate per pass.
+    cons <- vector("list", length(protos))
+    for (j in seq_along(protos)) {
+      q <- protos[[j]]
+      if (is.null(q)) next
+      for (inp in q$inputs) cons[[inp]] <- c(cons[[inp]], j)
+    }
     for (i in seq_along(protos)) {
       p <- protos[[i]]
       if (is.null(p) || p$kind != "compute") next
-      consumers <- Filter(function(q) !is.null(q) && p$id %in% q$inputs,
-                          protos)
-      if (length(consumers) != 1L) next
-      q <- consumers[[1L]]
+      cids <- unique(cons[[i]])
+      cids <- cids[vapply(cids, function(j) {
+        q <- protos[[j]]
+        !is.null(q) && p$id %in% q$inputs
+      }, logical(1))]
+      if (length(cids) != 1L) next
+      q <- protos[[cids]]
       if (q$kind != "compute") next
       if (!.spatial_equal(p$grid, q$grid)) next
       if (length(q$inputs) > 1L) {
@@ -264,12 +277,13 @@ NULL
       members <- sort(unique(c(p$members, q$members)))
       input_nodes <- setdiff(unique(c(p$input_nodes, q$input_nodes)),
                              members)
-      if (.stage_halo(graph, members, input_nodes) > 0L) next
+      if (.stage_halo(graph, members, input_nodes, halos) > 0L) next
       protos[[q$id]]$members <- members
       protos[[q$id]]$input_nodes <- input_nodes
       protos[[q$id]]$inputs <-
         setdiff(unique(c(p$inputs, q$inputs)), p$id)
       protos[p$id] <- list(NULL)
+      for (inp in p$inputs) cons[[inp]] <- c(cons[[inp]], q$id)
       did_merge <- TRUE
     }
     if (!did_merge) break
@@ -298,6 +312,13 @@ plan_lazy <- function(x) {
   graph <- x@graph
   ids <- .reachable(graph, x@node_id)
 
+  # required_halo is static per node; computed once here, threaded
+  # through the merge pass and finalise (S7 dispatch per call adds up
+  # over the merge pass's repeated .stage_halo calls).
+  halos <- stats::setNames(
+    vapply(ids, function(i) required_halo(graph_get(graph, i)), integer(1)),
+    as.character(ids))
+
   # ---- Phase A: assign nodes to proto-stages --------------------------------
   protos <- list()                              # id -> mutable list
   node_stage <- new.env(parent = emptyenv())    # node id -> stage id
@@ -317,10 +338,10 @@ plan_lazy <- function(x) {
 
     if (S7::S7_inherits(node, SourceNode)) {
       node_stage[[.key(id)]] <-
-        new_proto("source_read", id, node@grid, integer(0), id)
+        new_proto("source_read", id, .node_grid(node), integer(0), id)
 
     } else if (S7::S7_inherits(node, WarpNode)) {
-      pin <- node@parents[[1L]]
+      pin <- .node_parents(node)[[1L]]
       if (!S7::S7_inherits(graph_get(graph, pin), SourceNode))
         .garry_error(paste0(
           "warping a computed raster is not supported in v1: align() ",
@@ -344,18 +365,19 @@ plan_lazy <- function(x) {
           "chunks; algebraic ops (", paste(.algebraic_ops, collapse = ", "),
           ") only (D12). median/quantile remain available over t/band."),
           "garry_reduce_unsupported_error")
-      pin <- node@parents[[1L]]
+      pin <- .node_parents(node)[[1L]]
       # Partial stage chunks over the INPUT grid (it runs per input
       # chunk); only the combine stage lives on the reduced grid.
       part <- new_proto("reduce_partial", id,
-                        graph_get(graph, pin)@grid,
+                        .node_grid(graph_get(graph, pin)),
                         node_stage[[.key(pin)]], pin)
       node_stage[[.key(id)]] <-
-        new_proto("reduce_combine", id, node@grid, part, id)
+        new_proto("reduce_combine", id, .node_grid(node), part, id)
 
     } else {
       # Fusable: MapNode, FocalNode, chunk-local Reduce over t/band.
-      parent_sids <- unique(vapply(node@parents,
+      parents <- .node_parents(node)
+      parent_sids <- unique(vapply(parents,
                                    function(p) node_stage[[.key(p)]],
                                    integer(1)))
       compute_sids <- parent_sids[vapply(parent_sids, function(s)
@@ -365,8 +387,8 @@ plan_lazy <- function(x) {
         # Fuse into the single open compute ancestor.
         sid <- compute_sids
         protos[[sid]]$members <- c(protos[[sid]]$members, id)
-        ext <- node@parents[!node@parents %in% protos[[sid]]$members &
-                            !node@parents %in% protos[[sid]]$input_nodes]
+        ext <- parents[!parents %in% protos[[sid]]$members &
+                       !parents %in% protos[[sid]]$input_nodes]
         if (length(ext) > 0L) {
           ext_sids <- vapply(ext, function(p) node_stage[[.key(p)]],
                              integer(1))
@@ -374,7 +396,7 @@ plan_lazy <- function(x) {
           protos[[sid]]$inputs <- unique(c(protos[[sid]]$inputs, ext_sids))
           closed <- unique(c(closed, ext_sids))
         }
-        protos[[sid]]$grid <- node@grid
+        protos[[sid]]$grid <- .node_grid(node)
         node_stage[[.key(id)]] <- sid
       } else if (length(compute_sids) == 0L) {
         # Join an open compute stage with the identical input set (keeps
@@ -385,34 +407,35 @@ plan_lazy <- function(x) {
         }, protos)
         if (is.null(joinable)) {
           node_stage[[.key(id)]] <-
-            new_proto("compute", id, node@grid, parent_sids, node@parents)
+            new_proto("compute", id, .node_grid(node), parent_sids, parents)
         } else {
           sid <- joinable$id
           protos[[sid]]$members <- c(protos[[sid]]$members, id)
           protos[[sid]]$input_nodes <-
-            unique(c(protos[[sid]]$input_nodes, node@parents))
-          protos[[sid]]$grid <- node@grid
+            unique(c(protos[[sid]]$input_nodes, parents))
+          protos[[sid]]$grid <- .node_grid(node)
           node_stage[[.key(id)]] <- sid
         }
       } else {
         # Distinct compute ancestries meet: consume both, materialised.
         node_stage[[.key(id)]] <-
-          new_proto("compute", id, node@grid, parent_sids, node@parents)
+          new_proto("compute", id, .node_grid(node), parent_sids, parents)
       }
     }
   }
 
   # ---- Stage-merge pass -------------------------------------------------------
-  protos <- .merge_stages(protos, graph)
+  protos <- .merge_stages(protos, graph, halos)
 
   # ---- Phase B: finalise -----------------------------------------------------
 
   # Exports: members referenced by other stages' input_nodes, plus tail.
+  all_inputs <- lapply(protos, `[[`, "input_nodes")
   for (i in seq_along(protos)) {
     s <- protos[[i]]
     s$members <- sort(s$members)
     tail_id <- s$members[[length(s$members)]]
-    ext_refs <- unlist(lapply(protos[-i], `[[`, "input_nodes"))
+    ext_refs <- unlist(all_inputs[-i], use.names = FALSE)
     s$exports <- sort(unique(c(intersect(s$members, ext_refs), tail_id)))
     protos[[i]] <- s
   }
@@ -421,7 +444,7 @@ plan_lazy <- function(x) {
     s <- protos[[i]]
     node <- graph_get(graph, s$members[[1L]])
     if (s$kind == "compute") {
-      s$halo <- .stage_halo(graph, s$members, s$input_nodes)
+      s$halo <- .stage_halo(graph, s$members, s$input_nodes, halos)
       s$fn <- .compose_stage_fn(graph, s$members, s$input_nodes,
                                 s$exports, s$halo)
       if (s$halo > 0L) {
@@ -481,33 +504,47 @@ plan_lazy <- function(x) {
 
 # Reachable ids from a sink, ascending (= topo in an append-only graph).
 .reachable <- function(graph, root_id) {
-  seen <- integer(0)
+  nodes <- graph@nodes
+  seen <- new.env(parent = emptyenv(), hash = TRUE)
   stack <- root_id
   while (length(stack) > 0L) {
-    id <- stack[[1L]]
-    stack <- stack[-1L]
-    if (id %in% seen) next
-    seen <- c(seen, id)
-    stack <- c(stack, graph_get(graph, id)@parents)
+    id <- stack[[length(stack)]]
+    stack <- stack[-length(stack)]
+    k <- .key(id)
+    if (!is.null(seen[[k]])) next
+    seen[[k]] <- TRUE
+    stack <- c(stack, .node_parents(nodes[[k]]))
   }
-  sort(seen)
+  sort(as.integer(ls(seen, all.names = TRUE)))
 }
 
 # Within-stage halo: halo required on a member's inputs = its own
 # requirement + max over in-stage consumers; stage halo = max over
-# members that read stage inputs.
-.stage_halo <- function(graph, members, input_nodes) {
+# members that read stage inputs. `halos` is an optional precomputed
+# required_halo lookup (named by node id); when every member's own
+# requirement is zero the propagation is all-zero and the O(members^2)
+# consumer scan is skipped — the common case, and the merge pass calls
+# this once per attempted merge on an ever-growing member list.
+.stage_halo <- function(graph, members, input_nodes, halos = NULL) {
+  req <- if (is.null(halos)) {
+    vapply(members, function(m) required_halo(graph_get(graph, m)),
+           integer(1))
+  } else {
+    unname(halos[as.character(members)])
+  }
+  if (all(req == 0L)) return(0L)
   H <- stats::setNames(integer(length(members)), as.character(members))
-  for (id in rev(members)) {
-    consumers <- Filter(function(m) id %in% graph_get(graph, m)@parents,
+  for (i in rev(seq_along(members))) {
+    id <- members[[i]]
+    consumers <- Filter(function(m) id %in% .node_parents(graph_get(graph, m)),
                         members)
     downstream <- if (length(consumers) == 0L) 0L
                   else max(vapply(consumers, function(m) H[[.key(m)]],
                                   integer(1)))
-    H[[.key(id)]] <- required_halo(graph_get(graph, id)) + downstream
+    H[[.key(id)]] <- req[[i]] + downstream
   }
   readers <- Filter(function(m) {
-    any(graph_get(graph, m)@parents %in% input_nodes)
+    any(.node_parents(graph_get(graph, m)) %in% input_nodes)
   }, members)
   if (length(readers) == 0L) return(0L)
   max(vapply(readers, function(m) H[[.key(m)]], integer(1)))
