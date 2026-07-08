@@ -132,18 +132,56 @@ stac_drop_duplicates <- function(sources) {
 #' Adds a `slice` column (the datetime truncated to `granularity`);
 #' tiles sharing a slice mosaic together in `lazy_stac_stack()`.
 #'
+#' `"day"` truncates the UTC datetime: one satellite overpass that
+#' crosses local midnight in UTC terms splits into two slices.
+#' `"solar_day"` instead shifts each timestamp by the local solar
+#' offset (`lon` degrees x 240 s, the odc-stac rule) before taking the
+#' date, so acquisitions group by the local day of the overpass; the
+#' two agree everywhere except within ~an overpass of the UTC date
+#' line at `lon`.
+#'
 #' @param sources A `stac_sources()` table.
-#' @param granularity "day", "month", or "exact".
+#' @param granularity "day", "month", "exact", or "solar_day".
+#' @param lon Longitude (degrees, WGS84) whose solar time defines
+#'   `"solar_day"` — use the centre of the analysis area. Defaults to
+#'   the circular mean of the source footprint centres (safe across
+#'   the antimeridian).
 #' @return The table with a `slice` column.
 #' @export
 stac_time_slices <- function(sources, granularity = c("day", "month",
-                                                      "exact")) {
+                                                      "exact",
+                                                      "solar_day"),
+                             lon = NULL) {
   granularity <- match.arg(granularity)
   sources$slice <- switch(granularity,
     day = substr(sources$datetime, 1L, 10L),
     month = substr(sources$datetime, 1L, 7L),
-    exact = sources$datetime)
+    exact = sources$datetime,
+    solar_day = {
+      if (is.null(lon)) {
+        mid <- (sources$xmin + sources$xmax) / 2
+        rad <- mid * pi / 180
+        lon <- atan2(mean(sin(rad)), mean(cos(rad))) * 180 / pi
+      }
+      stopifnot(length(lon) == 1L, is.finite(lon))
+      utc <- .stac_parse_datetime(sources$datetime)
+      format(utc + round(lon * 240), "%Y-%m-%d", tz = "UTC")
+    })
   sources
+}
+
+# RFC 3339 datetimes (STAC item `datetime`) to POSIXct UTC. Accepts
+# "Z", "+HH:MM"/"-HH:MM", "+HHMM" offsets and fractional seconds.
+.stac_parse_datetime <- function(x) {
+  x <- sub("Z$", "+0000", x)
+  x <- sub("([+-]\\d{2}):(\\d{2})$", "\\1\\2", x)
+  out <- as.POSIXct(x, format = "%Y-%m-%dT%H:%M:%OS%z", tz = "UTC")
+  if (anyNA(out))
+    .garry_error(paste0("unparseable STAC datetime(s): ",
+                        paste(utils::head(x[is.na(out)], 3L),
+                              collapse = ", ")),
+                 "garry_stac_error")
+  out
 }
 
 #' Write a source table as a GTI index for one asset.
@@ -200,14 +238,16 @@ stac_gti_index <- function(sources, asset,
 #' @param granularity Slice granularity (see `stac_time_slices()`).
 #' @param sort_field Index field ordering overlaps within a slice.
 #' @param nodata Optional nodata override passed to each slice source.
+#' @param lon Longitude for `granularity = "solar_day"` (see
+#'   `stac_time_slices()`).
 #' @return A list: `stack` (`LazyRaster`), `slices` (character),
 #'   `index` (path).
 #' @export
 lazy_stac_stack <- function(sources, grid, asset,
                             granularity = "day",
                             sort_field = "datetime",
-                            nodata = NULL) {
-  sources <- stac_time_slices(sources, granularity)
+                            nodata = NULL, lon = NULL) {
+  sources <- stac_time_slices(sources, granularity, lon = lon)
   idx <- stac_gti_index(sources, asset, crs = grid@crs)
   slices <- sort(unique(sources$slice[sources$asset == asset]))
   # One metadata probe per asset, not per slice: every slice opens the

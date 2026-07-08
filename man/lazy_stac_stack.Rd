@@ -10,7 +10,8 @@ lazy_stac_stack(
   asset,
   granularity = "day",
   sort_field = "datetime",
-  nodata = NULL
+  nodata = NULL,
+  lon = NULL
 )
 }
 \arguments{
@@ -25,6 +26,9 @@ lazy_stac_stack(
 \item{sort_field}{Index field ordering overlaps within a slice.}
 
 \item{nodata}{Optional nodata override passed to each slice source.}
+
+\item{lon}{Longitude for \code{granularity = "solar_day"} (see
+\code{stac_time_slices()}).}
 }
 \value{
 A list: \code{stack} (\code{LazyRaster}), \code{slices} (character),

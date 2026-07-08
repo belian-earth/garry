@@ -67,6 +67,43 @@ test_that("table filters: cloud cover, duplicates, slices", {
                    c("2023-01", "2023-02"))
 })
 
+test_that("solar_day groups by local overpass date (gap 8)", {
+  base <- stac_sources(.fake_items())[rep(1L, 3L), , drop = FALSE]
+
+  # HLS-at-144E shape: a late-UTC overpass belongs to the NEXT local
+  # day; an early-UTC one to the same day. 144.3E -> +9.62 h.
+  base$datetime <- c("2023-06-15T00:16:42.336Z",   # 09:54 local solar
+                     "2023-06-15T14:21:00Z",       # 23:59 local solar
+                     "2023-06-15T14:24:00Z")       # 00:02 NEXT local day
+  sl <- stac_time_slices(base, "solar_day", lon = 144.3)
+  expect_identical(sl$slice, c("2023-06-15", "2023-06-15", "2023-06-16"))
+  # UTC "day" puts all three in one slice: the difference solar_day fixes.
+  expect_identical(unique(stac_time_slices(base, "day")$slice),
+                   "2023-06-15")
+
+  # Antimeridian scene (179E, +11.93 h): one overpass, two UTC dates,
+  # ONE solar day.
+  base$datetime <- c("2023-06-15T23:58:00Z", "2023-06-16T00:02:00Z",
+                     "2023-06-16T00:05:00Z")
+  sl <- stac_time_slices(base, "solar_day", lon = 179)
+  expect_identical(unique(sl$slice), "2023-06-16")
+  expect_identical(length(unique(stac_time_slices(base, "day")$slice)), 2L)
+
+  # Default lon: circular mean of footprint centres straddling the
+  # antimeridian must land near 180, not 0.
+  base$xmin <- c(178.5, 178.5, -180); base$xmax <- c(180, 180, -178.5)
+  sl <- stac_time_slices(base, "solar_day")
+  expect_identical(unique(sl$slice), "2023-06-16")
+
+  # Offset datetimes (explicit +00:00) parse too.
+  base$datetime <- rep("2023-06-15T10:00:00+00:00", 3L)
+  expect_identical(unique(stac_time_slices(base, "solar_day",
+                                           lon = 0)$slice),
+                   "2023-06-15")
+
+  expect_error(stac_time_slices(base, "solar_day", lon = NaN))
+})
+
 test_that("http hrefs gain the vsicurl prefix", {
   it <- .fake_items()
   it$features[[1]]$assets$B1$href <- "https://example.com/x.tif"
