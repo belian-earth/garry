@@ -783,6 +783,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       cd <- s@chunks@chunk_dim
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
         prod(as.numeric(cd) + 2 * s@halo) / 2^20
+      # The per-px estimate is calibrated for the rds store, where
+      # every input lands as a private R double. Under mori the
+      # inputs are shared mappings (zero-copy extraction) and the
+      # resident cost is mostly the f32 device copies — roughly
+      # half. The planner's chunk sizing keeps the conservative
+      # figure; this only loosens the in-flight budget.
+      if (use_shm) task_mb <- task_mb / 2
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         fn = s@fn,
