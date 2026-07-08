@@ -12,7 +12,8 @@ inputs.}
   in_keys,
   trims,
   dtypes,
-  reg_key
+  reg_key,
+  out_keys = NULL
 )
 }
 \arguments{

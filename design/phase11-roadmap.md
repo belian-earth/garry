@@ -57,17 +57,42 @@ recommended sequence.
   Expect: peak ~4-4.5 GB (ODC territory) at wall parity or better.
   Gate: interleaved benchmark trio, peak and wall.
 
-- [ ] **11.2 Morphology parity benchmark.** ODC's baseline does
-  opening(2) + dilation(3) on the cloud mask; garry's doesn't, so
-  today's wall comparison undersells ODC. The mask is a MapNode over
-  the Fmask SOURCE, so chained focal min/max (erosion then dilation)
-  lives in a source-fed stage — D11 already permits it and
-  .compose_stage_fn already sequences pad consumption for chained
-  focals. Write focal min/max kernels, add the cleanup to the garry
-  benchmark, re-baseline all three pipelines same-sitting.
-  Expect: garry wall grows (more compute per chunk); the comparison
-  becomes honest. Gate: cor vs ODC output on the cleaned mask path,
-  interleaved wall/peak triple.
+- [x] **11.2 Morphology parity benchmark.** DONE 2026-07-08 except
+  the wall re-baseline (below). The benchmark now applies odc-algo's
+  mask_cleanup — opening(2) then dilation(3), disk structuring
+  elements — as chained focal min/max (erosion = product over the
+  disk on a 0/1 f32 mask, dilation = its dual) in a Fmask-source-fed
+  halo-7 stage, computed once per slice on a SHARED graph (cross-
+  graph import only dedups sources, so per-band graphs would have
+  tripled the morphology). NaN (fill + beyond-edge halo) maps to
+  clear, matching scipy's constant-0 border; fill pixels are -9999
+  in band data anyway. Offline gate: exact match to a pure-R
+  morphology reference; pooled == single-threaded. Correctness gate
+  vs ODC PASSED: cor 0.987-0.991 per band over 1.17M px against
+  ODC's cleaned composite (historical 0.992 band-level agreement).
+  Three scheduler/planner improvements fell out of making it fast:
+  (a) CONTENT-ADDRESSED KERNEL KEYS — .stage_kernel_sig normalizes
+  node ids to stage-local indices and hashes member structure +
+  serialized slimmed fns, so 55 structurally identical per-slice
+  mask stages compile ONE kernel per daemon instead of 55 (the
+  first morph run was 96.9 s from that compile storm alone), task
+  bodies rename exports positionally, and kernels persist across
+  runs; (b) BYTE-BUDGET COMPUTE BALANCER — per-task resident
+  estimates (.stage_bytes_per_px x chunk px: mask chunk ~10 MB,
+  fused median ~350 MB) gated against ram_budget x pool size,
+  replacing the flat drain-phase cap that had serialized 330 tiny
+  mask tasks two-at-a-time; (c) COARSE READS WITH HALO — halo'd
+  source stages now read coarse and split producer-side like
+  halo-free ones (a compute chunk's padded window is contained in
+  the coarse window padded by the same halo), keeping 55 Fmask
+  sources at 55 reads instead of 330.
+  REMAINING: same-sitting wall/peak triple in a clean network
+  window. Tonight's link collapsed mid-session (ODC 34.8 -> 56.4 s
+  across two hours; garry no-morph 36.5 -> 86.7 s; interleaved
+  ratios degraded for everyone and more readers made it worse) —
+  no wall conclusion is honest from that data. Morphology's
+  incremental cost on the degraded link was ~12 s (98.3 vs 86.7
+  same-sitting).
 
 - [ ] **11.3 Streaming sink writes.** Sink chunks currently write
   after the whole drain; write each as it lands (band k's chunks

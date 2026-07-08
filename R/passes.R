@@ -489,7 +489,8 @@ plan_lazy <- function(x) {
                           s$kind, chunk_dim),
       device = "cpu",
       inputs = as.integer(s$inputs),
-      input_nodes = as.integer(s$input_nodes)
+      input_nodes = as.integer(s$input_nodes),
+      exports = as.integer(s$exports %||% integer(0))
     )
   })
 
@@ -564,6 +565,23 @@ plan_lazy <- function(x) {
   c(1L, 1L)
 }
 
+# Per-pixel resident estimate for one stage's chunk task: ~2 f32
+# device copies of the widest member + input chunks held as R
+# doubles. Calibrated against a measured 55-layer median stage with
+# 110 inputs (~1.5 KB/px). An estimate, not a bound. Shared by the
+# chunking pass (worst stage caps chunk size) and the pooled
+# scheduler's compute-budget balancer (a mask chunk is ~30 B/px, a
+# stacked median ~1.3 KB/px — the budget is what lets many small
+# tasks and few big ones share the pool safely).
+.stage_bytes_per_px <- function(graph, members, input_nodes) {
+  outer_max <- max(vapply(members, function(id) {
+    d <- graph_get(graph, id)@grid@dims
+    prod(d[!names(d) %in% c("x", "y")])
+  }, numeric(1)))
+  n_in <- max(1L, length(input_nodes))
+  8 * outer_max + 8 * n_in + 16
+}
+
 .gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
 .lcm2 <- function(a, b) as.integer(a / .gcd2(a, b) * b)
 
@@ -580,15 +598,7 @@ plan_lazy <- function(x) {
 # read optimisation).
 .plan_chunk_dim <- function(graph, protos) {
   bytes_per_px <- vapply(protos, function(s) {
-    outer_max <- max(vapply(s$members, function(id) {
-      d <- graph_get(graph, id)@grid@dims
-      prod(d[!names(d) %in% c("x", "y")])
-    }, numeric(1)))
-    n_in <- max(1L, length(s$input_nodes))
-    # ~2 f32 device copies of the widest member + input chunks held as
-    # R doubles. Calibrated against a measured 55-layer median stage
-    # with 110 inputs (~1.5 KB/px). An estimate, not a bound.
-    8 * outer_max + 8 * n_in + 16
+    .stage_bytes_per_px(graph, s$members, s$input_nodes)
   }, numeric(1))
   px_cap <- garry_opt("ram_budget_mb") * 2^20 / max(bytes_per_px)
   target <- max(1, min(garry_opt("chunk_target_px"), px_cap))
@@ -603,20 +613,24 @@ plan_lazy <- function(x) {
 }
 
 # Chunk-size policy (D14): tile a stage's grid by the plan-wide
-# chunk dim. Halo-free source/warp stages read COARSER: their chunk
-# dim is an integer multiple of the compute chunk dim sized toward
-# garry_opt("read_target_px"), and consumers slice their window out of
-# the read buffer (windowed reads of warped mosaics decompress the
-# same source blocks whatever the window, so small read windows
-# amplify transfer). With a halo the read table stays identical to the
-# compute table: a compute chunk's halo may not straddle read chunks.
+# chunk dim. Source/warp stages read COARSER: their chunk dim is an
+# integer multiple of the compute chunk dim sized toward
+# garry_opt("read_target_px"), and reads split producer-side into
+# per-compute-chunk store values (windowed reads of warped mosaics
+# decompress the same source blocks whatever the window, so small
+# read windows amplify transfer). A halo rides on the coarse window:
+# coarse chunks are unions of whole compute chunks, so every compute
+# chunk's halo-padded window is contained in the coarse window
+# padded by the same halo (phase 11.2: this is what keeps 55
+# per-slice mask-cleanup sources at 55 coarse reads instead of
+# 55 x chunks halo'd reads).
 .chunk_for <- function(grid, block, halo, kind, chunk_dim) {
   if (kind == "reduce_combine") {
     return(ChunkGrid(grid = grid,
                      chunk_dim = unname(grid@dims[c("x", "y")]),
                      block_dim = c(1L, 1L), halo = 0L))
   }
-  if (kind %in% c("source_read", "warp") && halo == 0L) {
+  if (kind %in% c("source_read", "warp")) {
     f <- max(1L, as.integer(floor(sqrt(
       garry_opt("read_target_px") / prod(as.numeric(chunk_dim))))))
     chunk_dim <- chunk_dim * f

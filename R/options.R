@@ -43,12 +43,11 @@
   # whole run (odc-stac's fail_on_error=FALSE, stackstac's
   # errors_as_nodata).
   read_fail = "error",
-  # Pooled scheduler (garry_daemons): max in-flight compute chunks
-  # WHILE reads are still draining. Each in-flight fused chunk holds
-  # a ~0.3-1 GB working set, so the compute pool is throttled during
-  # the drain and opened to the full pool for the tail (the freed
-  # read footprint funds the tail's parallelism). NULL = half the
-  # compute pool, minimum 2.
+  # Pooled scheduler (garry_daemons): optional hard cap on in-flight
+  # compute chunks, on top of the byte budget (per-task resident
+  # estimates gated against ram_budget_mb x pool size — small chunks
+  # flow at full pool width, big fused medians self-limit). NULL =
+  # twice the compute pool.
   compute_inflight = NULL,
   # Pooled scheduler: pre-compile each compute stage's modal chunk
   # shape on every compute-pool daemon at run start, while the read

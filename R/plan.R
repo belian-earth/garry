@@ -40,6 +40,8 @@ NULL
 #' @param device Device tag ("cpu" until Phase 7).
 #' @param inputs Stage ids feeding this stage.
 #' @param input_nodes IR node ids whose values `fn` receives, in order.
+#' @param exports Member node ids `fn` returns, ascending (consumed by
+#'   other stages, plus the stage tail).
 #' @return A `Stage`.
 #' @export
 Stage <- S7::new_class(
@@ -54,7 +56,8 @@ Stage <- S7::new_class(
     chunks      = ChunkGrid,
     device      = S7::class_character,
     inputs      = S7::class_integer,
-    input_nodes = S7::class_integer
+    input_nodes = S7::class_integer,
+    exports     = S7::class_integer
   ),
   validator = function(self) {
     kinds <- c("source_read", "compute", "reduce_partial",

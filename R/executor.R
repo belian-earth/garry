@@ -73,7 +73,11 @@ NULL
 # (finer) chunk table on the producer's grid, or NULL when tables
 # already agree. Read tasks read at their own coarse granularity and
 # write one store value per compute chunk (read-granularity
-# decoupling); the planner only coarsens halo-free stages.
+# decoupling). The stage halo rides on both the coarse window and
+# every split part: parts are emitted halo-padded (the returned
+# table's halo says by how much), which is contained in the coarse
+# padded buffer because coarse chunks are unions of whole compute
+# chunks.
 .exec_split_cg <- function(plan, s) {
   cons <- Filter(function(t2)
     s@id %in% t2@inputs &&
@@ -81,10 +85,9 @@ NULL
   if (length(cons) == 0L) return(NULL)
   cg <- cons[[1L]]@chunks
   if (all(cg@chunk_dim == s@chunks@chunk_dim)) return(NULL)
-  stopifnot(s@chunks@halo == 0L,
-            all(s@chunks@chunk_dim %% cg@chunk_dim == 0L))
+  stopifnot(all(s@chunks@chunk_dim %% cg@chunk_dim == 0L))
   ChunkGrid(grid = s@grid, chunk_dim = cg@chunk_dim,
-            block_dim = s@chunks@block_dim, halo = 0L)
+            block_dim = s@chunks@block_dim, halo = s@chunks@halo)
 }
 
 # Compute-chunk rows covered by read-chunk row `r` (both tile the same
@@ -254,7 +257,11 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
         })
       } else {
         # Coarse read, split into compute-chunk values on arrival.
+        # Parts carry the stage halo: part (r0, c0) offsets are
+        # identical with or without halo (both buffer and part
+        # windows shift by -halo), only the slice grows by 2*halo.
         its <- chunk_iter(split_cg)
+        H2 <- 2L * split_cg@halo
         out[[s@id]] <- vector("list", nrow(its))
         for (r in seq_len(nrow(it))) {
           buf <- .exec_read_padded(rpath, rband, rnodata, s@chunks,
@@ -263,8 +270,9 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
             r0 <- its$y_off[[j]] - it$y_off[[r]]
             c0 <- its$x_off[[j]] - it$x_off[[r]]
             out[[s@id]][[j]] <- stats::setNames(list(
-              buf[(r0 + 1L):(r0 + its$y_size[[j]]),
-                  (c0 + 1L):(c0 + its$x_size[[j]]), drop = FALSE]), key)
+              buf[(r0 + 1L):(r0 + its$y_size[[j]] + H2),
+                  (c0 + 1L):(c0 + its$x_size[[j]] + H2), drop = FALSE]),
+              key)
           }
         }
       }

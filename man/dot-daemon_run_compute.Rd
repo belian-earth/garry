@@ -4,7 +4,16 @@
 \alias{.daemon_run_compute}
 \title{Daemon task body: run one jitted stage closure on one chunk.}
 \usage{
-.daemon_run_compute(cache_key, fn, in_files, in_keys, trims, dtypes, out_file)
+.daemon_run_compute(
+  cache_key,
+  fn,
+  in_files,
+  in_keys,
+  trims,
+  dtypes,
+  out_file,
+  out_keys = NULL
+)
 }
 \arguments{
 \item{cache_key}{Per-run jit cache key.}

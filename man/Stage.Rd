@@ -14,7 +14,8 @@ Stage(
   chunks = ChunkGrid(),
   device = character(0),
   inputs = integer(0),
-  input_nodes = integer(0)
+  input_nodes = integer(0),
+  exports = integer(0)
 )
 }
 \arguments{
@@ -38,6 +39,9 @@ Stage(
 \item{inputs}{Stage ids feeding this stage.}
 
 \item{input_nodes}{IR node ids whose values \code{fn} receives, in order.}
+
+\item{exports}{Member node ids \code{fn} returns, ascending (consumed by
+other stages, plus the stage tail).}
 }
 \value{
 A \code{Stage}.
