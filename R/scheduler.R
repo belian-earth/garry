@@ -158,16 +158,17 @@ NULL
 #' @export
 .daemon_run_compute_shm <- function(cache_key, fn, in_vals, in_keys,
                                     trims, dtypes, reg_key,
-                                    out_keys = NULL) {
+                                    out_keys = NULL, device = "cpu") {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  dev <- .exec_device(device)
   jf <- .daemon_cache[[cache_key]]
   if (is.null(jf)) {
-    jf <- g_jit(fn)
+    jf <- g_jit(fn, device = dev)
     .daemon_cache[[cache_key]] <- jf
   }
   inputs <- Map(function(v, k, tr, dt) {
-    g_upload(.exec_trim(v[[k]], tr), dt)
+    g_upload(.exec_trim(v[[k]], tr), dt, device = dev)
   }, in_vals, in_keys, trims, dtypes)
   res <- g_download(jf(unname(inputs)))
   # Content-addressed cache keys share one jitted wrapper across
@@ -200,16 +201,18 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_run_compute <- function(cache_key, fn, in_files, in_keys, trims,
-                                dtypes, out_file, out_keys = NULL) {
+                                dtypes, out_file, out_keys = NULL,
+                                device = "cpu") {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  dev <- .exec_device(device)
   jf <- .daemon_cache[[cache_key]]
   if (is.null(jf)) {
-    jf <- g_jit(fn)
+    jf <- g_jit(fn, device = dev)
     .daemon_cache[[cache_key]] <- jf
   }
   inputs <- Map(function(f, k, tr, dt) {
-    g_upload(.exec_trim(readRDS(f)[[k]], tr), dt)
+    g_upload(.exec_trim(readRDS(f)[[k]], tr), dt, device = dev)
   }, in_files, in_keys, trims, dtypes)
   res <- g_download(jf(unname(inputs)))
   # See .daemon_run_compute_shm: shared wrappers, positional rename.
@@ -243,13 +246,14 @@ NULL
 .daemon_warm_jit <- function(specs) {
   for (sp in specs) {
     tryCatch({
+      dev <- .exec_device(sp$device %||% "cpu")
       jf <- .daemon_cache[[sp$ck]]
       if (is.null(jf)) {
-        jf <- g_jit(sp$fn)
+        jf <- g_jit(sp$fn, device = dev)
         .daemon_cache[[sp$ck]] <- jf
       }
       dummy <- lapply(sp$dtypes, function(dt)
-        g_upload(matrix(0, sp$nr, sp$nc), dt))
+        g_upload(matrix(0, sp$nr, sp$nc), dt, device = dev))
       invisible(g_download(jf(unname(dummy))))
       rm(dummy)
     }, error = function(e) NULL)
@@ -562,7 +566,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
     } else {  # compute / reduce_partial
       in_meta <- .exec_in_meta(graph, s, plan@stages)
-      sig <- .stage_kernel_sig(graph, s)
+      sig <- paste0(.stage_kernel_sig(graph, s), "@", s@device)
       okeys <- vapply(s@exports, .key, character(1))
       cd <- s@chunks@chunk_dim
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
@@ -570,6 +574,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         fn = s@fn,
+        device = s@device,
         dtypes = vapply(in_meta, function(m) m$dtype, character(1)),
         nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * s@halo,
         nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * s@halo)
@@ -579,6 +584,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           meta <- in_meta
           ck <- sig                       # content-addressed jit key
           out_keys <- okeys
+          sdev <- s@device
           in_deps <- vapply(meta, function(m) {
             dep <- source_deps[[.key(m$id)]]
             if (is.null(dep)) sprintf("s%d_c%d", m$id, jj) else dep[[jj]]
@@ -601,26 +607,28 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
             mirai::mirai(
               garry::.daemon_run_compute_shm(ck, fn, in_vals, in_keys,
                                              trims, dtypes, reg,
-                                             out_keys = ok),
+                                             out_keys = ok,
+                                             device = dv),
               ck = ck, fn = fn,
               in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
               in_keys = shm_keys,
               trims = trims, dtypes = dtypes,
               reg = sprintf("r%d_%s", run_id, key),
-              ok = out_keys,
+              ok = out_keys, dv = sdev,
               .compute = comp_prof)
           } else function() {
             mirai::mirai(
               garry::.daemon_run_compute(ck, fn, in_files, in_keys,
                                           trims, dtypes, out,
-                                          out_keys = ok),
+                                          out_keys = ok,
+                                          device = dv),
               ck = ck, fn = fn,
               in_files = vapply(meta, function(m)
                 chunk_file(m$id, jj), character(1)),
               in_keys = in_keys,
               trims = trims, dtypes = dtypes,
               out = chunk_file(sid, jj),
-              ok = out_keys,
+              ok = out_keys, dv = sdev,
               .compute = comp_prof)
           })
           if (use_shm) {

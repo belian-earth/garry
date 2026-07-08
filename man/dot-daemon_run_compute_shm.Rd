@@ -13,7 +13,8 @@ inputs.}
   trims,
   dtypes,
   reg_key,
-  out_keys = NULL
+  out_keys = NULL,
+  device = "cpu"
 )
 }
 \arguments{

@@ -55,6 +55,12 @@ NULL
   if (stage@kind %in% c("source_read", "warp")) stage@halo else 0L
 }
 
+# Stage device -> anvl device argument: "cpu" means anvl's default
+# device (NULL), anything else passes through (e.g. "cuda").
+.exec_device <- function(device) {
+  if (identical(device, "cpu")) NULL else device
+}
+
 # Per-input fetch metadata for a compute/reduce_partial stage. Stage
 # outputs are always stored at the plan-wide compute chunk granularity
 # (coarse source reads split on write), so consumers index by chunk.
@@ -278,7 +284,8 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
       }
 
     } else if (s@kind %in% c("compute", "reduce_partial")) {
-      jf <- g_jit(s@fn)
+      dev <- .exec_device(s@device)
+      jf <- g_jit(s@fn, device = dev)
       in_meta <- .exec_in_meta(graph, s, plan@stages)
       shapes <- character(0)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
@@ -287,7 +294,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
           v <- out[[meta$id]][[j]][[.key(s@input_nodes[[k]])]]
           extra <- meta$pad - s@halo
           stopifnot(extra >= 0L)
-          g_upload(.exec_trim(v, extra), meta$dtype)
+          g_upload(.exec_trim(v, extra), meta$dtype, device = dev)
         })
         shapes <<- unique(c(shapes, paste(
           vapply(inputs, function(a) paste(dim(a), collapse = "x"),

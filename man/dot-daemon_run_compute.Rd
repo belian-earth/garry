@@ -12,7 +12,8 @@
   trims,
   dtypes,
   out_file,
-  out_keys = NULL
+  out_keys = NULL,
+  device = "cpu"
 )
 }
 \arguments{

@@ -105,6 +105,10 @@ if (grepl("+", daemons_arg, fixed = TRUE)) {
 options(garry.chunk_target_px = 1.4e6, garry.progress = TRUE)
 if (nzchar(Sys.getenv("GARRY_TASK_LOG")))
   options(garry.task_log = Sys.getenv("GARRY_TASK_LOG"))
+# GARRY_DEVICE=cuda runs the fused compute stages on the GPU (11.5);
+# use a small compute pool, e.g. 12+2 — chunks share GPU memory.
+if (nzchar(Sys.getenv("GARRY_DEVICE")))
+  options(garry.device = Sys.getenv("GARRY_DEVICE"))
 if (requireNamespace("mori", quietly = TRUE))
   options(garry.store = "mori")
 

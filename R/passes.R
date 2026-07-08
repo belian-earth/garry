@@ -487,7 +487,8 @@ plan_lazy <- function(x) {
       halo = as.integer(s$halo), grid = s$grid,
       chunks = .chunk_for(s$grid, .stage_block(graph, protos, s), s$halo,
                           s$kind, chunk_dim),
-      device = "cpu",
+      device = if (s$kind %in% c("compute", "reduce_partial"))
+        garry_opt("device") else "cpu",
       inputs = as.integer(s$inputs),
       input_nodes = as.integer(s$input_nodes),
       exports = as.integer(s$exports %||% integer(0))

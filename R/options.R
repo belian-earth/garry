@@ -53,7 +53,12 @@
   # shape on every compute-pool daemon at run start, while the read
   # pool owns the drain. Removes the first-execution compile
   # (~0.9 s/stage measured) from the tail. Ignored without pools.
-  jit_warmup = TRUE
+  jit_warmup = TRUE,
+  # Device compute stages jit and upload on: "cpu" (anvl's default
+  # device) or "cuda" (requires the CUDA PJRT plugin; pair with a
+  # small compute pool — concurrent chunks share the GPU's memory).
+  # Reads and host-side combines are always CPU.
+  device = "cpu"
 )
 
 #' Read a garry policy option.

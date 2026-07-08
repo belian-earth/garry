@@ -94,30 +94,43 @@ recommended sequence.
   incremental cost on the degraded link was ~12 s (98.3 vs 86.7
   same-sitting).
 
-- [ ] **11.3 Streaming sink writes.** Sink chunks currently write
-  after the whole drain; write each as it lands (band k's chunks
-  complete during band k+1's drain, so all but the last band's
-  writes hide entirely). Small (<1 s) but nearly free.
-  Gate: write-roundtrip tests unchanged; task_log shows writes
-  interleaved with the drain.
+- [x] **11.3 Streaming sink writes.** DONE 2026-07-08. The output
+  dataset opens at run start and each sink chunk writes in the
+  harvest loop (task_log gains "write" events); the post-drain
+  batch write is gone. Gated by streamed-vs-single write equivalence
+  (multiband + 2D) in test-mirai-pools.R.
 
-- [ ] **11.4 f32 store values.** Store parts are R doubles (8 B/px)
-  for data that is f32 on disk and device. Sharing raw f32 buffers
-  through mori and uploading straight from them halves shm
-  (~1.3 -> 0.65 GB), halves upload conversion, halves per-chunk R
-  heap churn. Needs an anvl upload-from-raw entry point (upstream
-  candidate, alongside the unsigned-dtype carrier).
+- [ ] **11.4 f32 store values.** BLOCKED on anvl (upstream ask
+  below); garry-side follow-ons folded in from 11.1's profiling:
+  the reader drain plateau (~150 MB/daemon native growth —
+  curl/TLS/PROJ churn, not block cache, not handles) and compute
+  daemons' 1.1-1.4 GB during-chunk anon (upload double-coercion +
+  XLA sort scratch across the PJRT thread pool).
+  Store parts are R doubles (8 B/px) for data that is f32 on disk
+  and device. Sharing raw f32 buffers through mori and uploading
+  straight from them halves shm (~1.3 -> 0.65 GB), halves upload
+  conversion, halves per-chunk R heap churn.
+  UPSTREAM ASK (r-xla/anvl), precise: (1) `nv_array()` accepting a
+  raw vector (or ALTREP-backed buffer) + explicit dtype + dim,
+  uploading WITHOUT the R-double round-trip — today doubles are the
+  only numeric carrier, which is also why unsigned dtypes need the
+  widening carrier in garry's g_upload; (2) a client option to size
+  the PJRT CPU thread pool (compute daemons currently inherit
+  hardware_concurrency each; 3 daemons x 16 threads oversubscribes
+  and multiplies sort scratch).
   Gate: bit-identical outputs (f32 end-to-end is exact); peak drop
   in the benchmark profile.
 
-- [ ] **11.5 GPU fused stages.** Planner device selection
-  (device = "cuda" for compute stages when a CUDA PJRT plugin is
-  present); natural on top of 11.1 — the compute pool owns the GPU,
-  readers never touch it, pool size 1-2 bounds GPU memory. The
-  sort-based nan_rm median (and 11.2's morphology) is exactly GPU
-  shaped; PCIe traffic per chunk is ~110 MB in / 3 MB out.
-  Expect: tail exec collapses; matters more as compute grows.
-  Gate: CUDA daemon equivalence tests (exist), interleaved wall.
+- [x] **11.5 GPU fused stages.** DONE 2026-07-08 (wall measurement
+  deferred to the clean-window re-baseline with 11.2).
+  `options(garry.device = "cuda")` (or GARRY_DEVICE=cuda for the
+  benchmark): the planner stamps compute/reduce_partial stages with
+  the device; both executors jit and upload on it (reads,
+  host-side combines, and source/warp stages stay CPU); kernel
+  cache keys include the device. Gates: CUDA plan equivalence vs
+  CPU (pooled, both stores) in test-mirai-cuda.R, green on the
+  RTX A1000; the full 3-band morphology benchmark ran end-to-end
+  on CUDA (12 readers + 2 GPU computers).
 
 ## Measured dead — do not re-litigate
 
