@@ -71,13 +71,30 @@
   # as before; "force" fetches even local sources (testing; staging
   # slow filesystems).
   fetch = "auto",
-  # Phase 12d GDAL-direct temporal-composite fast path. When TRUE and the
-  # plan is the eligible shape (GTI source reads -> one fused compute sink,
-  # no focal/warp/partial-reduce), collect(distributed=TRUE) warps each
-  # slice's f32 pixels straight into device-bound memory and runs the fused
-  # kernel, bypassing the staged scheduler (~22% faster on HLS median).
-  # Requires the raw-f32 upload path. FALSE routes through the scheduler.
-  composite_direct = FALSE
+  # Phase 12d GDAL-direct temporal-composite fast path (default ON). When the
+  # plan is an eligible composite (GTI source reads -> masked temporal reduce,
+  # optionally with morphology and multiple bands), collect(distributed=TRUE)
+  # warps each slice's f32 pixels straight into device-bound memory and runs
+  # one lean cube kernel, bypassing the staged scheduler (~30-40% faster on
+  # HLS median). Needs the raw-f32 upload path. HEAVY composites (estimated
+  # whole-grid compute > gd_compute_budget) fall through to the scheduler,
+  # whose warm parallel compute pool overlaps compute with the fetch drain.
+  # FALSE forces the scheduler.
+  composite_direct = TRUE,
+  # Route decision for composite_direct: n_bands (+1 if morphology) x
+  # n_slices x grid pixels. Above this, the whole-grid single-process compute
+  # is heavy enough that the scheduler's overlapped parallel compute wins, so
+  # the plan falls through. Calibrated ~ the 3-band morphology crossover;
+  # machine/link dependent, so tunable.
+  gd_compute_budget = 2.2e8,
+  # Enable the general GDAL-direct whole-grid IR replay for NON-composite
+  # cube plans (.gd_spec). Off by default: the per-slice replay is slow for
+  # focal, and non-composite cube plans are rare -- they use the scheduler.
+  gd_general = FALSE,
+  # Spike: fan composite_direct's per-band medians out to (XLA-pre-warmed)
+  # daemons instead of one whole-grid kernel in-process. Helps multi-band
+  # runs; not the default (the scheduler wins the heaviest cases anyway).
+  gd_parallel = FALSE
 )
 
 #' Read a garry policy option.

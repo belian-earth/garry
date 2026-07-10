@@ -114,8 +114,11 @@ if (nzchar(Sys.getenv("GARRY_DEVICE")))
 if (nzchar(Sys.getenv("GARRY_STORE_VALUES")))
   options(garry.store_values = Sys.getenv("GARRY_STORE_VALUES"))
 # Phase 12d GDAL-direct composite fast path (composite shape only).
+# GDAL-direct is default ON; GARRY_COMPOSITE_DIRECT=0 forces the scheduler.
 if (nzchar(Sys.getenv("GARRY_COMPOSITE_DIRECT")))
-  options(garry.composite_direct = TRUE)
+  options(garry.composite_direct = Sys.getenv("GARRY_COMPOSITE_DIRECT") != "0")
+if (nzchar(Sys.getenv("GARRY_GD_PARALLEL")))
+  options(garry.gd_parallel = TRUE)
 
 t_all <- system.time({
   # One GTI index per asset; each day is a FILTERed mosaic of that

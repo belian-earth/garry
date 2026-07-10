@@ -61,6 +61,41 @@ NULL
   mc
 }
 
+# Warm a daemon's XLA/PJRT client (one trivial jit) so the first real compute
+# task doesn't pay the ~3s cold init on the critical path.
+#' @keywords internal
+#' @export
+.gd_warm <- function() {
+  .require_anvl()
+  g_download(g_jit(function(inp) inp[[1L]] + 1)(list(anvl::nv_array(as.double(1:4)))))
+  invisible(TRUE)
+}
+
+# Daemon task body (parallel compute spike): read one band's per-slice .bin
+# cubes (and the shared fmask cube) from tmpfs, replay mask + masked-apply +
+# temporal reduce, return the (ny,nx) result as a raw f32 payload. `k` is the
+# grid-constant + slimmed-fn bundle passed once via mirai .args.
+#' @keywords internal
+#' @export
+.gd_compute_band <- function(job, k) {
+  .require_anvl()
+  dev <- .exec_device(k$dev)
+  cube <- function(bins) g_upload_raw(
+    do.call(c, lapply(bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))),
+    "f32", c(length(bins), k$ny, k$nx), device = dev)
+  masked <- length(k$fmask_bins) > 0L
+  lean1 <- function(inp) {
+    if (masked) {
+      mask <- .gd_replay_mask(inp[[2L]], k$chain, k$halo, k$ny, k$nx)
+      m <- k$F(inp[[1L]], mask)
+    } else m <- inp[[1L]]
+    .apply_reduce(k$op, m, 1L, k$nan_rm)
+  }
+  band <- cube(job$band_bins)
+  inputs <- if (masked) list(band, cube(k$fmask_bins)) else list(band)
+  g_download_raw(g_jit(lean1, device = dev)(inputs))
+}
+
 # Given a ReduceNode, lift one band's pieces: per-slice band + fmask sources,
 # the masked-apply fn F, and the mask CHAIN (Map/Focal nodes, replayed on the
 # cube; may include morphology focals). NULL if not reconstructible.
@@ -101,7 +136,7 @@ NULL
 # StackNode of homogeneous per-slice masked MapNodes (F) over (band SourceNode,
 # mask MapNode (M) over fmask SourceNode) -- or bare SourceNodes when unmasked.
 .cd_spec <- function(plan) {
-  if (!isTRUE(getOption("garry.composite_direct", FALSE))) return(NULL)
+  if (!isTRUE(garry_opt("composite_direct"))) return(NULL)
   if (!.g_has_raw_upload()) return(NULL)
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
@@ -138,9 +173,18 @@ NULL
       (!masked || identical(s$fmask, s1$fmask)),   # one shared mask across bands
     logical(1))
   if (!all(ok)) return(NULL)
+  # Smart routing: the whole-grid compute runs single-process here (no overlap
+  # with the fetch drain). For heavy composites the scheduler's warm, parallel,
+  # overlapped compute pool wins -- but ONLY when it exists (a garry_daemons
+  # split pool). On a single pool composite_direct is best regardless, so only
+  # fall through when both heavy AND pooled.
+  n_bands <- length(specs); n_slices <- length(s1$band)
+  grid_px <- sink@grid@dims[["x"]] * sink@grid@dims[["y"]]
+  weight <- (n_bands + (s1$halo > 0L)) * n_slices * grid_px
+  if (weight > garry_opt("gd_compute_budget") && .gd_pooled()) return(NULL)
   list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F, mask_chain = s1$mask_chain,
        halo = s1$halo, band_srcs = lapply(specs, function(s) s$band),
-       fmask_srcs = s1$fmask, n_bands = length(specs),
+       fmask_srcs = s1$fmask, n_bands = n_bands,
        grid = sink@grid, device = sink@device)
 }
 
@@ -188,6 +232,21 @@ NULL
   list(err = err, tf = tf, tw = tw)
 }
 
+# Is a garry_daemons() split read/compute pool active? (Both named profiles
+# have daemons.) The scheduler's warm compute pool only exists when pooled.
+.gd_pooled <- function() {
+  n_of <- function(p) {
+    st <- tryCatch(mirai::status(.compute = p), error = function(e) NULL)
+    if (is.null(st) || !is.numeric(st$connections)) 0L else as.integer(st$connections)
+  }
+  n_of("garry_read") > 0L && n_of("garry_compute") > 0L
+}
+
+# The mirai profile composite_direct dispatches to: the read pool when pooled
+# (a garry_daemons split), else mirai's default profile. Unqualified everywhere/
+# mirai_map hit the empty default under a split pool and error.
+.gd_profile <- function() if (.gd_pooled()) "garry_read" else "default"
+
 # Fetch each GTI source's slice items and warp its f32 pixels straight into a
 # per-source .bin on tmpfs (parallel across the pool). Returns `info`: keyed by
 # source node id, each with its .bin path. `grid` supplies the spatial target
@@ -224,19 +283,21 @@ NULL
     list(locs = x$locs, dt = x$dt, bb = x$bb, nodata = x$nodata, bin = x$bin)))
   # Preload garry once per daemon (else fetch tasks cold-init XLA) and set the
   # vsicurl/MEM config in the daemons (set_config_option in the host does not
-  # propagate to mirai daemons).
+  # propagate to mirai daemons). Target the read profile under a split pool.
+  prof <- .gd_profile()
   mirai::everywhere({
     suppressMessages(library(garry)); library(gdalraster)
     gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
     gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
     gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
-  })
+  }, .compute = prof)
   progress <- isTRUE(getOption("garry.progress", FALSE))
   # Pass the bare namespace function (NOT a local closure): a local closure
   # captures this frame -- the whole IR -- which mirai serialises per task,
   # throttling dispatch. `.cd_fetch_warp`'s env is the garry namespace.
   t <- system.time({
-    r <- mirai::mirai_map(jobs, .cd_fetch_warp, .args = list(k = K))[]
+    r <- mirai::mirai_map(jobs, .cd_fetch_warp, .args = list(k = K),
+                          .compute = prof)[]
     errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
                    conditionMessage, "")
     if (progress) {
@@ -268,37 +329,54 @@ NULL
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   info <- .gd_warp_sources(plan, spec$grid, tmp)
 
-  # COMPUTE: assemble contiguous cubes, run ONE lean kernel from the IR.
+  bin_of <- function(ids) vapply(ids, function(id) info[[as.character(id)]]$bin, "")
+  parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
+  masked <- length(spec$fmask_srcs) > 0L
+  # COMPUTE. Default: one lean whole-grid kernel in this process. Spike
+  # (garry.gd_parallel): fan the per-band medians out to daemons reading the
+  # shared .bin cubes, XLA pre-warmed, so the compute parallelises across bands.
   tcomp <- system.time({
-    dev <- .exec_device(spec$device)
-    cube <- function(ids) {
-      Tt <- length(ids)
-      bytes <- do.call(c, lapply(ids, function(id)
-        readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L)))
-      g_upload_raw(bytes, "f32", c(Tt, ny, nx), device = dev)
+    if (parallel) {
+      prof <- .gd_profile()
+      mirai::everywhere(try(garry:::.gd_warm(), silent = TRUE), .compute = prof)
+      K2 <- list(chain = lapply(spec$mask_chain, function(n) {
+                   n@fn <- .slim_fn(n@fn); n }),
+                 F = if (is.null(spec$F)) NULL else .slim_fn(spec$F),
+                 op = spec$op, nan_rm = spec$nan_rm, halo = spec$halo,
+                 ny = ny, nx = nx, dev = spec$device,
+                 fmask_bins = if (masked) bin_of(spec$fmask_srcs) else character(0))
+      band_jobs <- lapply(spec$band_srcs, function(ids)
+        list(band_bins = bin_of(ids)))
+      res <- mirai::mirai_map(band_jobs, .gd_compute_band, .args = list(k = K2),
+                              .compute = prof)[]
+    } else {
+      dev <- .exec_device(spec$device)
+      cube <- function(ids)
+        g_upload_raw(do.call(c, lapply(ids, function(id)
+          readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L))),
+          "f32", c(length(ids), ny, nx), device = dev)
+      band_cubes <- lapply(spec$band_srcs, cube)
+      fm <- if (masked) cube(spec$fmask_srcs) else NULL
+      F <- spec$F; chain <- spec$mask_chain; halo <- spec$halo
+      op <- spec$op; nan_rm <- spec$nan_rm; nyy <- ny; nxx <- nx
+      nb <- length(band_cubes)
+      # The mask (incl. morphology focals) is replayed ONCE on the whole fmask
+      # cube, vectorised over time, and shared across bands.
+      lean <- function(inp) {
+        mask <- if (masked) .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
+                else NULL
+        lapply(seq_len(nb), function(b) {
+          m <- if (masked) F(inp[[b]], mask) else inp[[b]]
+          .apply_reduce(op, m, 1L, nan_rm)
+        })
+      }
+      res <- g_download(g_jit(lean, device = dev)(
+        c(band_cubes, if (masked) list(fm) else NULL)))
     }
-    band_cubes <- lapply(spec$band_srcs, cube)               # N x (T, ny, nx)
-    masked <- length(spec$fmask_srcs) > 0L
-    fm <- if (masked) cube(spec$fmask_srcs) else NULL
-    F <- spec$F; chain <- spec$mask_chain; halo <- spec$halo
-    op <- spec$op; nan_rm <- spec$nan_rm; nyy <- ny; nxx <- nx
-    nb <- length(band_cubes)
-    # inp = list(band_1_cube, ..., band_N_cube[, fmask_cube]). The mask (incl.
-    # any morphology focals) is replayed ONCE on the whole fmask cube -
-    # vectorised over time - and shared across bands. Returns one (ny,nx)/band.
-    lean <- function(inp) {
-      mask <- if (masked) .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
-              else NULL
-      lapply(seq_len(nb), function(b) {
-        m <- if (masked) F(inp[[b]], mask) else inp[[b]]
-        .apply_reduce(op, m, 1L, nan_rm)        # reduce over t (axis 1)
-      })
-    }
-    jf <- g_jit(lean, device = dev)
-    res <- g_download(jf(c(band_cubes, if (masked) list(fm) else NULL)))
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    message(sprintf("[gdal-direct] lean compute=%.2fs", tcomp))
+    message(sprintf("[gdal-direct] %s compute=%.2fs",
+                    if (parallel) "parallel" else "lean", tcomp))
 
   mats <- lapply(res, .sv_materialise)                        # one per band
   if (is.null(path)) return(if (spec$n_bands == 1L) mats[[1L]] else mats)
@@ -326,7 +404,8 @@ NULL
 #' Recognise ANY whole-grid-replayable cube plan and lift its IR, or NULL.
 #' @keywords internal
 .gd_spec <- function(plan) {
-  if (!isTRUE(getOption("garry.composite_direct", FALSE))) return(NULL)
+  if (!isTRUE(garry_opt("composite_direct")) || !isTRUE(garry_opt("gd_general")))
+    return(NULL)
   if (!.g_has_raw_upload()) return(NULL)
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
