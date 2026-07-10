@@ -112,7 +112,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @export
 gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
                              nodata = numeric(0),
-                             open_options = character(0)) {
+                             open_options = character(0),
+                             out = c("matrix", "raw_f32")) {
+  out <- match.arg(out)
   ds <- .gdal_handle(path, open_options)
   v <- ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size)
   v <- as.numeric(v)
@@ -120,6 +122,9 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
     v[!is.na(v) & v == nodata] <- NaN
   }
   v[is.na(v) & !is.nan(v)] <- NaN        # GDAL-side masked values
+  # GDAL's buffer is already row-major: the raw f32 store payload (D19)
+  # converts it directly, skipping the byrow transpose below.
+  if (out == "raw_f32") return(.sv_from_vec(v, y_size, x_size))
   matrix(v, nrow = y_size, byrow = TRUE)
 }
 
@@ -212,14 +217,24 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
 #' @export
 gdal_write_window <- function(ds, x_off, y_off, m, dtype,
                               nodata = numeric(0), band = 1L) {
+  if (.sv_is(m)) {
+    # Raw store payloads are already in GDAL's row-major write order.
+    d <- .sv_dim(m)
+    v <- .sv_to_vec(m)
+    nr <- d[[1L]]
+    nc <- d[[2L]]
+  } else {
+    nr <- nrow(m)
+    nc <- ncol(m)
+    v <- as.numeric(t(m))
+  }
   if (length(nodata) == 1L) {
-    m[is.na(m)] <- nodata
-  } else if (anyNA(m) && .dtype_family(dtype) != "float") {
+    v[is.na(v)] <- nodata
+  } else if (anyNA(v) && .dtype_family(dtype) != "float") {
     stop("result contains nodata (NaN) but no `nodata` sentinel was ",
          "given for integer output dtype ", dtype)
   }
-  ds$write(as.integer(band), x_off, y_off, ncol(m), nrow(m),
-           as.numeric(t(m)))
+  ds$write(as.integer(band), x_off, y_off, nc, nr, v)
   invisible(NULL)
 }
 

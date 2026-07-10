@@ -1,0 +1,11 @@
+
+# ODC benchmark venv
+benchmarks/.venv/
+__pycache__/
+*.pyc
+
+# scratch composite outputs
+composite_gdaldirect*.tif
+composite_isolate.tif
+composite_ref.tif
+composite_lean.tif

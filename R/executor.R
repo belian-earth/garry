@@ -21,19 +21,28 @@ NULL
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8).
 .exec_read_padded <- function(path, band, nodata, cg, core,
-                              open_options = character(0)) {
+                              open_options = character(0),
+                              out = c("matrix", "raw_f32")) {
+  out <- match.arg(out)
   H <- cg@halo
+  # Raw store payloads (D19) only take the halo-free path: padding
+  # embeds into a matrix buffer below.
+  stopifnot(out == "matrix" || H == 0L)
   w <- chunk_window_with_halo(cg, core$x_off, core$y_off,
                               core$x_size, core$y_size)
   sub <- tryCatch(
     gdal_read_window(path, band, w$x_off, w$y_off,
                      w$x_size, w$y_size, nodata = nodata,
-                     open_options = open_options),
+                     open_options = open_options, out = out),
     error = function(e) {
       if (!identical(garry_opt("read_fail"), "nodata")) stop(e)
       warning("read failed, filling with nodata: ", path, " (",
               conditionMessage(e), ")", call. = FALSE)
-      matrix(NaN, w$y_size, w$x_size)
+      if (out == "raw_f32") {
+        .sv_from_vec(rep(NaN, w$y_size * w$x_size), w$y_size, w$x_size)
+      } else {
+        matrix(NaN, w$y_size, w$x_size)
+      }
     })
   if (H == 0L) return(sub)
   buf <- matrix(NaN, core$y_size + 2L * H, core$x_size + 2L * H)
@@ -43,10 +52,135 @@ NULL
   buf
 }
 
-# Trim k cells from every side.
+# Trim k cells from every side (matrix or raw store value).
 .exec_trim <- function(x, k) {
   if (k == 0L) return(x)
+  if (.sv_is(x)) return(.sv_trim(x, k))
   x[(k + 1L):(nrow(x) - k), (k + 1L):(ncol(x) - k), drop = FALSE]
+}
+
+# -- Raw f32 store values (phase 12c, decisions D19/D20) ----------------------
+#
+# A raw store value is a raw vector holding the f32 byte payload of a
+# `[y, x]` window in ROW-major element order, tagged with `gdim`
+# (c(nr, nc)) and `gdt` ("f32") attributes. Row-major matches GDAL's
+# RasterIO buffer order (reads skip the matrix(byrow = TRUE)
+# transpose) and XLA's default layout (uploads skip the relayout
+# copy). Only f32 values take this form (D21); everything else stays
+# an R matrix, and every store consumer dispatches on .sv_is().
+
+.sv_is <- function(v) is.raw(v) && !is.null(attr(v, "gdim"))
+
+.sv_dim <- function(v) attr(v, "gdim")
+
+# Wrap a ROW-major numeric vector (GDAL read order) as an f32 payload.
+.sv_from_vec <- function(v, nr, nc) {
+  structure(writeBin(as.numeric(v), raw(), size = 4L),
+            gdim = c(nr, nc), gdt = "f32")
+}
+
+# Producer-side window slice. `v` is private (fresh read output), so
+# the byte-matrix view (one column per row of the image) costs one
+# dim-stamped copy for the whole window, amortised over its parts.
+.sv_slicer <- function(v) {
+  d <- .sv_dim(v)
+  bm <- unclass(v)
+  attributes(bm) <- NULL
+  dim(bm) <- c(4L * d[[2L]], d[[1L]])
+  function(r0, c0, nr, nc) {
+    out <- bm[(4L * c0 + 1L):(4L * (c0 + nc)), (r0 + 1L):(r0 + nr),
+              drop = FALSE]
+    attributes(out) <- NULL
+    structure(out, gdim = c(nr, nc), gdt = "f32")
+  }
+}
+
+# Consumer-side halo trim. Consumers hold shared (mori) payloads whose
+# attributes must not be touched (a write would force a private copy of
+# the whole mapping element), so this gathers by byte index instead of
+# taking a dim-stamped view. Trims are 0 on the fused hot paths; this
+# runs on align-style plans only.
+.sv_trim <- function(v, k) {
+  k <- as.integer(k)
+  d <- .sv_dim(v)
+  nr <- d[[1L]] - 2L * k
+  nc <- d[[2L]] - 2L * k
+  ncb <- 4L * d[[2L]]
+  rows0 <- (k + seq_len(nr) - 1L) * ncb
+  cols <- 4L * k + seq_len(4L * nc)
+  out <- v[rep(rows0, each = length(cols)) + cols]
+  attributes(out) <- NULL
+  structure(out, gdim = c(nr, nc), gdt = "f32")
+}
+
+# Raw payload -> `[y, x]` matrix (sink writes, collect assembly,
+# oracle comparisons).
+.sv_to_matrix <- function(v) {
+  d <- .sv_dim(v)
+  matrix(readBin(v, numeric(), n = prod(d), size = 4L),
+         nrow = d[[1L]], byrow = TRUE)
+}
+
+# Raw payload -> R array of any rank (row-major payload into R's
+# column-major memory). Lists recurse (reduce_partial exports nest);
+# non-store values pass through.
+.sv_materialise <- function(v) {
+  if (is.list(v)) return(lapply(v, .sv_materialise))
+  if (!.sv_is(v)) return(v)
+  d <- .sv_dim(v)
+  if (length(d) == 2L) return(.sv_to_matrix(v))
+  x <- readBin(v, numeric(), n = prod(d), size = 4L)
+  aperm(array(x, dim = rev(d)), rev(seq_along(d)))
+}
+
+# Raw payload -> ROW-major numeric vector (GDAL write order).
+.sv_to_vec <- function(v) {
+  readBin(v, numeric(), n = prod(.sv_dim(v)), size = 4L)
+}
+
+# Upload a store value (raw or matrix) after trimming `k`.
+.sv_upload <- function(v, k, dtype, dev) {
+  if (.sv_is(v)) {
+    v <- .exec_trim(v, k)
+    g_upload_raw(v, "f32", .sv_dim(v), device = dev)
+  } else {
+    g_upload(.exec_trim(v, k), dtype, device = dev)
+  }
+}
+
+# Download a stage's exports as store values: f32 exports of rank >= 2
+# become raw payloads (no double materialisation); scalars and
+# non-float exports stay R arrays. Recurses into nested exports
+# (reduce_partial wraps its pieces in a list).
+.sv_download_exports <- function(res, store_raw) {
+  if (!store_raw) return(g_download(res))
+  conv <- function(o) {
+    if (.g_traced(o)) {
+      if (identical(.g_dtype(o), "f32") && length(.g_shape(o)) >= 2L) {
+        g_download_raw(o)
+      } else {
+        g_download(o)
+      }
+    } else if (is.list(o)) {
+      lapply(o, conv)
+    } else {
+      o
+    }
+  }
+  lapply(res, conv)
+}
+
+# Should this run's store hold raw f32 payloads? Resolved once on the
+# host and shipped inside task payloads (daemon processes do not
+# inherit host options, and the daemons' anvl is assumed to match the
+# host's lib path).
+.exec_use_raw_store <- function() {
+  mode <- match.arg(garry_opt("store_values"), c("auto", "raw", "double"))
+  switch(mode,
+    double = FALSE,
+    raw = TRUE,
+    auto = .g_has_raw_upload()
+  )
 }
 
 # Output padding a stage's chunks carry: source/warp emit halo-padded
@@ -147,7 +281,24 @@ NULL
 # are always 2D, so stacked chunks never need trimming.
 .exec_write_chunk <- function(ds, x_off, y_off, ch, sink_pad, dtype,
                               nodata) {
-  if (is.matrix(ch)) {
+  if (.sv_is(ch)) {
+    d <- .sv_dim(ch)
+    if (length(d) == 2L) {
+      gdal_write_window(ds, x_off, y_off, .exec_trim(ch, sink_pad),
+                        dtype = dtype, nodata = nodata)
+    } else {
+      # Row-major (band, y, x) payload: each band's plane is one
+      # contiguous byte range.
+      stopifnot(sink_pad == 0L, length(d) == 3L)
+      plane <- 4L * prod(d[2:3])
+      for (b in seq_len(d[[1L]])) {
+        bytes <- ch[((b - 1L) * plane + 1L):(b * plane)]
+        gdal_write_window(ds, x_off, y_off,
+                          structure(bytes, gdim = d[2:3], gdt = "f32"),
+                          dtype = dtype, nodata = nodata, band = b)
+      }
+    }
+  } else if (is.matrix(ch)) {
     gdal_write_window(ds, x_off, y_off, .exec_trim(ch, sink_pad),
                       dtype = dtype, nodata = nodata)
   } else {
@@ -163,6 +314,12 @@ NULL
 }
 
 .exec_check_writable <- function(ch, n_chunks) {
+  if (.sv_is(ch)) {
+    if (n_chunks == 1L && length(.sv_dim(ch)) < 2L)
+      .garry_error("cannot write a scalar reduction to a raster file",
+                   "garry_plan_error")
+    return(invisible(NULL))
+  }
   rank3 <- is.array(ch) && length(dim(ch)) == 3L
   if (n_chunks == 1L && !is.matrix(ch) && !rank3)
     .garry_error("cannot write a scalar reduction to a raster file",
@@ -188,6 +345,7 @@ NULL
 # Assemble sink chunks into the full raster; stacks assemble to
 # (t, y, x) arrays (D17), 2D sinks to [y, x] matrices.
 .exec_assemble <- function(chunks, it, grid, sink_pad) {
+  chunks <- lapply(chunks, .sv_materialise)
   dims <- grid@dims
   outer_dims <- dims[!names(dims) %in% c("x", "y")]
   if (length(outer_dims) == 0L) {

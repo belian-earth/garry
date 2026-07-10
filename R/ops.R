@@ -98,6 +98,78 @@ g_download <- function(x) {
   x
 }
 
+# -- Raw f32 transport (phase 12c, D19/D20) -----------------------------------
+
+# Does the installed anvl accept raw byte payloads in nv_array?
+# Released anvl (<= 0.3.0.9000 upstream) does not; the patched local
+# branch does at the same version string, so probe behaviour, not
+# versions. Memoised per process (daemons probe once each).
+.g_raw_probe <- new.env(parent = emptyenv())
+
+#' Can uploads take the raw byte path?
+#'
+#' Internal capability probe (exported for daemon use via `::`).
+#' @return `TRUE` if `anvl::nv_array` accepts raw payloads.
+#' @keywords internal
+#' @export
+.g_has_raw_upload <- function() {
+  ok <- .g_raw_probe$ok
+  if (!is.null(ok)) return(ok)
+  ok <- requireNamespace("anvl", quietly = TRUE) && tryCatch({
+    x <- anvl::nv_array(as.raw(c(0L, 0L, 128L, 63L)), "f32", shape = 1L)
+    identical(as.numeric(anvl::as_array(x)), 1)
+  }, error = function(e) FALSE)
+  .g_raw_probe$ok <- ok
+  ok
+}
+
+#' Upload a raw byte payload to an AnvlArray.
+#'
+#' `bytes` holds `prod(dim)` elements of `dtype` in ROW-major element
+#' order (D19): one memcpy to the device, no double conversion, and no
+#' XLA relayout (row-major matches the default layout).
+#'
+#' @param bytes Raw vector (native little-endian payload).
+#' @param dtype garry dtype string (f32 on the 12c path).
+#' @param dim Integer dims, `[nr, nc]` or `[t, nr, nc]`.
+#' @param device Optional device (e.g. "cuda"); NULL uses the default.
+#' @return An `AnvlArray`.
+#' @export
+g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
+  .require_anvl()
+  attributes(bytes) <- NULL
+  if (is.null(device)) {
+    anvl::nv_array(bytes, dtype, shape = dim, byrow = TRUE)
+  } else {
+    anvl::nv_array(bytes, dtype, shape = dim, byrow = TRUE, device = device)
+  }
+}
+
+#' Download an AnvlArray as a raw f32 store payload.
+#'
+#' Row-major byte payload tagged with `gdim`/`gdt` (D20); no double
+#' materialisation.
+#'
+#' @param x `AnvlArray` (f32).
+#' @return Raw vector with `gdim` and `gdt` attributes.
+#' @export
+g_download_raw <- function(x) {
+  .require_anvl()
+  structure(anvl::as_raw(x, row_major = TRUE),
+            gdim = .g_shape(x), gdt = "f32")
+}
+
+# Shape of an AnvlArray (bridge; the executor must not touch anvl).
+.g_shape <- function(x) {
+  anvl::shape(x)
+}
+
+# Dtype string of an AnvlArray output (bridge for the executor's
+# f32-only raw download dispatch).
+.g_dtype <- function(x) {
+  as.character(anvl::dtype(x))
+}
+
 #' Elementwise select: `yes` where `cond`, else `no`.
 #'
 #' @param cond Logical array.

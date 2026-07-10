@@ -65,7 +65,7 @@ NULL
 # read it. `fuse` is list(ck, fn, dtype, out_key): jit cache key
 # (content-addressed), stage closure, upload dtype, export node key.
 # Returns the kernel's single export (pad consumed: core-sized).
-.apply_fuse <- function(m, fuse) {
+.apply_fuse <- function(m, fuse, store_raw = FALSE) {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
   jf <- .daemon_cache[[fuse$ck]]
@@ -73,9 +73,18 @@ NULL
     jf <- g_jit(fuse$fn)
     .daemon_cache[[fuse$ck]] <- jf
   }
-  res <- g_download(jf(list(g_upload(m, fuse$dtype))))
-  out <- res[[1L]]
-  rm(res)
+  up <- if (.sv_is(m)) g_upload_raw(m, "f32", .sv_dim(m))
+        else g_upload(m, fuse$dtype)
+  res <- jf(list(up))
+  out_dev <- res[[1L]]
+  # f32 kernel outputs become raw store payloads directly off the
+  # device (D19): no double materialisation on the download either.
+  out <- if (store_raw && identical(.g_dtype(out_dev), "f32")) {
+    g_download_raw(out_dev)
+  } else {
+    g_download(out_dev)
+  }
+  rm(res, out_dev, up)
   gc(FALSE)
   out
 }
@@ -92,10 +101,12 @@ NULL
 #' @export
 .daemon_run_source <- function(path, band, nodata, cg, core, key,
                                out_file, open_options = character(0),
-                               fuse = NULL) {
+                               fuse = NULL, read_raw = FALSE,
+                               store_raw = FALSE) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
-                         open_options = open_options)
-  if (!is.null(fuse)) m <- .apply_fuse(m, fuse)
+                         open_options = open_options,
+                         out = if (read_raw) "raw_f32" else "matrix")
+  if (!is.null(fuse)) m <- .apply_fuse(m, fuse, store_raw)
   # Store files are transient same-host scratch: gzip costs hundreds of
   # ms per chunk and buys nothing.
   saveRDS(stats::setNames(list(m), key), out_file, compress = FALSE)
@@ -118,14 +129,24 @@ NULL
 #' @export
 .daemon_run_source_split <- function(path, band, nodata, cg, core, key,
                                      parts, open_options = character(0),
-                                     fuse = NULL) {
+                                     fuse = NULL, read_raw = FALSE,
+                                     store_raw = FALSE) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
-                         open_options = open_options)
-  if (!is.null(fuse)) m <- .apply_fuse(m, fuse)
-  for (p in parts) {
-    saveRDS(stats::setNames(list(
-      m[(p$r0 + 1L):(p$r0 + p$nr), (p$c0 + 1L):(p$c0 + p$nc),
-        drop = FALSE]), key), p$file, compress = FALSE)
+                         open_options = open_options,
+                         out = if (read_raw) "raw_f32" else "matrix")
+  if (!is.null(fuse)) m <- .apply_fuse(m, fuse, store_raw)
+  if (.sv_is(m)) {
+    slc <- .sv_slicer(m)
+    for (p in parts) {
+      saveRDS(stats::setNames(list(slc(p$r0, p$c0, p$nr, p$nc)), key),
+              p$file, compress = FALSE)
+    }
+  } else {
+    for (p in parts) {
+      saveRDS(stats::setNames(list(
+        m[(p$r0 + 1L):(p$r0 + p$nr), (p$c0 + 1L):(p$c0 + p$nc),
+          drop = FALSE]), key), p$file, compress = FALSE)
+    }
   }
   TRUE
 }
@@ -153,11 +174,18 @@ NULL
 .daemon_run_source_shm <- function(path, band, nodata, cg, core, key,
                                    reg_key, parts = NULL,
                                    open_options = character(0),
-                                   fuse = NULL) {
+                                   fuse = NULL, read_raw = FALSE,
+                                   store_raw = FALSE) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
-                         open_options = open_options)
-  if (!is.null(fuse)) m <- .apply_fuse(m, fuse)
-  val <- if (is.null(parts)) stats::setNames(list(m), key) else {
+                         open_options = open_options,
+                         out = if (read_raw) "raw_f32" else "matrix")
+  if (!is.null(fuse)) m <- .apply_fuse(m, fuse, store_raw)
+  val <- if (is.null(parts)) stats::setNames(list(m), key) else if (.sv_is(m)) {
+    slc <- .sv_slicer(m)
+    stats::setNames(
+      lapply(parts, function(p) slc(p$r0, p$c0, p$nr, p$nc)),
+      vapply(parts, `[[`, character(1), "elt"))
+  } else {
     stats::setNames(
       lapply(parts, function(p)
         m[(p$r0 + 1L):(p$r0 + p$nr), (p$c0 + 1L):(p$c0 + p$nc),
@@ -222,7 +250,8 @@ NULL
 #' @export
 .daemon_run_compute_shm <- function(cache_key, fn, in_vals, in_keys,
                                     trims, dtypes, reg_key,
-                                    out_keys = NULL, device = "cpu") {
+                                    out_keys = NULL, device = "cpu",
+                                    store_raw = FALSE) {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
   dev <- .exec_device(device)
@@ -232,9 +261,9 @@ NULL
     .daemon_cache[[cache_key]] <- jf
   }
   inputs <- Map(function(v, k, tr, dt) {
-    g_upload(.exec_trim(v[[k]], tr), dt, device = dev)
+    .sv_upload(v[[k]], tr, dt, dev)
   }, in_vals, in_keys, trims, dtypes)
-  res <- g_download(jf(unname(inputs)))
+  res <- .sv_download_exports(jf(unname(inputs)), store_raw)
   # Content-addressed cache keys share one jitted wrapper across
   # structurally identical stages; the wrapper's export NAMES belong
   # to whichever stage compiled it, so rename positionally (exports
@@ -266,7 +295,7 @@ NULL
 #' @export
 .daemon_run_compute <- function(cache_key, fn, in_files, in_keys, trims,
                                 dtypes, out_file, out_keys = NULL,
-                                device = "cpu") {
+                                device = "cpu", store_raw = FALSE) {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
   dev <- .exec_device(device)
@@ -276,9 +305,9 @@ NULL
     .daemon_cache[[cache_key]] <- jf
   }
   inputs <- Map(function(f, k, tr, dt) {
-    g_upload(.exec_trim(readRDS(f)[[k]], tr), dt, device = dev)
+    .sv_upload(readRDS(f)[[k]], tr, dt, dev)
   }, in_files, in_keys, trims, dtypes)
-  res <- g_download(jf(unname(inputs)))
+  res <- .sv_download_exports(jf(unname(inputs)), store_raw)
   # See .daemon_run_compute_shm: shared wrappers, positional rename.
   if (!is.null(out_keys)) names(res) <- out_keys
   saveRDS(res, out_file, compress = FALSE)
@@ -488,6 +517,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   if (use_shm && !requireNamespace("mori", quietly = TRUE))
     .garry_error("options(garry.store = \"mori\") needs the mori package",
                  "garry_scheduler_error")
+  # Raw f32 store payloads (phase 12c, D19-D21). Resolved once here:
+  # daemon processes do not inherit host options, so the flag rides in
+  # every task payload.
+  use_raw <- .exec_use_raw_store()
   store <- file.path(tempdir(), paste0("garry-store-", run_id))
   dir.create(store, recursive = TRUE)
   on.exit(unlink(store, recursive = TRUE), add = TRUE)
@@ -670,6 +703,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         oid <- fspec$cid
         skey <- fspec$out_key
       }
+      # Raw read gate (D21): halo-free windows whose consumers see f32
+      # values — the node's own dtype for pure reads, the fused
+      # kernel's input dtype for compute-on-read. Non-f32 dtypes keep
+      # the matrix path (bitwise consumers, integer exactness).
+      raw_in <- use_raw && s@chunks@halo == 0L &&
+        identical(if (is.null(fspec)) {
+          graph_get(graph, s@members[[1L]])@grid@dtype
+        } else {
+          fspec$dtype
+        }, "f32")
       fetch_deps <- character(0)
       read_pool <- "read"
       task_mb_read <- 0
@@ -701,23 +744,27 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           local({
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-            fs <- fspec; oid2 <- oid
+            fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
             key <- sprintf("s%d_c%d", sid, jj)
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
                      launch = if (use_shm) function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo,
-                                              fuse = fs),
+                                              fuse = fs, read_raw = rr,
+                                              store_raw = sr),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, reg = sprintf("r%d_%s", run_id, key), fs = fs,
+                rr = rr, sr = sr,
                 .compute = prof)
             } else function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
-                                          open_options = oo, fuse = fs),
+                                          open_options = oo, fuse = fs,
+                                          read_raw = rr, store_raw = sr),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, out = chunk_file(oid2, jj), fs = fs,
+                rr = rr, sr = sr,
                 .compute = prof)
             })
           })
@@ -738,10 +785,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           members <- .exec_split_members(its, it[r, ])
           dep_of[members] <- sprintf("s%d_r%d", s@id, r)
           local({
-            sid <- s@id; rr <- r; cg <- s@chunks; core <- it[rr, ]
+            sid <- s@id; rr2 <- r; cg <- s@chunks; core <- it[rr2, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-            fs <- fspec; oid2 <- oid
-            key <- sprintf("s%d_r%d", sid, rr)
+            fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
+            key <- sprintf("s%d_r%d", sid, rr2)
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
             parts <- lapply(members, function(j) {
@@ -757,18 +804,22 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, parts = parts,
                                               open_options = oo,
-                                              fuse = fs),
+                                              fuse = fs, read_raw = rr,
+                                              store_raw = sr),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
                 k2 = k2, oo = oo, parts = parts, fs = fs,
+                rr = rr, sr = sr,
                 reg = sprintf("r%d_%s", run_id, key),
                 .compute = prof)
             } else function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_split(p2, b2, nd, cg, core, k2,
                                                 parts, open_options = oo,
-                                                fuse = fs),
+                                                fuse = fs, read_raw = rr,
+                                                store_raw = sr),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                parts = parts, oo = oo, fs = fs, .compute = prof)
+                parts = parts, oo = oo, fs = fs, rr = rr, sr = sr,
+                .compute = prof)
             })
           })
         }
@@ -818,6 +869,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
             as.integer(m$pad - halo), integer(1))
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- sprintf("s%d_c%d", sid, jj)
+          sr <- use_raw
           add_task(key, unique(in_deps), "comp", mb = task_mb,
                    dev = sdev,
                    launch = if (use_shm) function(prof) {
@@ -828,27 +880,29 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
               garry::.daemon_run_compute_shm(ck, fn, in_vals, in_keys,
                                              trims, dtypes, reg,
                                              out_keys = ok,
-                                             device = dv),
+                                             device = dv,
+                                             store_raw = sr),
               ck = ck, fn = fn,
               in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
               in_keys = shm_keys,
               trims = trims, dtypes = dtypes,
               reg = sprintf("r%d_%s", run_id, key),
-              ok = out_keys, dv = sdev,
+              ok = out_keys, dv = sdev, sr = sr,
               .compute = prof)
           } else function(prof) {
             mirai::mirai(
               garry::.daemon_run_compute(ck, fn, in_files, in_keys,
                                           trims, dtypes, out,
                                           out_keys = ok,
-                                          device = dv),
+                                          device = dv,
+                                          store_raw = sr),
               ck = ck, fn = fn,
               in_files = vapply(meta, function(m)
                 chunk_file(m$id, jj), character(1)),
               in_keys = in_keys,
               trims = trims, dtypes = dtypes,
               out = chunk_file(sid, jj),
-              ok = out_keys, dv = sdev,
+              ok = out_keys, dv = sdev, sr = sr,
               .compute = prof)
           })
           if (use_shm) {
@@ -1086,7 +1140,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
     if (s@kind != "reduce_combine") next
     part <- plan@stages[[s@inputs[[1L]]]]
     key <- .key(s@members[[1L]])
-    partials <- lapply(out_of(part), `[[`, key)
+    # Combine closures run host-side on R arrays.
+    partials <- lapply(lapply(out_of(part), `[[`, key), .sv_materialise)
     combine_vals[[.key(s@id)]] <- s@fn(partials)
   }
 
@@ -1104,7 +1159,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
   if (nrow(it) == 1L) {
     v <- chunks[[1L]]
-    if (is.matrix(v)) v <- .exec_trim(v, sink_pad)
+    if (.sv_is(v) && length(.sv_dim(v)) == 2L) {
+      v <- .sv_to_matrix(.exec_trim(v, sink_pad))
+    } else if (.sv_is(v)) {
+      v <- .sv_materialise(v)
+    } else if (is.matrix(v)) {
+      v <- .exec_trim(v, sink_pad)
+    }
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) return(v[1L, 1L])
     return(v)
   }

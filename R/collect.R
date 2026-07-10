@@ -25,6 +25,11 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = FALSE) {
   p <- plan_lazy(x)
   if (plan_only) return(p)
-  if (distributed) return(execute_plan_mirai(p, path = path, nodata = nodata))
+  if (distributed) {
+    spec <- .cd_spec(p)
+    if (!is.null(spec))
+      return(.execute_composite_direct(p, spec, path = path, nodata = nodata))
+    return(execute_plan_mirai(p, path = path, nodata = nodata))
+  }
   execute_plan(p, path = path, nodata = nodata)
 }

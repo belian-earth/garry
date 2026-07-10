@@ -14,7 +14,9 @@
   reg_key,
   parts = NULL,
   open_options = character(0),
-  fuse = NULL
+  fuse = NULL,
+  read_raw = FALSE,
+  store_raw = FALSE
 )
 }
 \arguments{

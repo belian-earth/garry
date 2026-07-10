@@ -1,0 +1,13 @@
+# ODC + dask baseline for hls-median-composite-odc.py.
+# Build:  uv venv benchmarks/.venv && uv pip install --python benchmarks/.venv -r benchmarks/requirements-odc.txt
+# Run:    benchmarks/.venv/bin/python benchmarks/hls-median-composite-odc.py
+planetary-computer
+pystac-client
+odc-stac
+odc-geo
+odc-algo
+dask
+distributed
+scipy
+rioxarray
+rasterio

@@ -12,7 +12,8 @@ gdal_read_window(
   x_size,
   y_size,
   nodata = numeric(0),
-  open_options = character(0)
+  open_options = character(0),
+  out = c("matrix", "raw_f32")
 )
 }
 \arguments{

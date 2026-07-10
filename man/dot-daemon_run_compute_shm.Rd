@@ -14,7 +14,8 @@ inputs.}
   dtypes,
   reg_key,
   out_keys = NULL,
-  device = "cpu"
+  device = "cpu",
+  store_raw = FALSE
 )
 }
 \arguments{

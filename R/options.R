@@ -59,6 +59,15 @@
   # small compute pool — concurrent chunks share the GPU's memory).
   # Reads and host-side combines are always CPU.
   device = "cpu",
+  # Store-value payloads for the distributed executor (phase 12c):
+  # "raw" holds f32 stage values as native byte payloads (row-major,
+  # D19) so store traffic is 4 B/px and uploads/downloads are memcpys
+  # with no R-double conversion; "double" is the historical R-matrix
+  # store; "auto" uses raw when the installed anvl accepts raw
+  # payloads (.g_has_raw_upload) and double otherwise. The
+  # single-threaded executor always uses R matrices (it is the
+  # correctness oracle).
+  store_values = "auto",
   # Fetch/assemble split for GTI sources in the distributed scheduler
   # (phase 12): "auto" fetches per-item native windows to local tmpfs
   # first when the index holds remote (/vsi*) locations, then
@@ -67,7 +76,14 @@
   # where few big warped reads cannot. "direct" reads remote mosaics
   # as before; "force" fetches even local sources (testing; staging
   # slow filesystems).
-  fetch = "auto"
+  fetch = "auto",
+  # Phase 12d GDAL-direct temporal-composite fast path. When TRUE and the
+  # plan is the eligible shape (GTI source reads -> one fused compute sink,
+  # no focal/warp/partial-reduce), collect(distributed=TRUE) warps each
+  # slice's f32 pixels straight into device-bound memory and runs the fused
+  # kernel, bypassing the staged scheduler (~22% faster on HLS median).
+  # Requires the raw-f32 upload path. FALSE routes through the scheduler.
+  composite_direct = FALSE
 )
 
 #' Read a garry policy option.

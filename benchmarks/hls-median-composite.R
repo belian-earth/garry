@@ -110,6 +110,12 @@ if (nzchar(Sys.getenv("GARRY_TASK_LOG")))
 # use a small compute pool, e.g. 12+2 — chunks share GPU memory.
 if (nzchar(Sys.getenv("GARRY_DEVICE")))
   options(garry.device = Sys.getenv("GARRY_DEVICE"))
+# Phase 12c: GARRY_STORE_VALUES=raw|double|auto flips the f32 raw store.
+if (nzchar(Sys.getenv("GARRY_STORE_VALUES")))
+  options(garry.store_values = Sys.getenv("GARRY_STORE_VALUES"))
+# Phase 12d GDAL-direct composite fast path (composite shape only).
+if (nzchar(Sys.getenv("GARRY_COMPOSITE_DIRECT")))
+  options(garry.composite_direct = TRUE)
 if (requireNamespace("mori", quietly = TRUE))
   options(garry.store = "mori")
 
