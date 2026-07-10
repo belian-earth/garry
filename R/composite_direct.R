@@ -188,33 +188,23 @@ NULL
        grid = sink@grid, device = sink@device)
 }
 
-# One source's fused fetch+warp, run in a daemon: fetch this slice's item
-# windows to local tmpfs, build a small per-slice GTI (much faster to open
-# than one shared many-tile index FILTERed per slice), then warp the mosaic
-# straight into a raw f32 buffer via MEM:::DATAPOINTER (GDAL writes f32 into
-# memory we hold; no R double). Writes the payload to `bin`.
-# `j` carries only this slice's varying data (locs, dt, bb, nodata, bin); `k`
-# is the grid-constant bundle passed once via mirai `.args` (embedding it in
-# every task instead throttles the dispatcher and starves the daemon pool).
+# One source's warp-on-read, run in a daemon: warp this slice's REMOTE item
+# window(s) straight into a raw f32 buffer via MEM:::DATAPOINTER in one
+# gdalwarp -- GDAL reads (windowed vsicurl), reprojects and mosaics the sources
+# itself, writing f32 into memory we hold (no R double, no tmpfs GTiff, no
+# local index). Writes the payload to `bin`.
+# `j` carries only this slice's varying data (locs, dt, nodata, bin); `k` is
+# the grid-constant bundle passed once via mirai `.args` (embedding it in every
+# task instead throttles the dispatcher and starves the daemon pool).
 .cd_fetch_warp <- function(j, k) {
   nx <- k$nx; ny <- k$ny
   buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny)   # all-nodata default
-  tf <- 0; tw <- 0
+  tw <- 0
   err <- tryCatch({
     gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
-    d <- tempfile("cd"); dir.create(d); on.exit(unlink(d, recursive = TRUE))
     if (!length(j$locs)) stop("no items for this slice")
-    lf <- file.path(d, sprintf("i%03d.tif", seq_along(j$locs)))
-    tf <- system.time(for (i in seq_along(j$locs)) tryCatch(
-      garry:::gdal_fetch_window(j$locs[i], lf[i], k$ex, k$cr),
-      error = function(e) garry:::gdal_nodata_window(lf[i], k$ex, k$cr, 255)))[["elapsed"]]
     tw <- system.time({
-      ent <- data.frame(location = lf, datetime = j$dt,
-                        xmin = j$bb[, 1], ymin = j$bb[, 2],
-                        xmax = j$bb[, 3], ymax = j$bb[, 4])
-      fgb <- file.path(d, "s.fgb"); garry::gti_index_create(ent, fgb, crs = k$cr)
       ptr <- gdalraster:::.get_data_ptr(buf)
-      s <- methods::new(gdalraster::GDALRaster, paste0("GTI:", fgb), TRUE, k$oo)
       dsn <- sprintf(
         "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",
         ptr, nx, ny, k$gtstr)
@@ -223,13 +213,18 @@ NULL
       cl <- c("-r", "near", "-q", "-dstnodata", "nan")
       if (length(j$nodata) == 1L)
         cl <- c(cl, "-srcnodata", format(j$nodata, scientific = FALSE))
-      gdalraster::warp(s, o, "", cl_arg = cl)
-      s$close(); o$close()
+      # WARP-ON-READ: warp the slice's REMOTE items straight into the f32
+      # buffer in one gdalwarp -- it reads (windowed vsicurl), reprojects, and
+      # mosaics the sources itself. No tmpfs GTiff fetch, no per-slice local
+      # index. Ordered by datetime so overlap resolution (last source wins)
+      # matches the GTI SORT_FIELD=datetime, highest-on-top path.
+      gdalraster::warp(j$locs[order(j$dt)], o, "", cl_arg = cl)
+      o$close()
     })[["elapsed"]]
     NA_character_
   }, error = function(e) conditionMessage(e))
   writeBin(buf, j$bin)   # always write a complete slice (real or all-NaN)
-  list(err = err, tf = tf, tw = tw)
+  list(err = err, tf = 0, tw = tw)
 }
 
 # Is a garry_daemons() split read/compute pool active? (Both named profiles
@@ -254,7 +249,7 @@ NULL
 # path and the general IR-replay path.
 .gd_warp_sources <- function(plan, grid, tmp) {
   graph <- plan@graph
-  ex <- grid@extent; cr <- grid@crs
+  cr <- grid@crs
   nx <- grid@dims[["x"]]; ny <- grid@dims[["y"]]
   srcs <- Filter(function(s) s@kind == "source_read", plan@stages)
   meta_cache <- new.env(parent = emptyenv())
@@ -267,20 +262,16 @@ NULL
     er <- if (length(filt)) {
       sl <- sub(".*'([^']*)'.*", "\\1", filt); e[e$slice == sl, , drop = FALSE]
     } else e
-    # The per-slice local GTI holds only this slice's tiles, so drop the
-    # FILTER=slice open option (its `slice` field is not carried locally).
-    oo <- grep("^FILTER=", n@open_options, value = TRUE, invert = TRUE)
-    list(nid = n@id, oo = oo, nodata = n@nodata, locs = er$location,
-         dt = er$datetime, bb = as.matrix(er[, c("xmin","ymin","xmax","ymax")]),
+    list(nid = n@id, nodata = n@nodata, locs = er$location, dt = er$datetime,
          bin = file.path(tmp, sprintf("n%d.bin", n@id)))
   })
   names(info) <- vapply(info, function(x) as.character(x$nid), "")
   # Grid-constant bundle (same for every source): send ONCE via mirai .args.
-  K <- list(ex = ex, cr = cr, nx = nx, ny = ny,
+  K <- list(nx = nx, ny = ny,
             gtstr = paste(sprintf("%.10g", grid@transform), collapse = "/"),
-            wkt = gdalraster::srs_to_wkt(cr), oo = info[[1L]]$oo)
+            wkt = gdalraster::srs_to_wkt(cr))
   jobs <- unname(lapply(info, function(x)
-    list(locs = x$locs, dt = x$dt, bb = x$bb, nodata = x$nodata, bin = x$bin)))
+    list(locs = x$locs, dt = x$dt, nodata = x$nodata, bin = x$bin)))
   # Preload garry once per daemon (else fetch tasks cold-init XLA) and set the
   # vsicurl/MEM config in the daemons (set_config_option in the host does not
   # propagate to mirai daemons). Target the read profile under a split pool.
