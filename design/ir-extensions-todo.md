@@ -47,3 +47,36 @@ auto-combine (monoid). But the composite / whole-cube path already materialises
 the full reduce axis per tile, so a custom reducer drops in cleanly THERE first;
 the chunked scheduler path would need an optional user-supplied combine fn (or to
 force whole-axis). Smaller and static-shape (no iteration) vs the scan node.
+
+## 3. Multi-band (multivariate) reductions -- geometric median / medoid
+
+A per-band temporal median is band-SEPARABLE (each band reduced independently,
+the current composite shape) and can yield a spectrum matching no real
+observation. A geometric median (L1 / spatial median) and a medoid are
+MULTIVARIATE: for each pixel they reduce over time but must see the full BAND
+vector at every time step jointly. vrtility's `multi_band_reduce` -- valued by
+Hugh -- does exactly this.
+
+Feasibility is good because the substrate exists:
+- The dim model is 4D (`.dim_names = c("x","y","t","band")`), so a `(band, t, y,
+  x)` cube is representable.
+- `lazy_stack(along = "band")` assembles it (stack per-time `(band,y,x)` slices,
+  or per-band `(t,y,x)` cubes along band).
+- The custom reducer (#2) is the hook: `reduce_over(cube4d, fn, over = "t")`
+  reduces t while KEEPING band -- `.reduce_grid` drops only `t`, and the reducer
+  receives the whole `(band,t,y,x)` array, so it operates across bands.
+
+Compute is expressible in anvl (batched over pixels, band axis intact):
+- medoid: pairwise inter-time band distances -> argmin total distance -> gather
+  the winning time's vector. STATIC, expressible today.
+- geometric median: Weiszfeld iteration. Fixed-K unrolled = static, expressible
+  today; convergence-based wants the Scan/Iterate node (#1).
+
+Work to do (not from scratch): (a) verify the 4D stack + multi-band custom reduce
+runs end-to-end via the general scheduler -- it will NOT match the per-band
+composite fast path (`.cd_spec`), so it falls to the scheduler, which keeps
+non-spatial dims (t AND band) full per spatial tile, so a reduce over t seeing
+band should work per chunk; (b) ship geometric-median (fixed-iter Weiszfeld) and
+medoid as reference reducers; (c) a `multi_band_reduce(cube, fn)` convenience
+wrapper matching vrtility's ergonomics; (d) later, a composite-fast-path variant
+for the multi-band shape if it becomes hot. Deferred by Hugh 2026-07-11.
