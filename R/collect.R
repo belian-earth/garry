@@ -26,9 +26,12 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   p <- plan_lazy(x)
   if (plan_only) return(p)
   if (distributed) {
-    spec <- .cd_spec(p)
+    spec <- .cd_spec(p)               # lean cube path (no-focal composite)
     if (!is.null(spec))
       return(.execute_composite_direct(p, spec, path = path, nodata = nodata))
+    gspec <- .gd_spec(p)              # general IR replay (focal, any cube shape)
+    if (!is.null(gspec))
+      return(.execute_gd_general(p, gspec, path = path, nodata = nodata))
     return(execute_plan_mirai(p, path = path, nodata = nodata))
   }
   execute_plan(p, path = path, nodata = nodata)

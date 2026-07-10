@@ -206,9 +206,12 @@ g_pad <- function(x, h, value = 0) {
   h <- as.integer(h)
   if (h == 0L) return(x)
   if (.g_traced(x)) {
+    # Pad the LAST two (spatial) dims; leading dims (e.g. time in a (t,y,x)
+    # cube) are left full so one focal op vectorises over the whole cube.
+    lead <- rep(0L, length(anvl::shape(x)) - 2L)
     return(anvl::nv_pad(x, .g_scalar_like(x, value),
-                        edge_padding_low = c(h, h),
-                        edge_padding_high = c(h, h)))
+                        edge_padding_low = c(lead, h, h),
+                        edge_padding_high = c(lead, h, h)))
   }
   out <- matrix(value, nrow(x) + 2L * h, ncol(x) + 2L * h)
   out[(h + 1L):(h + nrow(x)), (h + 1L):(h + ncol(x))] <- x
@@ -229,11 +232,14 @@ g_pad <- function(x, h, value = 0) {
 #' @export
 g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
   if (.g_traced(xpad)) {
+    # Slice the LAST two (spatial) dims; leading dims (time in a (t,y,x) cube)
+    # are taken in full, so the stencil vectorises over the whole cube.
+    sh <- anvl::shape(xpad); lead <- length(sh) - 2L
     return(anvl::nv_static_slice(
       xpad,
-      start_indices = c(1L + h + dy, 1L + h + dx),
-      limit_indices = c(out_nrow + h + dy, out_ncol + h + dx),
-      strides = c(1L, 1L)))
+      start_indices = c(rep(1L, lead), 1L + h + dy, 1L + h + dx),
+      limit_indices = c(sh[seq_len(lead)], out_nrow + h + dy, out_ncol + h + dx),
+      strides = rep(1L, lead + 2L)))
   }
   xpad[(1L + h + dy):(out_nrow + h + dy),
        (1L + h + dx):(out_ncol + h + dx), drop = FALSE]
