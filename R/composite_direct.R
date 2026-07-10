@@ -181,7 +181,12 @@ NULL
   n_bands <- length(specs); n_slices <- length(s1$band)
   grid_px <- sink@grid@dims[["x"]] * sink@grid@dims[["y"]]
   weight <- (n_bands + (s1$halo > 0L)) * n_slices * grid_px
-  if (weight > garry_opt("gd_compute_budget") && .gd_pooled()) return(NULL)
+  # Route heavy composites to the scheduler only when its warm parallel pool
+  # exists (a split) AND we are not running composite_direct's own parallel
+  # per-band path (gd_parallel), which warms the compute pool during the fetch
+  # and handles the heavy split-pool case itself.
+  if (weight > garry_opt("gd_compute_budget") && .gd_pooled() &&
+      !isTRUE(garry_opt("gd_parallel"))) return(NULL)
   list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F, mask_chain = s1$mask_chain,
        halo = s1$halo, band_srcs = lapply(specs, function(s) s$band),
        fmask_srcs = s1$fmask, n_bands = n_bands,
@@ -247,7 +252,14 @@ NULL
 # source node id, each with its .bin path. `grid` supplies the spatial target
 # (nx/ny/transform/crs); every source is pinned to it. Shared by the lean cube
 # path and the general IR-replay path.
-.gd_warp_sources <- function(plan, grid, tmp) {
+.gd_warp_sources <- function(plan, grid, tmp)
+  .gd_warp_collect(.gd_warp_launch(plan, grid, tmp))
+
+# Launch the parallel warp-on-read WITHOUT blocking: build the per-source job
+# bundle, preload garry + the vsicurl/MEM config on the pool, and dispatch the
+# fetch mirai_map. Returns a handle to collect later, so the caller can do other
+# work (warm the compute pool) while the fetch drains on the read pool.
+.gd_warp_launch <- function(plan, grid, tmp) {
   graph <- plan@graph
   cr <- grid@crs
   nx <- grid@dims[["x"]]; ny <- grid@dims[["y"]]
@@ -282,22 +294,30 @@ NULL
     gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
     gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
   }, .compute = prof)
-  progress <- isTRUE(getOption("garry.progress", FALSE))
   # Pass the bare namespace function (NOT a local closure): a local closure
   # captures this frame -- the whole IR -- which mirai serialises per task,
   # throttling dispatch. `.cd_fetch_warp`'s env is the garry namespace.
-  t <- system.time({
-    r <- mirai::mirai_map(jobs, .cd_fetch_warp, .args = list(k = K),
-                          .compute = prof)[]
-    errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
-                   conditionMessage, "")
-    if (progress) {
-      ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
-      message(sprintf("[gdal-direct] per-task sums: fetch=%.1fs warp=%.1fs",
-                      sum(vapply(ok, function(x) x$tf, 0)),
-                      sum(vapply(ok, function(x) x$tw, 0))))
-    }
-  })[["elapsed"]]
+  promise <- mirai::mirai_map(jobs, .cd_fetch_warp, .args = list(k = K),
+                              .compute = prof)
+  list(info = info, promise = promise, t0 = proc.time()[["elapsed"]])
+}
+
+# Block on a launched warp, report per-task timing + failures, return `info`
+# (keyed by source node id, each with its .bin path). The elapsed clock runs
+# from launch, so it includes any work the caller overlapped with the drain.
+.gd_warp_collect <- function(launched) {
+  info <- launched$info
+  progress <- isTRUE(getOption("garry.progress", FALSE))
+  r <- launched$promise[]
+  t <- proc.time()[["elapsed"]] - launched$t0
+  errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
+                 conditionMessage, "")
+  if (progress) {
+    ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
+    message(sprintf("[gdal-direct] per-task sums: fetch=%.1fs warp=%.1fs",
+                    sum(vapply(ok, function(x) x$tf, 0)),
+                    sum(vapply(ok, function(x) x$tw, 0))))
+  }
   if (length(errs))
     warning(sprintf("gdal-direct: %d/%d source warps failed (e.g. %s)",
                     length(errs), length(info), errs[[1L]]), call. = FALSE)
@@ -318,18 +338,36 @@ NULL
   .require_anvl()
   nx <- spec$grid@dims[["x"]]; ny <- spec$grid@dims[["y"]]
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
-  info <- .gd_warp_sources(plan, spec$grid, tmp)
+  parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
+  pooled <- .gd_pooled()
+  # Per-band medians fan out to the dedicated compute pool under a split (idle
+  # during the fetch, so we warm it there); on a single pool they share it.
+  cprof <- if (pooled) "garry_compute" else "default"
+
+  # Launch the fetch NON-blocking, then -- on a split pool -- warm the compute
+  # pool's XLA WHILE the fetch drains on the read pool, hiding the ~3s cold init
+  # so the per-band medians hit an already-warm pool. (Single pool: every daemon
+  # is fetching, so the warm cannot overlap; it runs just before the compute.)
+  launched <- .gd_warp_launch(plan, spec$grid, tmp)
+  if (parallel && pooled)
+    mirai::everywhere({
+      suppressMessages(library(garry))   # ATTACH: slimmed mask/F fns call
+      try(garry:::.gd_warm(), silent = TRUE)   # garry exports (g_ifelse ...) by name
+    }, .compute = cprof)
+  info <- .gd_warp_collect(launched)
 
   bin_of <- function(ids) vapply(ids, function(id) info[[as.character(id)]]$bin, "")
-  parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
   masked <- length(spec$fmask_srcs) > 0L
   # COMPUTE. Default: one lean whole-grid kernel in this process. Spike
   # (garry.gd_parallel): fan the per-band medians out to daemons reading the
   # shared .bin cubes, XLA pre-warmed, so the compute parallelises across bands.
   tcomp <- system.time({
     if (parallel) {
-      prof <- .gd_profile()
-      mirai::everywhere(try(garry:::.gd_warm(), silent = TRUE), .compute = prof)
+      if (!pooled)
+        mirai::everywhere({
+          suppressMessages(library(garry))
+          try(garry:::.gd_warm(), silent = TRUE)
+        }, .compute = cprof)
       K2 <- list(chain = lapply(spec$mask_chain, function(n) {
                    n@fn <- .slim_fn(n@fn); n }),
                  F = if (is.null(spec$F)) NULL else .slim_fn(spec$F),
@@ -339,7 +377,11 @@ NULL
       band_jobs <- lapply(spec$band_srcs, function(ids)
         list(band_bins = bin_of(ids)))
       res <- mirai::mirai_map(band_jobs, .gd_compute_band, .args = list(k = K2),
-                              .compute = prof)[]
+                              .compute = cprof)[]
+      bad <- which(vapply(res, function(x) inherits(x, "miraiError"), FALSE))
+      if (length(bad))
+        stop("gdal-direct parallel compute failed on band ", bad[[1L]], ": ",
+             conditionMessage(res[[bad[[1L]]]]), call. = FALSE)
     } else {
       dev <- .exec_device(spec$device)
       cube <- function(ids)
