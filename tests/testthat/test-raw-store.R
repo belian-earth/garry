@@ -1,10 +1,9 @@
 # Phase 12c: raw f32 store payloads (D19-D21). Gates: the sv helper
-# algebra matches the matrix path exactly; distributed execution with
-# store_values = "raw" is identical to the single-threaded executor
-# (which always uses R matrices) across rds and mori stores, map /
-# focal / median / global-reduce / multiband-sink pipelines; the
-# "double" override restores the historical path; non-f32 sources stay
-# on the matrix path.
+# algebra matches the matrix path exactly; distributed execution (raw f32
+# mori store) is identical to the single-threaded executor (which always
+# uses R matrices, the correctness oracle) across map / focal / median /
+# global-reduce / multiband-sink pipelines; non-f32 sources stay on the
+# matrix path.
 
 test_that("sv helpers mirror matrix slicing exactly", {
   set.seed(3)
@@ -33,7 +32,7 @@ test_that("sv helpers mirror matrix slicing exactly", {
   expect_identical(garry:::.exec_trim(sv, 0L), sv)
 })
 
-test_that("raw store == double store == single-threaded, rds and mori", {
+test_that("distributed raw f32 store == single-threaded oracle", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
@@ -65,23 +64,15 @@ test_that("raw store == double store == single-threaded, rds and mori", {
     }),
     i16    = local({ a <- lazy_source(fi); a + 0.5 })
   )
-  stores <- "mori"
   for (nm in names(pipelines)) {
     p <- plan_lazy(pipelines[[nm]])
     single <- execute_plan(p)
-    for (st in stores) {
-      for (svmode in c("raw", "double")) {
-        old_st <- options(garry.store = st, garry.store_values = svmode)
-        dist <- execute_plan_mirai(p)
-        options(old_st)
-        expect_equal(dist, single, tolerance = 1e-12,
-                     label = paste("dist", nm, st, svmode))
-      }
-    }
+    dist <- execute_plan_mirai(p)
+    expect_equal(dist, single, tolerance = 1e-12, label = paste("dist", nm))
   }
 })
 
-test_that("raw store streams a multiband sink to GTiff identically", {
+test_that("distributed multiband sink streams to GTiff like the oracle", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
@@ -100,13 +91,11 @@ test_that("raw store streams a multiband sink to GTiff identically", {
     local({ a <- lazy_source(f); a + 10 })
   ), along = "band")
 
-  outs <- lapply(c(raw = "raw", double = "double"), function(svmode) {
-    out <- tempfile(fileext = ".tif")
-    old_sv <- options(garry.store_values = svmode)
-    on.exit(options(old_sv), add = TRUE)
-    collect(bands, path = out)
-    lapply(1:2, function(b)
-      gdal_read_window(out, b, 0L, 0L, 60L, 40L))
-  })
-  expect_identical(outs$raw, outs$double)
+  out_d <- tempfile(fileext = ".tif")
+  collect(bands, path = out_d, distributed = TRUE)
+  dist <- lapply(1:2, function(b) gdal_read_window(out_d, b, 0L, 0L, 60L, 40L))
+  out_s <- tempfile(fileext = ".tif")
+  collect(bands, path = out_s)
+  single <- lapply(1:2, function(b) gdal_read_window(out_s, b, 0L, 0L, 60L, 40L))
+  expect_equal(dist, single, tolerance = 1e-5)
 })

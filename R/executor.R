@@ -174,14 +174,11 @@ NULL
 # host and shipped inside task payloads (daemon processes do not
 # inherit host options, and the daemons' anvl is assumed to match the
 # host's lib path).
-.exec_use_raw_store <- function() {
-  mode <- match.arg(garry_opt("store_values"), c("auto", "raw", "double"))
-  switch(mode,
-    double = FALSE,
-    raw = TRUE,
-    auto = .g_has_raw_upload()
-  )
-}
+# The distributed store uses raw f32 payloads (4 B/px, memcpy transport, no
+# R-double conversion) whenever the installed anvl accepts them, else R
+# doubles. (The single-threaded executor always uses doubles: it is the
+# correctness oracle.)
+.exec_use_raw_store <- function() .g_has_raw_upload()
 
 # Output padding a stage's chunks carry: source/warp emit halo-padded
 # windows; compute stages consume their padding and emit chunk cores.
