@@ -21,30 +21,11 @@ NULL
 # to the scheduler (`.cd_spec` returns NULL).
 # ---------------------------------------------------------------------------
 
-# Recognise the reconstructible composite shape and lift its pieces, or NULL.
-# Shape: N GTI source_reads feeding ONE fused compute sink whose members hold a
-# single ReduceNode over "t" fed by a StackNode of homogeneous per-slice masked
-# MapNodes (F) over (band SourceNode, mask MapNode (M) over fmask SourceNode) --
-# or bare SourceNodes when unmasked.
-.cd_spec <- function(plan) {
-  if (!isTRUE(getOption("garry.composite_direct", FALSE))) return(NULL)
-  if (!.g_has_raw_upload()) return(NULL)
-  graph <- plan@graph
-  sink <- plan@stages[[plan@sink]]
-  if (sink@kind != "compute") return(NULL)
-  nonsink <- Filter(function(s) s@id != plan@sink, plan@stages)
-  if (!length(nonsink) ||
-      !all(vapply(nonsink, function(s) s@kind == "source_read", logical(1))))
-    return(NULL)
-  for (s in nonsink) {
-    n <- graph_get(graph, s@members[[1L]])
-    if (!grepl("^GTI:", n@path)) return(NULL)
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) return(NULL)
-  }
-  gg <- function(id) graph_get(graph, id)
-  reds <- Filter(function(id) S7::S7_inherits(gg(id), ReduceNode), sink@members)
-  if (length(reds) != 1L) return(NULL)
-  red <- gg(reds[[1L]])
+# Given a ReduceNode, lift one band's pieces: per-slice band sources, per-slice
+# fmask sources, the masked-apply fn F and mask fn M (NULL if unmasked). NULL if
+# the sub-shape isn't reconstructible.
+.cd_reduce_spec <- function(gg, red) {
+  if (!S7::S7_inherits(red, ReduceNode)) return(NULL)
   if (!("t" %in% red@over) ||
       !(red@op %in% c("median", "mean", "min", "max", "sum", "prod")))
     return(NULL)
@@ -64,13 +45,61 @@ NULL
     if (!all(vapply(c(band_srcs, fmask_srcs),
                     function(id) S7::S7_inherits(gg(id), SourceNode), logical(1))))
       return(NULL)
-    F <- first@fn; M <- mask0@fn
+    list(band = band_srcs, fmask = fmask_srcs, F = first@fn, M = mask0@fn,
+         op = red@op, nan_rm = red@nan_rm)
   } else if (S7::S7_inherits(first, SourceNode)) {
-    band_srcs <- as.integer(masked); fmask_srcs <- integer(0); F <- NULL; M <- NULL
+    list(band = as.integer(masked), fmask = integer(0), F = NULL, M = NULL,
+         op = red@op, nan_rm = red@nan_rm)
+  } else NULL
+}
+
+# Recognise the reconstructible composite shape and lift its pieces, or NULL.
+# Shape: N GTI source_reads feeding ONE fused compute sink whose output is either
+# a single ReduceNode over "t" (single band) or a StackNode along "band" over one
+# ReduceNode per band (multi-band, sharing one mask). Each ReduceNode is fed by a
+# StackNode of homogeneous per-slice masked MapNodes (F) over (band SourceNode,
+# mask MapNode (M) over fmask SourceNode) -- or bare SourceNodes when unmasked.
+.cd_spec <- function(plan) {
+  if (!isTRUE(getOption("garry.composite_direct", FALSE))) return(NULL)
+  if (!.g_has_raw_upload()) return(NULL)
+  graph <- plan@graph
+  sink <- plan@stages[[plan@sink]]
+  if (sink@kind != "compute") return(NULL)
+  # Every GTI source must be a `source_read` stage with a .meta.rds sidecar
+  # (so its items can be fetched locally). Intermediate compute stages are
+  # fine -- the lean path recomputes from sources regardless of how the
+  # planner split the graph (e.g. a shared mask materialised on its own).
+  src_stages <- Filter(function(s) s@kind == "source_read", plan@stages)
+  if (!length(src_stages)) return(NULL)
+  gg <- function(id) graph_get(graph, id)
+  for (s in src_stages) {
+    n <- gg(s@members[[1L]])
+    if (!grepl("^GTI:", n@path)) return(NULL)
+    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) return(NULL)
+  }
+  src_ids <- vapply(src_stages, function(s) gg(s@members[[1L]])@id, integer(1))
+  top <- gg(sink@members[[length(sink@members)]])   # the sink's output node
+  if (S7::S7_inherits(top, ReduceNode)) {
+    reduces <- list(top)
+  } else if (S7::S7_inherits(top, StackNode) && identical(top@along, "band")) {
+    reduces <- lapply(top@parents, gg)
   } else return(NULL)
-  list(op = red@op, nan_rm = red@nan_rm, F = F, M = M,
-       band_srcs = band_srcs, fmask_srcs = fmask_srcs, grid = sink@grid,
-       device = sink@device)
+
+  specs <- lapply(reduces, function(r) .cd_reduce_spec(gg, r))
+  if (any(vapply(specs, is.null, logical(1)))) return(NULL)
+  # every band/fmask leaf must be a fetchable source_read source
+  leaves <- unlist(lapply(specs, function(s) c(s$band, s$fmask)))
+  if (!all(leaves %in% src_ids)) return(NULL)
+  s1 <- specs[[1L]]; masked <- !is.null(s1$M)
+  ok <- vapply(specs, function(s)
+    identical(s$op, s1$op) && identical(s$nan_rm, s1$nan_rm) &&
+      (!is.null(s$M)) == masked &&
+      (!masked || identical(s$fmask, s1$fmask)),   # one shared mask across bands
+    logical(1))
+  if (!all(ok)) return(NULL)
+  list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F, M = s1$M,
+       band_srcs = lapply(specs, function(s) s$band), fmask_srcs = s1$fmask,
+       n_bands = length(specs), grid = sink@grid, device = sink@device)
 }
 
 # One source's fused fetch+warp, run in a daemon: fetch this slice's item
@@ -129,7 +158,7 @@ NULL
   dir.create(tmp); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
 
   # Per-source (node id -> its slice's item rows + warp target .bin).
-  srcs <- Filter(function(s) s@id != plan@sink, plan@stages)
+  srcs <- Filter(function(s) s@kind == "source_read", plan@stages)
   meta_cache <- new.env(parent = emptyenv())
   info <- lapply(srcs, function(s) {
     n <- graph_get(graph, s@members[[1L]]); gti <- sub("^GTI:", "", n@path)
@@ -203,27 +232,34 @@ NULL
         readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L)))
       g_upload_raw(bytes, "f32", c(Tt, ny, nx), device = dev)
     }
-    band <- cube(spec$band_srcs)
+    band_cubes <- lapply(spec$band_srcs, cube)               # N x (T, ny, nx)
     fm <- if (length(spec$fmask_srcs)) cube(spec$fmask_srcs) else NULL
     F <- spec$F; M <- spec$M; op <- spec$op; nan_rm <- spec$nan_rm
+    # inp = list(band_1_cube, ..., band_N_cube[, fmask_cube]); the mask is
+    # computed ONCE and shared across bands. Returns one (ny, nx) per band.
     lean <- function(inp) {
-      b <- inp[[1L]]
-      masked <- if (is.null(M)) b else F(b, M(inp[[2L]]))
-      .apply_reduce(op, masked, 1L, nan_rm)   # reduce over t (axis 1)
+      nb <- length(inp) - (if (is.null(M)) 0L else 1L)
+      mask <- if (is.null(M)) NULL else M(inp[[length(inp)]])
+      lapply(seq_len(nb), function(b) {
+        masked <- if (is.null(M)) inp[[b]] else F(inp[[b]], mask)
+        .apply_reduce(op, masked, 1L, nan_rm)   # reduce over t (axis 1)
+      })
     }
     jf <- g_jit(lean, device = dev)
-    res <- g_download(jf(if (is.null(fm)) list(band) else list(band, fm)))
+    res <- g_download(jf(c(band_cubes, if (is.null(fm)) NULL else list(fm))))
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
     message(sprintf("[composite-direct] fetch+warp=%.2fs compute=%.2fs",
                     twarp, tcomp))
 
-  m <- .sv_materialise(res)
-  if (is.null(path)) return(m)
+  mats <- lapply(res, .sv_materialise)                        # one per band
+  if (is.null(path)) return(if (spec$n_bands == 1L) mats[[1L]] else mats)
   ds <- gdal_create_output(path, spec$grid,
                            nodata = if (is.null(nodata)) numeric(0) else nodata)
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
-  gdal_write_window(ds, 0L, 0L, m, spec$grid@dtype,
-                    nodata = if (is.null(nodata)) numeric(0) else nodata)
+  for (b in seq_along(mats))
+    gdal_write_window(ds, 0L, 0L, mats[[b]], spec$grid@dtype,
+                      nodata = if (is.null(nodata)) numeric(0) else nodata,
+                      band = b)
   invisible(path)
 }
