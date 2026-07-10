@@ -119,16 +119,24 @@ FocalNode <- S7::new_class(
 
 #' Reduction over named dims. Barrier: forces materialisation of its inputs.
 #'
-#' `op` is a name from `.reduce_ops`, not an arbitrary function: the
-#' planner needs op identity to decide algebraic decomposition (D12) and
-#' output dtype, and the executor maps it to the ops vocabulary.
+#' `op` is normally a name from `.reduce_ops`: the planner needs op
+#' identity to decide algebraic decomposition (D12) and output dtype, and
+#' the executor maps it to the ops vocabulary. A CUSTOM reducer may
+#' instead be supplied as `fn` (a length-1 list holding an anvl function
+#' `fn(x, dims)` that collapses `dims`), with `op = "custom"`; the
+#' executor calls it directly. A custom reducer cannot be decomposed
+#' across spatial chunks, so it is supported over the `t`/`band` axes
+#' (each spatial chunk holds the full axis), not over `x`/`y`.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param op Reduction name, e.g. "mean" (see `.reduce_ops`).
+#' @param op Reduction name, e.g. "mean" (see `.reduce_ops`), or "custom".
 #' @param over Names of dims to reduce over.
-#' @param nan_rm Skip NaN (nodata) values?
+#' @param nan_rm Skip NaN (nodata) values? (Named ops only; a custom `fn`
+#'   handles NaN itself.)
+#' @param fn Length-0 (named op) or length-1 list holding a custom anvl
+#'   reducer `fn(x, dims)`.
 #' @return A `ReduceNode`.
 #' @export
 ReduceNode <- S7::new_class(
@@ -137,10 +145,14 @@ ReduceNode <- S7::new_class(
   properties = list(
     op     = S7::class_character,
     over   = S7::class_character,
-    nan_rm = S7::class_logical
+    nan_rm = S7::class_logical,
+    fn     = S7::class_list
   ),
   validator = function(self) {
-    if (length(self@op) != 1L || !self@op %in% .reduce_ops)
+    custom <- length(self@fn) > 0L
+    if (custom && (length(self@fn) != 1L || !is.function(self@fn[[1L]])))
+      return("`fn` must be a length-1 list holding a reducer function")
+    if (!custom && (length(self@op) != 1L || !self@op %in% .reduce_ops))
       return(paste0("`op` must be one of: ", paste(.reduce_ops, collapse = ", ")))
     if (length(self@over) < 1L)
       return("`over` must name at least one dim")

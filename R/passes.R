@@ -74,7 +74,8 @@ NULL
     g_stack(pv)
   } else if (S7::S7_inherits(node, ReduceNode)) {
     margins <- .dim_margins(parent_dim_names, node@over)
-    .apply_reduce(node@op, pv[[1L]], margins, node@nan_rm)
+    if (length(node@fn)) node@fn[[1L]](pv[[1L]], margins)   # custom anvl reducer
+    else .apply_reduce(node@op, pv[[1L]], margins, node@nan_rm)
   } else {
     .garry_error(paste0("node class not executable in a compute stage: ",
                         class(node)[[1L]]), "garry_plan_error")

@@ -282,6 +282,14 @@ focal <- function(x, fn, radius, boundary = "nodata") {
 #' @export
 reduce_over <- function(x, op, over, nan_rm = TRUE) {
   stopifnot(S7::S7_inherits(x, LazyRaster))
+  # A custom reducer arrives as a function: an anvl kernel `fn(x, dims)`
+  # collapsing `dims` (e.g. per-pixel OLS/harmonic fit over time). Carried on
+  # the node as `fn`; `op` becomes the sentinel "custom" (dtype = parent's).
+  fn <- list()
+  if (is.function(op)) {
+    fn <- list(op)
+    op <- "custom"
+  }
   grid <- .reduce_grid(x@grid, op, over)   # validates `over`, applies D7
   id <- graph_add(
     x@graph,
@@ -290,7 +298,8 @@ reduce_over <- function(x, op, over, nan_rm = TRUE) {
     grid    = grid,
     op      = op,
     over    = over,
-    nan_rm  = isTRUE(nan_rm)
+    nan_rm  = isTRUE(nan_rm),
+    fn      = fn
   )
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }

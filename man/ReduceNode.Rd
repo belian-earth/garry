@@ -10,7 +10,8 @@ ReduceNode(
   grid = GridSpec(),
   op = character(0),
   over = character(0),
-  nan_rm = logical(0)
+  nan_rm = logical(0),
+  fn = list()
 )
 }
 \arguments{
@@ -20,17 +21,26 @@ ReduceNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{op}{Reduction name, e.g. "mean" (see \code{.reduce_ops}).}
+\item{op}{Reduction name, e.g. "mean" (see \code{.reduce_ops}), or "custom".}
 
 \item{over}{Names of dims to reduce over.}
 
-\item{nan_rm}{Skip NaN (nodata) values?}
+\item{nan_rm}{Skip NaN (nodata) values? (Named ops only; a custom \code{fn}
+handles NaN itself.)}
+
+\item{fn}{Length-0 (named op) or length-1 list holding a custom anvl
+reducer \code{fn(x, dims)}.}
 }
 \value{
 A \code{ReduceNode}.
 }
 \description{
-\code{op} is a name from \code{.reduce_ops}, not an arbitrary function: the
-planner needs op identity to decide algebraic decomposition (D12) and
-output dtype, and the executor maps it to the ops vocabulary.
+\code{op} is normally a name from \code{.reduce_ops}: the planner needs op
+identity to decide algebraic decomposition (D12) and output dtype, and
+the executor maps it to the ops vocabulary. A CUSTOM reducer may
+instead be supplied as \code{fn} (a length-1 list holding an anvl function
+\code{fn(x, dims)} that collapses \code{dims}), with \code{op = "custom"}; the
+executor calls it directly. A custom reducer cannot be decomposed
+across spatial chunks, so it is supported over the \code{t}/\code{band} axes
+(each spatial chunk holds the full axis), not over \code{x}/\code{y}.
 }
