@@ -82,6 +82,14 @@
   # cube plans (.gd_spec). Off by default: the per-slice replay is slow for
   # focal, and non-composite cube plans are rare -- they use the scheduler.
   gd_general = FALSE,
+  # Fraction of AVAILABLE RAM the fetch-ordered pipeline may commit to
+  # concurrent compute working sets. Each band median holds ~3.5 cubes (band +
+  # shared mask + median scratch); the pipeline caps how many run at once so
+  # their combined resident set stays under this fraction, regardless of how big
+  # the compute pool is. The headroom (1 - fraction) covers the read daemons,
+  # the host, and the OS. Users never set this; it exists so "use every daemon"
+  # can't OOM on a many-band job. Ignored when available RAM can't be read.
+  compute_ram_fraction = 0.6,
   # Multi-band composites (n_bands > 1): fan the per-band medians out to the
   # (XLA-pre-warmed) compute pool instead of one whole-grid kernel in-process.
   # On a garry_daemons SPLIT pool this uses the fetch-ordered pipeline (fetch

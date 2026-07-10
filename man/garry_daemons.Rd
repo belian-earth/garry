@@ -4,12 +4,14 @@
 \alias{garry_daemons}
 \title{Set up split mirai daemon pools for distributed execution.}
 \usage{
-garry_daemons(read, compute, read_handles = 1L, ...)
+garry_daemons(read = NULL, compute = NULL, read_handles = 1L, ...)
 }
 \arguments{
-\item{read}{Number of read-pool daemons (0 tears the pool down).}
+\item{read}{Read-pool daemon count; \code{NULL} (default) uses logical
+cores. \code{0} tears the pool down.}
 
-\item{compute}{Number of compute-pool daemons (0 tears down).}
+\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses
+physical cores. \code{0} tears down.}
 
 \item{read_handles}{Open-handle cache depth on read daemons.
 Readers open per-slice mosaics that are rarely revisited, and
@@ -24,22 +26,22 @@ Invisibly, \code{list(read =, compute =)}.
 }
 \description{
 Two pools instead of one: \code{read} daemons execute source/warp read
-tasks and never load anvl/PJRT (a reader stays at ~60 MB), while a
-small pool of \code{compute} daemons runs the fused XLA stages,
-confining the ~0.3-1 GB per-chunk working sets to few processes.
-\code{collect(distributed = TRUE)} detects the pools automatically and
-also pre-compiles stage kernels on the compute pool at run start
-(\code{garry_opt("jit_warmup")}). With no pools set up, it uses
-\code{mirai::daemons()}'s default pool for everything, as before.
+tasks and never load anvl/PJRT (a reader stays at ~60 MB), while
+\code{compute} daemons run the fused XLA stages. Called with no arguments,
+it sizes the pools to the machine: \code{compute} = physical cores (each
+XLA median is ~one core, so hyperthreads would only thrash) and
+\code{read} = logical cores (reads are ~74\% network wait, so more streams
+saturate the link without fighting for CPU). \code{collect(distributed = TRUE)} detects the pools automatically and pre-compiles stage kernels
+on the compute pool at run start (\code{garry_opt("jit_warmup")}).
 }
 \details{
-Size \code{read} for the network (enough concurrent streams to saturate
-the link; 12 measured right for the benchmark link) and \code{compute}
-for RAM (each concurrently executing chunk holds its working set;
-idle daemons cost base RSS only, so over-allocating \code{compute} for
-the post-drain tail is cheap — the scheduler throttles compute
-in-flight to \code{garry_opt("compute_inflight")} while reads are
-draining and opens the full pool afterwards).
+You should not need to tune these: the fetch-ordered composite
+pipeline bounds concurrent compute working sets by
+\code{garry_opt("compute_ram_fraction")} of available RAM, so a generous
+compute pool cannot OOM (excess daemons stay idle at base RSS, and
+a many-band job drains in memory-bounded waves). The one case for
+overriding is a source API that throttles concurrent reads: pass a
+smaller \code{read} to stay under its limit.
 
 MALLOC thresholds and other env vars must be exported BEFORE this
 call: daemon processes read them at exec.

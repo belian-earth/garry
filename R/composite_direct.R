@@ -269,14 +269,29 @@ NULL
   list(err = err, tf = 0, tw = tw)
 }
 
+# Number of connected daemons in a mirai profile (0 if none / unknown).
+.gd_n_compute <- function(prof) {
+  st <- tryCatch(mirai::status(.compute = prof), error = function(e) NULL)
+  if (is.null(st) || !is.numeric(st$connections)) 0L else as.integer(st$connections)
+}
+
 # Is a garry_daemons() split read/compute pool active? (Both named profiles
 # have daemons.) The scheduler's warm compute pool only exists when pooled.
-.gd_pooled <- function() {
-  n_of <- function(p) {
-    st <- tryCatch(mirai::status(.compute = p), error = function(e) NULL)
-    if (is.null(st) || !is.numeric(st$connections)) 0L else as.integer(st$connections)
-  }
-  n_of("garry_read") > 0L && n_of("garry_compute") > 0L
+.gd_pooled <- function()
+  .gd_n_compute("garry_read") > 0L && .gd_n_compute("garry_compute") > 0L
+
+# Max concurrent band medians whose working sets fit the RAM budget. Each holds
+# ~3.5 cubes (band + shared mask + median scratch); cap so their combined
+# resident set stays under compute_ram_fraction of AVAILABLE RAM. Clamped to
+# [1, pool]; falls back to the full pool when RAM can't be read. This is what
+# lets garry_daemons() over-provision compute without OOM on a many-band job.
+.gd_compute_cap <- function(n_slices, ny, nx, pool) {
+  pool <- max(1L, as.integer(pool))
+  per_task_mb <- 3.5 * n_slices * ny * nx * 4 / 1e6
+  avail <- .garry_ram_avail_mb()
+  if (is.na(avail) || per_task_mb <= 0) return(pool)
+  cap <- floor(garry_opt("compute_ram_fraction") * avail / per_task_mb)
+  max(1L, min(pool, as.integer(cap)))
 }
 
 # The mirai profile composite_direct dispatches to: the read pool when pooled
@@ -516,28 +531,40 @@ NULL
   }
 
   # Per-band medians: wait each band's fetch, then dispatch its median (async)
-  # so it overlaps the remaining bands' fetches.
+  # so it overlaps the remaining bands' fetches -- but never let more than `cap`
+  # run at once, so their combined working sets stay under the RAM budget (a
+  # generous / many-band pool then drains in memory-bounded waves, not a spike).
   Kb <- list(F = if (is.null(spec$F)) NULL else .slim_fn(spec$F),
              op = spec$op, nan_rm = spec$nan_rm, ny = ny, nx = nx,
              dev = spec$device, mask_bin = if (masked) mask_bin else character(0))
+  n_slices <- length(spec$band_srcs[[1L]])
+  cap <- .gd_compute_cap(n_slices, ny, nx, .gd_n_compute(prof_c))
+  if (progress && cap < length(spec$band_srcs))
+    message(sprintf("[gdal-direct] compute in-flight capped at %d (RAM budget)", cap))
   mask_done <- !masked
   res_p <- vector("list", length(spec$band_srcs))
-  for (bi in seq_along(spec$band_srcs)) {
-    .gd_check_fetch(band_p[[bi]][], sprintf("band %d", bi))
-    if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
-    jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]))
-    res_p[[bi]] <- mirai::mirai(garry:::.gd_compute_masked_band(jb, kb),
-                                jb = jb, kb = Kb, .compute = prof_c)
-  }
-  if (progress) message(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
-                                proc.time()[["elapsed"]] - t0))
-  res <- lapply(seq_along(res_p), function(bi) {
+  res <- vector("list", length(spec$band_srcs))
+  inflight <- integer(0)                      # dispatched, not yet collected (FIFO)
+  harvest <- function() {
+    bi <- inflight[[1L]]; inflight <<- inflight[-1L]
     v <- res_p[[bi]][]
     if (inherits(v, "miraiError"))
       stop("gdal-direct pipeline compute failed on band ", bi, ": ",
            conditionMessage(v), call. = FALSE)
-    v
-  })
+    res[[bi]] <<- v
+  }
+  for (bi in seq_along(spec$band_srcs)) {
+    .gd_check_fetch(band_p[[bi]][], sprintf("band %d", bi))
+    if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
+    while (length(inflight) >= cap) harvest()         # RAM cap: bound concurrency
+    jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]))
+    res_p[[bi]] <- mirai::mirai(garry:::.gd_compute_masked_band(jb, kb),
+                                jb = jb, kb = Kb, .compute = prof_c)
+    inflight <- c(inflight, bi)
+  }
+  if (progress) message(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
+                                proc.time()[["elapsed"]] - t0))
+  while (length(inflight)) harvest()
   if (progress) message(sprintf("[gdal-direct] pipeline total=%.2fs",
                                 proc.time()[["elapsed"]] - t0))
   .gd_write_result(res, spec, path, nodata)

@@ -308,30 +308,51 @@ NULL
 
 # -- Host-side scheduler -------------------------------------------------------
 
+# Physical / logical core counts, with safe fallbacks (detectCores can NA).
+.garry_cores <- function() {
+  phys <- tryCatch(parallel::detectCores(logical = FALSE), error = function(e) NA_integer_)
+  logi <- tryCatch(parallel::detectCores(logical = TRUE),  error = function(e) NA_integer_)
+  if (is.na(logi) || logi < 1L) logi <- 4L
+  if (is.na(phys) || phys < 1L) phys <- logi
+  list(physical = as.integer(phys), logical = as.integer(logi))
+}
+
+# Available RAM in MB from /proc/meminfo (Linux); NA where it can't be read.
+.garry_ram_avail_mb <- function() {
+  mi <- tryCatch(readLines("/proc/meminfo", n = 40L), error = function(e) character(0))
+  ln <- grep("^MemAvailable:", mi, value = TRUE)
+  if (!length(ln)) return(NA_real_)
+  kb <- suppressWarnings(as.numeric(sub("[^0-9]*([0-9]+).*", "\\1", ln)))
+  if (is.na(kb)) NA_real_ else kb / 1024
+}
+
 #' Set up split mirai daemon pools for distributed execution.
 #'
 #' Two pools instead of one: `read` daemons execute source/warp read
-#' tasks and never load anvl/PJRT (a reader stays at ~60 MB), while a
-#' small pool of `compute` daemons runs the fused XLA stages,
-#' confining the ~0.3-1 GB per-chunk working sets to few processes.
-#' `collect(distributed = TRUE)` detects the pools automatically and
-#' also pre-compiles stage kernels on the compute pool at run start
-#' (`garry_opt("jit_warmup")`). With no pools set up, it uses
-#' `mirai::daemons()`'s default pool for everything, as before.
+#' tasks and never load anvl/PJRT (a reader stays at ~60 MB), while
+#' `compute` daemons run the fused XLA stages. Called with no arguments,
+#' it sizes the pools to the machine: `compute` = physical cores (each
+#' XLA median is ~one core, so hyperthreads would only thrash) and
+#' `read` = logical cores (reads are ~74% network wait, so more streams
+#' saturate the link without fighting for CPU). `collect(distributed =
+#' TRUE)` detects the pools automatically and pre-compiles stage kernels
+#' on the compute pool at run start (`garry_opt("jit_warmup")`).
 #'
-#' Size `read` for the network (enough concurrent streams to saturate
-#' the link; 12 measured right for the benchmark link) and `compute`
-#' for RAM (each concurrently executing chunk holds its working set;
-#' idle daemons cost base RSS only, so over-allocating `compute` for
-#' the post-drain tail is cheap — the scheduler throttles compute
-#' in-flight to `garry_opt("compute_inflight")` while reads are
-#' draining and opens the full pool afterwards).
+#' You should not need to tune these: the fetch-ordered composite
+#' pipeline bounds concurrent compute working sets by
+#' `garry_opt("compute_ram_fraction")` of available RAM, so a generous
+#' compute pool cannot OOM (excess daemons stay idle at base RSS, and
+#' a many-band job drains in memory-bounded waves). The one case for
+#' overriding is a source API that throttles concurrent reads: pass a
+#' smaller `read` to stay under its limit.
 #'
 #' MALLOC thresholds and other env vars must be exported BEFORE this
 #' call: daemon processes read them at exec.
 #'
-#' @param read Number of read-pool daemons (0 tears the pool down).
-#' @param compute Number of compute-pool daemons (0 tears down).
+#' @param read Read-pool daemon count; `NULL` (default) uses logical
+#'   cores. `0` tears the pool down.
+#' @param compute Compute-pool daemon count; `NULL` (default) uses
+#'   physical cores. `0` tears down.
 #' @param read_handles Open-handle cache depth on read daemons.
 #'   Readers open per-slice mosaics that are rarely revisited, and
 #'   every open warped mosaic pins warper and connection memory, so
@@ -340,9 +361,14 @@ NULL
 #' @param ... Passed to `mirai::daemons()` for both pools.
 #' @return Invisibly, `list(read =, compute =)`.
 #' @export
-garry_daemons <- function(read, compute, read_handles = 1L, ...) {
+garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L, ...) {
   if (!requireNamespace("mirai", quietly = TRUE))
     stop("the mirai package is required for distributed execution")
+  if (is.null(read) || is.null(compute)) {
+    cr <- .garry_cores()
+    if (is.null(compute)) compute <- cr$physical
+    if (is.null(read))    read    <- cr$logical
+  }
   mirai::daemons(read, .compute = "garry_read", ...)
   mirai::daemons(compute, .compute = "garry_compute", ...)
   if (read > 0L) {
