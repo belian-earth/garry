@@ -67,7 +67,8 @@ NULL
 #' @export
 .gd_warm <- function() {
   .require_anvl()
-  g_download(g_jit(function(inp) inp[[1L]] + 1)(list(anvl::nv_array(as.double(1:4)))))
+  a <- g_upload_raw(writeBin(as.numeric(1:4), raw(), size = 4L), "f32", c(2L, 2L))
+  g_download(g_jit(function(inp) inp[[1L]] + 1)(list(a)))
   invisible(TRUE)
 }
 
@@ -252,26 +253,16 @@ NULL
   buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny)   # all-nodata default
   tw <- 0
   err <- tryCatch({
-    gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
     if (!length(j$locs)) stop("no items for this slice")
-    tw <- system.time({
-      ptr <- gdalraster:::.get_data_ptr(buf)
-      dsn <- sprintf(
-        "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",
-        ptr, nx, ny, k$gtstr)
-      o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
-      o$setProjection(k$wkt)
-      cl <- c("-r", "near", "-q", "-dstnodata", "nan")
-      if (length(j$nodata) == 1L)
-        cl <- c(cl, "-srcnodata", format(j$nodata, scientific = FALSE))
-      # WARP-ON-READ: warp the slice's REMOTE items straight into the f32
-      # buffer in one gdalwarp -- it reads (windowed vsicurl), reprojects, and
-      # mosaics the sources itself. No tmpfs GTiff fetch, no per-slice local
-      # index. Ordered by datetime so overlap resolution (last source wins)
-      # matches the GTI SORT_FIELD=datetime, highest-on-top path.
-      gdalraster::warp(j$locs[order(j$dt)], o, "", cl_arg = cl)
-      o$close()
-    })[["elapsed"]]
+    # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
+    # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
+    # reprojects and mosaics the sources itself. No tmpfs GTiff fetch, no
+    # per-slice local index. Ordered by datetime so overlap resolution (last
+    # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
+    tw <- system.time(
+      buf <- gdal_warp_to_buffer(buf, nx, ny, k$gtstr, k$wkt,
+                                 j$locs[order(j$dt)], j$nodata)
+    )[["elapsed"]]
     NA_character_
   }, error = function(e) conditionMessage(e))
   writeBin(buf, j$bin)   # always write a complete slice (real or all-NaN)
@@ -337,10 +328,8 @@ NULL
 # not propagate to mirai daemons).
 .gd_daemon_prep <- function(prof) {
   mirai::everywhere({
-    suppressMessages(library(garry)); library(gdalraster)
-    gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-    gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
-    gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
+    suppressMessages(library(garry))
+    garry:::gdal_set_direct_config()
   }, .compute = prof)
 }
 

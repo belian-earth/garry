@@ -238,6 +238,37 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
   invisible(NULL)
 }
 
+# Warp sources straight into a caller-held f32 buffer via GDAL's MEM:::
+# DATAPOINTER driver (warp-on-read, the GDAL-direct fast path): GDAL reads
+# (windowed vsicurl for remote items), reprojects and mosaics `srcs` into `buf`
+# in place, in the order given (last source wins on overlap). `-r near` and
+# nan dst-nodata match the composite path. Returns the same `buf`, now filled.
+# D13: the sole home for the direct-to-memory GDAL warp mechanics (the MEM
+# driver open gate, the raw data pointer, and the warp) -- callers stay clean.
+gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL) {
+  gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")   # >=3.10 gate
+  ptr <- gdalraster:::.get_data_ptr(buf)
+  dsn <- sprintf(
+    "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",
+    ptr, nx, ny, gtstr)
+  o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
+  o$setProjection(wkt)
+  cl <- c("-r", "near", "-q", "-dstnodata", "nan")
+  if (length(srcnodata) == 1L)
+    cl <- c(cl, "-srcnodata", format(srcnodata, scientific = FALSE))
+  gdalraster::warp(srcs, o, "", cl_arg = cl)
+  o$close()
+  buf
+}
+
+# Set the GDAL config the GDAL-direct daemons need (a host set_config_option
+# does not propagate to mirai daemons). D13: GDAL config lives in the adapter.
+gdal_set_direct_config <- function() {
+  gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+  gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
+  gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
+}
+
 # ---------------------------------------------------------------------------
 # GTI (GDAL Raster Tile Index) support: the mosaic layer (decision D18).
 # One datetime-attributed index serves every time slice via the FILTER

@@ -82,10 +82,15 @@
   # cube plans (.gd_spec). Off by default: the per-slice replay is slow for
   # focal, and non-composite cube plans are rare -- they use the scheduler.
   gd_general = FALSE,
-  # Spike: fan composite_direct's per-band medians out to (XLA-pre-warmed)
-  # daemons instead of one whole-grid kernel in-process. Helps multi-band
-  # runs; not the default (the scheduler wins the heaviest cases anyway).
-  gd_parallel = FALSE
+  # Multi-band composites (n_bands > 1): fan the per-band medians out to the
+  # (XLA-pre-warmed) compute pool instead of one whole-grid kernel in-process.
+  # On a garry_daemons SPLIT pool this uses the fetch-ordered pipeline (fetch
+  # fmask first, compute the shared mask + each band's median overlapping the
+  # remaining band fetches) for ODC-parity wall time; on a single pool it fans
+  # the medians across the shared pool. Single-band runs are unaffected (the
+  # whole-grid kernel is already fetch-bound). FALSE forces the whole-grid
+  # kernel and re-enables the scheduler route for heavy composites.
+  gd_parallel = TRUE
 )
 
 #' Read a garry policy option.
