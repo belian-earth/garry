@@ -344,7 +344,7 @@ NULL
 .gd_daemon_prep <- function(prof) {
   mirai::everywhere({
     suppressMessages(library(garry))
-    garry:::gdal_set_direct_config()
+    garry::garry_gdal_config()
   }, .compute = prof)
 }
 

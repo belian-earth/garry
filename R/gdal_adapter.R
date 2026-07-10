@@ -261,12 +261,43 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL)
   buf
 }
 
-# Set the GDAL config the GDAL-direct daemons need (a host set_config_option
-# does not propagate to mirai daemons). D13: GDAL config lives in the adapter.
-gdal_set_direct_config <- function() {
-  gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-  gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
-  gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")
+#' Apply garry's default GDAL configuration for remote COG reads.
+#'
+#' Sets the GDAL config options the composite / warp-on-read path and
+#' cloud-optimised remote reads want: HTTP multiplexing over HTTP/2, the
+#' odc-stac retry cadence and timeouts, a capped block cache (GDAL
+#' defaults to 5% of RAM *per process*, which many daemons would
+#' multiply), single-range COG-header ingest, a skipped directory scan
+#' and `.tif`-only vsicurl probing for fast remote opens, and the MEM
+#' driver open gate the direct warp needs. `garry_daemons()` calls this
+#' on every read daemon automatically; call it yourself for host-side
+#' discovery reads or when you drive `mirai::daemons()` directly. Each
+#' option is set via `set_config_option`, so a value you set afterwards
+#' wins.
+#'
+#' These are session-global GDAL settings. In particular
+#' `GDAL_DISABLE_READDIR_ON_OPEN = EMPTY_DIR` speeds remote opens but can
+#' hide sidecars (overviews, world files) for *local* multi-file reads in
+#' the same session; pass `gdal_config = FALSE` to `garry_daemons()` to
+#' skip it.
+#'
+#' @return Invisibly `NULL`.
+#' @export
+garry_gdal_config <- function() {
+  sc <- gdalraster::set_config_option
+  sc("GDAL_HTTP_MULTIPLEX", "YES")
+  sc("GDAL_HTTP_VERSION", "2")
+  sc("GDAL_HTTP_MAX_RETRY", "10")
+  sc("GDAL_HTTP_RETRY_DELAY", "0.5")
+  sc("GDAL_HTTP_RETRY_CODES", "429,500,502,503")
+  sc("GDAL_HTTP_TIMEOUT", "60")
+  sc("GDAL_HTTP_CONNECTTIMEOUT", "10")
+  sc("GDAL_CACHEMAX", "256")                       # MB, per process
+  sc("GDAL_INGESTED_BYTES_AT_OPEN", "32768")       # one range grabs the COG header
+  sc("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+  sc("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
+  sc("GDAL_MEM_ENABLE_OPEN", "YES")                # >=3.10 gate for the direct warp
+  invisible(NULL)
 }
 
 # ---------------------------------------------------------------------------

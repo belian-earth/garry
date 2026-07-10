@@ -326,6 +326,17 @@ NULL
   if (is.na(kb)) NA_real_ else kb / 1024
 }
 
+# glibc malloc thresholds: big freed buffers get mmap'd and really returned to
+# the OS instead of retained in arenas (a fused chunk otherwise leaves a daemon
+# resident at its peak). These are read at process start, so they MUST be in the
+# environment BEFORE daemons spawn -- children inherit them at exec. Only-if-
+# unset, so a value the user exported themselves wins.
+.garry_env_defaults <- function() {
+  defs <- c(MALLOC_MMAP_THRESHOLD_ = "131072", MALLOC_TRIM_THRESHOLD_ = "131072")
+  unset <- defs[!nzchar(Sys.getenv(names(defs)))]
+  if (length(unset)) do.call(Sys.setenv, as.list(unset))
+}
+
 #' Set up split mirai daemon pools for distributed execution.
 #'
 #' Two pools instead of one: `read` daemons execute source/warp read
@@ -346,8 +357,14 @@ NULL
 #' overriding is a source API that throttles concurrent reads: pass a
 #' smaller `read` to stay under its limit.
 #'
-#' MALLOC thresholds and other env vars must be exported BEFORE this
-#' call: daemon processes read them at exec.
+#' It also applies the sensible defaults so a workload script needs no
+#' preamble: the glibc `MALLOC_*` thresholds are exported BEFORE the
+#' daemons spawn (read at exec, so children inherit them), and
+#' [garry_gdal_config()] runs on every read daemon. Neither touches the
+#' host's own GDAL config (that would hide local sidecars for the
+#' caller's reads); call [garry_gdal_config()] yourself to tune host-side
+#' discovery. `MALLOC_*` is only-if-unset, and `gdal_config = FALSE`
+#' skips the GDAL settings entirely.
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses logical
 #'   cores. `0` tears the pool down.
@@ -358,10 +375,14 @@ NULL
 #'   every open warped mosaic pins warper and connection memory, so
 #'   the default keeps only the most recent handle (measured ~15
 #'   MB/daemon saved at no wall cost on the benchmark).
+#' @param gdal_config Apply [garry_gdal_config()] on the host and read
+#'   daemons (default `TRUE`). Set `FALSE` to leave session GDAL config
+#'   untouched (e.g. when mixing local multi-file reads).
 #' @param ... Passed to `mirai::daemons()` for both pools.
 #' @return Invisibly, `list(read =, compute =)`.
 #' @export
-garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L, ...) {
+garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L,
+                          gdal_config = TRUE, ...) {
   if (!requireNamespace("mirai", quietly = TRUE))
     stop("the mirai package is required for distributed execution")
   if (is.null(read) || is.null(compute)) {
@@ -369,12 +390,22 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L, ...) {
     if (is.null(compute)) compute <- cr$physical
     if (is.null(read))    read    <- cr$logical
   }
+  # MALLOC_* must be exported BEFORE the daemons spawn (read at exec). The GDAL
+  # config is applied on the read daemons below, NOT on the host session:
+  # DISABLE_READDIR_ON_OPEN=EMPTY_DIR would hide local sidecars (overviews,
+  # world files) for the caller's own reads. Call garry_gdal_config() yourself
+  # to tune host-side discovery.
+  if (isTRUE(gdal_config)) .garry_env_defaults()
   mirai::daemons(read, .compute = "garry_read", ...)
   mirai::daemons(compute, .compute = "garry_compute", ...)
   if (read > 0L) {
-    w <- mirai::everywhere(options(garry.handle_cache_max = hc),
-                           hc = as.integer(read_handles),
-                           .compute = "garry_read")
+    # Read daemons: set the handle-cache depth, and (once) the GDAL config so it
+    # is live from pool creation (the pipeline also re-applies it per run).
+    w <- mirai::everywhere({
+      options(garry.handle_cache_max = hc)
+      if (cfg) { suppressMessages(library(garry)); garry::garry_gdal_config() }
+    }, hc = as.integer(read_handles), cfg = isTRUE(gdal_config),
+    .compute = "garry_read")
     invisible(lapply(w, function(m) m[]))
   }
   invisible(list(read = read, compute = compute))

@@ -4,7 +4,13 @@
 \alias{garry_daemons}
 \title{Set up split mirai daemon pools for distributed execution.}
 \usage{
-garry_daemons(read = NULL, compute = NULL, read_handles = 1L, ...)
+garry_daemons(
+  read = NULL,
+  compute = NULL,
+  read_handles = 1L,
+  gdal_config = TRUE,
+  ...
+)
 }
 \arguments{
 \item{read}{Read-pool daemon count; \code{NULL} (default) uses logical
@@ -18,6 +24,10 @@ Readers open per-slice mosaics that are rarely revisited, and
 every open warped mosaic pins warper and connection memory, so
 the default keeps only the most recent handle (measured ~15
 MB/daemon saved at no wall cost on the benchmark).}
+
+\item{gdal_config}{Apply \code{\link[=garry_gdal_config]{garry_gdal_config()}} on the host and read
+daemons (default \code{TRUE}). Set \code{FALSE} to leave session GDAL config
+untouched (e.g. when mixing local multi-file reads).}
 
 \item{...}{Passed to \code{mirai::daemons()} for both pools.}
 }
@@ -43,6 +53,12 @@ a many-band job drains in memory-bounded waves). The one case for
 overriding is a source API that throttles concurrent reads: pass a
 smaller \code{read} to stay under its limit.
 
-MALLOC thresholds and other env vars must be exported BEFORE this
-call: daemon processes read them at exec.
+It also applies the sensible defaults so a workload script needs no
+preamble: the glibc \verb{MALLOC_*} thresholds are exported BEFORE the
+daemons spawn (read at exec, so children inherit them), and
+\code{\link[=garry_gdal_config]{garry_gdal_config()}} runs on every read daemon. Neither touches the
+host's own GDAL config (that would hide local sidecars for the
+caller's reads); call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself to tune host-side
+discovery. \verb{MALLOC_*} is only-if-unset, and \code{gdal_config = FALSE}
+skips the GDAL settings entirely.
 }
