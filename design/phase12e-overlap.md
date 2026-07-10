@@ -22,14 +22,27 @@ only change is the warp source (remote item URLs) instead of local tiles.
 Per-item (whole-window) warp amortises the vsicurl header read, unlike the
 per-CHUNK remote warp that was slow earlier in the phase.
 
-## Gap 1: no fetch/compute overlap
+## Gap 1: no fetch/compute overlap (DONE -- fetch-ordered pipeline)
 
-ODC streams read -> mask -> median through one dask graph; a spatial chunk
-reduces as soon as its time-slices land. garry warps everything, then computes.
-To overlap: pipeline the GDAL-direct reduce with the warp -- a producer/consumer
-where daemons warp slices into a shared /dev/shm cube and the main process
-reduces each spatial TILE the moment all its slices are present. Hides the
-~5.6 s compute under the ~16 s fetch drain -> garry approaches fetch-bound.
+A per-pixel median needs EVERY time-slice, so it cannot stream under the fetch
+of its own band's slices -- the earlier "reduce streams under the warp" framing
+was wrong. What CAN overlap the fetch: (1) the morphology mask (needs only the
+fmask slices), and (2) each band's median relative to LATER bands' fetches.
+
+Implemented (`.execute_composite_pipeline`, split pool only): fetch fmask FIRST
+on the read pool; the moment it lands, compute the cleaned mask ONCE on the
+compute pool (cube-vectorised morphology) and write it to one mask .bin, WHILE
+the bands are still downloading; then as each band's fetch lands, dispatch its
+median (async, on the compute pool) reading the shared mask -- so band B's
+median runs while later bands still fetch. Only the LAST band's median is
+exposed after the drain. The mask is computed once (not once per band), and
+g_upload_raw/g_download_raw round-trip the 3D mask cube through the .bin with no
+transpose (row-major both ways).
+
+Result (3-band morphology, split 16+6): 17.5 s total, compute tail after the
+fetch ~1.6 s (mask + two medians hid under the fetch), output exact. Down from
+19.6 s (parallel, warm-overlap only), 21.1 s (whole-grid), 24 s (original) --
+now inside the ODC 15-17 s band.
 
 ## Floor: R has no threads
 
@@ -48,5 +61,6 @@ threaded compute (which R lacks).
 
 ## Order of attack
 
-1. Warp-on-read direct to array (Gap 2) -- PRIORITISED.
-2. Median spatial-tile fetch/compute overlap (Gap 1).
+1. Warp-on-read direct to array (Gap 2) -- DONE (8418cac).
+2. Fetch-ordered pipeline (Gap 1) -- DONE (fmask-first, mask + per-band medians
+   overlap the band fetch on a split pool).
