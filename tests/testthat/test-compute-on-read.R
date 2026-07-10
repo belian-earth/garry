@@ -46,8 +46,7 @@ test_that("source-fed kernel chains execute on their read tasks", {
   tlog <- tempfile(fileext = ".csv")
   old <- options(garry.chunk_target_px = 400, garry.task_log = tlog)
   on.exit(options(old), add = TRUE)
-  for (st in c("rds", if (requireNamespace("mori", quietly = TRUE))
-    "mori")) {
+  for (st in "mori") {
     old_st <- options(garry.store = st)
     dist <- execute_plan_mirai(p)
     options(old_st)

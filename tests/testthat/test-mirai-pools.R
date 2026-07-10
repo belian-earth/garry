@@ -29,8 +29,7 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
       reduce_over(a * 2, "mean", c("x", "y"), nan_rm = TRUE)
     })
   )
-  stores <- c("rds",
-              if (requireNamespace("mori", quietly = TRUE)) "mori")
+  stores <- "mori"
   for (nm in names(pipelines)) {
     p <- plan_lazy(pipelines[[nm]])
     single <- execute_plan(p)

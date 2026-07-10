@@ -40,8 +40,7 @@ test_that("distributed == single-threaded across pipeline shapes", {
     })
   )
 
-  stores <- c("rds",
-              if (requireNamespace("mori", quietly = TRUE)) "mori")
+  stores <- "mori"
   for (nm in names(pipelines)) {
     p <- plan_lazy(pipelines[[nm]])
     single <- execute_plan(p)

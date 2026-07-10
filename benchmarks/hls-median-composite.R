@@ -116,8 +116,6 @@ if (nzchar(Sys.getenv("GARRY_STORE_VALUES")))
 # Phase 12d GDAL-direct composite fast path (composite shape only).
 if (nzchar(Sys.getenv("GARRY_COMPOSITE_DIRECT")))
   options(garry.composite_direct = TRUE)
-if (requireNamespace("mori", quietly = TRUE))
-  options(garry.store = "mori")
 
 t_all <- system.time({
   # One GTI index per asset; each day is a FILTERed mosaic of that

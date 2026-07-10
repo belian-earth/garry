@@ -65,8 +65,7 @@ test_that("raw store == double store == single-threaded, rds and mori", {
     }),
     i16    = local({ a <- lazy_source(fi); a + 0.5 })
   )
-  stores <- c("rds",
-              if (requireNamespace("mori", quietly = TRUE)) "mori")
+  stores <- "mori"
   for (nm in names(pipelines)) {
     p <- plan_lazy(pipelines[[nm]])
     single <- execute_plan(p)

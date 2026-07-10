@@ -89,68 +89,6 @@ NULL
   out
 }
 
-#' Daemon task body: read one padded source chunk into the store.
-#'
-#' Internal (exported only so mirai daemons can address it via `::`).
-#'
-#' @param path,band,nodata Source identity.
-#' @param cg `ChunkGrid`; `core` the chunk row; `key` the node key;
-#'   `out_file` the store file.
-#' @return `TRUE`.
-#' @keywords internal
-#' @export
-.daemon_run_source <- function(path, band, nodata, cg, core, key,
-                               out_file, open_options = character(0),
-                               fuse = NULL, read_raw = FALSE,
-                               store_raw = FALSE) {
-  m <- .exec_read_padded(path, band, nodata, cg, core,
-                         open_options = open_options,
-                         out = if (read_raw) "raw_f32" else "matrix")
-  if (!is.null(fuse)) m <- .apply_fuse(m, fuse, store_raw)
-  # Store files are transient same-host scratch: gzip costs hundreds of
-  # ms per chunk and buys nothing.
-  saveRDS(stats::setNames(list(m), key), out_file, compress = FALSE)
-  TRUE
-}
-
-#' Daemon task body: read one coarse source window, split it into
-#' per-compute-chunk store files.
-#'
-#' Internal (exported only so mirai daemons can address it via `::`).
-#'
-#' @param path,band,nodata Source identity.
-#' @param cg Read-granularity `ChunkGrid` (halo-free); `core` the read
-#'   chunk row; `key` the node key.
-#' @param parts List of per-compute-chunk windows: `r0`/`c0` 0-based
-#'   offsets within the read buffer, `nr`/`nc` sizes, `file` the store
-#'   file.
-#' @return `TRUE`.
-#' @keywords internal
-#' @export
-.daemon_run_source_split <- function(path, band, nodata, cg, core, key,
-                                     parts, open_options = character(0),
-                                     fuse = NULL, read_raw = FALSE,
-                                     store_raw = FALSE) {
-  m <- .exec_read_padded(path, band, nodata, cg, core,
-                         open_options = open_options,
-                         out = if (read_raw) "raw_f32" else "matrix")
-  if (!is.null(fuse)) m <- .apply_fuse(m, fuse, store_raw)
-  if (.sv_is(m)) {
-    slc <- .sv_slicer(m)
-    for (p in parts) {
-      saveRDS(stats::setNames(list(slc(p$r0, p$c0, p$nr, p$nc)), key),
-              p$file, compress = FALSE)
-    }
-  } else {
-    for (p in parts) {
-      saveRDS(stats::setNames(list(
-        m[(p$r0 + 1L):(p$r0 + p$nr), (p$c0 + 1L):(p$c0 + p$nc),
-          drop = FALSE]), key), p$file, compress = FALSE)
-    }
-  }
-  TRUE
-}
-
 #' Daemon task body: read one source window into shared memory.
 #'
 #' The mori-store counterpart of `.daemon_run_source` and
@@ -281,40 +219,6 @@ NULL
   rm(inputs, res)
   gc(FALSE)
   sh
-}
-
-#' Daemon task body: run one jitted stage closure on one chunk.
-#'
-#' Internal (exported only so mirai daemons can address it via `::`).
-#'
-#' @param cache_key Per-run jit cache key.
-#' @param fn Stage closure; `in_files`/`in_keys`/`trims`/`dtypes`
-#'   describe the inputs; `out_file` the store file.
-#' @return `TRUE`.
-#' @keywords internal
-#' @export
-.daemon_run_compute <- function(cache_key, fn, in_files, in_keys, trims,
-                                dtypes, out_file, out_keys = NULL,
-                                device = "cpu", store_raw = FALSE) {
-  if (length(ls(.daemon_cache)) > 64L)
-    rm(list = ls(.daemon_cache), envir = .daemon_cache)
-  dev <- .exec_device(device)
-  jf <- .daemon_cache[[cache_key]]
-  if (is.null(jf)) {
-    jf <- g_jit(fn, device = dev)
-    .daemon_cache[[cache_key]] <- jf
-  }
-  inputs <- Map(function(f, k, tr, dt) {
-    .sv_upload(readRDS(f)[[k]], tr, dt, dev)
-  }, in_files, in_keys, trims, dtypes)
-  res <- .sv_download_exports(jf(unname(inputs)), store_raw)
-  # See .daemon_run_compute_shm: shared wrappers, positional rename.
-  if (!is.null(out_keys)) names(res) <- out_keys
-  saveRDS(res, out_file, compress = FALSE)
-  # See .daemon_run_compute_shm: free chunk buffers between tasks.
-  rm(inputs, res)
-  gc(FALSE)
-  TRUE
 }
 
 #' Daemon task body: pre-compile stage closures for their modal chunk
@@ -512,28 +416,21 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))
-  store_mode <- match.arg(garry_opt("store"), c("rds", "mori"))
-  use_shm <- store_mode == "mori"
-  if (use_shm && !requireNamespace("mori", quietly = TRUE))
-    .garry_error("options(garry.store = \"mori\") needs the mori package",
+  if (!requireNamespace("mori", quietly = TRUE))
+    .garry_error("the distributed scheduler requires the mori package",
                  "garry_scheduler_error")
   # Raw f32 store payloads (phase 12c, D19-D21). Resolved once here:
   # daemon processes do not inherit host options, so the flag rides in
   # every task payload.
   use_raw <- .exec_use_raw_store()
-  store <- file.path(tempdir(), paste0("garry-store-", run_id))
-  dir.create(store, recursive = TRUE)
-  on.exit(unlink(store, recursive = TRUE), add = TRUE)
-  if (use_shm) {
-    # Daemons pin every region they created for this run; release them
-    # once the host is done with the results (regions outlive tasks,
-    # not the run). Host-side handles die with `chunk_vals`. Both
-    # pools pin regions (readers: windows; computers: results).
-    on.exit(for (p in profiles)
-      try(mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
-          silent = TRUE), add = TRUE)
-  }
-  chunk_file <- function(sid, j) file.path(store, sprintf("s%d_c%d.rds", sid, j))
+  # Inter-stage store is POSIX shared memory (mori): daemons pin every
+  # region they created for this run and release them once the host is done
+  # (regions outlive tasks, not the run); host-side handles die with
+  # `chunk_vals`. Both pools pin regions (readers: windows; computers:
+  # results).
+  on.exit(for (p in profiles)
+    try(mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
+        silent = TRUE), add = TRUE)
   chunk_vals <- new.env(parent = emptyenv())   # task key -> shared value
 
   # ---- fetch/assemble split (phase 12) --------------------------------
@@ -747,7 +644,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
             key <- sprintf("s%d_c%d", sid, jj)
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
-                     launch = if (use_shm) function(prof) {
+                     launch = function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo,
@@ -755,15 +652,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                                               store_raw = sr),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, reg = sprintf("r%d_%s", run_id, key), fs = fs,
-                rr = rr, sr = sr,
-                .compute = prof)
-            } else function(prof) {
-              mirai::mirai(
-                garry::.daemon_run_source(p2, b2, nd, cg, core, k2, out,
-                                          open_options = oo, fuse = fs,
-                                          read_raw = rr, store_raw = sr),
-                p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, out = chunk_file(oid2, jj), fs = fs,
                 rr = rr, sr = sr,
                 .compute = prof)
             })
@@ -795,11 +683,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
               list(r0 = its$y_off[[j]] - core$y_off,
                    c0 = its$x_off[[j]] - core$x_off,
                    nr = its$y_size[[j]] + H2, nc = its$x_size[[j]] + H2,
-                   elt = elt_of[[j]],
-                   file = chunk_file(oid2, j))
+                   elt = elt_of[[j]])
             })
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
-                     launch = if (use_shm) function(prof) {
+                     launch = function(prof) {
               mirai::mirai(
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, parts = parts,
@@ -810,15 +697,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
                 k2 = k2, oo = oo, parts = parts, fs = fs,
                 rr = rr, sr = sr,
                 reg = sprintf("r%d_%s", run_id, key),
-                .compute = prof)
-            } else function(prof) {
-              mirai::mirai(
-                garry::.daemon_run_source_split(p2, b2, nd, cg, core, k2,
-                                                parts, open_options = oo,
-                                                fuse = fs, read_raw = rr,
-                                                store_raw = sr),
-                p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                parts = parts, oo = oo, fs = fs, rr = rr, sr = sr,
                 .compute = prof)
             })
           })
@@ -840,7 +718,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       # resident cost is mostly the f32 device copies — roughly
       # half. The planner's chunk sizing keeps the conservative
       # figure; this only loosens the in-flight budget.
-      if (use_shm) task_mb <- task_mb / 2
+      # Inputs are shared mori mappings (zero-copy extraction); the resident
+      # cost is mostly the f32 device copies -- roughly half the per-px
+      # estimate, which is calibrated for private R-double inputs.
+      task_mb <- task_mb / 2
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         fn = s@fn,
@@ -872,7 +753,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
           sr <- use_raw
           add_task(key, unique(in_deps), "comp", mb = task_mb,
                    dev = sdev,
-                   launch = if (use_shm) function(prof) {
+                   launch = function(prof) {
             # Handles resolve at launch time: dependencies are done, so
             # `chunk_vals` holds every input's shared object (a ~30-byte
             # name over the wire).
@@ -889,30 +770,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
               reg = sprintf("r%d_%s", run_id, key),
               ok = out_keys, dv = sdev, sr = sr,
               .compute = prof)
-          } else function(prof) {
-            mirai::mirai(
-              garry::.daemon_run_compute(ck, fn, in_files, in_keys,
-                                          trims, dtypes, out,
-                                          out_keys = ok,
-                                          device = dv,
-                                          store_raw = sr),
-              ck = ck, fn = fn,
-              in_files = vapply(meta, function(m)
-                chunk_file(m$id, jj), character(1)),
-              in_keys = in_keys,
-              trims = trims, dtypes = dtypes,
-              out = chunk_file(sid, jj),
-              ok = out_keys, dv = sdev, sr = sr,
-              .compute = prof)
           })
-          if (use_shm) {
-            comp_stage_of[[key]] <- sid
-            stage_left[[.key(sid)]] <-
-              (stage_left[[.key(sid)]] %||% 0L) + 1L
-            rk <- in_deps[grepl("_r\\d+$", in_deps)]
-            stage_reads[[.key(sid)]] <-
-              unique(c(stage_reads[[.key(sid)]], rk))
-          }
+          comp_stage_of[[key]] <- sid
+          stage_left[[.key(sid)]] <-
+            (stage_left[[.key(sid)]] %||% 0L) + 1L
+          rk <- in_deps[grepl("_r\\d+$", in_deps)]
+          stage_reads[[.key(sid)]] <-
+            unique(c(stage_reads[[.key(sid)]], rk))
         })
       }
     }
@@ -1068,7 +932,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       if (!mirai::unresolved(h)) {
         if (inherits(h$data, c("miraiError", "errorValue")))
           stop("task ", k, " failed on daemon: ", as.character(h$data))
-        if (use_shm) chunk_vals[[k]] <- h$data
+        chunk_vals[[k]] <- h$data
         tasks[[k]]$state <- "done"
         done <- c(done, k)
         inflight[[k]] <- NULL
@@ -1081,14 +945,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
         log_line("done", k)
         if (stream_write && !is.na(sink_task_j[k])) {
           j <- sink_task_j[[k]]
-          ch <- if (use_shm) chunk_vals[[k]][[sink_skey]]
-                else readRDS(chunk_file(sink@id, j))[[sink_skey]]
+          ch <- chunk_vals[[k]][[sink_skey]]
           .exec_check_writable(ch, nrow(sink_it))
           .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
                             ch, sink_spad, sink@grid@dtype, wnodata)
           log_line("write", k)
         }
-        if (use_shm) release_reads(k)
+        release_reads(k)
         # Eager fetch-cache cleanup: a fetch-backed source stage's
         # window files unlink once its last read (assemble) task is
         # done — bounds the tmpfs cache to slices still assembling.
@@ -1119,10 +982,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   # under a compute consumer), so chunk-keyed lookup always resolves.
   log_line("drain_end", "-")
   on.exit(log_line("host_end", "-"), add = TRUE)
-  read_chunk <- function(sid, j) {
-    if (use_shm) chunk_vals[[sprintf("s%d_c%d", sid, j)]]
-    else readRDS(chunk_file(sid, j))
-  }
+  read_chunk <- function(sid, j) chunk_vals[[sprintf("s%d_c%d", sid, j)]]
   out_of <- function(s) {
     it <- chunk_iter(s@chunks)
     lapply(seq_len(nrow(it)), function(j) read_chunk(s@id, j))

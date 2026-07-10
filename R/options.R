@@ -31,12 +31,6 @@
   # launch/done timestamps to (plus drain_end/host_end marks), for
   # profiling where a plan's wall time goes. NULL disables.
   task_log = NULL,
-  # Inter-stage chunk store for the distributed executor: "rds" writes
-  # one uncompressed RDS per (stage, chunk) in tempdir(); "mori" keeps
-  # chunks in POSIX shared memory (zero-copy across same-host daemons,
-  # no producer-side split, no disk churn; needs the mori package and
-  # the run's working set to fit in RAM).
-  store = "rds",
   # What a failed source read does: "error" aborts the plan; "nodata"
   # logs a warning and yields an all-NaN window, so one bad object /
   # expired token / 404 costs a hole in the composite instead of the
