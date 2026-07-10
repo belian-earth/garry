@@ -4,9 +4,6 @@ benchmarks/.venv/
 __pycache__/
 *.pyc
 
-# scratch composite outputs
-composite_gdaldirect*.tif
-composite_isolate.tif
-composite_ref.tif
-composite_lean.tif
+# benchmark composite outputs (regenerable; tests use tempdir fixtures)
+composite*.tif
 docs
