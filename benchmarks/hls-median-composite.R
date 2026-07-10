@@ -15,50 +15,26 @@
 #   vrtility:            20.74 s   (three bands, one pass)
 #
 # Run:  Rscript benchmarks/hls-median-composite.R [daemons] [bands...]
-# daemons is "READ+COMPUTE" pools (default 16+6: 16 fetch streams,
-# 6 XLA daemons; comp tasks spill to idle readers after the drain)
-# or a single number for one shared pool.
-# e.g.  Rscript benchmarks/hls-median-composite.R 16+6 B04 B03 B02
+# daemons defaults to "auto" (garry_daemons() sizes read/compute to the
+# machine and applies the GDAL/malloc defaults); pass "READ+COMPUTE" (e.g.
+# 16+20) to pin the pools. GARRY_DEVICE=cuda runs compute on the GPU (pass a
+# small explicit pool, the daemons share one GPU); GARRY_BENCH_MORPH=0 drops
+# the mask cleanup.
+# e.g.  Rscript benchmarks/hls-median-composite.R auto B04 B03 B02
 
 suppressMessages(library(garry))
 
 args <- commandArgs(trailingOnly = TRUE)
-daemons_arg <- if (length(args) >= 1) args[[1]] else "16+20"
+daemons_arg <- if (length(args) >= 1) args[[1]] else "auto"
 bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
+device <- Sys.getenv("GARRY_DEVICE", "cpu") # "cpu" or "cuda" (GPU compute)
 
-# GDAL/network tuning. Pre-signed hrefs (below) beat per-URL GDAL
-# signing (VSICURL_PC_URL_SIGNING), which storms the MPC signing
-# endpoint across daemons into 429s; note pre-signed tokens expire
-# after ~1 h, so very long jobs should switch back to GDAL signing.
-Sys.setenv(GDAL_HTTP_MULTIPLEX = "YES", GDAL_HTTP_VERSION = "2")
-# odc-stac's measured retry cadence (10 x 0.5s), plus the timeouts odc
-# omits: a stalled request should fail fast and retry, not hang a
-# daemon.
-Sys.setenv(
-  GDAL_HTTP_MAX_RETRY = "10",
-  GDAL_HTTP_RETRY_DELAY = "0.5",
-  GDAL_HTTP_RETRY_CODES = "429,500,502,503",
-  GDAL_HTTP_TIMEOUT = "60",
-  GDAL_HTTP_CONNECTTIMEOUT = "10"
-)
-# GDAL's block cache defaults to 5% of RAM PER PROCESS; every daemon
-# inherits this env, so cap it or n_daemons x 5% eats the machine.
-# (Trimming below 256 measured inert in phase 10b: whole-window reads
-# stream through without ever filling the cache.)
-Sys.setenv(GDAL_CACHEMAX = "256")
-# Return freed compute buffers to the OS. glibc malloc retains large
-# freed allocations in arenas: a daemon that ran one fused chunk sat
-# at ~650 MB anon forever (measured), and consecutive chunks stacked
-# further. With a 128 KB mmap/trim threshold big buffers are mmap'd
-# and really freed (paired with the gc between compute tasks in the
-# scheduler); fleet peak 9.3-9.8 -> 7.0 GB at wall parity. Must be in
-# the env BEFORE daemons() so daemon processes inherit it at exec.
-Sys.setenv(MALLOC_MMAP_THRESHOLD_ = "131072", MALLOC_TRIM_THRESHOLD_ = "131072")
-gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
-# One 32 KB range at open captures a whole COG header (vs several 16 KB
-# probes); per-open cost dominates GTI slice reads.
-Sys.setenv(GDAL_INGESTED_BYTES_AT_OPEN = "32768")
+# No GDAL/network preamble: garry_daemons() (below) applies the remote-COG GDAL
+# config (HTTP/2 multiplex, the odc-stac retry cadence, a capped block cache,
+# fast COG opens) and the glibc malloc thresholds on the daemons. Discovery
+# below uses pre-signed hrefs (rstac::items_sign) -- per-URL GDAL signing storms
+# the MPC signing endpoint into 429s across daemons; tokens expire after ~1 h,
+# so very long jobs should switch back to GDAL signing.
 
 # The analysis grid: everything downstream is pinned to it exactly.
 target <- grid_spec(
@@ -91,52 +67,19 @@ cat(sprintf(
   length(slices)
 ))
 
-# Split pools (phase 11.1): readers never load PJRT (~60 MB base +
-# drain growth each) and saturate the link; 3 compute daemons confine
-# the fused chunks' working sets and get their stage kernels
-# pre-compiled while the drain runs. Measured 6.4 GB fleet peak vs
-# 9.3-9.8 single-pool, same-or-better wall.
+# Split read/compute pools: readers stay PJRT-free and saturate the link, the
+# compute pool runs the XLA medians. "auto" sizes both to the machine (and sets
+# the GDAL/malloc defaults); "READ+COMPUTE" pins them.
 if (identical(daemons_arg, "auto")) {
-  garry_daemons()                       # size read/compute to the machine
-} else if (grepl("+", daemons_arg, fixed = TRUE)) {
+  garry_daemons()
+} else {
   np <- as.integer(strsplit(daemons_arg, "+", fixed = TRUE)[[1]])
   garry_daemons(np[[1]], np[[2]])
-} else {
-  mirai::daemons(as.integer(daemons_arg))
 }
 
-# Reads are whole-window (read_target_px decoupling: one GTI mosaic
-# open per slice x asset). Per-band fused stages start as soon as
-# their own band's reads land (fusion never crosses a reduction into
-# a join), so only the last band's compute tail runs after the drain.
-# Fewer, bigger chunks win: each compute chunk pays a fixed
-# per-input-file cost (measured: 20 chunks of 256px = 10s tail, 6
-# chunks of 512px = 5.5s). The mori store keeps chunks in shared
-# memory: reads share whole windows once, computes slice zero-copy,
-# nothing round-trips the disk.
-options(garry.chunk_target_px = 1.4e6, garry.progress = TRUE)
-if (nzchar(Sys.getenv("GARRY_TASK_LOG"))) {
-  options(garry.task_log = Sys.getenv("GARRY_TASK_LOG"))
-}
-# GARRY_DEVICE=cuda runs the fused compute stages on the GPU (11.5);
-# use a small compute pool, e.g. 12+2 — chunks share GPU memory.
-if (nzchar(Sys.getenv("GARRY_DEVICE"))) {
-  options(garry.device = Sys.getenv("GARRY_DEVICE"))
-}
-# Phase 12d GDAL-direct composite fast path (composite shape only).
-# GDAL-direct is default ON; GARRY_COMPOSITE_DIRECT=0 forces the scheduler.
-if (nzchar(Sys.getenv("GARRY_COMPOSITE_DIRECT"))) {
-  options(garry.composite_direct = Sys.getenv("GARRY_COMPOSITE_DIRECT") != "0")
-}
-if (nzchar(Sys.getenv("GARRY_GD_PARALLEL"))) {
-  options(garry.gd_parallel = Sys.getenv("GARRY_GD_PARALLEL") != "0")
-}
-# Testing hook: shrink the compute RAM budget to force the pipeline's in-flight
-# cap to bind (bounded waves) even on a big-RAM box.
-if (nzchar(Sys.getenv("GARRY_COMPUTE_RAM_FRACTION"))) {
-  options(garry.compute_ram_fraction =
-            as.numeric(Sys.getenv("GARRY_COMPUTE_RAM_FRACTION")))
-}
+# The GDAL-direct composite pipeline is the default path; progress prints the
+# per-phase [gdal-direct] timings.
+options(garry.progress = TRUE, garry.device = device)
 
 t_all <- system.time({
   # One GTI index per asset; each day is a FILTERed mosaic of that
@@ -211,7 +154,10 @@ t_all <- system.time({
     if (!morph) {
       return(bad)
     }
-    bad |> erode(2) |> dilate(2) |> dilate(3) # opening(2), dilation(3)
+    bad |>
+      erode(2) |>
+      dilate(2) |>
+      dilate(3) # opening(2), dilation(3)
   }
 
   # One composite per band; then ONE collect over the band stack. The
@@ -230,7 +176,8 @@ t_all <- system.time({
         fn = function(x, cl) g_ifelse(cl > 0.5, NaN, x)
       )
     })
-    lazy_stack(masked) |> reduce_over("median", "t", nan_rm = TRUE)
+    lazy_stack(masked) |>
+      reduce_over("median", "t", nan_rm = TRUE)
   })
 
   out <- if (length(composites) == 1L) {
@@ -248,8 +195,4 @@ cat(sprintf(
   daemons_arg,
   t_all[["elapsed"]]
 ))
-if (identical(daemons_arg, "auto") || grepl("+", daemons_arg, fixed = TRUE)) {
-  garry_daemons(0, 0)
-} else {
-  mirai::daemons(0)
-}
+garry_daemons(0, 0)
