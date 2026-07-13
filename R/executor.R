@@ -36,8 +36,8 @@ NULL
                      open_options = open_options, out = out),
     error = function(e) {
       if (!identical(garry_opt("read_fail"), "nodata")) stop(e)
-      warning("read failed, filling with nodata: ", path, " (",
-              conditionMessage(e), ")", call. = FALSE)
+      cli::cli_warn(
+        "read failed, filling with nodata: {.path {path}} ({conditionMessage(e)})")
       if (out == "raw_f32") {
         .sv_from_vec(rep(NaN, w$y_size * w$x_size), w$y_size, w$x_size)
       } else {

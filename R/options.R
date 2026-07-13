@@ -112,6 +112,6 @@
 #' @export
 garry_opt <- function(name) {
   if (!name %in% names(.garry_defaults))
-    stop("unknown garry option: ", name)
+    cli::cli_abort("unknown garry option: {.val {name}}")
   getOption(paste0("garry.", name), .garry_defaults[[name]])
 }

@@ -253,7 +253,7 @@ NULL
   buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny)   # all-nodata default
   tw <- 0
   err <- tryCatch({
-    if (!length(j$locs)) stop("no items for this slice")
+    if (!length(j$locs)) cli::cli_abort("no items for this slice")
     # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
     # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
     # reprojects and mosaics the sources itself. No tmpfs GTiff fetch, no
@@ -373,14 +373,14 @@ NULL
                  conditionMessage, "")
   if (progress) {
     ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
-    message(sprintf("[gdal-direct] per-task sums: fetch=%.1fs warp=%.1fs",
+    cli::cli_inform(sprintf("[gdal-direct] per-task sums: fetch=%.1fs warp=%.1fs",
                     sum(vapply(ok, function(x) x$tf, 0)),
                     sum(vapply(ok, function(x) x$tw, 0))))
   }
   if (length(errs))
-    warning(sprintf("gdal-direct: %d/%d source warps failed (e.g. %s)",
-                    length(errs), length(info), errs[[1L]]), call. = FALSE)
-  if (progress) message(sprintf("[gdal-direct] fetch+warp=%.2fs", t))
+    cli::cli_warn(sprintf("gdal-direct: %d/%d source warps failed (e.g. %s)",
+                    length(errs), length(info), errs[[1L]]))
+  if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+warp=%.2fs", t))
   info
 }
 
@@ -411,8 +411,8 @@ NULL
   errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
                  conditionMessage, "")
   if (length(errs))
-    warning(sprintf("gdal-direct: %d %s warps failed (e.g. %s)",
-                    length(errs), label, errs[[1L]]), call. = FALSE)
+    cli::cli_warn(sprintf("gdal-direct: %d %s warps failed (e.g. %s)",
+                    length(errs), label, errs[[1L]]))
 }
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
@@ -452,8 +452,9 @@ NULL
                               .compute = "default")[]
       bad <- which(vapply(res, function(x) inherits(x, "miraiError"), FALSE))
       if (length(bad))
-        stop("gdal-direct parallel compute failed on band ", bad[[1L]], ": ",
-             conditionMessage(res[[bad[[1L]]]]), call. = FALSE)
+        cli::cli_abort(paste0(
+          "gdal-direct parallel compute failed on band {bad[[1L]]}: ",
+          "{conditionMessage(res[[bad[[1L]]]])}"))
     } else {
       dev <- .exec_device(spec$device)
       cube <- function(ids)
@@ -480,7 +481,7 @@ NULL
     }
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    message(sprintf("[gdal-direct] %s compute=%.2fs",
+    cli::cli_inform(sprintf("[gdal-direct] %s compute=%.2fs",
                     if (parallel) "parallel" else "lean", tcomp))
   .gd_write_result(res, spec, path, nodata)
 }
@@ -540,7 +541,7 @@ NULL
   n_slices <- length(spec$band_srcs[[1L]])
   cap <- .gd_compute_cap(n_slices, ny, nx, .gd_n_compute(prof_c))
   if (progress && cap < length(spec$band_srcs))
-    message(sprintf("[gdal-direct] compute in-flight capped at %d (RAM budget)", cap))
+    cli::cli_inform(sprintf("[gdal-direct] compute in-flight capped at %d (RAM budget)", cap))
   mask_done <- !masked
   res_p <- vector("list", length(spec$band_srcs))
   res <- vector("list", length(spec$band_srcs))
@@ -549,8 +550,8 @@ NULL
     bi <- inflight[[1L]]; inflight <<- inflight[-1L]
     v <- res_p[[bi]][]
     if (inherits(v, "miraiError"))
-      stop("gdal-direct pipeline compute failed on band ", bi, ": ",
-           conditionMessage(v), call. = FALSE)
+      cli::cli_abort(
+        "gdal-direct pipeline compute failed on band {bi}: {conditionMessage(v)}")
     res[[bi]] <<- v
   }
   for (bi in seq_along(spec$band_srcs)) {
@@ -562,10 +563,10 @@ NULL
                                 jb = jb, kb = Kb, .compute = prof_c)
     inflight <- c(inflight, bi)
   }
-  if (progress) message(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
+  if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
                                 proc.time()[["elapsed"]] - t0))
   while (length(inflight)) harvest()
-  if (progress) message(sprintf("[gdal-direct] pipeline total=%.2fs",
+  if (progress) cli::cli_inform(sprintf("[gdal-direct] pipeline total=%.2fs",
                                 proc.time()[["elapsed"]] - t0))
   .gd_write_result(res, spec, path, nodata)
 }
@@ -642,7 +643,7 @@ NULL
     res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(gspec$sink_out)]]
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    message(sprintf("[gdal-direct] general compute=%.2fs", tcomp))
+    cli::cli_inform(sprintf("[gdal-direct] general compute=%.2fs", tcomp))
 
   m <- .sv_materialise(res)
   d <- dim(m)

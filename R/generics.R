@@ -96,8 +96,7 @@ S7::method(output_grid, ReduceNode) <- function(node, parent_grids) {
   dims <- pg@dims
   unknown <- setdiff(over, names(dims))
   if (length(unknown) > 0L)
-    stop("cannot reduce over missing dim(s): ",
-         paste(unknown, collapse = ", "))
+    cli::cli_abort("cannot reduce over missing dim(s): {unknown}")
 
   gt <- pg@transform
   if ("x" %in% over) {

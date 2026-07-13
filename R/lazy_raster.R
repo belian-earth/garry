@@ -121,7 +121,7 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
     x <- xs[[i]]
     stopifnot(S7::S7_inherits(x, LazyRaster))
     if (!grid_equal(xs[[1L]]@grid, x@grid))
-      stop("input ", i, " is not on the same grid; align() it first")
+      cli::cli_abort("input {i} is not on the same grid; {.fn align} it first")
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
     else graph_import(graph, x@graph, x@node_id)
   }, integer(1))
@@ -153,7 +153,7 @@ lazy_stack <- function(xs, along = "t") {
     x <- xs[[i]]
     stopifnot(S7::S7_inherits(x, LazyRaster))
     if (!grid_equal(xs[[1L]]@grid, x@grid))
-      stop("layer ", i, " is not on the same grid; align() it first")
+      cli::cli_abort("layer {i} is not on the same grid; {.fn align} it first")
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
     else graph_import(graph, x@graph, x@node_id)
   }, integer(1))
@@ -181,7 +181,7 @@ lazy_stack <- function(xs, along = "t") {
 # a's graph (decision D6) — users never manage graphs by hand.
 .lazy_binop <- function(a, b, op, divide = FALSE) {
   if (!grid_equal(a@grid, b@grid))
-    stop("grids differ; use align(a, b, to = ...) first")
+    cli::cli_abort("grids differ; use {.code align(a, b, to = ...)} first")
   graph <- a@graph
   b_id <- if (identical(graph@nodes, b@graph@nodes)) b@node_id
           else graph_import(graph, b@graph, b@node_id)
@@ -349,7 +349,7 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
     FocalNode,
     parents  = x@node_id,
     grid     = x@grid,
-    fn       = function(sh) stop("kernel focal is evaluated from weights"),
+    fn       = function(sh) cli::cli_abort("kernel focal is evaluated from weights", .internal = TRUE),
     radius   = radius,
     boundary = boundary,
     weights  = w

@@ -164,9 +164,9 @@ NULL
     error = function(e) e)
   if (!isTRUE(ok)) {
     if (!identical(garry_opt("read_fail"), "nodata"))
-      stop("fetch failed: ", location, " (", conditionMessage(ok), ")")
-    warning("fetch failed, writing nodata window: ", location, " (",
-            conditionMessage(ok), ")", call. = FALSE)
+      cli::cli_abort("fetch failed: {location} ({conditionMessage(ok)})")
+    cli::cli_warn(
+      "fetch failed, writing nodata window: {location} ({conditionMessage(ok)})")
     unlink(out_file)
     gdal_nodata_window(out_file, ext, crs, nodata)
   }
@@ -987,7 +987,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
       h <- inflight[[k]]
       if (!mirai::unresolved(h)) {
         if (inherits(h$data, c("miraiError", "errorValue")))
-          stop("task ", k, " failed on daemon: ", as.character(h$data))
+          cli::cli_abort("task {k} failed on daemon: {as.character(h$data)}")
         chunk_vals[[k]] <- h$data
         tasks[[k]]$state <- "done"
         done <- c(done, k)

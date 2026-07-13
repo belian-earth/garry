@@ -112,7 +112,7 @@ graph_toposort <- function(graph) {
   }
 
   if (length(order) != length(ids))
-    stop("graph has a cycle")
+    cli::cli_abort("graph has a cycle", .internal = TRUE)
   order
 }
 

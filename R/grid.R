@@ -56,8 +56,8 @@ dtype_valid <- function(dtype) {
 #' @return The promoted dtype string.
 #' @export
 dtype_promote <- function(a, b, divide = FALSE) {
-  if (!dtype_valid(a)) stop("invalid dtype: ", a)
-  if (!dtype_valid(b)) stop("invalid dtype: ", b)
+  if (!dtype_valid(a)) cli::cli_abort("invalid dtype: {.val {a}}")
+  if (!dtype_valid(b)) cli::cli_abort("invalid dtype: {.val {b}}")
 
   fa <- .dtype_family(a); fb <- .dtype_family(b)
   wa <- .dtype_width(a);  wb <- .dtype_width(b)
@@ -100,7 +100,7 @@ dtype_promote <- function(a, b, divide = FALSE) {
   hit <- .crs_cache[[crs]]
   if (!is.null(hit)) return(hit)
   wkt <- gdalraster::srs_to_wkt(crs)
-  if (!nzchar(wkt)) stop("cannot interpret CRS: ", crs)
+  if (!nzchar(wkt)) cli::cli_abort("cannot interpret CRS: {.val {crs}}")
   .crs_cache[[crs]] <- wkt
   wkt
 }
@@ -145,7 +145,7 @@ GridSpec <- S7::new_class(
   ),
   constructor = function(crs, transform, extent, dims, dtype) {
     if (!is.character(crs) || length(crs) != 1L || !nzchar(crs))
-      stop("`crs` must be a single non-empty string")
+      cli::cli_abort("{.arg crs} must be a single non-empty string")
     nm <- names(dims)              # as.integer() strips names; keep them
     dims <- as.integer(dims)
     names(dims) <- if (is.null(nm)) .dim_names[seq_along(dims)] else nm

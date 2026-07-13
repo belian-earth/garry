@@ -201,7 +201,7 @@ stac_gti_index <- function(sources, asset,
                            crs = "EPSG:4326") {
   stopifnot("slice" %in% names(sources))
   rows <- sources[sources$asset == asset, , drop = FALSE]
-  if (nrow(rows) == 0L) stop("no rows for asset: ", asset)
+  if (nrow(rows) == 0L) cli::cli_abort("no rows for asset: {.val {asset}}")
   entries <- rows[, c("location", "datetime", "slice", "cloud_cover",
                       "xmin", "ymin", "xmax", "ymax")]
   entries$cloud_cover[is.na(entries$cloud_cover)] <- -1

@@ -90,7 +90,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   dtype_name <- ds$getDataTypeName(band)
   dtype <- .gdal_dtype_map[[dtype_name]]
   if (is.null(dtype))
-    stop("unsupported GDAL data type: ", dtype_name)
+    cli::cli_abort("unsupported GDAL data type: {.val {dtype_name}}")
 
   nodata <- ds$getNoDataValue(band)
   nodata <- if (is.na(nodata)) numeric(0) else as.numeric(nodata)
@@ -181,7 +181,7 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
   }
   ok <- gdalraster::warp(src_path, vrt, t_srs = target_grid@crs,
                          cl_arg = args, quiet = TRUE)
-  if (!isTRUE(ok)) stop("gdalwarp to VRT failed for ", src_path)
+  if (!isTRUE(ok)) cli::cli_abort("gdalwarp to VRT failed for {.path {src_path}}")
   vrt
 }
 
@@ -199,11 +199,11 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
 gdal_create_output <- function(path, grid, nodata = numeric(0),
                                options = c("COMPRESS=DEFLATE")) {
   dt <- .gdal_dtype_rev[[grid@dtype]]
-  if (is.null(dt)) stop("cannot write dtype: ", grid@dtype)
+  if (is.null(dt)) cli::cli_abort("cannot write dtype: {.val {grid@dtype}}")
   outer <- grid@dims[!names(grid@dims) %in% c("x", "y")]
   if (length(outer) > 1L)
-    stop("cannot write a grid with more than one non-spatial dim (",
-         paste(names(outer), collapse = ", "), ")")
+    cli::cli_abort(
+      "cannot write a grid with more than one non-spatial dim ({names(outer)})")
   n_bands <- if (length(outer) == 1L) as.integer(outer[[1L]]) else 1L
   ds <- gdalraster::create("GTiff", path,
                            grid@dims[["x"]], grid@dims[["y"]], n_bands, dt,
@@ -244,8 +244,9 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
   if (length(nodata) == 1L) {
     v[is.na(v)] <- nodata
   } else if (anyNA(v) && .dtype_family(dtype) != "float") {
-    stop("result contains nodata (NaN) but no `nodata` sentinel was ",
-         "given for integer output dtype ", dtype)
+    cli::cli_abort(paste0(
+      "result contains nodata (NaN) but no {.arg nodata} sentinel was ",
+      "given for integer output dtype {.val {dtype}}"))
   }
   ds$write(as.integer(band), x_off, y_off, nc, nr, v)
   invisible(NULL)
@@ -351,7 +352,7 @@ gti_index_create <- function(entries, path, crs, layer = "index") {
   fmt <- if (grepl("\\.fgb$", path)) "FlatGeobuf" else "GPKG"
   if (!gdalraster::ogr_ds_create(fmt, path, layer = layer,
                                  layer_defn = defn))
-    stop("failed to create GTI index dataset: ", path)
+    cli::cli_abort("failed to create GTI index dataset: {.path {path}}")
 
   v <- methods::new(gdalraster::GDALVector, path, layer, read_only = FALSE)
   on.exit(v$close(), add = TRUE)
@@ -362,7 +363,7 @@ gti_index_create <- function(entries, path, crs, layer = "index") {
         entries[i, c("xmin", "ymin", "xmax", "ymax")]))
     }
     if (!v$createFeature(ft))
-      stop("failed to write index feature ", i)
+      cli::cli_abort("failed to write index feature {i}")
   }
   # Sidecar for the distributed scheduler's fetch/assemble split
   # (phase 12): the entries table lets the scheduler turn a remote

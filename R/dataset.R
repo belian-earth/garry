@@ -185,7 +185,7 @@ as_dataset <- function(bands, mask_asset = NULL) {
 # stack of its slices.
 S7::method(`[[`, LazyDataset) <- function(x, i) {
   b <- x@bands[[i]]
-  if (is.null(b)) stop("no such band: ", i)
+  if (is.null(b)) cli::cli_abort("no such band: {.val {i}}")
   if (length(b) == 1L) b[[1L]] else lazy_stack(unname(b), along = "t")
 }
 
@@ -207,8 +207,9 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 .ds_map <- function(xs, fn, dtype, bands) {
   x <- xs[[1L]]
   if (length(xs) > 1L)
-    stop("lazy_map() over a LazyDataset takes one dataset; extract bands with ",
-         "`ds[[\"B04\"]]` for cross-band math")
+    cli::cli_abort(c(
+      "{.fn lazy_map} over a LazyDataset takes one dataset.",
+      "i" = "Extract bands with {.code ds[[\"B04\"]]} for cross-band math."))
   sel <- bands %||% .ds_value_bands(x)
   newbands <- x@bands
   for (a in sel)
@@ -273,9 +274,11 @@ stack_bands <- function(x) {
   stopifnot(S7::S7_inherits(x, LazyDataset))
   nl <- vapply(x@bands, length, integer(1))
   if (any(nl != 1L))
-    stop("stack_bands() needs one layer per band; reduce time first ",
-         "(reduce_over(ds, \"median\", \"t\")). Stacking bands over a time ",
-         "dimension (4D) is not yet supported (design/ir-extensions-todo.md #3).")
+    cli::cli_abort(c(
+      "{.fn stack_bands} needs one layer per band.",
+      "i" = "Reduce time first, e.g. {.code reduce_over(ds, \"median\", \"t\")}.",
+      "i" = paste("Stacking bands over a time dimension (4D) is not yet",
+                  "supported (design/ir-extensions-todo.md #3).")))
   layers <- lapply(x@bands, function(b) b[[1L]])
   if (length(layers) == 1L) return(layers[[1L]])
   lazy_stack(unname(layers), along = "band")
@@ -314,7 +317,7 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
   stopifnot(S7::S7_inherits(x, LazyDataset))
   if (is.null(from)) {
     if (length(x@mask_asset) == 0L)
-      stop("no `from` band given and the dataset has no mask_asset")
+      cli::cli_abort("no {.arg from} band given and the dataset has no mask_asset")
     from <- x@mask_asset
   }
   stopifnot(length(from) == 1L, from %in% names(x@bands))
@@ -358,8 +361,9 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
   if (!is.null(sl) && !is.null(names(masks)) && all(sl %in% names(masks)))
     return(lapply(sl, function(s) list(v = layers[[s]], m = masks[[s]])))
   if (length(layers) != length(masks))
-    stop("band '", band, "' has ", length(layers), " slices but mask band '",
-         from, "' has ", length(masks), "; slices do not align")
+    cli::cli_abort(paste0(
+      "band {.val {band}} has {length(layers)} slices but mask band ",
+      "{.val {from}} has {length(masks)}; slices do not align"))
   Map(function(v, m) list(v = v, m = m), layers, masks)
 }
 
@@ -394,7 +398,8 @@ qa_bits <- function(bits) {
       g_cast(Reduce(`+`, ind) > 0, "f32")
     })
   }
-  stop("`where` must be a predicate function, a numeric value set, or qa_bits()")
+  cli::cli_abort(
+    "{.arg where} must be a predicate function, a numeric value set, or {.fn qa_bits}")
 }
 
 # Binary morphology on a 0/1 mask, disk structuring element. Erosion of a 0/1
@@ -438,7 +443,7 @@ qa_bits <- function(bits) {
 .ds_ds_arith <- function(a, b, op, sym) {
   common <- intersect(.ds_value_bands(a), .ds_value_bands(b))
   if (length(common) == 0L)
-    stop("datasets share no value bands to combine")
+    cli::cli_abort("datasets share no value bands to combine")
   newbands <- list()
   for (nm in common) {
     la <- a@bands[[nm]]
