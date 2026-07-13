@@ -25,6 +25,13 @@ LazyRaster <- S7::new_class(
   )
 )
 
+# Friendly type guard for public entry points.
+.assert_class <- function(x, cls, name, arg = rlang::caller_arg(x),
+                          call = rlang::caller_env()) {
+  if (!S7::S7_inherits(x, cls))
+    cli::cli_abort("{.arg {arg}} must be a {.cls {name}}.", call = call)
+}
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -70,7 +77,7 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
     nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
     block_dim <- meta$block_dim
   } else {
-    stopifnot(S7::S7_inherits(grid, GridSpec))
+    .assert_class(grid, GridSpec, "GridSpec")
     nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
     block_dim <- if (is.null(block_dim)) integer(0) else as.integer(block_dim)
   }
@@ -119,7 +126,8 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   graph <- xs[[1L]]@graph
   ids <- vapply(seq_along(xs), function(i) {
     x <- xs[[i]]
-    stopifnot(S7::S7_inherits(x, LazyRaster))
+    if (!S7::S7_inherits(x, LazyRaster))
+      cli::cli_abort("input {i} must be a {.cls LazyRaster}")
     if (!grid_equal(xs[[1L]]@grid, x@grid))
       cli::cli_abort("input {i} is not on the same grid; {.fn align} it first")
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
@@ -151,7 +159,8 @@ lazy_stack <- function(xs, along = "t") {
   graph <- xs[[1L]]@graph
   ids <- vapply(seq_along(xs), function(i) {
     x <- xs[[i]]
-    stopifnot(S7::S7_inherits(x, LazyRaster))
+    if (!S7::S7_inherits(x, LazyRaster))
+      cli::cli_abort("layer {i} must be a {.cls LazyRaster}")
     if (!grid_equal(xs[[1L]]@grid, x@grid))
       cli::cli_abort("layer {i} is not on the same grid; {.fn align} it first")
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
@@ -266,7 +275,7 @@ for (op_name in c("+", "-", "*", "/")) {
 focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset))
     return(.ds_focal(x, fn, radius, rlang::arg_match(boundary, "nodata"), bands))
-  stopifnot(S7::S7_inherits(x, LazyRaster))
+  .assert_class(x, LazyRaster, "LazyRaster")
   boundary <- rlang::arg_match(boundary, "nodata")
   id <- graph_add(
     x@graph,
@@ -301,7 +310,7 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
 reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset))
     return(.ds_reduce(x, op, over, isTRUE(nan_rm), bands))
-  stopifnot(S7::S7_inherits(x, LazyRaster))
+  .assert_class(x, LazyRaster, "LazyRaster")
   # A custom reducer arrives as a function: an anvl kernel `fn(x, dims)`
   # collapsing `dims` (e.g. per-pixel OLS/harmonic fit over time). Carried on
   # the node as `fn`; `op` becomes the sentinel "custom" (dtype = parent's).
@@ -337,7 +346,7 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
 #' @return A `LazyRaster`.
 #' @export
 focal_kernel <- function(x, weights, boundary = "nodata") {
-  stopifnot(S7::S7_inherits(x, LazyRaster))
+  .assert_class(x, LazyRaster, "LazyRaster")
   boundary <- rlang::arg_match(boundary, "nodata")
   weights <- as.matrix(weights)
   stopifnot(nrow(weights) == ncol(weights), nrow(weights) %% 2L == 1L)
@@ -377,9 +386,9 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' @return A `LazyRaster` on the target grid.
 #' @export
 align <- function(x, to, resampling = "bilinear") {
-  stopifnot(S7::S7_inherits(x, LazyRaster))
+  .assert_class(x, LazyRaster, "LazyRaster")
   target <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
-  stopifnot(S7::S7_inherits(target, GridSpec))
+  .assert_class(target, GridSpec, "GridSpec", arg = "to")
   target <- .grid_retype(target, x@grid@dtype)
   if (grid_equal(x@grid, target)) return(x)
   id <- graph_add(

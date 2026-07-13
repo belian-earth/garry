@@ -40,7 +40,7 @@ NULL
 # extent snapped out to whole multiples of res, with matching integer dims.
 .grid_from_extent <- function(crs, extent, res, buffer, dtype) {
   res <- rep(as.numeric(res), length.out = 2L)
-  stopifnot(all(res > 0))
+  if (any(res <= 0)) cli::cli_abort("{.arg res} must be positive.")
   e <- extent + c(-buffer, -buffer, buffer, buffer)
   xmin <- floor(e[[1L]] / res[[1L]]) * res[[1L]]
   xmax <- ceiling(e[[3L]] / res[[1L]]) * res[[1L]]
@@ -81,8 +81,11 @@ NULL
 grid_from_bbox <- function(bbox, res,
                            projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
                            ellps = "WGS84", buffer = 0, dtype = "f32") {
-  stopifnot(is.numeric(bbox), length(bbox) == 4L,
-            bbox[[1L]] < bbox[[3L]], bbox[[2L]] < bbox[[4L]])
+  if (!is.numeric(bbox) || length(bbox) != 4L ||
+      bbox[[1L]] >= bbox[[3L]] || bbox[[2L]] >= bbox[[4L]])
+    cli::cli_abort(paste(
+      "{.arg bbox} must be numeric c(xmin, ymin, xmax, ymax)",
+      "with xmin < xmax and ymin < ymax."))
   projection <- rlang::arg_match(projection)
   proj <- .project_bbox(as.numeric(bbox), projection, ellps)
   .grid_from_extent(proj$crs, proj$extent, res, buffer, dtype)
@@ -106,7 +109,8 @@ grid_from_bbox <- function(bbox, res,
 grid_from_src <- function(x, res,
                           projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
                           ellps = "WGS84", buffer = 0, dtype = "f32") {
-  stopifnot(is.character(x), length(x) == 1L, nzchar(x))
+  if (!is.character(x) || length(x) != 1L || !nzchar(x))
+    cli::cli_abort("{.arg x} must be a single path or URL to a vector source.")
   grid_from_bbox(gdal_vector_bbox_ll(x), res, projection = rlang::arg_match(projection),
                  ellps = ellps, buffer = buffer, dtype = dtype)
 }

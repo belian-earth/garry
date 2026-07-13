@@ -115,7 +115,9 @@ LazyDataset <- S7::new_class(
 lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
                          granularity = "day", sort_field = "datetime",
                          nodata = NULL, lon = NULL) {
-  stopifnot(S7::S7_inherits(grid, GridSpec), length(assets) >= 1L)
+  .assert_class(grid, GridSpec, "GridSpec")
+  if (length(assets) < 1L)
+    cli::cli_abort("{.arg assets} must name at least one asset.")
   all_assets <- unique(c(assets, mask_asset))
   sources <- stac_time_slices(sources, granularity, lon = lon)
 
@@ -164,7 +166,8 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
 #' @return A `LazyDataset`.
 #' @export
 as_dataset <- function(bands, mask_asset = NULL) {
-  stopifnot(is.list(bands), length(bands) >= 1L, !is.null(names(bands)))
+  if (!is.list(bands) || length(bands) < 1L || is.null(names(bands)))
+    cli::cli_abort("{.arg bands} must be a non-empty named list.")
   norm <- lapply(bands, function(b) {
     if (S7::S7_inherits(b, LazyRaster)) list(b) else as.list(b)
   })
@@ -271,7 +274,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 #'   stack).
 #' @export
 stack_bands <- function(x) {
-  stopifnot(S7::S7_inherits(x, LazyDataset))
+  .assert_class(x, LazyDataset, "LazyDataset")
   nl <- vapply(x@bands, length, integer(1))
   if (any(nl != 1L))
     cli::cli_abort(c(
@@ -314,13 +317,14 @@ stack_bands <- function(x) {
 #' @return A `LazyDataset` with masked value bands.
 #' @export
 mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
-  stopifnot(S7::S7_inherits(x, LazyDataset))
+  .assert_class(x, LazyDataset, "LazyDataset")
   if (is.null(from)) {
     if (length(x@mask_asset) == 0L)
       cli::cli_abort("no {.arg from} band given and the dataset has no mask_asset")
     from <- x@mask_asset
   }
-  stopifnot(length(from) == 1L, from %in% names(x@bands))
+  if (length(from) != 1L || !from %in% names(x@bands))
+    cli::cli_abort("{.arg from} must name one band: {.val {names(x@bands)}}.")
   pred <- .mask_predicate(where)
 
   masks <- lapply(x@bands[[from]], function(qlr) {
