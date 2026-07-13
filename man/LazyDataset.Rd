@@ -4,7 +4,12 @@
 \alias{LazyDataset}
 \title{A named, multi-band, multi-time lazy dataset.}
 \usage{
-LazyDataset(graph = Graph(), bands = list(), mask_asset = character(0))
+LazyDataset(
+  graph = Graph(),
+  bands = list(),
+  mask_asset = character(0),
+  steps = list()
+)
 }
 \arguments{
 \item{graph}{The shared IR \code{Graph}.}
@@ -12,6 +17,9 @@ LazyDataset(graph = Graph(), bands = list(), mask_asset = character(0))
 \item{bands}{Named list; each element is a list of per-slice \code{LazyRaster}s.}
 
 \item{mask_asset}{Length-0 or length-1 name of the QA/mask band, if any.}
+
+\item{steps}{Display-only pipeline log (list of \code{.step()}s), shown by
+\code{draw()}; does not affect execution.}
 }
 \value{
 A \code{LazyDataset}.

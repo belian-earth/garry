@@ -393,13 +393,4 @@ align <- function(x, to, resampling = "bilinear") {
   LazyRaster(graph = x@graph, node_id = id, grid = target)
 }
 
-# `print` via S7
-S7::method(print, LazyRaster) <- function(x, ...) {
-  cat("<LazyRaster>\n")
-  cat("  node_id:", x@node_id, "\n")
-  cat("  crs:    ", x@grid@crs, "\n")
-  cat("  dim:    ", paste(x@grid@dims, collapse = " x "), "\n")
-  cat("  dtype:  ", x@grid@dtype, "\n")
-  cat("  nodes:  ", length(graph_ids(x@graph)), "in graph\n")
-  invisible(x)
-}
+# print() cards and draw() live in draw.R.

@@ -29,6 +29,8 @@ NULL
 #' @param graph The shared IR `Graph`.
 #' @param bands Named list; each element is a list of per-slice `LazyRaster`s.
 #' @param mask_asset Length-0 or length-1 name of the QA/mask band, if any.
+#' @param steps Display-only pipeline log (list of `.step()`s), shown by
+#'   `draw()`; does not affect execution.
 #' @return A `LazyDataset`.
 #' @export
 LazyDataset <- S7::new_class(
@@ -36,7 +38,8 @@ LazyDataset <- S7::new_class(
   properties = list(
     graph      = Graph,
     bands      = S7::class_list,
-    mask_asset = S7::class_character
+    mask_asset = S7::class_character,
+    steps      = S7::class_list
   ),
   validator = function(self) {
     if (length(self@bands) < 1L || is.null(names(self@bands)))
@@ -54,6 +57,26 @@ LazyDataset <- S7::new_class(
 
 # Value bands are every band except the QA/mask band.
 .ds_value_bands <- function(x) setdiff(names(x@bands), x@mask_asset)
+
+# One display step for the pipeline log (see draw()); execution ignores it.
+.step <- function(kind, label, detail = NULL) {
+  list(kind = kind, label = label, detail = detail)
+}
+
+# Format an integer set as compact ranges, e.g. 0:3 -> "0-3",
+# c(0,1,2,3,8,9,10,11) -> "0-3, 8-11". Uses an en dash when UTF-8.
+.rng <- function(v) {
+  v <- sort(unique(as.integer(v)))
+  if (!length(v)) return("")
+  dash <- if (cli::is_utf8_output()) "–" else "-"
+  brk <- c(0L, which(diff(v) != 1L), length(v))
+  parts <- vapply(seq_len(length(brk) - 1L), function(i) {
+    seg <- v[(brk[i] + 1L):brk[i + 1L]]
+    if (length(seg) == 1L) as.character(seg)
+    else paste0(seg[1L], dash, seg[length(seg)])
+  }, character(1))
+  paste(parts, collapse = ", ")
+}
 
 # Re-home a LazyRaster onto graph `g` (no-op if already there).
 .ds_reimport <- function(lr, g) {
@@ -125,7 +148,9 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
   bands <- bands[all_assets]               # preserve requested order
   LazyDataset(graph = graph, bands = bands,
               mask_asset = if (is.null(mask_asset)) character(0)
-                           else as.character(mask_asset))
+                           else as.character(mask_asset),
+              steps = list(.step("source", "source",
+                                 detail = max(vapply(bands, length, 1L)))))
 }
 
 #' Assemble a lazy dataset from existing rasters.
@@ -147,7 +172,9 @@ as_dataset <- function(bands, mask_asset = NULL) {
   bands2 <- lapply(norm, function(layers) lapply(layers, .ds_reimport, g = g))
   LazyDataset(graph = g, bands = bands2,
               mask_asset = if (is.null(mask_asset)) character(0)
-                           else as.character(mask_asset))
+                           else as.character(mask_asset),
+              steps = list(.step("source", "source",
+                                 detail = max(vapply(bands2, length, 1L)))))
 }
 
 # ---------------------------------------------------------------------------
@@ -166,21 +193,11 @@ S7::method(`[[`, LazyDataset) <- function(x, i) {
 S7::method(`[`, LazyDataset) <- function(x, i) {
   sub <- x@bands[i]
   LazyDataset(graph = x@graph, bands = sub,
-              mask_asset = intersect(x@mask_asset, names(sub)))
+              mask_asset = intersect(x@mask_asset, names(sub)),
+              steps = x@steps)
 }
 
-S7::method(print, LazyDataset) <- function(x, ...) {
-  g  <- .ds_grid(x)
-  nl <- vapply(x@bands, length, integer(1))
-  cat("<LazyDataset>\n")
-  cat("  bands:  ", paste(names(x@bands), collapse = ", "), "\n")
-  cat("  layers: ", paste(sprintf("%s=%d", names(nl), nl), collapse = ", "), "\n")
-  if (length(x@mask_asset)) cat("  mask:   ", x@mask_asset, "\n")
-  cat("  crs:    ", g@crs, "\n")
-  cat("  dim:    ", paste(g@dims[c("x", "y")], collapse = " x "), "\n")
-  cat("  nodes:  ", length(graph_ids(x@graph)), "in graph\n")
-  invisible(x)
-}
+# print() cards and draw() live in draw.R.
 
 # ---------------------------------------------------------------------------
 # Polymorphic-verb backends (dispatched from lazy_map/focal/reduce_over).
@@ -197,7 +214,9 @@ S7::method(print, LazyDataset) <- function(x, ...) {
   for (a in sel)
     newbands[[a]] <- lapply(x@bands[[a]],
                             function(lr) lazy_map(lr, fn = fn, dtype = dtype))
-  LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset)
+  LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset,
+              steps = c(x@steps, list(.step("map", "map",
+                        detail = paste(sel, collapse = " ")))))
 }
 
 .ds_focal <- function(x, fn, radius, boundary, bands) {
@@ -207,7 +226,11 @@ S7::method(print, LazyDataset) <- function(x, ...) {
     newbands[[a]] <- lapply(x@bands[[a]],
                             function(lr) focal(lr, fn = fn, radius = radius,
                                                boundary = boundary))
-  LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset)
+  LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset,
+              steps = c(x@steps, list(.step("focal", "focal",
+                        detail = sprintf("r=%d %s %s", radius,
+                                         cli::symbol$bullet %||% "-",
+                                         paste(sel, collapse = " "))))))
 }
 
 .ds_reduce <- function(x, op, over, nan_rm, bands) {
@@ -223,7 +246,11 @@ S7::method(print, LazyDataset) <- function(x, ...) {
     newbands[[a]] <- list(reduce_over(lr, op, over, nan_rm = nan_rm))
   }
   LazyDataset(graph = x@graph, bands = newbands,
-              mask_asset = intersect(x@mask_asset, names(newbands)))
+              mask_asset = intersect(x@mask_asset, names(newbands)),
+              steps = c(x@steps, list(.step("reduce", "reduce",
+                        detail = sprintf("%s over %s",
+                                 if (is.function(op)) "custom" else op,
+                                 paste(over, collapse = ","))))))
 }
 
 # ---------------------------------------------------------------------------
@@ -312,8 +339,16 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
       lapply(pair, function(p) apply_mask(p$v, p$m)), names(layers))
   }
   if (!drop) newbands[[from]] <- x@bands[[from]]
+
+  where_desc <- attr(where, "garry_desc") %||%
+    if (is.numeric(where)) paste0("values ", .rng(where)) else "predicate"
+  morph <- c(if (open   > 0L) sprintf("open %d", open),
+             if (dilate > 0L) sprintf("dilate %d", dilate))
+  detail <- paste(c(sprintf("from %s", from), where_desc, morph),
+                  collapse = sprintf(" %s ", cli::symbol$bullet %||% "-"))
   LazyDataset(graph = x@graph, bands = newbands,
-              mask_asset = if (drop) character(0) else x@mask_asset)
+              mask_asset = if (drop) character(0) else x@mask_asset,
+              steps = c(x@steps, list(.step("mask", "mask", detail = detail))))
 }
 
 # Pair each value-band layer with the mask for its slice, by slice name when
@@ -341,10 +376,12 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
 #' @export
 qa_bits <- function(bits) {
   m <- as.integer(sum(2^as.integer(bits)))
-  function(f) {
+  fn <- function(f) {
     fc <- g_ifelse(g_is_nodata(f), 0, f)
     g_cast(g_bitand(g_cast(fc, "i32"), m) > 0, "f32")
   }
+  attr(fn, "garry_desc") <- paste0("bits ", .rng(bits))
+  fn
 }
 
 # Resolve `where` to a predicate fn(traced array) -> 0/1 f32 mask.
@@ -387,15 +424,18 @@ qa_bits <- function(bits) {
 # graph merging follow the same rules.
 # ---------------------------------------------------------------------------
 
-.ds_scalar_arith <- function(ds, s, op, scalar_first) {
+.ds_scalar_arith <- function(ds, s, op, sym, scalar_first) {
   newbands <- ds@bands
   for (a in .ds_value_bands(ds))
     newbands[[a]] <- lapply(ds@bands[[a]], function(lr)
       if (scalar_first) op(s, lr) else op(lr, s))
-  LazyDataset(graph = ds@graph, bands = newbands, mask_asset = ds@mask_asset)
+  detail <- if (scalar_first) sprintf("%s %s bands", s, sym)
+            else sprintf("bands %s %s", sym, s)
+  LazyDataset(graph = ds@graph, bands = newbands, mask_asset = ds@mask_asset,
+              steps = c(ds@steps, list(.step("math", "math", detail = detail))))
 }
 
-.ds_ds_arith <- function(a, b, op) {
+.ds_ds_arith <- function(a, b, op, sym) {
   common <- intersect(.ds_value_bands(a), .ds_value_bands(b))
   if (length(common) == 0L)
     stop("datasets share no value bands to combine")
@@ -407,15 +447,17 @@ qa_bits <- function(bits) {
     newbands[[nm]] <- stats::setNames(
       lapply(pair, function(p) op(p$v, p$m)), names(la))
   }
-  LazyDataset(graph = a@graph, bands = newbands, mask_asset = character(0))
+  LazyDataset(graph = a@graph, bands = newbands, mask_asset = character(0),
+              steps = c(a@steps, list(.step("math", "math",
+                        detail = sprintf("bands %s dataset", sym)))))
 }
 
 for (op_name in c("+", "-", "*", "/")) {
   op_fn <- get(op_name, envir = baseenv())
   S7::method(op_fn, list(LazyDataset, LazyDataset)) <-
-    local({ f <- op_fn; function(e1, e2) .ds_ds_arith(e1, e2, f) })
+    local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_ds_arith(e1, e2, f, s) })
   S7::method(op_fn, list(LazyDataset, S7::class_numeric)) <-
-    local({ f <- op_fn; function(e1, e2) .ds_scalar_arith(e1, e2, f, FALSE) })
+    local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_scalar_arith(e1, e2, f, s, FALSE) })
   S7::method(op_fn, list(S7::class_numeric, LazyDataset)) <-
-    local({ f <- op_fn; function(e1, e2) .ds_scalar_arith(e2, e1, f, TRUE) })
+    local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_scalar_arith(e2, e1, f, s, TRUE) })
 }
