@@ -33,12 +33,9 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
       cli::cli_abort(c(
         "{.arg distributed} is TRUE but no garry daemon pools are running.",
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
-    spec <- .cd_spec(p)               # lean cube path (no-focal composite)
+    spec <- .cd_spec(p)               # GDAL-direct composite fast path
     if (!is.null(spec))
       return(.execute_composite_direct(p, spec, path = path, nodata = nodata))
-    gspec <- .gd_spec(p)              # general IR replay (focal, any cube shape)
-    if (!is.null(gspec))
-      return(.execute_gd_general(p, gspec, path = path, nodata = nodata))
     return(execute_plan_mirai(p, path = path, nodata = nodata))
   }
   execute_plan(p, path = path, nodata = nodata)

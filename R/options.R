@@ -78,10 +78,6 @@
   # the plan falls through. Calibrated ~ the 3-band morphology crossover;
   # machine/link dependent, so tunable.
   gd_compute_budget = 2.2e8,
-  # Enable the general GDAL-direct whole-grid IR replay for NON-composite
-  # cube plans (.gd_spec). Off by default: the per-slice replay is slow for
-  # focal, and non-composite cube plans are rare -- they use the scheduler.
-  gd_general = FALSE,
   # Fraction of AVAILABLE RAM the fetch-ordered pipeline may commit to
   # concurrent compute working sets. Each band median holds ~3.5 cubes (band +
   # shared mask + median scratch); the pipeline caps how many run at once so
