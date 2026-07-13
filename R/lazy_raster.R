@@ -102,14 +102,20 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
 #' `dtype` when `fn` changes the value domain, e.g. `"f32"` for a mask
 #' that introduces NaN over an integer band.
 #'
-#' @param ... `LazyRaster` inputs (at least one).
+#' Over a `LazyDataset`, `fn` is applied to every value band (a single dataset
+#' input only); `bands` restricts which bands, and non-selected bands pass
+#' through unchanged.
+#'
+#' @param ... `LazyRaster` inputs (at least one), or a single `LazyDataset`.
 #' @param fn Function of as many arrays as there are inputs.
 #' @param dtype Optional output dtype override.
-#' @return A `LazyRaster`.
+#' @param bands `LazyDataset` only: bands to map over (default: all value bands).
+#' @return A `LazyRaster`, or a `LazyDataset` when given one.
 #' @export
-lazy_map <- function(..., fn, dtype = NULL) {
+lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   xs <- list(...)
   stopifnot(length(xs) >= 1L, is.function(fn))
+  if (S7::S7_inherits(xs[[1L]], LazyDataset)) return(.ds_map(xs, fn, dtype, bands))
   graph <- xs[[1L]]@graph
   ids <- vapply(seq_along(xs), function(i) {
     x <- xs[[i]]
@@ -245,14 +251,21 @@ for (op_name in c("+", "-", "*", "/")) {
 #' Cells beyond the raster edge are NaN (nodata) — v1 supports only this
 #' `boundary = "nodata"` policy; reflect/wrap arrive with Phase 9.
 #'
-#' @param x        LazyRaster.
+#' Over a `LazyDataset`, the stencil is applied to every value band per slice;
+#' `bands` restricts which bands.
+#'
+#' @param x        LazyRaster, or a `LazyDataset`.
 #' @param fn       Function over the list of shifted arrays (see above).
 #' @param radius   Halo in pixels (mandatory: the footprint cannot be
 #'                 inferred from `fn`; decision D14).
 #' @param boundary Boundary policy; only "nodata" in v1.
+#' @param bands    `LazyDataset` only: bands to apply to (default: all value
+#'                 bands).
 #'
 #' @export
-focal <- function(x, fn, radius, boundary = "nodata") {
+focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
+  if (S7::S7_inherits(x, LazyDataset))
+    return(.ds_focal(x, fn, radius, match.arg(boundary, "nodata"), bands))
   stopifnot(S7::S7_inherits(x, LazyRaster))
   boundary <- match.arg(boundary, "nodata")
   id <- graph_add(
@@ -274,13 +287,20 @@ focal <- function(x, fn, radius, boundary = "nodata") {
 #' rules. `nan_rm = TRUE` (the default) skips nodata, matching R's
 #' `na.rm = TRUE` under the NaN-sentinel model (D8).
 #'
-#' @param x A `LazyRaster`.
-#' @param op Reduction name, e.g. `"mean"`.
+#' Over a `LazyDataset`, each band is reduced independently (over `"t"`: stack
+#' the band's slices and collapse time to a composite); `bands` restricts which
+#' bands. `over = "band"` collapses the band axis, returning a `LazyRaster`.
+#'
+#' @param x A `LazyRaster`, or a `LazyDataset`.
+#' @param op Reduction name, e.g. `"mean"`, or a custom anvl reducer `fn(x, dims)`.
 #' @param over Names of dims to reduce over (subset of `names(dims)`).
 #' @param nan_rm Skip NaN (nodata) values?
-#' @return A `LazyRaster` on the reduced grid.
+#' @param bands `LazyDataset` only: bands to reduce (default: all bands).
+#' @return A `LazyRaster` on the reduced grid, or a `LazyDataset` when given one.
 #' @export
-reduce_over <- function(x, op, over, nan_rm = TRUE) {
+reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
+  if (S7::S7_inherits(x, LazyDataset))
+    return(.ds_reduce(x, op, over, isTRUE(nan_rm), bands))
   stopifnot(S7::S7_inherits(x, LazyRaster))
   # A custom reducer arrives as a function: an anvl kernel `fn(x, dims)`
   # collapsing `dims` (e.g. per-pixel OLS/harmonic fit over time). Carried on

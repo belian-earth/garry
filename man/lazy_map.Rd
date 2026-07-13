@@ -4,17 +4,19 @@
 \alias{lazy_map}
 \title{Elementwise map over one or more aligned rasters.}
 \usage{
-lazy_map(..., fn, dtype = NULL)
+lazy_map(..., fn, dtype = NULL, bands = NULL)
 }
 \arguments{
-\item{...}{\code{LazyRaster} inputs (at least one).}
+\item{...}{\code{LazyRaster} inputs (at least one), or a single \code{LazyDataset}.}
 
 \item{fn}{Function of as many arrays as there are inputs.}
 
 \item{dtype}{Optional output dtype override.}
+
+\item{bands}{\code{LazyDataset} only: bands to map over (default: all value bands).}
 }
 \value{
-A \code{LazyRaster}.
+A \code{LazyRaster}, or a \code{LazyDataset} when given one.
 }
 \description{
 \code{fn} receives one traced array per input raster and returns one
@@ -27,4 +29,8 @@ graphs auto-merge (D6).
 The output dtype defaults to the promoted input dtype (D3); pass
 \code{dtype} when \code{fn} changes the value domain, e.g. \code{"f32"} for a mask
 that introduces NaN over an integer band.
+
+Over a \code{LazyDataset}, \code{fn} is applied to every value band (a single dataset
+input only); \code{bands} restricts which bands, and non-selected bands pass
+through unchanged.
 }

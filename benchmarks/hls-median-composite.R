@@ -21,6 +21,9 @@
 # small explicit pool, the daemons share one GPU); GARRY_BENCH_MORPH=0 drops
 # the mask cleanup.
 # e.g.  Rscript benchmarks/hls-median-composite.R auto B04 B03 B02
+#
+# For a back-to-back garry-vs-ODC run (timings + a band-by-band output check),
+# use benchmarks/compare.sh (REPS=3 benchmarks/compare.sh).
 
 suppressMessages(library(garry))
 
@@ -82,112 +85,36 @@ if (identical(daemons_arg, "auto")) {
 options(garry.progress = TRUE, garry.device = device)
 
 t_all <- system.time({
-  # One GTI index per asset; each day is a FILTERed mosaic of that
-  # index, pinned to the target grid (mixed UTM zones warp per tile).
-  idx <- lapply(c(bands, "Fmask"), function(a) {
-    stac_gti_index(src, a, crs = target@crs)
-  })
-  names(idx) <- c(bands, "Fmask")
+  # One lazy dataset: a band per asset plus the Fmask QA band, each a
+  # per-day GTI mosaic pinned to the target grid (mixed UTM zones warp
+  # per tile), all on one shared IR graph. Value bands read -9999 -> NaN,
+  # Fmask reads 255 -> NaN. lazy_dataset() does the per-asset GTI index +
+  # single metadata probe that the manual scaffolding used to.
+  ds <- lazy_dataset(
+    src, grid = target, assets = bands, mask_asset = "Fmask",
+    granularity = "day", sort_field = "datetime",
+    nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
+  )
 
-  # One metadata probe per asset (dtype / native block); the 220
-  # per-slice sources then declare their grid instead of each opening
-  # the mosaic to rediscover it (~0.1s x 220, serial, on the host).
-  meta <- lapply(idx, function(p) {
-    gdal_grid_spec(paste0("GTI:", p), open_options = gti_open_options(target))
-  })
-
-  # One shared IR graph: the cleaned mask below is then a single
-  # subgraph consumed by every band's masking map (computed and
-  # materialised once per slice), instead of re-imported per band —
-  # cross-graph import only dedups sources (D6), not computed chains.
-  G <- graph_new()
-  slice_of <- function(asset, sl, nodata = NULL) {
-    lazy_source(
-      paste0("GTI:", idx[[asset]]),
-      graph = G,
-      nodata = nodata,
-      open_options = c(
-        gti_open_options(
-          target,
-          filter = sprintf("slice = '%s'", sl),
-          sort_field = "datetime"
-        ),
-        "NUM_THREADS=2"
-      ),
-      grid = meta[[asset]]$grid,
-      block_dim = meta[[asset]]$block_dim
-    )
-  }
-
-  # Mask cleanup (odc-algo mask_cleanup parity): binary morphology on
-  # the bad-pixel mask with disk structuring elements. Erosion of a
-  # 0/1 mask is the product over the disk offsets; dilation is its
-  # dual. The whole chain (bitand map + three focals, halo 2+2+3=7)
-  # fuses into one Fmask-source-fed stage (D11), materialised once
-  # per slice and shared by all bands. NaN (Fmask fill AND beyond-
-  # edge halo pad) maps to 0 = clear, matching scipy's constant-0
-  # border; true fill pixels are -9999 in the band data anyway.
+  # mask() derives the bad-pixel mask from Fmask (bits 0-3: cirrus /
+  # cloud / adjacent / shadow), cleans it with odc-algo morphology
+  # (opening(2) despeckle then dilation(3) buffer, disk elements),
+  # applies it to every value band, and drops Fmask. The cleaned mask is
+  # one shared subgraph computed once per slice and dedup'd across bands
+  # (D11 fuses the morphology); reduce_over collapses time per band; then
+  # collect() assembles the band axis and plans the whole dataset in one
+  # scheduler pass, keeping the network saturated end to end. NaN (Fmask
+  # fill and beyond-edge halo pad) reads as clear, matching scipy's
+  # constant-0 border.
   morph <- !identical(Sys.getenv("GARRY_BENCH_MORPH"), "0")
-  disk_sel <- function(r) {
-    o <- expand.grid(dx = -r:r, dy = -r:r)
-    which(o$dx^2 + o$dy^2 <= r^2)
-  }
-  erode <- function(x, r) {
-    sel <- disk_sel(r)
-    focal(x, radius = as.integer(r), fn = function(sh) Reduce(`*`, sh[sel]))
-  }
-  dilate <- function(x, r) {
-    sel <- disk_sel(r)
-    focal(x, radius = as.integer(r), fn = function(sh) {
-      1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))
-    })
-  }
-  bad_of <- function(sl) {
-    bad <- lazy_map(
-      slice_of("Fmask", sl, nodata = 255), # f32; fill/halo -> NaN
-      dtype = "f32",
-      fn = function(f) {
-        fc <- g_ifelse(g_is_nodata(f), 0, f)
-        g_cast(g_bitand(g_cast(fc, "i32"), 15L) > 0, "f32")
-      }
-    )
-    if (!morph) {
-      return(bad)
-    }
-    bad |>
-      erode(2) |>
-      dilate(2) |>
-      dilate(3) # opening(2), dilation(3)
-  }
-
-  # One composite per band; then ONE collect over the band stack. The
-  # merged graph dedups the shared Fmask subgraph — the cleaned mask
-  # is computed once per slice, not per band — and a single plan puts
-  # every band's reads into the scheduler ready-queue together,
-  # keeping the network saturated end to end.
-  cleaned <- lapply(slices, bad_of)
-  names(cleaned) <- slices
-  composites <- lapply(bands, function(band) {
-    masked <- lapply(slices, function(sl) {
-      lazy_map(
-        slice_of(band, sl, nodata = -9999), # reflectance: -9999 -> NaN
-        cleaned[[sl]],
-        dtype = "f32",
-        fn = function(x, cl) g_ifelse(cl > 0.5, NaN, x)
-      )
-    })
-    lazy_stack(masked) |>
-      reduce_over("median", "t", nan_rm = TRUE)
-  })
-
-  out <- if (length(composites) == 1L) {
-    composites[[1L]]
-  } else {
-    lazy_stack(composites, along = "band")
-  }
+  composite <- ds |>
+    mask(from = "Fmask", where = qa_bits(0:3),
+         open = if (morph) 2L else 0L, dilate = if (morph) 3L else 0L) |>
+    reduce_over("median", over = "t", nan_rm = TRUE)
 
   cat("graph built; planning + executing...\n")
-  collect(out, path = "composite_garry.tif", nodata = -9999, distributed = TRUE)
+  collect(composite, path = "composite_garry.tif", nodata = -9999,
+          distributed = TRUE)
 })
 cat(sprintf(
   "processing time (garry, %s, daemons %s): %.2fs\n",

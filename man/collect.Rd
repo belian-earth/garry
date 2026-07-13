@@ -7,7 +7,8 @@
 collect(x, plan_only = FALSE, path = NULL, nodata = NULL, distributed = FALSE)
 }
 \arguments{
-\item{x}{A \code{LazyRaster}.}
+\item{x}{A \code{LazyRaster}, or a \code{LazyDataset} (its bands are assembled along the
+band axis via \code{stack_bands()} first).}
 
 \item{plan_only}{Return the \code{Plan} instead of executing?}
 

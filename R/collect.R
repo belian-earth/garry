@@ -8,7 +8,8 @@ NULL
 #' without executing: the permanent introspection path. Execution
 #' arrives in Phase 5.
 #'
-#' @param x A `LazyRaster`.
+#' @param x A `LazyRaster`, or a `LazyDataset` (its bands are assembled along the
+#'   band axis via `stack_bands()` first).
 #' @param plan_only Return the `Plan` instead of executing?
 #' @param path Optional GTiff destination; the result is written chunk
 #'   by chunk and the path returned invisibly.
@@ -23,6 +24,7 @@ NULL
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = FALSE) {
+  if (S7::S7_inherits(x, LazyDataset)) x <- stack_bands(x)
   p <- plan_lazy(x)
   if (plan_only) return(p)
   if (distributed) {

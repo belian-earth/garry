@@ -4,10 +4,10 @@
 \alias{focal}
 \title{Focal (stencil) op.}
 \usage{
-focal(x, fn, radius, boundary = "nodata")
+focal(x, fn, radius, boundary = "nodata", bands = NULL)
 }
 \arguments{
-\item{x}{LazyRaster.}
+\item{x}{LazyRaster, or a \code{LazyDataset}.}
 
 \item{fn}{Function over the list of shifted arrays (see above).}
 
@@ -15,6 +15,9 @@ focal(x, fn, radius, boundary = "nodata")
 inferred from \code{fn}; decision D14).}
 
 \item{boundary}{Boundary policy; only "nodata" in v1.}
+
+\item{bands}{\code{LazyDataset} only: bands to apply to (default: all value
+bands).}
 }
 \description{
 \code{fn} receives a LIST of (2r+1)^2 shifted arrays, row-major over
@@ -27,4 +30,7 @@ anvl's jit() (D10/D14). Example, a 3x3 sum:
 \details{
 Cells beyond the raster edge are NaN (nodata) — v1 supports only this
 \code{boundary = "nodata"} policy; reflect/wrap arrive with Phase 9.
+
+Over a \code{LazyDataset}, the stencil is applied to every value band per slice;
+\code{bands} restricts which bands.
 }

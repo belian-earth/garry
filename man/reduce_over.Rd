@@ -4,23 +4,30 @@
 \alias{reduce_over}
 \title{Reduction over named dims.}
 \usage{
-reduce_over(x, op, over, nan_rm = TRUE)
+reduce_over(x, op, over, nan_rm = TRUE, bands = NULL)
 }
 \arguments{
-\item{x}{A \code{LazyRaster}.}
+\item{x}{A \code{LazyRaster}, or a \code{LazyDataset}.}
 
-\item{op}{Reduction name, e.g. \code{"mean"}.}
+\item{op}{Reduction name, e.g. \code{"mean"}, or a custom anvl reducer \code{fn(x, dims)}.}
 
 \item{over}{Names of dims to reduce over (subset of \code{names(dims)}).}
 
 \item{nan_rm}{Skip NaN (nodata) values?}
+
+\item{bands}{\code{LazyDataset} only: bands to reduce (default: all bands).}
 }
 \value{
-A \code{LazyRaster} on the reduced grid.
+A \code{LazyRaster} on the reduced grid, or a \code{LazyDataset} when given one.
 }
 \description{
 \code{op} is a reduction name (see \code{.reduce_ops}), not a function: the
 planner needs op identity for algebraic decomposition (D12) and dtype
 rules. \code{nan_rm = TRUE} (the default) skips nodata, matching R's
 \code{na.rm = TRUE} under the NaN-sentinel model (D8).
+}
+\details{
+Over a \code{LazyDataset}, each band is reduced independently (over \code{"t"}: stack
+the band's slices and collapse time to a composite); \code{bands} restricts which
+bands. \code{over = "band"} collapses the band axis, returning a \code{LazyRaster}.
 }

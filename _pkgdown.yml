@@ -2,3 +2,163 @@ url: ~
 template:
   bootstrap: 5
 
+# Reference grouped by API tier. This grouping is also the audit surface:
+# Tier 1 (Discovery / Cube algebra / Execution / Grids) is the API a normal
+# user touches; Tier 2 (anvl vocabulary / GDAL adapter / IR) is power-user and
+# extension surface, exported deliberately; "internal" is exported only to
+# cross the mirai daemon boundary and should not be considered public.
+reference:
+
+- title: Discovery & sources
+  desc: >
+    Turn a STAC search into grid-pinned lazy rasters. Entry point for remote
+    (Planetary Computer / element84) collections.
+  contents:
+  - stac_query
+  - stac_sources
+  - stac_filter_cloud
+  - stac_drop_duplicates
+  - stac_time_slices
+  - stac_gti_index
+  - lazy_stac_stack
+  - lazy_source
+
+- title: Datasets
+  desc: >
+    The named multi-band, multi-time object; verbs apply across every band.
+    Build from a STAC table or from rasters, mask from a QA band, collapse the
+    band axis.
+  contents:
+  - lazy_dataset
+  - as_dataset
+  - LazyDataset
+  - mask
+  - qa_bits
+  - stack_bands
+
+- title: Raster & dataset algebra
+  desc: >
+    Lazily build and transform rasters and datasets. Every verb adds IR nodes
+    and returns a new lazy object; nothing reads or computes until collect().
+  contents:
+  - lazy_map
+  - lazy_stack
+  - focal
+  - focal_kernel
+  - reduce_over
+  - align
+
+- title: Execution
+  desc: Plan, distribute across daemons, and write the result.
+  contents:
+  - collect
+  - garry_daemons
+  - garry_gdal_config
+  - garry_opt
+
+- title: Grids & spatial helpers
+  desc: Define and interrogate the analysis grid; dtype rules.
+  contents:
+  - grid_spec
+  - gdal_grid_spec
+  - res
+  - xmin
+  - xmax
+  - ymin
+  - ymax
+  - as_vaster_extent
+  - grid_equal
+  - crs_equal
+  - dtype_valid
+  - dtype_promote
+  - snap_to_blocks
+  - output_grid
+
+- title: anvl compute vocabulary
+  desc: >
+    The g_* traced-array ops for writing map/focal/reducer functions. These run
+    fused inside an XLA stage under both the pure-R oracle and PJRT.
+  contents:
+  - g_ifelse
+  - g_is_nodata
+  - g_cast
+  - g_pad
+  - g_shift_slice
+  - g_stack
+  - g_index_scalar
+  - g_bitand
+  - g_bitor
+  - g_bitxor
+  - g_bitnot
+  - g_shiftl
+  - g_shiftr
+  - g_sum
+  - g_mean
+  - g_min
+  - g_max
+  - g_median
+  - g_count
+  - g_jit
+  - g_upload
+  - g_download
+  - g_upload_raw
+  - g_download_raw
+  - g_value_and_gradient
+  - lazy_value_and_grad
+
+- title: GDAL adapter (low-level IO)
+  desc: >
+    Direct windowed read/write, warp, and GTI index construction. Used by the
+    cube layer; exposed for bespoke IO.
+  contents:
+  - gdal_read_window
+  - gdal_write_window
+  - gdal_create_output
+  - gdal_warp_vrt
+  - gti_index_create
+  - gti_open_options
+
+- title: IR & planner (extension API)
+  desc: >
+    The intermediate representation and planner. Needed only to build on the IR
+    directly (custom nodes, alternate executors) — not for normal use.
+  contents:
+  - LazyRaster
+  - GridSpec
+  - Graph
+  - ChunkGrid
+  - Stage
+  - Plan
+  - Node
+  - SourceNode
+  - MapNode
+  - FocalNode
+  - ReduceNode
+  - WarpNode
+  - StackNode
+  - FusedNode
+  - graph_new
+  - graph_add
+  - graph_get
+  - graph_ids
+  - graph_toposort
+  - graph_replace
+  - graph_import
+  - plan_lazy
+  - plan_dot
+  - execute_plan
+  - execute_plan_mirai
+  - fusable
+  - is_barrier
+  - required_halo
+  - chunk_iter
+  - chunk_window_with_halo
+  - cross_grid_window
+
+- title: internal
+  desc: >
+    Exported only so mirai daemons can call them across the process boundary.
+    Not public API; do not depend on these.
+  contents:
+  - has_keyword("internal")
+  - starts_with(".")
