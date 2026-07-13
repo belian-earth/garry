@@ -470,3 +470,15 @@ gti_open_options <- function(grid = NULL, filter = NULL,
   }
   oo
 }
+
+# Read a vector source's bounding box in lon/lat (EPSG:4326). Lives in the
+# adapter because it opens a GDALVector (decision D13); grid_from_src() calls it.
+gdal_vector_bbox_ll <- function(x) {
+  vec <- methods::new(gdalraster::GDALVector, x)
+  on.exit(vec$close())
+  bb  <- as.numeric(vec$bbox())
+  srs <- vec$getSpatialRef()
+  if (nzchar(srs) && !crs_equal(srs, gdalraster::srs_to_wkt("EPSG:4326")))
+    bb <- as.numeric(gdalraster::transform_bounds(bb, srs, "EPSG:4326"))
+  bb
+}

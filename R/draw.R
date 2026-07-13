@@ -181,7 +181,13 @@ S7::method(print, LazyDataset) <- function(x, ...) {
   if (length(m) == 1L && nzchar(m))
     return(paste0("EPSG:", sub('.*?([0-9]+).*', "\\1", m)))
   nm <- tryCatch(gdalraster::srs_get_name(crs), error = function(e) "")
-  if (length(nm) == 1L && nzchar(nm)) nm else "(custom)"
+  if (length(nm) == 1L && nzchar(nm) && !identical(tolower(nm), "unknown"))
+    return(nm)
+  # Bespoke CRS (e.g. a centred LAEA): name the projection method instead.
+  pm <- regmatches(crs, regexpr('PROJECTION\\["[^"]+"', crs))
+  if (length(pm) == 1L && nzchar(pm))
+    return(gsub("_", " ", gsub('PROJECTION\\["|"$', "", pm)))
+  "(custom)"
 }
 
 # ---------------------------------------------------------------------------
