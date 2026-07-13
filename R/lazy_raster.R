@@ -147,7 +147,7 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
 #' @export
 lazy_stack <- function(xs, along = "t") {
   stopifnot(is.list(xs), length(xs) >= 1L)
-  along <- match.arg(along, c("t", "band"))
+  along <- rlang::arg_match(along, c("t", "band"))
   graph <- xs[[1L]]@graph
   ids <- vapply(seq_along(xs), function(i) {
     x <- xs[[i]]
@@ -265,9 +265,9 @@ for (op_name in c("+", "-", "*", "/")) {
 #' @export
 focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset))
-    return(.ds_focal(x, fn, radius, match.arg(boundary, "nodata"), bands))
+    return(.ds_focal(x, fn, radius, rlang::arg_match(boundary, "nodata"), bands))
   stopifnot(S7::S7_inherits(x, LazyRaster))
-  boundary <- match.arg(boundary, "nodata")
+  boundary <- rlang::arg_match(boundary, "nodata")
   id <- graph_add(
     x@graph,
     FocalNode,
@@ -338,7 +338,7 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
 #' @export
 focal_kernel <- function(x, weights, boundary = "nodata") {
   stopifnot(S7::S7_inherits(x, LazyRaster))
-  boundary <- match.arg(boundary, "nodata")
+  boundary <- rlang::arg_match(boundary, "nodata")
   weights <- as.matrix(weights)
   stopifnot(nrow(weights) == ncol(weights), nrow(weights) %% 2L == 1L)
   radius <- (nrow(weights) - 1L) %/% 2L

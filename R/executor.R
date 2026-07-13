@@ -23,7 +23,7 @@ NULL
 .exec_read_padded <- function(path, band, nodata, cg, core,
                               open_options = character(0),
                               out = c("matrix", "raw_f32")) {
-  out <- match.arg(out)
+  out <- rlang::arg_match(out)
   H <- cg@halo
   # Raw store payloads (D19) only take the halo-free path: padding
   # embeds into a matrix buffer below.

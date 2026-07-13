@@ -22,9 +22,7 @@ NULL
 # ---------------------------------------------------------------------------
 
 .require_rstac <- function() {
-  if (!requireNamespace("rstac", quietly = TRUE))
-    stop("the rstac package is required for STAC queries; ",
-         "install.packages(\"rstac\")", call. = FALSE)
+  rlang::check_installed("rstac", reason = "for STAC queries.")
 }
 
 #' Query a STAC API and return the item collection.
@@ -152,7 +150,7 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
                                                       "exact",
                                                       "solar_day"),
                              lon = NULL) {
-  granularity <- match.arg(granularity)
+  granularity <- rlang::arg_match(granularity)
   sources$slice <- switch(granularity,
     day = substr(sources$datetime, 1L, 10L),
     month = substr(sources$datetime, 1L, 7L),

@@ -26,9 +26,10 @@
 }
 
 .require_anvl <- function() {
-  if (!requireNamespace("anvl", quietly = TRUE))
-    stop("the anvl package is required for execution; install it from ",
-         "https://r-xla.r-universe.dev", call. = FALSE)
+  if (!rlang::is_installed("anvl"))
+    cli::cli_abort(c(
+      "The {.pkg anvl} package is required for execution.",
+      "i" = "Install it from {.url https://r-xla.r-universe.dev}."))
 }
 
 # Promote a plain R scalar to the traced operand's dtype.
@@ -115,7 +116,7 @@ g_download <- function(x) {
 .g_has_raw_upload <- function() {
   ok <- .g_raw_probe$ok
   if (!is.null(ok)) return(ok)
-  ok <- requireNamespace("anvl", quietly = TRUE) && tryCatch({
+  ok <- rlang::is_installed("anvl") && tryCatch({
     x <- anvl::nv_array(as.raw(c(0L, 0L, 128L, 63L)), "f32", shape = 1L)
     identical(as.numeric(anvl::as_array(x)), 1)
   }, error = function(e) FALSE)

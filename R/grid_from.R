@@ -83,7 +83,7 @@ grid_from_bbox <- function(bbox, res,
                            ellps = "WGS84", buffer = 0, dtype = "f32") {
   stopifnot(is.numeric(bbox), length(bbox) == 4L,
             bbox[[1L]] < bbox[[3L]], bbox[[2L]] < bbox[[4L]])
-  projection <- match.arg(projection)
+  projection <- rlang::arg_match(projection)
   proj <- .project_bbox(as.numeric(bbox), projection, ellps)
   .grid_from_extent(proj$crs, proj$extent, res, buffer, dtype)
 }
@@ -107,6 +107,6 @@ grid_from_src <- function(x, res,
                           projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
                           ellps = "WGS84", buffer = 0, dtype = "f32") {
   stopifnot(is.character(x), length(x) == 1L, nzchar(x))
-  grid_from_bbox(gdal_vector_bbox_ll(x), res, projection = match.arg(projection),
+  grid_from_bbox(gdal_vector_bbox_ll(x), res, projection = rlang::arg_match(projection),
                  ellps = ellps, buffer = buffer, dtype = dtype)
 }

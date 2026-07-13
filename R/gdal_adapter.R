@@ -127,7 +127,7 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
                              nodata = numeric(0),
                              open_options = character(0),
                              out = c("matrix", "raw_f32")) {
-  out <- match.arg(out)
+  out <- rlang::arg_match(out)
   ds <- .gdal_handle(path, open_options)
   v <- ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size)
   v <- as.numeric(v)

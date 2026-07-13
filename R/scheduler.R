@@ -383,8 +383,7 @@ NULL
 #' @export
 garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L,
                           gdal_config = TRUE, ...) {
-  if (!requireNamespace("mirai", quietly = TRUE))
-    stop("the mirai package is required for distributed execution")
+  rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
     if (is.null(compute)) compute <- cr$physical
@@ -422,8 +421,7 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L,
 #' @return As `execute_plan()`.
 #' @export
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
-  if (!requireNamespace("mirai", quietly = TRUE))
-    stop("the mirai package is required for distributed execution")
+  rlang::check_installed("mirai", reason = "for distributed execution.")
   # Pooled mode (phase 11.1): when the garry_read/garry_compute mirai
   # compute profiles both have daemons (garry_daemons()), read/warp
   # tasks route to the read pool — where anvl/PJRT never loads, so a
@@ -499,7 +497,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   # local speed. Requires the index sidecar gti_index_create() writes
   # and garry's own "slice = '...'" FILTER form; anything else falls
   # back to direct remote reads.
-  fetch_mode <- match.arg(garry_opt("fetch"), c("auto", "direct", "force"))
+  fetch_mode <- rlang::arg_match0(garry_opt("fetch"), c("auto", "direct", "force"),
+                                  arg_nm = "garry.fetch")
   fetch_root <- NULL
   fetch_state <- new.env(parent = emptyenv())  # orig index -> local info
   fetch_n_idx <- 0L
