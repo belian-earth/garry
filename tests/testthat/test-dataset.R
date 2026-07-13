@@ -177,6 +177,62 @@ test_that("dataset + dataset combines shared value bands slice by slice", {
   expect_equal(as.numeric(got), as.numeric(manual), tolerance = 1e-6)
 })
 
+# Fabricate a doc_items-shaped list with a value asset (V) and a QA asset (Q)
+# over local tiles, so lazy_dataset()'s STAC path (per-asset GTI index + grid
+# probe + slice mosaics) runs fully offline. Q holds small integer flags that
+# vary per slice so masking differs across time.
+.ds_fake_items <- function() {
+  dates <- c("2023-01-05T01:00:00Z", "2023-01-15T01:00:00Z", "2023-02-05T01:00:00Z")
+  mk <- function(nm, m) {
+    f <- file.path(tempdir(), nm)
+    ds <- gdalraster::create("GTiff", f, 20, 16, 1, "Float32", return_obj = TRUE)
+    ds$setGeoTransform(c(0, 10, 0, 160, 0, -10))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+    ds$write(1, 0, 0, 20, 16, as.numeric(t(m)))
+    ds$close()
+    f
+  }
+  b <- gdalraster::transform_bounds(c(0, 0, 200, 160), "EPSG:3857", "EPSG:4326")
+  feats <- lapply(1:3, function(i) {
+    V <- outer(1:16, 1:20, function(r, c2) r * 100 + c2) + (i - 1) * 1000
+    Q <- matrix((seq_len(16 * 20) + i) %% 5, 16, 20)   # flags 0..4, vary by slice
+    list(id = sprintf("item-%d", i), bbox = as.list(b),
+         properties = list(datetime = dates[[i]], `eo:cloud_cover` = 10),
+         assets = list(V = list(href = mk(sprintf("garry-ds-V%d.tif", i), V)),
+                       Q = list(href = mk(sprintf("garry-ds-Q%d.tif", i), Q))))
+  })
+  list(features = feats)
+}
+
+test_that("lazy_dataset builds from a STAC table and masks end to end (offline)", {
+  skip_if_not_installed("anvl")
+  src  <- stac_sources(.ds_fake_items(), assets = c("V", "Q"))
+  vloc <- src$location[src$asset == "V"]
+  qloc <- src$location[src$asset == "Q"]
+  grid <- gdal_grid_spec(vloc[[1]])$grid                 # native 3857 grid
+
+  ds <- lazy_dataset(src, grid, assets = "V", mask_asset = "Q")
+  expect_identical(names(ds@bands), c("V", "Q"))
+  expect_identical(ds@mask_asset, "Q")
+  expect_length(ds@bands$V, 3L)                          # three day slices
+  expect_named(ds@bands$V, c("2023-01-05", "2023-01-15", "2023-02-05"))
+
+  got <- collect(reduce_over(mask(ds, where = qa_bits(0:1)), "median", "t"))
+
+  # plain-R reference: bad = (int(Q) & 3) > 0 -> NaN, then median over slices
+  rd <- function(f) gdal_read_window(f, 1L, 0L, 0L, 20L, 16L)
+  slabs <- lapply(1:3, function(i) {
+    v <- rd(vloc[[i]]); q <- rd(qloc[[i]])
+    v[bitwAnd(as.integer(q), 3L) > 0] <- NaN
+    v
+  })
+  arr  <- g_stack(slabs)
+  want <- apply(arr, c(2, 3), function(v) { m <- median(v, na.rm = TRUE); if (is.na(m)) NaN else m })
+  expect_identical(is.nan(got), is.nan(want))
+  ok <- !is.nan(want)
+  expect_equal(got[ok], want[ok], tolerance = 1e-5)
+})
+
 test_that("distributed masked composite equals the oracle", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("mirai")

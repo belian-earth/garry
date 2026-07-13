@@ -41,11 +41,24 @@ NULL
     .gdal_cache$handles[[key]] <- h
     return(h)
   }
-  h <- if (length(open_options) > 0L) {
+  open_ds <- function() if (length(open_options) > 0L) {
     methods::new(gdalraster::GDALRaster, path, TRUE, open_options)
   } else {
     methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
   }
+  # A GTI mosaic pinned to the analysis grid reprojects mixed-UTM-zone tiles
+  # (HLS spans several zones), so PROJ reports "several coordinate operations
+  # ... artifacts may appear". The ambiguity is inherent to warping multi-zone
+  # sources onto one grid and the divergence is sub-pixel; muffle just that
+  # benign notice so it does not spam once per asset. Every other warning
+  # surfaces.
+  h <- withCallingHandlers(
+    open_ds(),
+    warning = function(w) {
+      if (grepl("Several coordinate operations", conditionMessage(w),
+                fixed = TRUE))
+        invokeRestart("muffleWarning")
+    })
   cap <- garry_opt("handle_cache_max")
   while (length(.gdal_cache$handles) >= cap) {
     try(.gdal_cache$handles[[1L]]$close(), silent = TRUE)
