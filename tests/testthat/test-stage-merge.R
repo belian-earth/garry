@@ -218,8 +218,8 @@ test_that("merged plans run identically under the mirai scheduler", {
                     along = "band")
   single <- collect(out)
 
-  mirai::daemons(2)
-  on.exit(mirai::daemons(0), add = TRUE)
+  garry_daemons(2, 2, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   dist <- collect(out, distributed = TRUE)
   expect_identical(is.nan(dist), is.nan(single))
   ok <- !is.nan(single)

@@ -15,19 +15,24 @@ NULL
 #'   by chunk and the path returned invisibly.
 #' @param nodata Optional sentinel for the written file (NaN demotes to
 #'   it; required for integer outputs containing nodata).
-#' @param distributed Execute across mirai daemons (requires
-#'   `mirai::daemons()` to be set)? Results are identical to the
-#'   single-threaded executor.
+#' @param distributed Execute across the [garry_daemons()] pools? Defaults to
+#'   [garry_daemons_set()], so `collect(x)` uses the pools when they are running
+#'   and runs single-threaded otherwise. Pass `TRUE`/`FALSE` to override; the
+#'   distributed result is identical to the single-threaded one.
 #' @return With `plan_only = TRUE`, the `Plan`. With `path`, the path,
 #'   invisibly. Otherwise the materialised result: a `[y, x]` matrix
 #'   for raster sinks, a scalar for global reductions.
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
-                    distributed = FALSE) {
+                    distributed = garry_daemons_set()) {
   if (S7::S7_inherits(x, LazyDataset)) x <- stack_bands(x)
   p <- plan_lazy(x)
   if (plan_only) return(p)
   if (distributed) {
+    if (!garry_daemons_set())
+      cli::cli_abort(c(
+        "{.arg distributed} is TRUE but no garry daemon pools are running.",
+        "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
     spec <- .cd_spec(p)               # lean cube path (no-focal composite)
     if (!is.null(spec))
       return(.execute_composite_direct(p, spec, path = path, nodata = nodata))

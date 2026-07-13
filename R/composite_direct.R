@@ -277,8 +277,7 @@ NULL
 
 # Is a garry_daemons() split read/compute pool active? (Both named profiles
 # have daemons.) The scheduler's warm compute pool only exists when pooled.
-.gd_pooled <- function()
-  .gd_n_compute("garry_read") > 0L && .gd_n_compute("garry_compute") > 0L
+.gd_pooled <- function() garry_daemons_set()
 
 # Max concurrent band medians whose working sets fit the RAM budget. Each holds
 # ~3.5 cubes (band + shared mask + median scratch); cap so their combined
@@ -294,10 +293,10 @@ NULL
   max(1L, min(pool, as.integer(cap)))
 }
 
-# The mirai profile composite_direct dispatches to: the read pool when pooled
-# (a garry_daemons split), else mirai's default profile. Unqualified everywhere/
-# mirai_map hit the empty default under a split pool and error.
-.gd_profile <- function() if (.gd_pooled()) "garry_read" else "default"
+# The mirai profile composite_direct dispatches to: the garry_daemons() read
+# pool. Distributed execution requires the pools (checked in collect() and
+# execute_plan_mirai()), so this is always the read profile.
+.gd_profile <- function() "garry_read"
 
 # Fetch each GTI source's slice items and warp its f32 pixels straight into a
 # per-source .bin on tmpfs (parallel across the pool). Returns `info`: keyed by
@@ -424,65 +423,42 @@ NULL
   # with the band fetch on the read pool (only the last band's median is exposed
   # after the drain). A single pool cannot overlap (every daemon is fetching),
   # so it uses the simpler parallel-or-whole-grid path below.
-  if (parallel && .gd_pooled())
+  # Parallel multi-band always takes the split-pool pipeline (distributed
+  # execution requires garry_daemons(), so the pools are guaranteed here).
+  if (parallel)
     return(.execute_composite_pipeline(plan, spec, path, nodata))
 
   nx <- spec$grid@dims[["x"]]; ny <- spec$grid@dims[["y"]]
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   info <- .gd_warp_sources(plan, spec$grid, tmp)
-  bin_of <- function(ids) vapply(ids, function(id) info[[as.character(id)]]$bin, "")
   masked <- length(spec$fmask_srcs) > 0L
-  # COMPUTE. Default: one lean whole-grid kernel in this process. Spike
-  # (garry.gd_parallel) on a single pool: warm the shared pool, then fan the
-  # per-band medians out to it (parallelises across bands).
+  # COMPUTE: one lean whole-grid kernel in this process (a single band, or
+  # gd_parallel off). The mask (incl. morphology focals) is replayed ONCE on the
+  # whole fmask cube, vectorised over time, and shared across bands.
   tcomp <- system.time({
-    if (parallel) {
-      mirai::everywhere({
-        suppressMessages(library(garry)); try(garry:::.gd_warm(), silent = TRUE)
-      }, .compute = "default")
-      K2 <- list(chain = lapply(spec$mask_chain, function(n) {
-                   n@fn <- .slim_fn(n@fn); n }),
-                 F = if (is.null(spec$F)) NULL else .slim_fn(spec$F),
-                 op = spec$op, nan_rm = spec$nan_rm, halo = spec$halo,
-                 ny = ny, nx = nx, dev = spec$device,
-                 fmask_bins = if (masked) bin_of(spec$fmask_srcs) else character(0))
-      band_jobs <- lapply(spec$band_srcs, function(ids)
-        list(band_bins = bin_of(ids)))
-      res <- mirai::mirai_map(band_jobs, .gd_compute_band, .args = list(k = K2),
-                              .compute = "default")[]
-      bad <- which(vapply(res, function(x) inherits(x, "miraiError"), FALSE))
-      if (length(bad))
-        cli::cli_abort(paste0(
-          "gdal-direct parallel compute failed on band {bad[[1L]]}: ",
-          "{conditionMessage(res[[bad[[1L]]]])}"))
-    } else {
-      dev <- .exec_device(spec$device)
-      cube <- function(ids)
-        g_upload_raw(do.call(c, lapply(ids, function(id)
-          readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L))),
-          "f32", c(length(ids), ny, nx), device = dev)
-      band_cubes <- lapply(spec$band_srcs, cube)
-      fm <- if (masked) cube(spec$fmask_srcs) else NULL
-      F <- spec$F; chain <- spec$mask_chain; halo <- spec$halo
-      op <- spec$op; nan_rm <- spec$nan_rm; nyy <- ny; nxx <- nx
-      nb <- length(band_cubes)
-      # The mask (incl. morphology focals) is replayed ONCE on the whole fmask
-      # cube, vectorised over time, and shared across bands.
-      lean <- function(inp) {
-        mask <- if (masked) .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
-                else NULL
-        lapply(seq_len(nb), function(b) {
-          m <- if (masked) F(inp[[b]], mask) else inp[[b]]
-          .apply_reduce(op, m, 1L, nan_rm)
-        })
-      }
-      res <- g_download(g_jit(lean, device = dev)(
-        c(band_cubes, if (masked) list(fm) else NULL)))
+    dev <- .exec_device(spec$device)
+    cube <- function(ids)
+      g_upload_raw(do.call(c, lapply(ids, function(id)
+        readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L))),
+        "f32", c(length(ids), ny, nx), device = dev)
+    band_cubes <- lapply(spec$band_srcs, cube)
+    fm <- if (masked) cube(spec$fmask_srcs) else NULL
+    F <- spec$F; chain <- spec$mask_chain; halo <- spec$halo
+    op <- spec$op; nan_rm <- spec$nan_rm; nyy <- ny; nxx <- nx
+    nb <- length(band_cubes)
+    lean <- function(inp) {
+      mask <- if (masked) .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
+              else NULL
+      lapply(seq_len(nb), function(b) {
+        m <- if (masked) F(inp[[b]], mask) else inp[[b]]
+        .apply_reduce(op, m, 1L, nan_rm)
+      })
     }
+    res <- g_download(g_jit(lean, device = dev)(
+      c(band_cubes, if (masked) list(fm) else NULL)))
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    cli::cli_inform(sprintf("[gdal-direct] %s compute=%.2fs",
-                    if (parallel) "parallel" else "lean", tcomp))
+    cli::cli_inform(sprintf("[gdal-direct] lean compute=%.2fs", tcomp))
   .gd_write_result(res, spec, path, nodata)
 }
 

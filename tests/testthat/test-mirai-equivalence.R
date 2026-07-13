@@ -10,8 +10,8 @@ test_that("distributed == single-threaded across pipeline shapes", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
 
-  mirai::daemons(2)
-  on.exit(mirai::daemons(0), add = TRUE)
+  garry_daemons(2, 2, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
 
   old <- options(garry.chunk_target_px = 400)   # force many chunks
   on.exit(options(old), add = TRUE)
@@ -60,8 +60,8 @@ test_that("mori store matches rds store on the benchmark shape", {
   # stages, band-stack join, multiband write sink.
   skip_if_not_installed("mori")
   skip_if(!requireNamespace("garry", quietly = TRUE))
-  mirai::daemons(2)
-  on.exit(mirai::daemons(0), add = TRUE)
+  garry_daemons(2, 2, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   old <- options(garry.chunk_target_px = 400, garry.read_target_px = 4e3)
   on.exit(options(old), add = TRUE)
 
@@ -91,8 +91,8 @@ test_that("mori store matches rds store on the benchmark shape", {
 
 test_that("distributed warp pipeline and write sink match", {
   skip_if(!requireNamespace("garry", quietly = TRUE))
-  mirai::daemons(2)
-  on.exit(mirai::daemons(0), add = TRUE)
+  garry_daemons(2, 2, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

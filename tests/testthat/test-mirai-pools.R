@@ -1,7 +1,8 @@
 # Phase 11.1: split daemon pools (garry_daemons). Gates: pooled
 # execution is IDENTICAL to single-threaded; read daemons never load
 # anvl/PJRT; jit warm-up lands in the compute pool's cache; teardown
-# and fallback to the default pool both work.
+# works; and distributed execution requires the garry pools (a plain
+# mirai::daemons() pool is not silently used).
 
 skip_if_not_installed("anvl")
 skip_if_not_installed("mirai")
@@ -85,14 +86,14 @@ test_that("streaming distributed writes match single-threaded writes", {
   }
 })
 
-test_that("no pools set up falls back to the default profile", {
+test_that("a plain mirai pool is NOT used; garry pools are required", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  mirai::daemons(2)
+  mirai::daemons(2)                 # a plain default pool, not garry's split
   on.exit(mirai::daemons(0), add = TRUE)
   a <- lazy_source(fixture_gradient_f32())
   p <- plan_lazy(a + 1)
-  expect_equal(execute_plan_mirai(p), execute_plan(p), tolerance = 1e-12)
+  expect_error(execute_plan_mirai(p), class = "garry_scheduler_error")
 })
 
 test_that("no daemons at all raises the structured error", {

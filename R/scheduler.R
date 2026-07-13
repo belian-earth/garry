@@ -410,6 +410,19 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L,
   invisible(list(read = read, compute = compute))
 }
 
+#' Are the garry daemon pools running?
+#'
+#' `TRUE` when both mirai pools created by [garry_daemons()] (`garry_read` and
+#' `garry_compute`) have daemons. This is the default for the `distributed`
+#' argument of [collect()], so `collect(x)` uses the pools when they are up and
+#' runs single-threaded otherwise. Mirrors `mirai::daemons_set()`.
+#'
+#' @return A single logical.
+#' @export
+garry_daemons_set <- function() {
+  .gd_n_compute("garry_read") > 0L && .gd_n_compute("garry_compute") > 0L
+}
+
 #' Execute a Plan across mirai daemons.
 #'
 #' Requires `mirai::daemons()` to be set by the caller. Results are
@@ -422,30 +435,19 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = 1L,
 #' @export
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   rlang::check_installed("mirai", reason = "for distributed execution.")
-  # Pooled mode (phase 11.1): when the garry_read/garry_compute mirai
-  # compute profiles both have daemons (garry_daemons()), read/warp
-  # tasks route to the read pool — where anvl/PJRT never loads, so a
-  # reader stays at ~60 MB — and compute tasks to a small pool of fat
-  # daemons, confining per-chunk working sets to few processes.
-  # Otherwise everything runs on mirai's default profile, exactly as
-  # before pools existed.
-  n_of <- function(p) {
-    st <- tryCatch(mirai::status(.compute = p), error = function(e) NULL)
-    if (is.null(st) || !is.numeric(st$connections)) 0L
-    else as.integer(st$connections)
-  }
-  n_read <- n_of("garry_read")
-  n_comp <- n_of("garry_compute")
-  pooled <- n_read > 0L && n_comp > 0L
-  if (!pooled) {
-    n_read <- n_comp <- n_of("default")
-    if (n_read < 1L)
-      .garry_error(paste0(
-        "no mirai daemons: call mirai::daemons(n) or ",
-        "garry_daemons(read, compute) first"), "garry_scheduler_error")
-  }
-  read_prof <- if (pooled) "garry_read" else "default"
-  comp_prof <- if (pooled) "garry_compute" else "default"
+  # Distributed execution runs on the garry_daemons() split pools: read/warp
+  # tasks route to the read pool — where anvl/PJRT never loads, so a reader
+  # stays at ~60 MB — and compute tasks to a small pool of fat daemons,
+  # confining per-chunk working sets to few processes.
+  if (!garry_daemons_set())
+    .garry_error(paste0(
+      "no garry daemon pools are running; call garry_daemons() first"),
+      "garry_scheduler_error")
+  n_read <- .gd_n_compute("garry_read")
+  n_comp <- .gd_n_compute("garry_compute")
+  pooled <- TRUE
+  read_prof <- "garry_read"
+  comp_prof <- "garry_compute"
   profiles <- unique(c(read_prof, comp_prof))
   # Back-pressure. Single pool: one shared bucket (unchanged
   # behavior). Pooled: reads as before; compute launches are gated

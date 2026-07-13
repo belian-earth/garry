@@ -29,8 +29,8 @@ test_that("distributed execution scales on a compute-heavy pipeline", {
   p <- plan_lazy(build())
 
   time_with <- function(n) {
-    mirai::daemons(n)
-    on.exit(mirai::daemons(0), add = TRUE)
+    garry_daemons(n, n, gdal_config = FALSE)
+    on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
     # Warm daemons (jit compile) then time.
     invisible(execute_plan_mirai(p))
     system.time(execute_plan_mirai(p))[["elapsed"]]

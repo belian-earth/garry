@@ -141,8 +141,8 @@ test_that("distributed stacks match single-threaded", {
   med <- reduce_over(st, "median", "t", nan_rm = TRUE)
   p <- plan_lazy(med)
 
-  mirai::daemons(2)
-  on.exit(mirai::daemons(0), add = TRUE)
+  garry_daemons(2, 2, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   old <- options(garry.chunk_target_px = 300)
   on.exit(options(old), add = TRUE)
 

@@ -4,7 +4,13 @@
 \alias{collect}
 \title{Materialise a LazyRaster (or inspect its plan).}
 \usage{
-collect(x, plan_only = FALSE, path = NULL, nodata = NULL, distributed = FALSE)
+collect(
+  x,
+  plan_only = FALSE,
+  path = NULL,
+  nodata = NULL,
+  distributed = garry_daemons_set()
+)
 }
 \arguments{
 \item{x}{A \code{LazyRaster}, or a \code{LazyDataset} (its bands are assembled along the
@@ -18,9 +24,10 @@ by chunk and the path returned invisibly.}
 \item{nodata}{Optional sentinel for the written file (NaN demotes to
 it; required for integer outputs containing nodata).}
 
-\item{distributed}{Execute across mirai daemons (requires
-\code{mirai::daemons()} to be set)? Results are identical to the
-single-threaded executor.}
+\item{distributed}{Execute across the \code{\link[=garry_daemons]{garry_daemons()}} pools? Defaults to
+\code{\link[=garry_daemons_set]{garry_daemons_set()}}, so \code{collect(x)} uses the pools when they are running
+and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override; the
+distributed result is identical to the single-threaded one.}
 }
 \value{
 With \code{plan_only = TRUE}, the \code{Plan}. With \code{path}, the path,
