@@ -17,7 +17,8 @@ Imports:
     cli,
     codetools,
     gdalraster,
-    methods
+    methods,
+    rlang
 Remotes:
     hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
     r-xla/anvl@b724533

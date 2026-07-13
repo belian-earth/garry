@@ -1,4 +1,5 @@
 #' @include plan.R node.R generics.R ops.R options.R
+#' @importFrom rlang %||%
 #' @keywords internal
 NULL
 
@@ -16,11 +17,12 @@ NULL
 # orphan an externally-referenced member.
 # ---------------------------------------------------------------------------
 
-.garry_error <- function(msg, class) {
-  stop(errorCondition(msg, class = c(class, "garry_error", "error")))
+# Structured, cli-formatted garry error. `msg` is taken literally (interpolated
+# once), so caller-built strings with stray braces are safe; the condition
+# carries `class` plus "garry_error" and points at the calling function.
+.garry_error <- function(msg, class, call = rlang::caller_env()) {
+  cli::cli_abort("{msg}", class = c(class, "garry_error"), call = call)
 }
-
-`%||%` <- function(a, b) if (is.null(a)) b else a
 
 # -- Chunk array layout (D13 + D7) --------------------------------------------
 
