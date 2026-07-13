@@ -1,0 +1,108 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/README-",
+  out.width = "100%"
+)
+```
+
+# garry
+
+<!-- badges: start -->
+<!-- badges: end -->
+
+garry is a lazy, spatial-aware raster engine for R. You describe a whole
+raster computation as a graph and it runs it fast: chunked, distributed across
+processes, with the numeric kernels JIT-compiled to XLA (CPU or GPU). It is
+built for cloud-native earth observation, turning a STAC search of remote COGs
+into an analysis-ready composite without leaving R.
+
+**What it is:**
+
+- **Lazy.** Every operation (`lazy_map()`, `focal()`, `reduce_over()`, `mask()`,
+  `align()`) adds a node to a computation graph and returns immediately. Nothing
+  reads or computes until `collect()`.
+- **Spatial-aware.** Arrays carry their CRS, transform and extent. Alignment is
+  explicit: binary ops never silently resample, so a pixel is never quietly
+  moved half a cell.
+- **Fast.** `collect()` plans the graph into chunks, streams reads through a
+  GDAL daemon pool, and runs the fused kernels through
+  [anvl](https://github.com/r-xla/anvl) (XLA). On a three-band annual HLS
+  composite it matches Python's ODC + dask on the same machine, in idiomatic R.
+- **GDAL-faithful.** IO is [gdalraster](https://cran.r-project.org/package=gdalraster);
+  grid math is [vaster](https://github.com/hypertidy/vaster). Results track what
+  GDAL would give you.
+
+## Installation
+
+You can install the development version of garry from
+[GitHub](https://github.com/) with:
+
+``` r
+# install.packages("pak")
+pak::pak("belian-earth/garry")
+```
+
+## Example
+
+A cloud-masked annual median composite of HLS Sentinel-2 imagery, straight from
+the Microsoft Planetary Computer. The whole pipeline is lazy: it reads and
+computes only at the final `collect()`.
+
+```{r example, eval = TRUE}
+library(garry)
+
+# 1. Discover: HLS S30 over an AOI, all of 2023, pre-signed for the PC.
+aoi <- c(144.13, -7.725, 144.47, -7.475)   # lon/lat bounding box
+its <- stac_query(
+  bbox        = aoi,
+  stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
+  collection  = "hls2-s30",
+  start_date  = "2023-01-01", end_date = "2023-12-31"
+) |>
+  rstac::items_sign(rstac::sign_planetary_computer())
+
+src <- stac_sources(its, assets = c("B04", "B03", "B02", "Fmask")) 
+
+# 2. The analysis grid, straight from the AOI: an equal-area (LAEA) grid at 30 m
+#    centred on the bbox. No hand-picked EPSG or projected extent.
+target <- grid_from_bbox(aoi, res = 30)
+
+# 3. A read/compute daemon pool, auto-sized to the machine.
+garry_daemons()
+
+# 4. Build the pipeline. A `LazyDataset` holds every band over time; the verbs
+#    apply across all bands at once. Still nothing has been read or computed.
+composite <- lazy_dataset(
+  src, grid = target,
+  assets     = c("B04", "B03", "B02"), mask_asset = "Fmask",
+  nodata     = c(B04 = -9999, B03 = -9999, B02 = -9999, Fmask = 255)
+) |>
+  mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
+  reduce_over("median", over = "t")                                    # per-band temporal median
+
+print(composite)
+
+draw(composite)
+
+draw(composite[["B04"]])
+
+# 5. Execute across the daemons and write the GeoTIFF.
+collect(composite, path = "composite.tif", nodata = -9999, distributed = TRUE)
+
+r <- new(gdalraster::GDALRaster, "composite.tif") 
+gdalraster::plot_raster(r)
+r$close()
+```
+
+The same verbs work on a single raster. `lazy_source()` opens one COG or a GDAL
+mosaic; `lazy_map()` / `focal()` / `reduce_over()` build map-algebra graphs;
+`align()` reprojects onto a target grid; `collect()` runs it. See
+`benchmarks/compare.sh` for the back-to-back garry-vs-ODC benchmark.
