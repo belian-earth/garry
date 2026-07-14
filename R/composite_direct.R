@@ -392,11 +392,12 @@ NULL
 
 # Materialise the per-band results and write the composite GTiff (or return the
 # matrices when path is NULL). Shared by the direct and pipeline paths.
-.gd_write_result <- function(res, spec, path, nodata) {
+.gd_write_result <- function(res, spec, path, nodata, band_names = NULL) {
   mats <- lapply(res, .sv_materialise)                        # one per band
   if (is.null(path)) return(if (spec$n_bands == 1L) mats[[1L]] else mats)
   ds <- gdal_create_output(path, spec$grid,
-                           nodata = if (is.null(nodata)) numeric(0) else nodata)
+                           nodata = if (is.null(nodata)) numeric(0) else nodata,
+                           band_names = band_names)
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_along(mats))
     gdal_write_window(ds, 0L, 0L, mats[[b]], spec$grid@dtype,
@@ -416,7 +417,7 @@ NULL
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
 #' @keywords internal
-.execute_composite_direct <- function(plan, spec, path = NULL, nodata = NULL) {
+.execute_composite_direct <- function(plan, spec, path = NULL, nodata = NULL, band_names = NULL) {
   .require_anvl()
   parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
   # Split pool: the fetch-ordered pipeline overlaps the mask + per-band medians
@@ -426,7 +427,7 @@ NULL
   # Parallel multi-band always takes the split-pool pipeline (distributed
   # execution requires garry_daemons(), so the pools are guaranteed here).
   if (parallel)
-    return(.execute_composite_pipeline(plan, spec, path, nodata))
+    return(.execute_composite_pipeline(plan, spec, path, nodata, band_names))
 
   nx <- spec$grid@dims[["x"]]; ny <- spec$grid@dims[["y"]]
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
@@ -459,7 +460,7 @@ NULL
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
     cli::cli_inform(sprintf("[gdal-direct] lean compute=%.2fs", tcomp))
-  .gd_write_result(res, spec, path, nodata)
+  .gd_write_result(res, spec, path, nodata, band_names)
 }
 
 #' Execute a composite via the split-pool fetch-ordered pipeline.
@@ -469,7 +470,7 @@ NULL
 #' lands, so band B's median runs while later bands are still fetching. Only the
 #' last band's median is exposed after the drain. Requires a garry_daemons split.
 #' @keywords internal
-.execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL) {
+.execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL, band_names = NULL) {
   .require_anvl()
   ny <- spec$grid@dims[["y"]]; nx <- spec$grid@dims[["x"]]
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
@@ -544,6 +545,6 @@ NULL
   while (length(inflight)) harvest()
   if (progress) cli::cli_inform(sprintf("[gdal-direct] pipeline total=%.2fs",
                                 proc.time()[["elapsed"]] - t0))
-  .gd_write_result(res, spec, path, nodata)
+  .gd_write_result(res, spec, path, nodata, band_names)
 }
 

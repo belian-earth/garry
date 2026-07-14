@@ -194,10 +194,13 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
 #' @param grid Output `GridSpec`.
 #' @param nodata Optional sentinel to record in metadata (all bands).
 #' @param options GTiff creation options.
+#' @param band_names Optional character vector of band descriptions, in band
+#'   order; written as each band's GDAL description (shows in `gdalinfo`).
 #' @return An open dataset object; caller must `$close()`.
 #' @export
 gdal_create_output <- function(path, grid, nodata = numeric(0),
-                               options = c("COMPRESS=DEFLATE")) {
+                               options = c("COMPRESS=DEFLATE"),
+                               band_names = NULL) {
   dt <- .gdal_dtype_rev[[grid@dtype]]
   if (is.null(dt)) cli::cli_abort("cannot write dtype: {.val {grid@dtype}}")
   outer <- grid@dims[!names(grid@dims) %in% c("x", "y")]
@@ -212,6 +215,9 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
   ds$setProjection(grid@crs)
   if (length(nodata) == 1L)
     for (b in seq_len(n_bands)) ds$setNoDataValue(b, nodata)
+  if (length(band_names) > 0L)
+    for (b in seq_len(min(n_bands, length(band_names))))
+      if (nzchar(band_names[[b]])) ds$setDescription(b, band_names[[b]])
   ds
 }
 

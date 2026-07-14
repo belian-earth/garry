@@ -326,11 +326,11 @@ NULL
 # Write sink chunks to a GTiff (single-threaded executor; the
 # distributed scheduler streams chunks through .exec_write_chunk as
 # they land instead).
-.exec_write_sink <- function(chunks, it, sink, path, nodata) {
+.exec_write_sink <- function(chunks, it, sink, path, nodata, band_names = NULL) {
   .exec_check_writable(chunks[[1L]], nrow(it))
   sink_pad <- .exec_out_pad(sink)
   nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
-  ds <- gdal_create_output(path, sink@grid, nodata = nodata)
+  ds <- gdal_create_output(path, sink@grid, nodata = nodata, band_names = band_names)
   on.exit(ds$close(), add = TRUE)
   for (j in seq_len(nrow(it))) {
     .exec_write_chunk(ds, it$x_off[j], it$y_off[j], chunks[[j]],
@@ -376,7 +376,7 @@ NULL
 #'   `garry_exec_stats` attribute with the distinct input shapes
 #'   submitted per stage (kernel-cache accounting).
 #' @export
-execute_plan <- function(plan, path = NULL, nodata = NULL) {
+execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
   .require_anvl()
   graph <- plan@graph
   out <- vector("list", length(plan@stages))
@@ -477,7 +477,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL) {
   sink_pad <- .exec_out_pad(sink)
 
   if (!is.null(path))
-    return(.exec_write_sink(chunks, it, sink, path, nodata))
+    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names))
 
   result <- if (nrow(it) == 1L) {
     v <- chunks[[1L]]

@@ -433,7 +433,7 @@ garry_daemons_set <- function() {
 #' @param path,nodata As in `execute_plan()`.
 #' @return As `execute_plan()`.
 #' @export
-execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
+execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
   rlang::check_installed("mirai", reason = "for distributed execution.")
   # Distributed execution runs on the garry_daemons() split pools: read/warp
   # tasks route to the read pool — where anvl/PJRT never loads, so a reader
@@ -902,7 +902,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
     sink_task_j <- stats::setNames(
       seq_len(nrow(sink_it)),
       sprintf("s%d_c%d", sink@id, seq_len(nrow(sink_it))))
-    sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata)
+    sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata, band_names = band_names)
     on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
             add = TRUE)
   }
@@ -1073,7 +1073,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL) {
   sink_pad <- .exec_out_pad(sink)
 
   if (!is.null(path))
-    return(.exec_write_sink(chunks, it, sink, path, nodata))
+    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names))
 
   if (nrow(it) == 1L) {
     v <- chunks[[1L]]

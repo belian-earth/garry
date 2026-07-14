@@ -25,7 +25,13 @@ NULL
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = garry_daemons_set()) {
-  if (S7::S7_inherits(x, LazyDataset)) x <- stack_bands(x)
+  # A dataset's band names become the output band descriptions; capture them
+  # before stack_bands() collapses the named bands into one node.
+  band_names <- NULL
+  if (S7::S7_inherits(x, LazyDataset)) {
+    band_names <- names(x@bands)
+    x <- stack_bands(x)
+  }
   p <- plan_lazy(x)
   if (plan_only) return(p)
   if (distributed) {
@@ -35,8 +41,10 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
     spec <- .cd_spec(p)               # GDAL-direct composite fast path
     if (!is.null(spec))
-      return(.execute_composite_direct(p, spec, path = path, nodata = nodata))
-    return(execute_plan_mirai(p, path = path, nodata = nodata))
+      return(.execute_composite_direct(p, spec, path = path, nodata = nodata,
+                                       band_names = band_names))
+    return(execute_plan_mirai(p, path = path, nodata = nodata,
+                              band_names = band_names))
   }
-  execute_plan(p, path = path, nodata = nodata)
+  execute_plan(p, path = path, nodata = nodata, band_names = band_names)
 }

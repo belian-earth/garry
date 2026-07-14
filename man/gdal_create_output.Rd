@@ -8,7 +8,8 @@ gdal_create_output(
   path,
   grid,
   nodata = numeric(0),
-  options = c("COMPRESS=DEFLATE")
+  options = c("COMPRESS=DEFLATE"),
+  band_names = NULL
 )
 }
 \arguments{
@@ -19,6 +20,9 @@ gdal_create_output(
 \item{nodata}{Optional sentinel to record in metadata (all bands).}
 
 \item{options}{GTiff creation options.}
+
+\item{band_names}{Optional character vector of band descriptions, in band
+order; written as each band's GDAL description (shows in \code{gdalinfo}).}
 }
 \value{
 An open dataset object; caller must \verb{$close()}.
