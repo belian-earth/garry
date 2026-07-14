@@ -9,7 +9,49 @@ Open Data Cube + dask; vrtility already beats it.
 Numbers are network-sensitive: always compare runs from the same
 sitting, against a vrtility baseline measured in that sitting.
 
-## Results
+## Results (2026-07-14, fast link)
+
+garry now runs at parity-to-ahead of ODC + dask on both the median
+composite and NDVI, on the CPU, same-sitting interleaved (`compare.sh`
+and `compare-ndvi.sh`):
+
+| pipeline | bands | garry | ODC + dask | ratio |
+|---|---|---|---|---|
+| median composite | 3 (B04/B03/B02) | 15.63 s | 15.72 s | 1.01x |
+| NDVI | 2 (B04/B08) | 11.97 s | 12.64 s | 1.06x |
+
+NDVI is best-of-4 and garry won every rep (11.97 / 12.70 / 12.59 /
+12.62 s vs ODC 12.64 / 12.74 / 13.10 / 13.02 s); a 2-rep sample had
+caught ODC's fastest run and read as a wash, so run >=4 reps. Output
+correctness cor 0.996 (composite 0.99); the residual is
+nearest-vs-bilinear tile resampling, not a compute difference.
+
+Two structural changes closed the 1.9-2.1x deficit recorded below:
+
+1. **GDAL-direct composite fast path**
+   (`.execute_composite_direct` / `.execute_composite_pipeline`): warp
+   each slice's f32 pixels straight into a device buffer (no per-chunk
+   store round-trip), and run each band's temporal reduce on a compute
+   daemon overlapped with the next band's fetch. This handles the pure
+   composite.
+2. **Reduce-decomposition general path**
+   (`.gd_decompose` / `.execute_gd_reduce`): any reduce-structured
+   graph (NDVI, nested reduce->map->reduce, focal-over-composite) runs
+   by computing its leaf temporal reduces via that same overlapped
+   pipeline, then the rest of the graph on the small 2D results in one
+   lean kernel. For NDVI the upper `(B08-B04)/(B08+B04)` kernel costs
+   0.06 s; ~85% of the wall is the shared network fetch. It is measured
+   byte-identical to the whole-grid and scheduler executors
+   (`test-gd-general.R`). Before it, NDVI had no fast route and ran
+   through the general scheduler at 21-35 s (2-3x behind ODC); it is
+   now ahead.
+
+Numbers stay network-sensitive; garry's run-to-run variance is higher
+than ODC's (whole-slice warp reads vs ODC's fine-window threaded
+reads) but it stays ahead across reps. Tightening read variance is the
+remaining frontier, orthogonal to the compute paths.
+
+## Historical results (phases 9-11)
 
 2026-07-08 ~00:30, ODC baseline added (same-sitting triple; cgroup
 v2 `memory.peak` for the whole scope, which counts shared pages
@@ -169,7 +211,17 @@ With all three, the full three-band run peaks at 8 GB fleet-wide.
 ```sh
 Rscript benchmarks/hls-median-composite.R 12 B04           # one band
 Rscript benchmarks/hls-median-composite.R 12 B04 B03 B02   # full workload
+Rscript benchmarks/ndvi-garry.R auto                       # NDVI (general path)
+
+REPS=4 benchmarks/compare.sh        # composite: garry vs ODC, back to back
+REPS=4 benchmarks/compare-ndvi.sh   # NDVI: garry vs ODC, back to back
 ```
+
+`compare.sh` / `compare-ndvi.sh` interleave garry and ODC runs, report
+every rep and the best-of, and diff the two output GeoTIFFs so a speed
+win can't hide a wrong answer. The ODC baselines
+(`hls-median-composite-odc.py`, `ndvi-odc.py`) need the venv in
+`benchmarks/.venv/`.
 
 Network required (Planetary Computer, anonymous + pre-signed hrefs).
 The STAC query is untimed, matching the reference benchmarks. The

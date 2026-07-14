@@ -4,6 +4,8 @@ benchmarks/.venv/
 __pycache__/
 *.pyc
 
-# benchmark composite outputs (regenerable; tests use tempdir fixtures)
+# benchmark outputs (regenerable; tests use tempdir fixtures)
 composite*.tif
+ndvi*.tif
+Rplots.pdf
 docs

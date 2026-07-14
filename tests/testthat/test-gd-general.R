@@ -47,6 +47,20 @@ skip_if_not_installed("mirai")
                                        .gg_slice(gB, "s2", g))), "median", "t"))
 }
 
+# Strict comparator: identical NaN pattern AND exact (tolerance 0) values on the
+# finite cells -- the row-block pipeline must be byte-identical to the whole-grid
+# kernel, not merely close.
+.gg_identical <- function(a, b) {
+  a <- if (is.list(a)) a else list(a)
+  b <- if (is.list(b)) b else list(b)
+  expect_equal(length(a), length(b))
+  for (i in seq_along(a)) {
+    av <- as.numeric(a[[i]]); bv <- as.numeric(b[[i]])
+    expect_identical(is.nan(av), is.nan(bv))
+    expect_equal(av[!is.nan(av)], bv[!is.nan(bv)], tolerance = 0)
+  }
+}
+
 .gg_equal <- function(x) {
   p <- plan_lazy(x)
   gsp <- .gd_spec(p)
@@ -56,6 +70,12 @@ skip_if_not_installed("mirai")
   sched <- execute_plan_mirai(p)
   ok <- !is.nan(as.numeric(sched))
   expect_equal(as.numeric(gen)[ok], as.numeric(sched)[ok], tolerance = 1e-5)
+  # Reduce-decomposition (the general path): compute the leaf temporal reduces
+  # via the overlapped per-band pipeline, then run the upper IR on the 2D results
+  # -- byte-identical to the whole-grid kernel.
+  dc <- .gd_decompose(p)
+  expect_false(is.null(dc))
+  .gg_identical(.execute_gd_reduce(p, dc), gen)
 }
 
 test_that("a derived band (map over reduces) runs warp-on-read == scheduler", {

@@ -41,14 +41,16 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
       cli::cli_abort(c(
         "{.arg distributed} is TRUE but no garry daemon pools are running.",
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
-    spec <- .cd_spec(p)               # composite fast path (fetch-ordered pipeline)
-    gspec <- if (is.null(spec)) .gd_spec(p) else NULL   # general warp-on-read
+    spec <- .cd_spec(p)               # pure composite fast path (fetch-ordered pipeline)
+    decomp <- if (is.null(spec)) .gd_decompose(p) else NULL   # reduce-decomposition
     if (!is.null(spec))
       .execute_composite_direct(p, spec, path = path, nodata = nodata,
                                 band_names = band_names)
-    else if (!is.null(gspec))
-      .execute_gd_general(p, gspec, path = path, nodata = nodata,
-                          band_names = band_names)
+    else if (!is.null(decomp))
+      # Any reduce-structured graph (ndvi, nested reduce->map->reduce, focal over
+      # a composite): overlap-compute the leaf reduces, run the upper IR on them.
+      .execute_gd_reduce(p, decomp, path = path, nodata = nodata,
+                         band_names = band_names)
     else
       execute_plan_mirai(p, path = path, nodata = nodata, band_names = band_names)
   } else {

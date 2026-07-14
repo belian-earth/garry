@@ -472,8 +472,18 @@ NULL
 #' @keywords internal
 .execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL, band_names = NULL) {
   .require_anvl()
-  ny <- spec$grid@dims[["y"]]; nx <- spec$grid@dims[["x"]]
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  .gd_write_result(.gd_reduce_results(plan, spec, tmp), spec, path, nodata, band_names)
+}
+
+# The fetch-ordered per-band compute of the composite pipeline, factored out so
+# the reduce-decomposition path can reuse it: fetch fmask first, compute the
+# cleaned mask on the compute pool while the bands download, then dispatch each
+# band's reduce as its fetch lands (overlapped, RAM-capped). Returns the list of
+# per-band raw f32 payloads (band-source order); the caller writes or feeds them
+# to an upper kernel. `tmp` is caller-owned (shared across groups).
+.gd_reduce_results <- function(plan, spec, tmp) {
+  ny <- spec$grid@dims[["y"]]; nx <- spec$grid@dims[["x"]]
   progress <- isTRUE(getOption("garry.progress", FALSE))
   masked <- length(spec$fmask_srcs) > 0L
   prof_r <- "garry_read"; prof_c <- "garry_compute"
@@ -498,7 +508,7 @@ NULL
 
   # Mask: once fmask lands, compute the cleaned cube on the compute pool while
   # the bands are still fetching. One mask .bin, read by every band median.
-  mask_bin <- file.path(tmp, "mask.bin"); mask_p <- NULL
+  mask_bin <- tempfile("mask", tmpdir = tmp, fileext = ".bin"); mask_p <- NULL
   if (masked) {
     .gd_check_fetch(fmask_p[], "fmask")
     Km <- list(fmask_bins = bin_of(spec$fmask_srcs), out_bin = mask_bin,
@@ -545,7 +555,7 @@ NULL
   while (length(inflight)) harvest()
   if (progress) cli::cli_inform(sprintf("[gdal-direct] pipeline total=%.2fs",
                                 proc.time()[["elapsed"]] - t0))
-  .gd_write_result(res, spec, path, nodata, band_names)
+  res
 }
 
 # ---------------------------------------------------------------------------
@@ -631,6 +641,137 @@ NULL
   for (b in seq_len(nb))
     gdal_write_window(ds, 0L, 0L, mats[[b]], gspec$grid@dtype,
                       nodata = wnodata, band = b)
+  invisible(path)
+}
+
+# ---------------------------------------------------------------------------
+# Reduce-decomposition: the single general path for any reduce-structured graph.
+#
+# The expensive work in every plan is the temporal reduces over source cubes
+# (collapsing many slices to 2D). The composite pipeline computes those fastest,
+# because it overlaps each band's reduce with the next band's fetch. This path
+# lifts that: find the LEAF temporal reduces (a reduce over "t" with no reduce
+# below it), group those sharing a mask/op into composite specs, compute each
+# group via the overlapped per-band pipeline, then run the REST of the graph
+# (maps, focals, reduces over small axes) on the materialised 2D results in one
+# lean kernel. ndvi (map over two composites), nested reduce->map->reduce, and
+# deep 10-year composite->ndvi->slope pipelines all reduce to this shape.
+#
+# Byte-identical to the whole-grid .execute_gd_general: each leaf reduce yields
+# the same 2D result whether computed whole-grid or via the pipeline, and the
+# upper kernel is the same nodes .compose_stage_fn would run whole-grid. The
+# only round-trip is materialising each leaf reduce to an f32 matrix and
+# re-uploading it (f32 -> double -> f32 is exact), so the upper maths is bit-
+# identical.
+# ---------------------------------------------------------------------------
+
+.gd_hash <- function(x) {
+  tf <- tempfile(); on.exit(unlink(tf), add = TRUE)
+  writeBin(serialize(x, NULL), tf); unname(tools::md5sum(tf))
+}
+
+#' Recognise a reduce-decomposable plan and lift its groups + upper IR, or NULL.
+#'
+#' NULL when there is no upper IR (a pure composite -> `.cd_spec`), when a leaf
+#' reduce is not composite-reducible, or when the upper IR does not close over
+#' the leaf reduces (a node consuming a raw source alongside a reduce -> the
+#' scheduler). `.gd_spec` gates fetchability and the node-type whitelist.
+#' @keywords internal
+.gd_decompose <- function(plan) {
+  gsp <- .gd_spec(plan)                       # fetchable GTI + Source/Map/Focal/Stack/Reduce
+  if (is.null(gsp)) return(NULL)
+  graph <- plan@graph
+  gg <- function(id) graph_get(graph, id)
+  sink_out <- gsp$sink_out
+  ids <- .reachable(graph, sink_out)
+  is_red_t <- function(n) S7::S7_inherits(n, ReduceNode) && "t" %in% n@over
+  # Leaf temporal reduces: a reduce over t with no reduce anywhere below it.
+  leaf_ids <- Filter(function(id) {
+    if (!is_red_t(gg(id))) return(FALSE)
+    below <- setdiff(.reachable(graph, id), id)
+    !any(vapply(below, function(s) is_red_t(gg(s)), logical(1)))
+  }, ids)
+  if (!length(leaf_ids)) return(NULL)
+  specs <- lapply(leaf_ids, function(id) .cd_reduce_spec(gg, gg(id)))
+  if (any(vapply(specs, is.null, logical(1)))) return(NULL)
+
+  # Upper IR: nodes strictly above the leaf reduces (their subtrees are the
+  # inputs). No upper members -> pure composite, not our job.
+  subtrees <- unique(unlist(lapply(leaf_ids, function(id) .reachable(graph, id))))
+  members <- setdiff(ids, subtrees)           # ascending == topo
+  if (!length(members)) return(NULL)
+  # Every upper member's parents must resolve to an upper member or a leaf
+  # reduce (else a raw non-reduced source feeds the upper IR -> scheduler).
+  leaf_set <- unlist(leaf_ids)
+  ok <- all(vapply(members, function(id)
+    all(gg(id)@parents %in% c(members, leaf_set)), logical(1)))
+  if (!ok) return(NULL)
+
+  # Group leaf reduces that form ONE composite (shared mask/op) -> one pipeline
+  # call computes them as a multi-band composite with fetch overlap.
+  gkey <- vapply(seq_along(specs), function(i) {
+    s <- specs[[i]]
+    paste(s$op, s$nan_rm, s$halo, paste(s$fmask, collapse = ","),
+          .gd_hash(list(lapply(s$mask_chain, function(n) { n@fn <- .slim_fn(n@fn); n }),
+                        if (is.null(s$F)) NULL else .slim_fn(s$F))), sep = "#")
+  }, "")
+  groups <- lapply(unique(gkey), function(k) {
+    idx <- which(gkey == k); ss <- specs[idx]; s1 <- ss[[1L]]
+    list(reduce_ids = unlist(leaf_ids[idx]),
+         spec = list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F,
+                     mask_chain = s1$mask_chain, halo = s1$halo,
+                     band_srcs = lapply(ss, function(s) s$band),
+                     fmask_srcs = s1$fmask, n_bands = length(ss),
+                     grid = gsp$grid, device = gsp$device))
+  })
+  list(groups = groups,
+       upper = list(members = members, input_nodes = leaf_set, sink_out = sink_out,
+                    halo = .stage_halo(graph, members, leaf_set),
+                    grid = gsp$grid, device = gsp$device))
+}
+
+#' Execute a reduce-decomposable plan: overlap-compute the leaf reduces, then
+#' run the upper IR on the materialised results.
+#' @keywords internal
+.execute_gd_reduce <- function(plan, decomp, path = NULL, nodata = NULL,
+                               band_names = NULL) {
+  .require_anvl()
+  graph <- plan@graph
+  tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  u <- decomp$upper
+  dev <- .exec_device(u$device); h <- u$halo
+
+  # 1. Each group's leaf reduces via the overlapped per-band pipeline, keyed by
+  #    reduce node id (band-source order == reduce_ids order).
+  leaf <- new.env(parent = emptyenv())
+  for (grp in decomp$groups) {
+    res <- .gd_reduce_results(plan, grp$spec, tmp)
+    mats <- lapply(res, .sv_materialise)
+    for (i in seq_along(grp$reduce_ids))
+      leaf[[.key(grp$reduce_ids[[i]])]] <- mats[[i]]
+  }
+
+  # 2. Upper IR on the materialised 2D leaf results, one lean kernel.
+  tcomp <- system.time({
+    fn <- .compose_stage_fn(graph, u$members, u$input_nodes, list(u$sink_out), h)
+    inputs <- lapply(u$input_nodes, function(id) {
+      a <- g_upload(leaf[[.key(id)]], "f32", device = dev)
+      if (h > 0L) g_pad(a, h, NaN) else a
+    })
+    res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(u$sink_out)]]
+  })[["elapsed"]]
+  if (isTRUE(getOption("garry.progress", FALSE)))
+    cli::cli_inform(sprintf("[gdal-direct] upper compute=%.2fs", tcomp))
+
+  m <- .sv_materialise(res); d <- dim(m)
+  nb <- if (length(d) == 3L) d[[1L]] else 1L
+  mats <- if (length(d) == 3L) lapply(seq_len(nb), function(b) m[b, , ]) else list(m)
+  if (is.null(path)) return(if (nb == 1L) mats[[1L]] else mats)
+  wnodata <- if (is.null(nodata)) numeric(0) else nodata
+  ds <- gdal_create_output(path, u$grid, nodata = wnodata, band_names = band_names)
+  on.exit(try(ds$close(), silent = TRUE), add = TRUE)
+  for (b in seq_len(nb))
+    gdal_write_window(ds, 0L, 0L, mats[[b]], u$grid@dtype, nodata = wnodata, band = b)
   invisible(path)
 }
 
