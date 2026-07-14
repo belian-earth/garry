@@ -168,6 +168,68 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
   sources
 }
 
+#' Rename assets to a common band schema.
+#'
+#' Harmonising collections that name the same physical band differently (e.g.
+#' HLS Landsat `B05` and HLS Sentinel-2 `B8A` are both the narrow NIR): supply a
+#' `c(old = new)` map and the `asset` column is rewritten to the shared names.
+#' Assets absent from the map are dropped by default, so the map doubles as the
+#' band selector. Include identity entries (`Fmask = "Fmask"`) to keep a band
+#' under its own name.
+#'
+#' After renaming, [stac_merge()] concatenates the collections into one table.
+#' A band a collection lacks needs no placeholder: [lazy_dataset()] gives each
+#' band only the slices that carry it, and [mask()] pairs those slices with the
+#' QA band by name (a Landsat-only thermal band masks against the Landsat Fmask
+#' slices), so ragged bands reduce over exactly their own observations.
+#'
+#' @param sources A `stac_sources()` table.
+#' @param mapping Named character `c(old = new)`: original asset -> common name.
+#' @param drop_unmapped Drop assets not named in `mapping` (default `TRUE`)? When
+#'   `FALSE`, unmapped assets pass through unchanged.
+#' @return The table with a rewritten `asset` column.
+#' @export
+stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
+  if (!is.character(mapping) || is.null(names(mapping)) || anyNA(names(mapping)))
+    cli::cli_abort("{.arg mapping} must be a named character vector {.code c(old = new)}.")
+  missing_keys <- setdiff(names(mapping), sources$asset)
+  if (length(missing_keys))
+    cli::cli_warn("mapping name{?s} not present in {.arg sources} (ignored): {.val {missing_keys}}")
+  if (isTRUE(drop_unmapped))
+    sources <- sources[sources$asset %in% names(mapping), , drop = FALSE]
+  hit <- match(sources$asset, names(mapping))
+  sources$asset <- ifelse(is.na(hit), sources$asset, unname(mapping)[hit])
+  rownames(sources) <- NULL
+  sources
+}
+
+#' Concatenate source tables into one harmonised collection.
+#'
+#' Row-binds `stac_sources()` tables (typically after [stac_rename_assets()] has
+#' brought them onto a shared band schema) and re-sorts. Every table must carry
+#' the same columns. Same-`slice` acquisitions from different collections
+#' co-mosaic (use `granularity = "exact"` downstream to keep them as separate
+#' time steps).
+#'
+#' @param ... Two or more `stac_sources()` tables (or a single list of them).
+#' @return One combined table.
+#' @export
+stac_merge <- function(...) {
+  tabs <- list(...)
+  if (length(tabs) == 1L && is.data.frame(tabs[[1L]]) == FALSE && is.list(tabs[[1L]]))
+    tabs <- tabs[[1L]]
+  tabs <- Filter(function(t) !is.null(t) && nrow(t) > 0L, tabs)
+  if (length(tabs) < 1L) cli::cli_abort("{.fn stac_merge} needs at least one non-empty table.")
+  cols <- names(tabs[[1L]])
+  for (t in tabs)
+    if (!setequal(names(t), cols))
+      cli::cli_abort("all source tables must have the same columns.")
+  out <- do.call(rbind, lapply(tabs, function(t) t[, cols, drop = FALSE]))
+  out <- out[order(out$datetime, out$item_id, out$asset), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
 # RFC 3339 datetimes (STAC item `datetime`) to POSIXct UTC. Accepts
 # "Z", "+HH:MM"/"-HH:MM", "+HHMM" offsets and fractional seconds.
 .stac_parse_datetime <- function(x) {

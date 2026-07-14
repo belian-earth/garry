@@ -18,6 +18,8 @@ reference:
   - stac_sources
   - stac_filter_cloud
   - stac_drop_duplicates
+  - stac_rename_assets
+  - stac_merge
   - stac_time_slices
   - stac_gti_index
   - lazy_stac_stack
