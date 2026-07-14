@@ -23,6 +23,13 @@ state, halo/dependency bookkeeping for the propagating cases) and deciding which
 of these must run whole-grid (most iterative transforms need the full frame, not
 chunked tiles). Deferred by Hugh 2026-07-10; wanted available, not now.
 
+**Watch upstream (2026-07-14):** the compute substrate is under active
+development in anvl -- branches `iterate-edge-cases-334`, `cum-primitives` /
+`cum-primitives-clean`, `higher-order-prim`, `feat-dynamic-slice` on
+r-xla/anvl. Revisit this node once a `While`/scan/cumulative primitive lands in
+an anvl release; building the ScanNode against the settled primitive avoids
+tracking a moving API. No current garry feature depends on it, so it can wait.
+
 ## 2. Custom reducer fn on ReduceNode -- DONE
 
 `reduce_over(x, fn, over)` now accepts an anvl reducer `fn(x, dims)` (carried on
