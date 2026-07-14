@@ -52,7 +52,7 @@ lazy: it reads and computes only at the final `collect()`.
 library(garry)
 
 # 1. Discover: HLS S30 over an AOI, all of 2023, pre-signed for the PC.
-aoi <- c(144.13, -7.725, 144.47, -7.475)   # lon/lat bounding box
+aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
 its <- stac_query(
   bbox        = aoi,
   stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
@@ -61,7 +61,7 @@ its <- stac_query(
 ) |>
   rstac::items_sign(rstac::sign_planetary_computer())
 
-src <- stac_sources(its, assets = c("B04", "B03", "B02", "Fmask")) 
+src <- stac_sources(its, assets = c("B04", "B03", "B02", "B08", "Fmask")) 
 
 # 2. The analysis grid, straight from the AOI: an equal-area (LAEA) grid at 30 m
 #    centred on the bbox. No hand-picked EPSG or projected extent.
@@ -74,52 +74,69 @@ garry_daemons()
 #    apply across all bands at once. Still nothing has been read or computed.
 composite <- lazy_dataset(
   src, grid = target,
-  assets     = c("B04", "B03", "B02"), mask_asset = "Fmask",
-  nodata     = c(B04 = -9999, B03 = -9999, B02 = -9999, Fmask = 255)
+  assets     = c("B04", "B03", "B02", "B08"), mask_asset = "Fmask",
+  nodata     = c(B04 = -9999, B03 = -9999, B02 = -9999, B08 = -9999, Fmask = 255)
 ) |>
   mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
   reduce_over("median", over = "t")                                    # per-band temporal median
 
+# A derived band is just more graph: NDVI from the NIR/red composites. It joins
+# the lazy pipeline like any other band, computed only at the final collect().
+composite[["ndvi"]] <- (composite[["B08"]] - composite[["B04"]]) /
+  (composite[["B08"]] + composite[["B04"]])
+
+# Inspect the pipeline before running anything. print() summarises the dataset
+# (bands + grid); draw() renders the IR: a LazyDataset as its ordered pipeline
+# steps, a single band as its node tree.
 print(composite)
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
-#>   bands  B04 B03 B02
-#>   time   55 slices
-#>   grid   1252 x 922 • f32
+#>   bands  B04 B03 B02 B08 ndvi
+#>   time   70 slices
+#>   grid   2536 x 1480 • f32
 #>   crs    Lambert Azimuthal Equal Area
-#>   graph  611 nodes • lazy
+#>   graph  921 nodes • lazy
 #>   ℹ draw(x) to see the pipeline
-
-draw(composite)
+draw(composite)              # the dataset's pipeline steps
 #> ── <LazyDataset> pipeline ──────────────────────────────────────────────────────
-#>   ◈ source    B04 B03 B02  •  55 slices • 1252×922 f32
+#>   ◈ source    B04 B03 B02 B08 ndvi  •  70 slices • 2536×1480 f32
 #>   ✕ mask      from Fmask • bits 0–3 • open 2 • dilate 3
 #>   ▸ reduce    median over t
-#>   ─ 611 nodes • crs Lambert Azimuthal Equal Area
+#>   ⊕ derive    ndvi
+#>   ─ 921 nodes • crs Lambert Azimuthal Equal Area
+draw(composite[["ndvi"]])    # the NDVI band's node tree
+#> ── <LazyRaster> 2536 x 1480 • f32 ──────────────────────────────────────────────
+#> ƒ map  (2 inputs)
+#> └─ ƒ map  (2 inputs)  ×2
+#>    └─ ▸ median  over t  ×2
+#>       └─ ⬚ stack  along t
+#>          └─ ƒ map  (2 inputs)  ×70
+#>             ├─ ◈ source  2536×1480 f32
+#>             └─ ◫ focal  r=3
+#>                └─ ◫ focal  r=2
+#>                   └─ ◫ focal  r=2
+#>                      └─ ƒ map
+#>                         └─ ◈ source  2536×1480 f32
 
-draw(composite[["B04"]])
-#> ── <LazyRaster> 1252 x 922 • f32 ───────────────────────────────────────────────
-#> ▸ median  over t
-#> └─ ⬚ stack  along t
-#>    └─ ƒ map  (2 inputs)  ×55
-#>       ├─ ◈ source  1252×922 f32
-#>       └─ ◫ focal  r=3
-#>          └─ ◫ focal  r=2
-#>             └─ ◫ focal  r=2
-#>                └─ ƒ map
-#>                   └─ ◈ source  1252×922 f32
-
-# 5. Execute across the daemons and write the GeoTIFF.
-collect(composite, path = "composite.tif", nodata = -9999, distributed = TRUE)
-
-r <- new(gdalraster::GDALRaster, "composite.tif") 
-gdalraster::plot_raster(r)
+# preview() estimates a coarse grid from the graph and device, runs the pipeline
+# at that reduced resolution (reading only overviews / the windows it needs), and
+# plots the result -- a cheap look before committing to the full collect().
+preview(composite[["ndvi"]])   # single band -> colour ramp + colourbar
 ```
 
 <img src="man/figures/README-example-1.png" alt="" width="100%" />
 
 ``` r
-r$close()
+
+# 5. Execute across the daemons. collect() returns a (y, x, band) array carrying
+#    a `gis` attribute (extent/CRS), so the result is self-describing; pass a
+#    `path=` to stream it straight to a GeoTIFF instead.
+a <- collect(composite, nodata = -9999)
+
+# preview() on a materialised array reads that `gis` attribute for real-world axes.
+preview(a)     # multi-band  -> RGB (first three bands)
 ```
+
+<img src="man/figures/README-example-2.png" alt="" width="100%" />
 
 The same verbs work on a single raster. `lazy_source()` opens one COG or
 a GDAL mosaic; `lazy_map()` / `focal()` / `reduce_over()` build
