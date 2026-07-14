@@ -13,14 +13,15 @@ NULL
 # kind -> colour / glyph. ASCII fallback when the terminal is not UTF-8.
 .kind_col <- c(source = "blue", map = "green", focal = "magenta",
                reduce = "yellow", stack = "cyan", warp = "red",
-               fused = "grey", mask = "red", math = "green", node = "grey")
+               fused = "grey", mask = "red", math = "green",
+               derive = "green", node = "grey")
 .kind_glyph_u <- c(source = "◈", map = "ƒ", focal = "◫",
                    reduce = "▸", stack = "⬚", warp = "→",
                    fused = "▣", mask = "✕", math = "±",
-                   node = "•")
+                   derive = "⊕", node = "•")
 .kind_glyph_a <- c(source = "o", map = "f", focal = "#", reduce = ">",
                    stack = "=", warp = "~", fused = "@", mask = "x",
-                   math = "+", node = "*")
+                   math = "+", derive = "+", node = "*")
 
 .style <- function(kind, text) cli::make_ansi_style(.kind_col[[kind]] %||% "grey")(text)
 .kind_glyph <- function(kind) {

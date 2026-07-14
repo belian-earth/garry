@@ -200,6 +200,29 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
               steps = x@steps)
 }
 
+# Assign a derived band into the dataset: `ds[["ndvi"]] <- (nir - red)/(nir + red)`.
+# The RHS is a LazyRaster (or a per-slice list) on the dataset's grid; because
+# band math like `ds[["B04"]] - ds[["B03"]]` already builds on the shared graph,
+# the derivation is part of the dataset's graph and is written by collect().
+S7::method(`[[<-`, LazyDataset) <- function(x, i, value) {
+  layers <- if (S7::S7_inherits(value, LazyRaster)) list(value)
+            else if (is.list(value)) value
+            else cli::cli_abort(
+              "assigned value must be a {.cls LazyRaster} or a list of them.")
+  sp <- .ds_grid(x)
+  layers <- lapply(layers, function(lr) {
+    .assert_class(lr, LazyRaster, "LazyRaster", arg = "value")
+    if (!.spatial_equal(sp, lr@grid))
+      cli::cli_abort("assigned band {.val {i}} is not on the dataset's grid.")
+    .ds_reimport(lr, x@graph)
+  })
+  bands <- x@bands
+  bands[[i]] <- layers
+  LazyDataset(graph = x@graph, bands = bands, mask_asset = x@mask_asset,
+              steps = c(x@steps,
+                        list(.step("derive", "derive", detail = i))))
+}
+
 # print() cards and draw() live in draw.R.
 
 # ---------------------------------------------------------------------------

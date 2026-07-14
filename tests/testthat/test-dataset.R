@@ -233,6 +233,36 @@ test_that("lazy_dataset builds from a STAC table and masks end to end (offline)"
   expect_equal(got[ok], want[ok], tolerance = 1e-5)
 })
 
+test_that("a derived band joins the graph and is written by collect", {
+  skip_if_not_installed("anvl")
+  f <- fixture_gradient_f32()
+  g <- graph_new(); s <- function() lazy_source(f, graph = g)
+  comp <- as_dataset(list(B04 = list(s() * 1), B03 = list(s() * 2),
+                          B02 = list(s() * 3)))
+
+  comp[["ratio"]] <- comp[["B03"]] * comp[["B02"]]
+  expect_identical(names(comp@bands), c("B04", "B03", "B02", "ratio"))
+
+  out <- collect(comp)                          # (band, y, x)
+  expect_equal(dim(out), c(4L, 40L, 60L))       # the derived band is written
+  b03 <- collect(comp[["B03"]]); b02 <- collect(comp[["B02"]])
+  expect_equal(out[4, , ], b03 * b02, tolerance = 1e-4)
+
+  # an index-style band from arithmetic + scalars also composes
+  comp[["ndvi"]] <- (comp[["B04"]] - comp[["B03"]]) /
+    (comp[["B04"]] + comp[["B03"]])
+  expect_equal(dim(collect(comp)), c(5L, 40L, 60L))
+})
+
+test_that("assigning a band on the wrong grid is rejected", {
+  f <- fixture_gradient_f32()
+  g <- graph_new()
+  comp <- as_dataset(list(B04 = list(lazy_source(f, graph = g))))
+  other <- lazy_source(fixture_i16_nodata())    # different grid
+  expect_error({ comp[["bad"]] <- other }, "grid")
+  expect_error({ comp[["x"]] <- 42 }, "LazyRaster")
+})
+
 test_that("distributed masked composite equals the oracle", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("mirai")
