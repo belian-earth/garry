@@ -61,6 +61,7 @@ test_that("a full plan on garry.device='cuda' matches the CPU result
     old_st <- options(garry.store = st)
     gpu <- execute_plan_mirai(p)
     options(old_st)
-    expect_equal(gpu, cpu, tolerance = 1e-6, label = paste("cuda", st))
+    expect_equal(gpu, cpu, tolerance = 1e-6, label = paste("cuda", st),
+                 ignore_attr = "gis")
   }
 })

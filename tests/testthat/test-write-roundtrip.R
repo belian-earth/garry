@@ -16,7 +16,7 @@ test_that("f32 pipeline writes and reads back bit-exactly", {
   collect(expr, path = outfile)
 
   back <- gdal_read_window(outfile, 1L, 0L, 0L, 60L, 40L)
-  expect_equal(back, in_mem, tolerance = 0)
+  expect_equal(back, in_mem, tolerance = 0, ignore_attr = "gis")
 
   meta <- gdal_grid_spec(outfile)
   src <- gdal_grid_spec(f)$grid

@@ -201,7 +201,7 @@ test_that("sources with different native blocks share one chunk table", {
 
   got <- collect(out)
   m <- gdal_read_window(f_a, 1L, 0L, 0L, 40L, 36L)
-  expect_equal(got, m * 1.5, tolerance = 1e-5)   # median(m, 2m)
+  expect_equal(got, m * 1.5, tolerance = 1e-5, ignore_attr = "gis")   # median(m, 2m)
 })
 
 test_that("merged plans run identically under the mirai scheduler", {

@@ -24,6 +24,10 @@ NULL
 #'   (spatial-first, layer-last): a scalar for global reductions, a `[y, x]`
 #'   matrix for a single layer, or a `(y, x, band)` array for multiple bands
 #'   (matching `terra::as.array()`; plots directly with `rasterImage`/`ximage`).
+#'   A matrix/array result also carries a `gis` attribute in the style of
+#'   `gdalraster::read_ds()` (`type`, `bbox` = `c(xmin, ymin, xmax, ymax)`,
+#'   `dim` = `c(nx, ny, nbands)`, `srs` = WKT, `datatype`), so the array is
+#'   self-describing and [preview()] can set real-world axes without the grid.
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = garry_daemons_set()) {
@@ -57,7 +61,28 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     execute_plan(p, path = path, nodata = nodata, band_names = band_names)
   }
   if (!is.null(path)) return(invisible(res))
-  .collect_layout(res)
+  out <- .collect_layout(res)
+  # Self-describing result: a gdalraster read_ds()-style `gis` attribute from the
+  # plan's output grid. Only for rasters (matrix/array) -- a scalar global
+  # reduction is not spatial. preview() reads it for real-world axes.
+  if (!is.null(dim(out))) {
+    grid <- p@stages[[p@sink]]@grid
+    nb <- if (length(dim(out)) == 3L) dim(out)[[3L]] else 1L
+    attr(out, "gis") <- .gis_attr(grid, nb)
+  }
+  out
+}
+
+# gdalraster read_ds()-style `gis` attribute from a GridSpec: type, bbox
+# (xmin,ymin,xmax,ymax), dim (nx,ny,nbands), srs (WKT), datatype (GDAL name).
+.gis_attr <- function(grid, nbands) {
+  list(
+    type = "raster",
+    bbox = as.numeric(grid@extent),
+    dim = c(unname(grid@dims[["x"]]), unname(grid@dims[["y"]]), as.integer(nbands)),
+    srs = .canon_crs(grid@crs),
+    datatype = unname(.gdal_dtype_rev[[grid@dtype]] %||% grid@dtype)
+  )
 }
 
 # Normalise an in-memory collect() result to the R raster convention:

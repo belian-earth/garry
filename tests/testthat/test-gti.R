@@ -93,7 +93,7 @@ test_that("lazy time slices over one GTI index stack and reduce", {
   on.exit(options(old))
   mn <- collect(reduce_over(st, "mean", "t"))
   base <- gdal_read_window(fixture_gradient_f32(), 1L, 0L, 0L, 60L, 40L)
-  expect_equal(mn, base + 500, tolerance = 1e-3)
+  expect_equal(mn, base + 500, tolerance = 1e-3, ignore_attr = "gis")
 })
 
 test_that("mixed-CRS tiles mosaic onto a pinned grid", {

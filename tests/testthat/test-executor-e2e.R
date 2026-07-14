@@ -50,7 +50,7 @@ test_that("full-raster map materialises bit-exactly at f32", {
   m <- gdal_read_window(f, 1L, 0L, 0L, 60L, 40L)
   a <- lazy_source(f)
   got <- collect(a * 2 + 1)
-  expect_equal(got, m * 2 + 1, tolerance = 1e-5)
+  expect_equal(got, m * 2 + 1, tolerance = 1e-5, ignore_attr = "gis")
   expect_identical(dim(got), c(40L, 60L))
 })
 

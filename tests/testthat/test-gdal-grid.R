@@ -70,7 +70,7 @@ test_that("declared-grid lazy_source matches discovery and skips the open", {
   expect_true(grid_equal(nd@grid, nc@grid))     # incl. f32 promotion
   expect_identical(nd@nodata, nc@nodata)
   expect_identical(nd@block_dim, nc@block_dim)
-  expect_identical(collect(declared), collect(discovered))
+  expect_equal(collect(declared), collect(discovered), ignore_attr = "gis")
 
   # No GDAL open happens at graph build: a path that cannot be opened
   # only fails at execution.

@@ -67,5 +67,5 @@ test_that("dtype promotion and cross-graph merge behave like operators", {
   expect_length(sources, 1L)                        # dedup (D6)
   got <- collect(s)
   m <- gdal_read_window(f, 1L, 0L, 0L, 60L, 40L)
-  expect_equal(got, 2 * m, tolerance = 1e-5)
+  expect_equal(got, 2 * m, tolerance = 1e-5, ignore_attr = "gis")
 })

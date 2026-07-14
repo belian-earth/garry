@@ -53,7 +53,7 @@ test_that("temporal median and mean match terra::app and R apply", {
   want_med <- apply(arr, c(2, 3), function(v) {
     m <- median(v, na.rm = TRUE); if (is.na(m)) NaN else m
   })
-  expect_equal(med, want_med, tolerance = 1e-6)
+  expect_equal(med, want_med, tolerance = 1e-6, ignore_attr = "gis")
 
   r <- terra::rast(paths)
   tmed <- as.matrix(terra::app(r, median, na.rm = TRUE), wide = TRUE)
@@ -62,7 +62,7 @@ test_that("temporal median and mean match terra::app and R apply", {
 
   mn <- collect(reduce_over(st, "mean", "t", nan_rm = TRUE))
   want_mn <- apply(arr, c(2, 3), function(v) mean(v, na.rm = TRUE))
-  expect_equal(mn, want_mn, tolerance = 1e-6)
+  expect_equal(mn, want_mn, tolerance = 1e-6, ignore_attr = "gis")
 })
 
 test_that("stack fuses with the temporal reduce into one compute stage", {

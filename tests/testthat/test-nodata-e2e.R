@@ -62,5 +62,5 @@ test_that("nan-aware focal kernel shrinks the window instead", {
     cnt <- cnt + !is.nan(w)
   }
   want <- want / cnt
-  expect_equal(got, want, tolerance = 1e-5)
+  expect_equal(got, want, tolerance = 1e-5, ignore_attr = "gis")
 })

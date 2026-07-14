@@ -117,10 +117,11 @@ test_that("align to the identical grid pastes: no WarpNode, no warp
   p <- collect(same + 0, plan_only = TRUE)
   expect_false(any(vapply(p@stages, function(s) s@kind == "warp",
                           logical(1))))
-  expect_identical(collect(same),
-                   gdal_read_window(f, 1L, 0L, 0L,
-                                    unname(g@dims[["x"]]),
-                                    unname(g@dims[["y"]])))
+  expect_equal(collect(same),
+               gdal_read_window(f, 1L, 0L, 0L,
+                                unname(g@dims[["x"]]),
+                                unname(g@dims[["y"]])),
+               ignore_attr = "gis")
 
   # a half-pixel-shifted grid is NOT a paste: it must warp
   g2 <- grid_spec(g@crs,

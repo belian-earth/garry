@@ -171,6 +171,18 @@ NULL
   invisible()
 }
 
+# Reconstruct a minimal GridSpec (extent + CRS) from a gdalraster-style `gis`
+# attribute, so preview() of a bare collect() matrix gets real-world axes. Only
+# the extent is used for the plot; dtype is nominal.
+.grid_from_gis <- function(gis) {
+  ext <- as.numeric(gis$bbox)
+  nx <- as.integer(gis$dim[[1L]]); ny <- as.integer(gis$dim[[2L]])
+  dx <- (ext[[3L]] - ext[[1L]]) / nx; dy <- (ext[[4L]] - ext[[2L]]) / ny
+  GridSpec(crs = gis$srs %||% "EPSG:4326",
+           transform = c(ext[[1L]], dx, 0, ext[[4L]], 0, -dy),
+           extent = ext, dims = c(x = nx, y = ny), dtype = "f32")
+}
+
 # -- front doors ------------------------------------------------------------
 
 # Target longest-axis pixels: an explicit cap, else the device size.
@@ -334,6 +346,10 @@ preview <- function(x, bands = NULL, max_px = NULL, stretch = c(2, 98),
     rd <- .pv_read_path(x, bands, target); arr <- rd$arr; grid <- rd$grid
     if (is.null(bands)) bands <- rd$bands
   } else if (is.array(x) || is.matrix(x)) {
+    # A collect() result carries a `gis` attribute (extent/CRS); use it for
+    # real-world axes. Capture it before decimation, which drops attributes.
+    gis <- attr(x, "gis")
+    if (is.null(grid) && !is.null(gis)) grid <- .grid_from_gis(gis)
     arr <- .pv_decimate(x, target)
   } else {
     cli::cli_abort(paste("{.fn preview} needs a LazyRaster/LazyDataset,",
