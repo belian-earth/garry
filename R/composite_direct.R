@@ -548,3 +548,89 @@ NULL
   .gd_write_result(res, spec, path, nodata, band_names)
 }
 
+# ---------------------------------------------------------------------------
+# General warp-on-read executor: the single path for any warp-on-read-eligible
+# plan (arbitrary Source/Map/Focal/Stack/Reduce IR over GTI sources). Warps
+# every source (overview-aware, on the read pool), then compiles the WHOLE
+# reachable IR into ONE jit via .compose_stage_fn -- so derived bands, band
+# math, and nested reduce -> map -> reduce pipelines all run fused, regardless
+# of shape. .cd_spec (the fetch-ordered composite pipeline) is tried first as a
+# throughput optimisation for the pure composite; this covers everything else
+# that reads warp-on-read. Whole-grid (fits in memory); spatial chunking for
+# scale is the next stage.
+# ---------------------------------------------------------------------------
+
+#' Recognise any warp-on-read-replayable plan and lift its whole IR, or NULL.
+#' @keywords internal
+.gd_spec <- function(plan) {
+  if (!isTRUE(garry_opt("composite_direct"))) return(NULL)
+  if (!.g_has_raw_upload()) return(NULL)
+  graph <- plan@graph
+  sink <- plan@stages[[plan@sink]]
+  if (sink@kind != "compute") return(NULL)          # raster (compute) sink only
+  src_stages <- Filter(function(s) s@kind == "source_read", plan@stages)
+  if (!length(src_stages)) return(NULL)
+  for (s in src_stages) {                            # every source must be fetchable
+    n <- graph_get(graph, s@members[[1L]])
+    if (!grepl("^GTI:", n@path)) return(NULL)
+    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) return(NULL)
+  }
+  sink_out <- sink@members[[length(sink@members)]]
+  ids <- .reachable(graph, sink_out)                # ascending = topo
+  nds <- lapply(ids, function(id) graph_get(graph, id))
+  ok_type <- function(n)
+    S7::S7_inherits(n, SourceNode) || S7::S7_inherits(n, MapNode) ||
+    S7::S7_inherits(n, FocalNode) || S7::S7_inherits(n, StackNode) ||
+    S7::S7_inherits(n, ReduceNode)
+  if (!all(vapply(nds, ok_type, logical(1)))) return(NULL)   # Warp/Fused -> sched
+  is_src <- vapply(nds, function(n) S7::S7_inherits(n, SourceNode), logical(1))
+  input_nodes <- ids[is_src]
+  src_ids <- vapply(src_stages, function(s)
+    graph_get(graph, s@members[[1L]])@id, integer(1))
+  if (!all(input_nodes %in% src_ids)) return(NULL)
+  members <- ids[!is_src]
+  list(members = members, input_nodes = input_nodes, sink_out = sink_out,
+       halo = .stage_halo(graph, members, input_nodes),
+       grid = sink@grid, device = sink@device)
+}
+
+#' Execute any warp-on-read plan via whole-IR replay in one jit.
+#' @keywords internal
+.execute_gd_general <- function(plan, gspec, path = NULL, nodata = NULL,
+                                band_names = NULL) {
+  .require_anvl()
+  graph <- plan@graph
+  nx <- gspec$grid@dims[["x"]]; ny <- gspec$grid@dims[["y"]]
+  tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  info <- .gd_warp_sources(plan, gspec$grid, tmp)   # overview-aware, on the read pool
+
+  tcomp <- system.time({
+    dev <- .exec_device(gspec$device)
+    h <- gspec$halo
+    fn <- .compose_stage_fn(graph, gspec$members, gspec$input_nodes,
+                            list(gspec$sink_out), h)
+    inputs <- lapply(gspec$input_nodes, function(id) {
+      a <- g_upload_raw(readBin(info[[as.character(id)]]$bin, "raw",
+                                n = ny * nx * 4L), "f32", c(ny, nx), device = dev)
+      if (h > 0L) g_pad(a, h, NaN) else a          # radius-cell NaN edge boundary
+    })
+    res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(gspec$sink_out)]]
+  })[["elapsed"]]
+  if (isTRUE(getOption("garry.progress", FALSE)))
+    cli::cli_inform(sprintf("[gdal-direct] general compute=%.2fs", tcomp))
+
+  m <- .sv_materialise(res)
+  d <- dim(m)
+  nb <- if (length(d) == 3L) d[[1L]] else 1L
+  mats <- if (length(d) == 3L) lapply(seq_len(nb), function(b) m[b, , ]) else list(m)
+  if (is.null(path)) return(if (nb == 1L) mats[[1L]] else mats)
+  wnodata <- if (is.null(nodata)) numeric(0) else nodata
+  ds <- gdal_create_output(path, gspec$grid, nodata = wnodata,
+                           band_names = band_names)
+  on.exit(try(ds$close(), silent = TRUE), add = TRUE)
+  for (b in seq_len(nb))
+    gdal_write_window(ds, 0L, 0L, mats[[b]], gspec$grid@dtype,
+                      nodata = wnodata, band = b)
+  invisible(path)
+}
+

@@ -41,10 +41,14 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
       cli::cli_abort(c(
         "{.arg distributed} is TRUE but no garry daemon pools are running.",
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
-    spec <- .cd_spec(p)               # GDAL-direct composite fast path
+    spec <- .cd_spec(p)               # composite fast path (fetch-ordered pipeline)
+    gspec <- if (is.null(spec)) .gd_spec(p) else NULL   # general warp-on-read
     if (!is.null(spec))
       .execute_composite_direct(p, spec, path = path, nodata = nodata,
                                 band_names = band_names)
+    else if (!is.null(gspec))
+      .execute_gd_general(p, gspec, path = path, nodata = nodata,
+                          band_names = band_names)
     else
       execute_plan_mirai(p, path = path, nodata = nodata, band_names = band_names)
   } else {
