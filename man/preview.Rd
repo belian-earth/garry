@@ -52,6 +52,7 @@ colour range; axes come from the grid.
 }
 \details{
 Inputs are reduced before rendering: a file or an array is decimated to the
-device (or \code{max_px}); a \code{LazyDataset}/\code{LazyRaster} is \code{collect()}ed (a coarse
-re-plan that fetches at preview resolution is the intended optimisation).
+device (or \code{max_px}); a \code{LazyDataset}/\code{LazyRaster} is re-planned at a coarse
+resolution so it fetches only what the preview shows (grid-pinned sources
+only; otherwise it collects at full resolution and decimates).
 }

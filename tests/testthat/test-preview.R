@@ -65,3 +65,66 @@ test_that("preview() dispatches over array, path, and lazy objects", {
 test_that("preview() rejects unsupported input", {
   expect_error(preview(list(1, 2, 3)), "LazyRaster")
 })
+
+# A grid-pinned LazyRaster: a one-tile local GTI over the gradient fixture, so
+# the read warps (and decimates) on demand -- exercisable offline.
+.pinned_lr <- function() {
+  f <- fixture_gradient_f32()
+  ext <- c(500000, 4599600, 500600, 4600000)          # the fixture's extent
+  grid <- grid_spec("EPSG:32632", extent = ext, dims = c(60, 40), dtype = "f32")
+  gti <- tempfile(fileext = ".gti.fgb")
+  gti_index_create(
+    data.frame(location = f, xmin = ext[1], ymin = ext[2],
+               xmax = ext[3], ymax = ext[4]),
+    gti, crs = "EPSG:32632")
+  list(lr = lazy_source(paste0("GTI:", gti), open_options = gti_open_options(grid),
+                        grid = grid, block_dim = c(60L, 40L)),
+       grid = grid)
+}
+
+test_that(".coarsen_grid rescales x/y, preserves extent and dtype", {
+  g <- grid_spec("EPSG:32632", extent = c(0, 0, 1200, 800), dims = c(120, 80),
+                 dtype = "f32")
+  cg <- .coarsen_grid(g, 4)
+  expect_equal(unname(cg@dims[c("x", "y")]), c(30L, 20L))
+  expect_equal(cg@extent, g@extent)                    # same footprint
+  expect_equal(cg@transform[[2L]], 40)                 # res * 4
+  expect_identical(cg@dtype, "f32")
+})
+
+test_that(".coarsen_open_options swaps RESX/RESY, keeps the rest", {
+  g  <- grid_spec("EPSG:32632", extent = c(0, 0, 1200, 800), dims = c(120, 80),
+                  dtype = "f32")
+  cg <- .coarsen_grid(g, 4)
+  coo <- .coarsen_open_options(gti_open_options(g, filter = "slice=x"), cg)
+  expect_true(any(grepl("^RESX=40", coo)))
+  expect_true(any(grepl("FILTER=slice=x", coo)))       # non-grid options kept
+  expect_length(grep("^RESX=", coo), 1L)               # not duplicated
+})
+
+test_that(".preview_coarsen re-plans grid-pinned sources; NULL otherwise", {
+  # Non-pinned (plain file source) -> NULL so the caller falls back.
+  expect_null(.preview_coarsen(lazy_source(fixture_gradient_f32()) * 2, 20))
+
+  p <- .pinned_lr()
+  coarse <- .preview_coarsen(p$lr, 20)
+  expect_true(S7::S7_inherits(coarse, LazyRaster))
+  expect_lte(max(coarse@grid@dims[c("x", "y")]), 20L)  # long axis <= target
+  # the coarse source fetches at coarse resolution (RESX rewritten)
+  src <- graph_get(coarse@graph, .reachable(coarse@graph, coarse@node_id)[[1L]])
+  expect_true(any(grepl("^RESX=", src@open_options)) &&
+              !any(grepl("^RESX=10\\b", src@open_options)))
+})
+
+test_that("preview() coarse-collects a grid-pinned lazy raster", {
+  skip_if_not_installed("anvl")
+  p <- .pinned_lr()
+  # the coarse pipeline actually executes at reduced res
+  arr <- collect(.preview_coarsen(p$lr, 20))
+  expect_lte(max(dim(arr)), 20L)
+  expect_true(all(is.finite(arr)))
+
+  tf <- tempfile(fileext = ".pdf"); grDevices::pdf(tf)
+  on.exit({ grDevices::dev.off(); unlink(tf) })
+  expect_error(preview(p$lr, max_px = 20), NA)
+})

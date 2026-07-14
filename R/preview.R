@@ -202,6 +202,90 @@ NULL
   list(arr = .pv_decimate(arr, target), grid = meta$grid, bands = seq_along(b))
 }
 
+# -- coarse re-plan ---------------------------------------------------------
+# Rebuild a lazy pipeline at a coarse resolution so a preview fetches only what
+# it shows. Every node's grid is rescaled by the same factor and grid-pinned
+# sources get coarse RESX/RESY, so the GTI/warp read fetches at preview res
+# (far less remote data). Focal radii stay in pixels, so morphology footprints
+# differ slightly at coarse res -- fine for a preview. Only kicks in when every
+# source is grid-pinned (a GTI/warp read); otherwise the caller collects full
+# res and decimates.
+
+.coarsen_grid <- function(grid, factor) {
+  dims <- grid@dims
+  cnx <- max(1L, as.integer(ceiling(dims[["x"]] / factor)))
+  cny <- max(1L, as.integer(ceiling(dims[["y"]] / factor)))
+  ext <- grid@extent
+  dx <- (ext[[3L]] - ext[[1L]]) / cnx
+  dy <- (ext[[4L]] - ext[[2L]]) / cny
+  dims[["x"]] <- cnx; dims[["y"]] <- cny
+  GridSpec(crs = grid@crs, transform = c(ext[[1L]], dx, 0, ext[[4L]], 0, -dy),
+           extent = ext, dims = dims, dtype = grid@dtype)
+}
+
+.coarsen_open_options <- function(oo, cg) {
+  if (!length(oo)) return(oo)
+  num <- function(v) sprintf("%.17g", v)
+  keep <- oo[!grepl("^RES[XY]=", oo)]
+  c(keep, paste0("RESX=", num(cg@transform[[2L]])),
+    paste0("RESY=", num(-cg@transform[[6L]])))
+}
+
+.coarsen_node <- function(ng, n, parents, cg) {
+  if (S7::S7_inherits(n, SourceNode))
+    graph_add(ng, SourceNode, parents = integer(0), grid = cg, path = n@path,
+              band = n@band, nodata = n@nodata, block_dim = n@block_dim,
+              open_options = .coarsen_open_options(n@open_options, cg))
+  else if (S7::S7_inherits(n, MapNode))
+    graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn)
+  else if (S7::S7_inherits(n, FocalNode))
+    graph_add(ng, FocalNode, parents = parents, grid = cg, fn = n@fn,
+              radius = n@radius, boundary = n@boundary, weights = n@weights)
+  else if (S7::S7_inherits(n, ReduceNode))
+    graph_add(ng, ReduceNode, parents = parents, grid = cg, op = n@op,
+              over = n@over, nan_rm = n@nan_rm, fn = n@fn)
+  else if (S7::S7_inherits(n, StackNode))
+    graph_add(ng, StackNode, parents = parents, grid = cg, along = n@along)
+  else if (S7::S7_inherits(n, WarpNode))
+    graph_add(ng, WarpNode, parents = parents, grid = cg, target_grid = cg,
+              resampling = n@resampling)
+  else NULL
+}
+
+# A LazyRaster re-planned to ~target_px on the long axis, or NULL when the
+# sources are not grid-pinned (caller falls back to a full collect).
+.preview_coarsen <- function(lr, target_px) {
+  fine <- lr@grid
+  factor <- max(fine@dims[["x"]], fine@dims[["y"]]) / target_px
+  if (factor <= 1) return(lr)
+  g <- lr@graph
+  nodes <- lapply(.reachable(g, lr@node_id), function(i) graph_get(g, i))
+  srcs <- Filter(function(n) S7::S7_inherits(n, SourceNode), nodes)
+  if (!length(srcs) ||
+      !all(vapply(srcs, function(n) any(grepl("^RESX=", n@open_options)),
+                  logical(1))))
+    return(NULL)
+  ng <- graph_new()
+  idmap <- new.env(parent = emptyenv())
+  for (n in nodes) {
+    ps <- vapply(n@parents, function(p) idmap[[.key(p)]], integer(1))
+    nid <- .coarsen_node(ng, n, ps, .coarsen_grid(n@grid, factor))
+    if (is.null(nid)) return(NULL)
+    idmap[[.key(n@id)]] <- nid
+  }
+  LazyRaster(graph = ng, node_id = idmap[[.key(lr@node_id)]],
+             grid = .coarsen_grid(fine, factor))
+}
+
+# Collect a LazyRaster at preview resolution: coarse re-plan when possible
+# (cheap), else full collect + decimate.
+.pv_collect <- function(lr, target) {
+  coarse <- .preview_coarsen(lr, target)
+  if (is.null(coarse)) return(list(arr = .pv_decimate(collect(lr), target),
+                                   grid = lr@grid))
+  list(arr = .pv_decimate(collect(coarse), target), grid = coarse@grid)
+}
+
 #' Preview a lazy object, a collected array, or a raster file.
 #'
 #' A quick, informative plot: single band as a colour ramp with a legend, three
@@ -210,8 +294,9 @@ NULL
 #' colour range; axes come from the grid.
 #'
 #' Inputs are reduced before rendering: a file or an array is decimated to the
-#' device (or `max_px`); a `LazyDataset`/`LazyRaster` is `collect()`ed (a coarse
-#' re-plan that fetches at preview resolution is the intended optimisation).
+#' device (or `max_px`); a `LazyDataset`/`LazyRaster` is re-planned at a coarse
+#' resolution so it fetches only what the preview shows (grid-pinned sources
+#' only; otherwise it collects at full resolution and decimates).
 #'
 #' @param x A `LazyRaster`, `LazyDataset`, a matrix/array from `collect()`, or a
 #'   path to a raster file.
@@ -234,14 +319,14 @@ preview <- function(x, bands = NULL, max_px = NULL, stretch = c(2, 98),
                     legend = NULL, main = "", axes = TRUE, xlab = "", ylab = "",
                     ...) {
   target <- .pv_target(max_px)
+  orig <- x
   grid <- NULL
   if (S7::S7_inherits(x, LazyDataset)) {
     if (is.character(bands)) { x <- x[bands]; bands <- seq_along(bands) }
-    grid <- .ds_grid(x)
-    arr <- .pv_decimate(collect(x), target)
-  } else if (S7::S7_inherits(x, LazyRaster)) {
-    grid <- x@grid
-    arr <- .pv_decimate(collect(x), target)
+    x <- stack_bands(x)                       # -> LazyRaster on the shared graph
+  }
+  if (S7::S7_inherits(x, LazyRaster)) {
+    r <- .pv_collect(x, target); arr <- r$arr; grid <- r$grid
   } else if (is.character(x) && length(x) == 1L) {
     rd <- .pv_read_path(x, bands, target); arr <- rd$arr; grid <- rd$grid
     if (is.null(bands)) bands <- rd$bands
@@ -253,5 +338,5 @@ preview <- function(x, bands = NULL, max_px = NULL, stretch = c(2, 98),
   }
   .plot_array(arr, grid = grid, bands = bands, stretch = stretch, col = col,
               legend = legend, main = main, axes = axes, xlab = xlab, ylab = ylab)
-  invisible(x)
+  invisible(orig)
 }
