@@ -106,3 +106,34 @@ test_that("failed fetch degrades to a nodata hole under read_fail",
   expect_false(any(is.nan(got[1, , ])))   # good slice intact
   expect_true(all(is.nan(got[2, , ])))    # broken slice = hole
 })
+
+test_that("gdal_fetch_window decimates to the target resolution via overviews", {
+  # Checkerboard: native pixels 0/1; the AVERAGE overview is ~0.5. A coarse
+  # fetch (out_res >> native) must read the overview (uniform), not native.
+  n <- 256
+  cb <- outer(1:n, 1:n, function(r, c) (r + c) %% 2)
+  cog <- tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", cog, n, n, 1, "Float32", return_obj = TRUE,
+    options = c("TILED=YES", "BLOCKXSIZE=64", "BLOCKYSIZE=64"))
+  ds$setGeoTransform(c(0, 1, 0, n, 0, -1))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, n, n, as.numeric(t(cb))); ds$close()
+  d2 <- new(gdalraster::GDALRaster, cog, read_only = FALSE)
+  d2$buildOverviews("AVERAGE", levels = c(2, 4, 8), bands = 1); d2$close()
+
+  ext <- c(0, 0, n, n); crs <- gdalraster::srs_to_wkt("EPSG:32632")
+  read_out <- function(out_res) {
+    o <- tempfile(fileext = ".tif")
+    gdal_fetch_window(cog, o, ext, crs, margin = 0L, out_res = out_res)
+    r <- new(gdalraster::GDALRaster, o); on.exit(r$close())
+    nx <- r$getRasterXSize(); ny <- r$getRasterYSize()
+    list(nx = nx, sd = sd(r$read(1, 0, 0, nx, ny, nx, ny)))
+  }
+  coarse <- read_out(out_res = 8)                 # 8x native -> overview
+  expect_equal(coarse$nx, 32L)                    # decimated
+  expect_lt(coarse$sd, 0.1)                        # uniform: overview, not native
+
+  native <- read_out(out_res = 1)                 # target ~ native -> full res
+  expect_equal(native$nx, 256L)
+  expect_gt(native$sd, 0.4)                        # checkerboard preserved
+})

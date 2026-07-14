@@ -4,7 +4,7 @@
 \alias{gdal_fetch_window}
 \title{Copy one source's target-window bytes to a local file.}
 \usage{
-gdal_fetch_window(location, out_file, ext, crs, margin = 8L)
+gdal_fetch_window(location, out_file, ext, crs, margin = 8L, out_res = NULL)
 }
 \arguments{
 \item{location}{Source path/URL.}

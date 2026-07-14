@@ -11,7 +11,8 @@ local file.}
   ext,
   crs,
   nodata = numeric(0),
-  margin = 8L
+  margin = 8L,
+  target_res = NULL
 )
 }
 \arguments{

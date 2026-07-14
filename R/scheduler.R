@@ -158,9 +158,11 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_fetch_window <- function(location, out_file, ext, crs,
-                                 nodata = numeric(0), margin = 8L) {
+                                 nodata = numeric(0), margin = 8L,
+                                 target_res = NULL) {
   ok <- tryCatch(
-    gdal_fetch_window(location, out_file, ext, crs, margin = margin),
+    gdal_fetch_window(location, out_file, ext, crs, margin = margin,
+                      out_res = target_res),
     error = function(e) e)
   if (!isTRUE(ok)) {
     if (!identical(garry_opt("read_fail"), "nodata"))
@@ -555,11 +557,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       local({
         src <- st$src[[rows[[k]]]]; dst <- st$dst[[rows[[k]]]]
         ex <- grid@extent; cr <- grid@crs; nd <- rnodata
+        tr <- grid@transform[[2L]]      # target x resolution: decimate coarse fetches
         add_task(key, character(0), "read", prio = 1L,
                  launch = function(prof) {
           mirai::mirai(
-            garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd),
-            src = src, dst = dst, ex = ex, cr = cr, nd = nd,
+            garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd,
+                                        target_res = tr),
+            src = src, dst = dst, ex = ex, cr = cr, nd = nd, tr = tr,
             .compute = prof)
         })
       })

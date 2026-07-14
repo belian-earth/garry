@@ -396,7 +396,7 @@ gti_index_create <- function(entries, path, crs, layer = "index") {
 #'   source unreadable.
 #' @keywords internal
 gdal_fetch_window <- function(location, out_file, ext, crs,
-                              margin = 8L) {
+                              margin = 8L, out_res = NULL) {
   ds <- methods::new(gdalraster::GDALRaster, location, read_only = TRUE)
   gt <- ds$getGeoTransform()
   b <- gdalraster::transform_bounds(ext, crs, ds$getProjection())
@@ -408,13 +408,27 @@ gdal_fetch_window <- function(location, out_file, ext, crs,
             as.integer(ceiling((b[2] - gt[4]) / gt[6])) + margin)
   ds$close()
   stopifnot(x1 > x0, y1 > y0)
+  w <- x1 - x0; h <- y1 - y0
+  # When the target grid is coarser than the source (a preview), decimate the
+  # fetch to ~the target resolution: -outsize makes GDAL read the matching COG
+  # overview, so only preview-resolution data crosses the network. Full-res
+  # reads have out_res ~ the native res (ratio ~ 1) and are untouched. The
+  # assemble warps this tile to the exact grid, so an approximate factor is safe
+  # (out_res and the source res are both assumed metric).
+  osz <- character(0)
+  if (!is.null(out_res)) {
+    k <- out_res / abs(gt[2L])
+    if (is.finite(k) && k > 1.5)
+      osz <- c("-outsize", max(1L, as.integer(round(w / k))),
+                           max(1L, as.integer(round(h / k))))
+  }
   # Uncompressed on purpose: the cache lives on tmpfs for one slice
   # assembly, and re-encoding (DEFLATE) costs more CPU across a
   # 20-plus-fetcher fleet than the bytes are worth (source blocks
   # still arrive compressed; only the local copy is raw).
   gdalraster::translate(
     location, out_file,
-    cl_arg = c("-srcwin", x0, y0, x1 - x0, y1 - y0,
+    cl_arg = c("-srcwin", x0, y0, w, h, osz,
                "-co", "TILED=YES", "-co", "COMPRESS=NONE", "-q"))
   invisible(TRUE)
 }

@@ -278,22 +278,15 @@ NULL
 }
 
 # Collect a LazyRaster at preview resolution: coarse re-plan when possible
-# (cheap), else full collect + decimate.
-#
-# Always collect single-threaded (distributed = FALSE). A preview reads only a
-# handful of coarse tiles, so the daemon fleet buys nothing -- and its
-# fetch/assemble split reads NATIVE-resolution source windows, defeating the
-# coarse re-plan. The local executor reads the coarse-pinned GTI directly, which
-# uses the COGs' overviews (verified), so only preview-resolution data is
-# fetched for any plan shape (a derived band like ndvi included, which does not
-# match the overview-aware composite fast path).
+# (cheap), else full collect + decimate. Collects distributed when the daemon
+# pools are up (default) -- the coarse grid drives both a coarse compute and an
+# overview-aware fetch (gdal_fetch_window decimates to the target resolution),
+# so a distributed preview fetches only overview-level tiles for any plan shape.
 .pv_collect <- function(lr, target) {
   coarse <- .preview_coarsen(lr, target)
   if (is.null(coarse))
-    return(list(arr = .pv_decimate(collect(lr, distributed = FALSE), target),
-                grid = lr@grid))
-  list(arr = .pv_decimate(collect(coarse, distributed = FALSE), target),
-       grid = coarse@grid)
+    return(list(arr = .pv_decimate(collect(lr), target), grid = lr@grid))
+  list(arr = .pv_decimate(collect(coarse), target), grid = coarse@grid)
 }
 
 #' Preview a lazy object, a collected array, or a raster file.

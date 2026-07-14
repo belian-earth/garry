@@ -4,7 +4,13 @@
 \alias{.execute_composite_direct}
 \title{Execute a no-focal composite via the lean GDAL-direct cube path.}
 \usage{
-.execute_composite_direct(plan, spec, path = NULL, nodata = NULL)
+.execute_composite_direct(
+  plan,
+  spec,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL
+)
 }
 \description{
 Execute a no-focal composite via the lean GDAL-direct cube path.

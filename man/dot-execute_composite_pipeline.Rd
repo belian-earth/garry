@@ -4,7 +4,13 @@
 \alias{.execute_composite_pipeline}
 \title{Execute a composite via the split-pool fetch-ordered pipeline.}
 \usage{
-.execute_composite_pipeline(plan, spec, path = NULL, nodata = NULL)
+.execute_composite_pipeline(
+  plan,
+  spec,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL
+)
 }
 \description{
 Fetch fmask first on the read pool; compute the cleaned mask on the compute
