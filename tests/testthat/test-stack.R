@@ -27,7 +27,7 @@ skip_if_not_installed("anvl")
   lapply(paths, function(f) gdal_read_window(f, 1L, 0L, 0L, 50L, 40L))
 }
 
-test_that("collect of a raw stack returns the (t, y, x) array", {
+test_that("collect of a raw stack returns the (y, x, t) array", {
   paths <- .stack_fixtures()
   st <- lazy_stack(lapply(paths, lazy_source))
   expect_identical(unname(st@grid@dims), c(50L, 40L, 3L))
@@ -35,9 +35,9 @@ test_that("collect of a raw stack returns the (t, y, x) array", {
 
   got <- collect(st)
   layers <- .read_layers(paths)
-  expect_identical(dim(got), c(3L, 40L, 50L))
+  expect_identical(dim(got), c(40L, 50L, 3L))
   for (i in 1:3) {
-    expect_equal(got[i, , ], layers[[i]], tolerance = 1e-6,
+    expect_equal(got[, , i], layers[[i]], tolerance = 1e-6,
                  label = paste("layer", i))
   }
 })

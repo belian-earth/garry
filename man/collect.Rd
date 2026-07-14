@@ -31,8 +31,10 @@ distributed result is identical to the single-threaded one.}
 }
 \value{
 With \code{plan_only = TRUE}, the \code{Plan}. With \code{path}, the path,
-invisibly. Otherwise the materialised result: a \verb{[y, x]} matrix
-for raster sinks, a scalar for global reductions.
+invisibly. Otherwise the materialised result in the R raster convention
+(spatial-first, layer-last): a scalar for global reductions, a \verb{[y, x]}
+matrix for a single layer, or a \verb{(y, x, band)} array for multiple bands
+(matching \code{terra::as.array()}; plots directly with \code{rasterImage}/\code{ximage}).
 }
 \description{
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}

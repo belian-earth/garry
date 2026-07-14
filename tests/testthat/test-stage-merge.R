@@ -79,7 +79,7 @@ test_that("mask -> stack -> median fuses per band; the band-stack join stays a b
   }
   for (k in 1:2) {
     want <- want_of(list(b1, b2)[[k]])
-    slab <- got[k, , ]
+    slab <- got[, , k]
     expect_identical(is.nan(slab), is.nan(matrix(want, 9, 12)))
     ok <- !is.nan(want)
     expect_equal(slab[matrix(ok, 9, 12)], want[ok], tolerance = 1e-5)

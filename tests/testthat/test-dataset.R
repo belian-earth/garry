@@ -39,13 +39,13 @@ test_that("reduce_over per band equals the manual stack+reduce path", {
 
   red <- reduce_over(ds, "median", "t")
   expect_true(all(vapply(red@bands, length, 1L) == 1L))  # one composite per band
-  out <- collect(red)                                    # (band, y, x)
-  expect_equal(dim(out), c(3L, 40L, 60L))
+  out <- collect(red)                                    # (y, x, band)
+  expect_equal(dim(out), c(40L, 60L, 3L))
 
   g <- graph_new()
   s <- function() lazy_source(f, graph = g)
   manual_V1 <- collect(reduce_over(lazy_stack(list(s() * 1, s() * 2)), "median", "t"))
-  expect_equal(out[1, , ], manual_V1, tolerance = 1e-6)
+  expect_equal(out[, , 1], manual_V1, tolerance = 1e-6)
 })
 
 test_that("collect on a single-band dataset returns a matrix", {
@@ -77,7 +77,7 @@ test_that("mask(qa_bits) equals a manual bitmask + apply", {
   m1 <- ap(V1s1, lazy_map(Q1, fn = bad, dtype = "f32"))
   m2 <- ap(V1s2, lazy_map(Q2, fn = bad, dtype = "f32"))
   manual <- collect(reduce_over(lazy_stack(list(m1, m2)), "median", "t"))
-  expect_equal(got[1, , ], manual, tolerance = 1e-6)
+  expect_equal(got[, , 1], manual, tolerance = 1e-6)
 })
 
 test_that("mask(value set) flags category membership", {
@@ -102,7 +102,7 @@ test_that("mask(value set) flags category membership", {
   m1 <- ap(V1s1, lazy_map(Q1, fn = memb, dtype = "f32"))
   m2 <- ap(V1s2, lazy_map(Q2, fn = memb, dtype = "f32"))
   manual <- collect(reduce_over(lazy_stack(list(m1, m2)), "median", "t"))
-  expect_equal(got[1, , ], manual, tolerance = 1e-6)
+  expect_equal(got[, , 1], manual, tolerance = 1e-6)
 })
 
 test_that("mask morphology (open + dilate) matches a manual erode/dilate chain", {
@@ -125,7 +125,7 @@ test_that("mask morphology (open + dilate) matches a manual erode/dilate chain",
   V1s1 <- s() * 1; V1s2 <- s() * 2; Q1 <- s(); Q2 <- s() + 1
   m1 <- ap(V1s1, clean(Q1)); m2 <- ap(V1s2, clean(Q2))
   manual <- collect(reduce_over(lazy_stack(list(m1, m2)), "median", "t"))
-  expect_equal(got[1, , ], manual, tolerance = 1e-6)
+  expect_equal(got[, , 1], manual, tolerance = 1e-6)
 })
 
 test_that("lazy_map over a dataset skips the mask band; bands= selects", {
@@ -243,15 +243,15 @@ test_that("a derived band joins the graph and is written by collect", {
   comp[["ratio"]] <- comp[["B03"]] * comp[["B02"]]
   expect_identical(names(comp@bands), c("B04", "B03", "B02", "ratio"))
 
-  out <- collect(comp)                          # (band, y, x)
-  expect_equal(dim(out), c(4L, 40L, 60L))       # the derived band is written
+  out <- collect(comp)                          # (y, x, band)
+  expect_equal(dim(out), c(40L, 60L, 4L))       # the derived band is written
   b03 <- collect(comp[["B03"]]); b02 <- collect(comp[["B02"]])
-  expect_equal(out[4, , ], b03 * b02, tolerance = 1e-4)
+  expect_equal(out[, , 4], b03 * b02, tolerance = 1e-4)
 
   # an index-style band from arithmetic + scalars also composes
   comp[["ndvi"]] <- (comp[["B04"]] - comp[["B03"]]) /
     (comp[["B04"]] + comp[["B03"]])
-  expect_equal(dim(collect(comp)), c(5L, 40L, 60L))
+  expect_equal(dim(collect(comp)), c(40L, 60L, 5L))
 })
 
 test_that("assigning a band on the wrong grid is rejected", {
