@@ -116,6 +116,35 @@ test_that(".preview_coarsen re-plans grid-pinned sources; NULL otherwise", {
               !any(grepl("^RESX=10\\b", src@open_options)))
 })
 
+test_that("coarse preview reads COG overviews, even for a derived band", {
+  skip_if_not_installed("anvl")
+  # A checkerboard: native pixels are 0/1; the AVERAGE overview is ~0.5. A coarse
+  # read that uses the overview is uniform (sd ~ 0); native decimation scatters.
+  n <- 256
+  cb <- outer(1:n, 1:n, function(r, c) (r + c) %% 2)
+  cog <- tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", cog, n, n, 1, "Float32", return_obj = TRUE,
+    options = c("TILED=YES", "BLOCKXSIZE=64", "BLOCKYSIZE=64"))
+  ds$setGeoTransform(c(0, 1, 0, n, 0, -1))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, n, n, as.numeric(t(cb))); ds$close()
+  d2 <- new(gdalraster::GDALRaster, cog, read_only = FALSE)
+  d2$buildOverviews("AVERAGE", levels = c(2, 4, 8), bands = 1); d2$close()
+
+  gti <- tempfile(fileext = ".gti.fgb")
+  gti_index_create(data.frame(location = cog, xmin = 0, ymin = 0,
+                              xmax = n, ymax = n), gti, crs = "EPSG:32632")
+  grid <- grid_spec("EPSG:32632", extent = c(0, 0, n, n), dims = c(n, n),
+                    dtype = "f32")
+  lr <- lazy_source(paste0("GTI:", gti), open_options = gti_open_options(grid),
+                    grid = grid, block_dim = c(n, n))
+  deriv <- (lr - lr * 0.5) / (lr + lr * 0.5 + 1)   # MapNode top: misses fast path
+
+  arr <- .pv_collect(deriv, 32)$arr
+  expect_lte(max(dim(arr)), 32L)
+  expect_lt(sd(as.numeric(arr)), 0.02)             # overview (uniform), not native
+})
+
 test_that("preview() coarse-collects a grid-pinned lazy raster", {
   skip_if_not_installed("anvl")
   p <- .pinned_lr()
