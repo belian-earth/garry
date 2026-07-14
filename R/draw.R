@@ -165,6 +165,28 @@ S7::method(print, LazyDataset) <- function(x, ...) {
   invisible(x)
 }
 
+S7::method(print, LazyDatasetGroups) <- function(x, ...) {
+  labs <- names(x@groups)
+  nb <- vapply(x@groups, function(g) length(.ds_value_bands(g)), integer(1))
+  ns <- vapply(x@groups, function(g) max(vapply(g@bands, length, integer(1))), integer(1))
+  show <- if (length(labs) > 6L)
+    c(labs[1:5], cli::col_grey(sprintf("... (+%d)", length(labs) - 5L))) else labs
+  .card(
+    "<LazyDatasetGroups>",
+    list(
+      c("groups", sprintf("%d by %s", length(labs), x@by)),
+      c("labels", paste(show, collapse = " ")),
+      c("bands",  if (min(nb) == max(nb)) as.character(max(nb))
+                  else sprintf("%d-%d per group", min(nb), max(nb))),
+      c("time",   sprintf("%s slice%s per group",
+                          if (min(ns) == max(ns)) as.character(max(ns))
+                          else sprintf("%d-%d", min(ns), max(ns)),
+                          if (max(ns) == 1L) "" else "s"))
+    ),
+    hint = "reduce_over(x, \"median\", \"t\") then collect(x)")
+  invisible(x)
+}
+
 # Original slice count: from the stored source step (survives reduce), else the
 # current per-band layer count.
 .ds_n_slices <- function(x) {

@@ -35,6 +35,10 @@ invisibly. Otherwise the materialised result in the R raster convention
 (spatial-first, layer-last): a scalar for global reductions, a \verb{[y, x]}
 matrix for a single layer, or a \verb{(y, x, band)} array for multiple bands
 (matching \code{terra::as.array()}; plots directly with \code{rasterImage}/\code{ximage}).
+A matrix/array result also carries a \code{gis} attribute in the style of
+\code{gdalraster::read_ds()} (\code{type}, \code{bbox} = \code{c(xmin, ymin, xmax, ymax)},
+\code{dim} = \code{c(nx, ny, nbands)}, \code{srs} = WKT, \code{datatype}), so the array is
+self-describing and \code{\link[=preview]{preview()}} can set real-world axes without the grid.
 }
 \description{
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}

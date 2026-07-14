@@ -31,6 +31,11 @@ NULL
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = garry_daemons_set()) {
+  # A grouped dataset materialises one result per time group (see
+  # group_by_time()): a named list, or one file per group when `path` carries a
+  # `{group}` placeholder.
+  if (S7::S7_inherits(x, LazyDatasetGroups))
+    return(.collect_groups(x, plan_only, path, nodata, distributed))
   # A dataset's band names become the output band descriptions; capture them
   # before stack_bands() collapses the named bands into one node.
   band_names <- NULL
@@ -71,6 +76,35 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     attr(out, "gis") <- .gis_attr(grid, nb)
   }
   out
+}
+
+# Materialise each time group of a LazyDatasetGroups. With `path`, writes one
+# file per group (a `{group}` placeholder is substituted, else the group label
+# is inserted before the extension) and returns the paths invisibly; otherwise
+# returns a named list of results (or Plans when `plan_only`).
+.collect_groups <- function(x, plan_only, path, nodata, distributed) {
+  labels <- names(x@groups)
+  paths <- if (is.null(path)) NULL else .group_paths(path, labels)
+  res <- lapply(seq_along(x@groups), function(i)
+    collect(x@groups[[i]], plan_only = plan_only,
+            path = if (is.null(paths)) NULL else paths[[i]],
+            nodata = nodata, distributed = distributed))
+  names(res) <- labels
+  if (!is.null(path) && !plan_only) return(invisible(stats::setNames(unlist(paths), labels)))
+  res
+}
+
+# One output path per group: substitute a `{group}`/`{time}` placeholder, or
+# insert the (filesystem-safe) group label before the file extension.
+.group_paths <- function(path, labels) {
+  safe <- gsub("[^A-Za-z0-9._-]", "-", labels)
+  if (grepl("\\{group\\}|\\{time\\}", path))
+    return(vapply(safe, function(s) gsub("\\{group\\}|\\{time\\}", s, path),
+                  character(1), USE.NAMES = FALSE))
+  ext <- tools::file_ext(path); stem <- tools::file_path_sans_ext(path)
+  vapply(safe, function(s)
+    if (nzchar(ext)) sprintf("%s_%s.%s", stem, s, ext) else sprintf("%s_%s", stem, s),
+    character(1), USE.NAMES = FALSE)
 }
 
 # gdalraster read_ds()-style `gis` attribute from a GridSpec: type, bbox

@@ -308,6 +308,8 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
 #' @return A `LazyRaster` on the reduced grid, or a `LazyDataset` when given one.
 #' @export
 reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
+  if (S7::S7_inherits(x, LazyDatasetGroups))
+    return(.dsg_reduce(x, op, over, isTRUE(nan_rm), bands))
   if (S7::S7_inherits(x, LazyDataset))
     return(.ds_reduce(x, op, over, isTRUE(nan_rm), bands))
   .assert_class(x, LazyRaster, "LazyRaster")

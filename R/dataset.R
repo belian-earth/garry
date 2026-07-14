@@ -281,6 +281,101 @@ S7::method(`[[<-`, LazyDataset) <- function(x, i, value) {
 }
 
 # ---------------------------------------------------------------------------
+# Temporal grouping: group_by_time() partitions a dataset's slices into calendar
+# groups (month, quarter, year, ...) so a following reduce_over(over = "t")
+# builds ONE composite per group -- xarray's resample(time = ...).reduce(). The
+# result is a LazyDatasetGroups; collect() materialises each group (a named list,
+# or one file per group via a `{group}` path placeholder).
+# ---------------------------------------------------------------------------
+
+#' A dataset partitioned into time groups (see [group_by_time()]).
+#' @keywords internal
+LazyDatasetGroups <- S7::new_class(
+  "LazyDatasetGroups",
+  properties = list(groups = S7::class_list, by = S7::class_character),
+  validator = function(self) {
+    if (length(self@groups) < 1L || is.null(names(self@groups)))
+      return("`groups` must be a non-empty named list")
+    if (!all(vapply(self@groups, function(g) S7::S7_inherits(g, LazyDataset),
+                    logical(1))))
+      return("every group must be a LazyDataset")
+    NULL
+  }
+)
+
+# Slice name -> group label. Presets truncate the (date) name; a function maps
+# the slice name to a label verbatim.
+.time_group <- function(slices, by) {
+  if (is.function(by)) return(vapply(slices, by, character(1), USE.NAMES = FALSE))
+  switch(by,
+    year    = substr(slices, 1L, 4L),
+    month   = substr(slices, 1L, 7L),
+    day     = substr(slices, 1L, 10L),
+    quarter = {
+      d <- .slice_dates(slices)
+      sprintf("%s-Q%d", format(d, "%Y"),
+              (as.integer(format(d, "%m")) - 1L) %/% 3L + 1L)
+    },
+    week    = format(.slice_dates(slices), "%G-W%V"),
+    cli::cli_abort("unknown {.arg by} {.val {by}}: use year/quarter/month/week/day or a function."))
+}
+
+.slice_dates <- function(slices) {
+  d <- as.Date(slices, format = "%Y-%m-%d")
+  if (anyNA(d))
+    cli::cli_abort(c("{.arg by = \"quarter\"/\"week\"} needs day-granularity (YYYY-MM-DD) slices.",
+                     "i" = "Build the dataset with {.code granularity = \"day\"}."))
+  d
+}
+
+#' Group a dataset's time slices into calendar periods.
+#'
+#' Partitions every band's slices by period so a following
+#' `reduce_over(over = "t")` builds one composite per group: a year of daily
+#' imagery, `group_by_time("month")`, then a median gives twelve monthly
+#' composites (xarray's `resample(time = ...).reduce()`). Slices are grouped by
+#' the period prefix of their date name, so build the dataset at
+#' `granularity = "day"` and group up from there. Ragged bands are fine -- a
+#' band with no slice in a group is simply absent from that group's composite.
+#'
+#' @param x A `LazyDataset`.
+#' @param by `"year"`, `"quarter"`, `"month"` (default), `"week"`, `"day"`, or a
+#'   function mapping a slice name to a group label.
+#' @return A `LazyDatasetGroups` (a named list of per-group `LazyDataset`s).
+#'   Reduce it with [reduce_over()], then [collect()] returns a named list of
+#'   results (or writes one file per group when `path` carries a `{group}`
+#'   placeholder, e.g. `"ndvi_{group}.tif"`).
+#' @export
+group_by_time <- function(x, by = "month") {
+  .assert_class(x, LazyDataset, "LazyDataset")
+  if (!is.function(by))
+    by <- rlang::arg_match(by, c("year", "quarter", "month", "week", "day"))
+  labels <- sort(unique(unlist(
+    lapply(x@bands, function(b) .time_group(names(b), by)), use.names = FALSE)))
+  if (!length(labels))
+    cli::cli_abort("no time groups: are the band slices named by date?")
+  lab <- if (is.function(by)) "custom" else by
+  groups <- lapply(labels, function(g) {
+    nb <- lapply(x@bands, function(b) b[.time_group(names(b), by) == g])
+    nb <- nb[vapply(nb, length, integer(1)) > 0L]        # drop bands empty this group
+    LazyDataset(graph = x@graph, bands = nb,
+                mask_asset = intersect(x@mask_asset, names(nb)),
+                steps = c(x@steps, list(.step("group", "group",
+                          detail = sprintf("%s = %s", lab, g)))))
+  })
+  names(groups) <- labels
+  LazyDatasetGroups(groups = groups, by = lab)
+}
+
+# reduce_over() dispatch for grouped datasets: reduce each group independently.
+.dsg_reduce <- function(x, op, over, nan_rm, bands) {
+  LazyDatasetGroups(
+    groups = lapply(x@groups, function(g)
+      reduce_over(g, op, over, nan_rm = nan_rm, bands = bands)),
+    by = x@by)
+}
+
+# ---------------------------------------------------------------------------
 # stack_bands: assemble the band axis into a single LazyRaster.
 # ---------------------------------------------------------------------------
 

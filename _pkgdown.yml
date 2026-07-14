@@ -36,6 +36,7 @@ reference:
   - LazyDataset
   - mask
   - qa_bits
+  - group_by_time
   - stack_bands
 
 - title: Raster & dataset algebra
