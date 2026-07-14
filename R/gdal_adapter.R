@@ -489,3 +489,11 @@ gdal_vector_bbox_ll <- function(x) {
     bb <- as.numeric(gdalraster::transform_bounds(bb, srs, "EPSG:4326"))
   bb
 }
+
+# Number of raster bands in a source. In the adapter (decision D13); preview()
+# uses it to choose default bands.
+gdal_band_count <- function(path) {
+  ds <- methods::new(gdalraster::GDALRaster, path)
+  on.exit(ds$close())
+  ds$getRasterCount()
+}

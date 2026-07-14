@@ -55,4 +55,5 @@ Collate:
     'draw.R'
     'gradient.R'
     'grid_from.R'
+    'preview.R'
     'zzz.R'
