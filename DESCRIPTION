@@ -24,13 +24,16 @@ Remotes:
     belian-earth/anvl@raw-payload-nv-array
 Suggests:
     anvl,
+    knitr,
     mirai,
     mori,
+    rmarkdown,
     rstac,
     terra,
     testthat (>= 3.0.0),
     vaster,
     withr
+VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
 Collate: 

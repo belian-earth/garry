@@ -330,6 +330,34 @@ g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))
 }
 
+#' Broadcast arrays to a common shape (compute vocabulary).
+#'
+#' numpy-style broadcasting for the `g_*` vocabulary: the hook for per-band
+#' constants in a band reducer -- multiply a `(band, y, x)` cube by a
+#' `(band, 1, 1)` loading vector before summing over band (a linear projection;
+#' see [band_project()]). anvl requires operands broadcast explicitly. Traces to
+#' anvl when given traced arrays, else broadcasts plain-R arrays (same rank).
+#'
+#' @param ... Two or more arrays (traced or plain).
+#' @return A list of the inputs broadcast to their common shape.
+#' @export
+g_broadcast_arrays <- function(...) {
+  args <- list(...)
+  if (.g_traced(args[[1L]])) return(anvl::nv_broadcast_arrays(...))
+  # oracle (plain-R arrays): replicate singleton dims to the common shape.
+  # Same-rank inputs (as the band reducer supplies); no rank padding.
+  shp <- lapply(args, function(a) dim(a) %||% length(a))
+  target <- do.call(pmax, shp)
+  lapply(args, function(a) {
+    s <- dim(a) %||% length(a)
+    if (identical(as.integer(s), as.integer(target))) return(a)
+    idx <- lapply(seq_along(target), function(ax)
+      if (s[[ax]] == 1L && target[[ax]] > 1L) rep(1L, target[[ax]])
+      else seq_len(target[[ax]]))
+    do.call(`[`, c(list(array(a, s)), idx, list(drop = FALSE)))
+  })
+}
+
 #' @rdname g-reductions
 #' @export
 g_mean <- function(x, dims = NULL, nan_rm = FALSE) {

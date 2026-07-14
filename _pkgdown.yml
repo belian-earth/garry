@@ -49,6 +49,7 @@ reference:
   - focal
   - focal_kernel
   - reduce_over
+  - band_project
   - align
 
 - title: Execution
@@ -100,6 +101,7 @@ reference:
   - g_min
   - g_max
   - g_median
+  - g_broadcast_arrays
   - g_count
   - g_jit
   - g_upload

@@ -1,0 +1,127 @@
+---
+title: "Harmonized Landsat-Sentinel composite and PCA"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Harmonized Landsat-Sentinel composite and PCA}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+The Harmonized Landsat Sentinel-2 (HLS) project delivers a common surface
+reflectance product from two sensors, giving a land observation every 2-3 days
+at 30 m. The two collections are spectrally harmonized but **name their bands
+differently and carry different band sets** (Landsat has thermal bands and no
+red edge; Sentinel-2 has red edge and a broad NIR). This vignette combines both
+into one cloud-masked median composite that keeps every band, then reduces the
+band axis to its first three principal components.
+
+The chunks below are not evaluated (they hit the network); they show the whole
+workflow end to end. We use the Microsoft Planetary Computer, which is
+pre-signed and fast.
+
+## Discover and harmonize
+
+Query both collections over an area of interest, filter cloudy scenes, and drop
+duplicate acquisitions.
+
+```{r discover}
+library(garry)
+
+aoi <- c(144.13, -7.725, 144.47, -7.475)   # lon/lat bbox
+mpc <- "https://planetarycomputer.microsoft.com/api/stac/v1/"
+
+query <- function(collection) {
+  its <- stac_query(bbox = aoi, stac_source = mpc, collection = collection,
+                    start_date = "2023-01-01", end_date = "2023-12-31")
+  rstac::items_sign(its, rstac::sign_planetary_computer())
+}
+```
+
+Each collection's assets are mapped onto one shared schema with
+`stac_rename_assets()`: aerosol `A`, visible `B`/`G`/`R`, red edge
+`RE1`-`RE3`, NIR `N` (broad) and `N2` (narrow), water vapour `WV`, cirrus `C`,
+SWIR `S1`/`S2`, thermal `T1`/`T2`. Unmapped assets (view angles, previews) drop
+out, so the map doubles as the band selector. `stac_merge()` concatenates the
+two harmonized tables.
+
+```{r harmonize}
+l30 <- stac_sources(query("hls2-l30")) |>
+  stac_filter_cloud(80) |> stac_drop_duplicates() |>
+  stac_rename_assets(c(
+    B01 = "A", B02 = "B", B03 = "G", B04 = "R", B05 = "N2", B06 = "S1",
+    B07 = "S2", B09 = "C", B10 = "T1", B11 = "T2", Fmask = "Fmask"))
+
+s30 <- stac_sources(query("hls2-s30")) |>
+  stac_filter_cloud(80) |> stac_drop_duplicates() |>
+  stac_rename_assets(c(
+    B01 = "A", B02 = "B", B03 = "G", B04 = "R", B05 = "RE1", B06 = "RE2",
+    B07 = "RE3", B08 = "N", B8A = "N2", B09 = "WV", B10 = "C", B11 = "S1",
+    B12 = "S2", Fmask = "Fmask"))
+
+src <- stac_merge(l30, s30)
+```
+
+No empty-band padding or reordering is needed (unlike a VRT-based approach):
+`lazy_dataset()` gives each band only the slices that carry it, and `mask()`
+pairs a band's slices with the matching Fmask by name. A Landsat-only thermal
+band and a Sentinel-only red-edge band each reduce over exactly their own
+observations.
+
+## Cloud-masked median composite
+
+```{r composite}
+bands  <- c("A", "B", "G", "R", "RE1", "RE2", "RE3", "N",
+            "N2", "WV", "C", "S1", "S2", "T1", "T2")
+target <- grid_from_bbox(aoi, res = 30)     # equal-area 30 m grid
+
+garry_daemons()
+
+comp <- lazy_dataset(
+  src, grid = target, assets = bands, mask_asset = "Fmask",
+  nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
+) |>
+  mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
+  reduce_over("median", over = "t")
+
+preview(comp, bands = c("R", "G", "B"))      # true-colour look (band names)
+cube <- stack_bands(comp)                    # LazyRaster (band, y, x)
+```
+
+## PCA over the band axis
+
+A per-pixel PCA collapses the spectral vector to a few components. Fit it in
+plain R on the materialized composite (fitting a model in R is perfectly
+reasonable -- not everything belongs in the lazy graph):
+
+```{r pca-fit}
+arr <- collect(cube)                         # (y, x, band)
+px  <- matrix(arr, ncol = dim(arr)[[3]])     # pixels x bands
+px  <- px[stats::complete.cases(px), , drop = FALSE]
+pca <- prcomp(px, center = TRUE, scale. = FALSE)
+```
+
+The projection onto each principal component is a **linear combination of the
+bands** -- exactly `reduce_over(over = "band")`. `band_project()` builds the
+reducer (centre, then weight by the loading); stacking the first three gives a
+3-band image. Because it is lazy, the same projection runs chunked and
+distributed at full resolution without ever holding the whole cube in memory.
+
+```{r pca-project}
+pcs <- lazy_stack(
+  lapply(1:3, function(i)
+    reduce_over(cube, band_project(pca$rotation[, i], center = pca$center),
+                over = "band")),
+  along = "band")
+
+preview(pcs)                                 # PC1-3 as R/G/B
+```
+
+The same `band_project()` reducer is the basis for any linear-model `predict`
+(regression, logistic, unmixing): fit in R, pass the coefficients as `weights`.
+Non-linear models (random forests, boosting) don't trace to the compute
+backend -- for those, `collect()` the composite and predict in R.
+```

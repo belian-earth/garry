@@ -335,6 +335,46 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
 
+#' A band reducer for a linear combination of bands.
+#'
+#' Returns an anvl reducer `fn(x, dims)` for `reduce_over(cube, fn, over =
+#' "band")`: it centres each band (optional) and forms the weighted sum
+#' `sum_b weights[b] * (band_b - center[b])` per pixel -- a linear projection of
+#' the band vector. This is the "reduce over bands" primitive behind spectral
+#' indices, linear/logistic prediction, and PCA. For multiple outputs (e.g. the
+#' first `k` principal components) build one reducer per weight column and stack:
+#'
+#' ```r
+#' pc <- lapply(1:3, \(i) reduce_over(cube, band_project(rot[, i], centre),
+#'                                    over = "band"))
+#' collect(lazy_stack(pc, along = "band"))            # (3, y, x)
+#' ```
+#'
+#' @param weights Per-band coefficients (length = number of bands).
+#' @param center Optional per-band centre subtracted before weighting (e.g. a
+#'   PCA's column means); length must match `weights`.
+#' @return A function `fn(x, dims)` suitable for [reduce_over()] `over = "band"`.
+#' @export
+band_project <- function(weights, center = NULL) {
+  w <- as.numeric(weights)
+  ctr <- if (is.null(center)) NULL else as.numeric(center)
+  if (!is.null(ctr) && length(ctr) != length(w))
+    cli::cli_abort("{.arg center} must be the same length as {.arg weights}.")
+  force(w); force(ctr)
+  function(x, dims) {
+    rank <- if (.g_traced(x)) length(.g_shape(x)) else length(dim(x))
+    lead <- function(v) {                       # v -> (length(v), 1, ..., 1)
+      a <- array(as.numeric(v), c(length(v), rep(1L, rank - 1L)))
+      if (.g_traced(x)) g_upload(a, "f32") else a
+    }
+    xc <- if (is.null(ctr)) x else {
+      b <- g_broadcast_arrays(x, lead(ctr)); b[[1L]] - b[[2L]]
+    }
+    b <- g_broadcast_arrays(xc, lead(w))
+    g_sum(b[[1L]] * b[[2L]], dims)
+  }
+}
+
 #' Linear focal op with an explicit kernel (differentiable).
 #'
 #' The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
