@@ -37,13 +37,15 @@ Fetches a (multi-band) Cloud-Optimised GeoTIFF onto \code{grid} and returns a
 (\code{mask}, \code{reduce_over}, \code{band_project}, ...). Multi-band sources -- geo-
 embedding stacks such as Alpha Earth -- route through
 \href{https://belian-earth.github.io/cptkirk/}{cptkirk}: its async-tiff reader
-opens each tile once and streams the band planes concurrently, far faster than
-per-band GDAL \verb{/vsicurl} for tens of bands. Single-band sources gain nothing
-from it; use \code{\link[=lazy_source]{lazy_source()}} / \code{\link[=lazy_dataset]{lazy_dataset()}}.
+opens each tile once and streams the band planes concurrently, then warps them
+in one pass into a native-dtype buffer, far faster than per-band GDAL
+\verb{/vsicurl} for tens of bands. Single-band sources gain nothing from it; use
+\code{\link[=lazy_source]{lazy_source()}} / \code{\link[=lazy_dataset]{lazy_dataset()}}.
 }
 \details{
-The fetch is eager (the remote data is warped to a local grid-aligned raster
-once, so iterative analysis re-uses it); downstream compute stays lazy.
-\code{dequant} fuses a decode onto the read -- e.g. \code{\link[=dequantize_aef]{dequantize_aef()}} -- on the
-device, not a separate pass.
+The fetch is eager (the remote data is warped to a local grid-aligned buffer
+once, so iterative analysis re-uses it); downstream compute stays lazy. The
+source's nodata sentinel is carried through so those pixels read as NaN and
+never reach the decode. \code{dequant} fuses a decode onto the read -- e.g.
+\code{\link[=dequantize_aef]{dequantize_aef()}} -- on the device, not a separate pass.
 }

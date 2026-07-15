@@ -32,6 +32,34 @@ test_that(".cog_to_dataset wraps a local multi-band raster and fuses dequant", {
     expect_equal(unname(got[1, 1, b]), ref(codes[[b]]), tolerance = 1e-4)
 })
 
+test_that(".raw_bsq_vrt wraps a raw BSQ buffer; source sentinel masks to NaN", {
+  skip_if_not_installed("anvl")
+  # A 4x3 grid; the user's analysis grid is f32, the source buffer is Int8, so
+  # .cog_to_dataset must read at the native i8 dtype for the D8 sentinel->NaN
+  # promotion to fire (else -128 would decode instead of masking).
+  f <- tempfile(fileext = ".tif")
+  d <- gdalraster::create("GTiff", f, 4, 3, 1, "Int8", return_obj = TRUE)
+  d$setGeoTransform(c(0, 10, 0, 30, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  d$close()
+  grid <- garry:::.grid_retype(gdal_grid_spec(f)$grid, "f32")
+
+  nx <- 4L; ny <- 3L; nd <- -128L
+  b1 <- rep(-100L, nx * ny); b1[[1]] <- nd     # (row0, col0) is the sentinel
+  b2 <- rep(90L, nx * ny)
+  bin <- tempfile(fileext = ".bin")
+  writeBin(c(b1, b2), bin, size = 1L)          # BSQ: band 1 plane then band 2
+  vrt <- garry:::.raw_bsq_vrt(bin, grid, "Int8", 2L, nodata = nd)
+
+  ds <- garry:::.cog_to_dataset(vrt, grid, bands = 1:2, dequant = dequantize_aef,
+                                names = c("e1", "e2"), nodata = nd)
+  got <- collect(ds)
+  ref <- function(x) ((x / 127.5)^2) * sign(x)
+  expect_true(is.na(got[1, 1, 1]))                        # sentinel -> nodata
+  expect_equal(unname(got[1, 2, 1]), ref(-100), tolerance = 1e-4)
+  expect_equal(unname(got[1, 1, 2]), ref(90),  tolerance = 1e-4)
+})
+
 test_that(".cog_to_dataset without dequant returns the raw codes", {
   skip_if_not_installed("anvl")
   f <- tempfile(fileext = ".tif")

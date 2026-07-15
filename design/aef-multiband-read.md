@@ -16,8 +16,25 @@ Paused 2026-07-15. This note is self-contained to resume from.
   cptkirk's existing `ck_warp` → a local GTiff; **swap to cptkirk's raw
   warp-to-bin when available** to drop the GeoTIFF round-trip.
 
+**BUILT (2026-07-15, step A — native buffer read via `ck_warp_to_buffer`):**
+`read_cog` now fetches through cptkirk's `ck_warp_to_buffer` (native BSQ buffer,
+no GeoTIFF), stages it as a raw `.bin` + a `VRTRawRasterBand` VRT
+(`relativeToVRT` sibling, so GDAL's raw-band security gate is satisfied without
+loosening `GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE`), and reads it via
+`lazy_source` at the source's NATIVE dtype so the D8 sentinel->NaN promotion
+fires. The nodata sentinel is read from the source dynamically (`.src_nodata`),
+never assumed. Fixed a real latent bug: `dequantize_aef` overflowed in Int8
+(`x*|x|` before promotion) -> now `xn*|xn|`, `xn = x/127.5` (divide first). These
+anvl tests were skipped in the prior "green" run, hiding it. `.raw_bsq_vrt`,
+`.gdal_dtype_bytes`, `.src_nodata` added; 12/12 read-cog tests pass.
+
+The fetch is still EAGER (at the `read_cog` call). The VRT/.bin bridge exists
+only so the eager read reuses `lazy_source` while keeping compute lazy; the
+lazy-at-collect design (below) deletes it (executor `g_upload_raw`s the planes at
+collect). Interim win available: stage `.bin`+`.vrt` in `/vsimem` not disk.
+
 **CONFIRMED DIRECTION (2026-07-15): lazy-at-collect, auto-selected in
-`lazy_dataset`, cptkirk as Imports.** The eager `read_cog` was the first slice;
+`lazy_dataset`, cptkirk as Imports.** The native buffer read (above) is step A;
 the target is:
 1. **cptkirk `ck_warp_to_buffer()`** (prerequisite, Hugh implementing) — warp the
    fetched/staged VRTs into a raw NATIVE-dtype BSQ buffer via `MEM:::DATAPOINTER`
