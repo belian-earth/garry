@@ -43,16 +43,22 @@ NULL
 
 .ck_lookup <- function(rpath) .ck_registry[[sub("^CK:", "", rpath)]]
 
-#' Read COGs into a lazy dataset via the cptkirk engine.
+#' Read multi-band COGs into a lazy dataset via the cptkirk engine.
 #'
-#' The cptkirk read path, a drop-in alternative to [lazy_dataset()] that differs
-#' only in the engine: both build the same `LazyDataset` and support the same
-#' `mask()` / `reduce_over()` / `collect()` verbs, but `lazy_cog` reads each
-#' source set through [cptkirk](https://belian-earth.github.io/cptkirk/) -- its
-#' async-tiff reader opens each tile once and streams the band planes
-#' concurrently. cptkirk's advantage is intra-file band concurrency, so it wins
-#' on multi-band COGs (geo-embedding stacks such as Alpha Earth); on single-band
-#' assets it works but has no lever GDAL lacks (use [lazy_dataset()] there).
+#' **Use `lazy_cog` for multi-band Cloud-Optimised GeoTIFFs** -- files with many
+#' bands in one COG, such as geo-embedding stacks (Alpha Earth's 64-band tiles).
+#' It reads through [cptkirk](https://belian-earth.github.io/cptkirk/), whose
+#' async-tiff reader opens each tile ONCE and streams all its band planes
+#' concurrently -- far faster than GDAL's one-open-per-band for tens of bands.
+#'
+#' **For single-band-per-asset time series (HLS, Sentinel-2, Landsat), use
+#' [lazy_dataset()] instead.** cptkirk's only lever is intra-file band
+#' concurrency, which single-band files do not have, so `lazy_cog` there is no
+#' faster than GDAL (and its per-file opens make it slower on many small reads).
+#'
+#' The API mirrors [lazy_dataset()] so the two are interchangeable in use: both
+#' build the same `LazyDataset` and support the same `mask()` / `reduce_over()` /
+#' `collect()` verbs; only the read engine differs.
 #'
 #' Two input forms:
 #' * a `stac_sources()`-style dataframe (`location`/`datetime`/`asset`) plus
@@ -265,35 +271,6 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
     paste(sprintf("%.16g", res$geotransform), collapse = ", "),
     res$crs, res$dtype, res$nbands, ndv), vrt)
   vrt
-}
-
-#' Read-pool fetch task: cptkirk a CK source set to a staged VRT (daemon entry).
-#'
-#' Runs on a scheduler read daemon (via `prepare_cptkirk`): `ck_warp_to_buffer`
-#' fetches+warps+mosaics the set onto the grid into a native buffer, staged as a
-#' raw `.bin` + VRTRawRasterBand VRT the compute daemons read. Exported only to
-#' cross the mirai boundary.
-#'
-#' @param srcs Source URL(s) (cptkirk-ready, /vsicurl stripped).
-#' @param bin,vrt Staging paths (siblings on shared tmpfs).
-#' @param crs,te,ts Target CRS / extent / dims.
-#' @param bands Source band indices.
-#' @param r Resampling.
-#' @param nodata Fill/nodata sentinel, or NULL.
-#' @return TRUE.
-#' @keywords internal
-#' @export
-.daemon_ck_fetch <- function(srcs, bin, vrt, crs, te, ts, bands, r,
-                             nodata = NULL) {
-  res <- cptkirk::ck_warp_to_buffer(srcs, t_srs = crs, te = te, ts = ts,
-                                    bands = bands, r = r, fill = nodata)
-  writeBin(res$data, bin)
-  ndv <- if (!is.null(nodata)) res$nodata else NULL
-  writeLines(.raw_bsq_vrt_xml(
-    basename(bin), res$nx, res$ny,
-    paste(sprintf("%.16g", res$geotransform), collapse = ", "),
-    res$crs, res$dtype, res$nbands, ndv), vrt)
-  TRUE
 }
 
 # Source metadata (band count, garry dtype, nodata sentinel) via cptkirk's native

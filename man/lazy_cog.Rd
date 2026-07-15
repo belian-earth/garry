@@ -2,7 +2,7 @@
 % Please edit documentation in R/lazy_cog.R
 \name{lazy_cog}
 \alias{lazy_cog}
-\title{Read COGs into a lazy dataset via the cptkirk engine.}
+\title{Read multi-band COGs into a lazy dataset via the cptkirk engine.}
 \usage{
 lazy_cog(
   sources,
@@ -51,16 +51,22 @@ form).}
 A \code{LazyDataset}.
 }
 \description{
-The cptkirk read path, a drop-in alternative to \code{\link[=lazy_dataset]{lazy_dataset()}} that differs
-only in the engine: both build the same \code{LazyDataset} and support the same
-\code{mask()} / \code{reduce_over()} / \code{collect()} verbs, but \code{lazy_cog} reads each
-source set through \href{https://belian-earth.github.io/cptkirk/}{cptkirk} -- its
-async-tiff reader opens each tile once and streams the band planes
-concurrently. cptkirk's advantage is intra-file band concurrency, so it wins
-on multi-band COGs (geo-embedding stacks such as Alpha Earth); on single-band
-assets it works but has no lever GDAL lacks (use \code{\link[=lazy_dataset]{lazy_dataset()}} there).
+\strong{Use \code{lazy_cog} for multi-band Cloud-Optimised GeoTIFFs} -- files with many
+bands in one COG, such as geo-embedding stacks (Alpha Earth's 64-band tiles).
+It reads through \href{https://belian-earth.github.io/cptkirk/}{cptkirk}, whose
+async-tiff reader opens each tile ONCE and streams all its band planes
+concurrently -- far faster than GDAL's one-open-per-band for tens of bands.
 }
 \details{
+\strong{For single-band-per-asset time series (HLS, Sentinel-2, Landsat), use
+\code{\link[=lazy_dataset]{lazy_dataset()}} instead.} cptkirk's only lever is intra-file band
+concurrency, which single-band files do not have, so \code{lazy_cog} there is no
+faster than GDAL (and its per-file opens make it slower on many small reads).
+
+The API mirrors \code{\link[=lazy_dataset]{lazy_dataset()}} so the two are interchangeable in use: both
+build the same \code{LazyDataset} and support the same \code{mask()} / \code{reduce_over()} /
+\code{collect()} verbs; only the read engine differs.
+
 Two input forms:
 \itemize{
 \item a \code{stac_sources()}-style dataframe (\code{location}/\code{datetime}/\code{asset}) plus

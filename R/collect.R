@@ -45,14 +45,17 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   }
   p <- plan_lazy(x)
   if (plan_only) return(p)
+  # lazy_cog sources ("CK:") fetch nothing until here: resolve each source set to
+  # a staged grid-aligned raster once (single-band sets through one concurrent
+  # ck_batch pool), then the executors read it as an ordinary GDAL source.
+  ck <- .ck_resolve(p)
+  p <- ck$plan
+  if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
   res <- if (distributed) {
     if (!garry_daemons_set())
       cli::cli_abort(c(
         "{.arg distributed} is TRUE but no garry daemon pools are running.",
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
-    # lazy_cog "CK:" sources decline .cd_spec/.gd_decompose (both require GTI) and
-    # land in execute_plan_mirai, where prepare_cptkirk fetches them on the read
-    # pool OVERLAPPED with compute -- no up-front resolve pass here.
     spec <- .cd_spec(p)               # pure composite fast path (fetch-ordered pipeline)
     decomp <- if (is.null(spec)) .gd_decompose(p) else NULL   # reduce-decomposition
     if (!is.null(spec))
@@ -66,11 +69,6 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     else
       execute_plan_mirai(p, path = path, nodata = nodata, band_names = band_names)
   } else {
-    # Single-threaded execute_plan has no fetch phase: resolve CK: sources to
-    # staged VRTs up front (correct, no fetch/compute overlap).
-    ck <- .ck_resolve(p)
-    p  <- ck$plan
-    if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
     execute_plan(p, path = path, nodata = nodata, band_names = band_names)
   }
   if (!is.null(path)) return(invisible(res))

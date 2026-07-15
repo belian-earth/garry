@@ -38,7 +38,7 @@ device <- Sys.getenv("GARRY_DEVICE", "cpu") # "cpu" or "cuda" (GPU compute)
 # single-band-per-file, so cptkirk has no intra-file band concurrency to exploit
 # here -- this branch measures exactly that (the routing thesis: cptkirk earns
 # its place on multi-band files, not single-band time series).
-engine <- Sys.getenv("GARRY_BENCH_ENGINE", "gdal")
+engine <- Sys.getenv("GARRY_BENCH_ENGINE", "cptkirk")
 
 # No GDAL/network preamble: garry_daemons() (below) applies the remote-COG GDAL
 # config (HTTP/2 multiplex, the odc-stac retry cadence, a capped block cache,
@@ -100,8 +100,12 @@ t_all <- system.time({
   # single metadata probe that the manual scaffolding used to.
   reader <- if (identical(engine, "cptkirk")) lazy_cog else lazy_dataset
   ds <- reader(
-    src, grid = target, assets = bands, mask_asset = "Fmask",
-    granularity = "day", sort_field = "datetime",
+    src,
+    grid = target,
+    assets = bands,
+    mask_asset = "Fmask",
+    granularity = "day",
+    sort_field = "datetime",
     nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
   )
 
@@ -117,13 +121,21 @@ t_all <- system.time({
   # constant-0 border.
   morph <- !identical(Sys.getenv("GARRY_BENCH_MORPH"), "0")
   composite <- ds |>
-    mask(from = "Fmask", where = qa_bits(0:3),
-         open = if (morph) 2L else 0L, dilate = if (morph) 3L else 0L) |>
+    mask(
+      from = "Fmask",
+      where = qa_bits(0:3),
+      open = if (morph) 2L else 0L,
+      dilate = if (morph) 3L else 0L
+    ) |>
     reduce_over("median", over = "t", nan_rm = TRUE)
 
   cat("graph built; planning + executing...\n")
-  collect(composite, path = "composite_garry.tif", nodata = -9999,
-          distributed = TRUE)
+  collect(
+    composite,
+    path = "composite_garry.tif",
+    nodata = -9999,
+    distributed = TRUE
+  )
 })
 cat(sprintf(
   "processing time (garry, %s engine, %s, daemons %s): %.2fs\n",
