@@ -6,8 +6,9 @@
 # ((x/127.5)^2)*sign(x). Public data (Source Cooperative, no auth).
 #
 # lazy_cog routes the multi-band read through cptkirk -- one open, all 64 band
-# planes streamed concurrently -- and FUSES the dequant onto the read as an anvl
-# map (no separate decode pass). The comparator is one multithreaded GDAL
+# planes streamed concurrently. The dequant is applied downstream as a pipeline
+# map (lazy_map), which garry fuses onto the read (no separate decode pass); the
+# reader only reads. The comparator is one multithreaded GDAL
 # multi-band warp (all 64 bands, one open: the good GDAL baseline) followed by a
 # garry anvl dequant of the returned buffer. That cptkirk-vs-one-GDAL-warp gap is
 # the decisive number; garry's old per-band path (64 warps) is added last for
@@ -39,14 +40,19 @@ if (identical(daemons_arg, "auto")) garry_daemons() else {
 on.exit(garry_daemons(0, 0), add = TRUE)
 options(garry.progress = FALSE)
 
+# Decode is a pipeline map, not a reader arg; garry fuses it onto the cptkirk
+# read. lazy_cog only reads.
+read_dequant <- function()
+  collect(lazy_map(lazy_cog(tile, grid), fn = dequantize_aef, dtype = "f32"),
+          distributed = TRUE)
+
 cat("warming up (TLS, GDAL header cache, daemons)...\n")
-invisible(collect(lazy_cog(tile, grid, dequant = dequantize_aef), distributed = TRUE))
+invisible(read_dequant())
 invisible(gdalraster::warp(vsi, tempfile(fileext = ".tif"), t_srs = tsrs,
           cl_arg = c("-te", te, "-ts", ts, "-b", "1", gcfg), quiet = TRUE))
 
 # --- lazy_cog: cptkirk read + fused dequant, end to end ---------------------
-t_ck <- best(function()
-  collect(lazy_cog(tile, grid, dequant = dequantize_aef), distributed = TRUE))
+t_ck <- best(read_dequant)
 cat(sprintf("RESULT lazy_cog (cptkirk 64-band read + fused dequant): %.1fs\n", t_ck))
 
 # --- baseline: one GDAL multi-band warp (all 64 bands) + garry anvl dequant --

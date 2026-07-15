@@ -9,7 +9,6 @@ lazy_cog(
   grid,
   assets = NULL,
   bands = NULL,
-  dequant = NULL,
   resampling = "near",
   names = NULL,
   mask_asset = NULL,
@@ -29,9 +28,6 @@ for the single form.}
 \item{assets}{Asset names to read (dataframe form; a band each).}
 
 \item{bands}{Source band indices (single-COG form; default: all).}
-
-\item{dequant}{Optional garry map \code{fn(x)} applied per value band and fused at
-\code{collect()} (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}).}
 
 \item{resampling}{GDAL resampling (default \code{"near"}, right for quantised
 codes).}
@@ -78,5 +74,7 @@ The read is LAZY: construction fetches nothing. At \code{\link[=collect]{collect
 (one asset-slice, or the single COG's bands) is fetched together in one
 cptkirk pass, staged as a grid-aligned native-dtype raster, and read from
 there. The source nodata sentinel is carried through so those pixels read as
-NaN. \code{dequant} fuses a decode onto the read (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}).
+NaN. \code{lazy_cog} only reads: value transforms (a decode such as
+\code{\link[=dequantize_aef]{dequantize_aef()}}, scaling, ...) go downstream as maps
+(\code{lazy_map(ds, fn = ...)}), which garry fuses onto the read at \code{collect()}.
 }

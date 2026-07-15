@@ -63,11 +63,13 @@ test_that("lazy_cog reads a multi-band COG and fuses dequant (end to end)", {
   f <- .lc_cog(dir)
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
                     dims = c(256L, 256L), dtype = "f32")
-  ds <- lazy_cog(f, grid, dequant = dequantize_aef, names = c("e1", "e2", "e3"))
+  ds <- lazy_cog(f, grid, names = c("e1", "e2", "e3"))
   expect_true(S7::S7_inherits(ds, LazyDataset))
   expect_named(ds@bands, c("e1", "e2", "e3"))
 
-  got <- collect(ds, distributed = FALSE)
+  # decode is a pipeline map (not a reader arg); garry fuses it onto the read
+  got <- collect(lazy_map(ds, fn = dequantize_aef, dtype = "f32"),
+                 distributed = FALSE)
   ref <- function(x) ((x / 127.5)^2) * sign(x)
   expect_equal(dim(got), c(256L, 256L, 3L))
   expect_equal(unname(got[1, 1, 1]), ref(-40), tolerance = 1e-4)
@@ -82,7 +84,8 @@ test_that("lazy_cog carries the source sentinel to NaN before the decode", {
   f <- .lc_cog(dir, codes = c(-128L, 90L), nd = -128L)     # band 1 is all sentinel
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
                     dims = c(64L, 64L), dtype = "f32")
-  got <- collect(lazy_cog(f, grid, dequant = dequantize_aef), distributed = FALSE)
+  got <- collect(lazy_map(lazy_cog(f, grid), fn = dequantize_aef, dtype = "f32"),
+                 distributed = FALSE)
   expect_true(all(is.na(got[, , 1])))                      # sentinel band -> nodata
   expect_equal(unname(got[1, 1, 2]), (90 / 127.5)^2, tolerance = 1e-4)
 })
@@ -138,7 +141,8 @@ test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3
                     dims = c(128L, 128L), dtype = "f32")
   garry_daemons(2, 1)
   on.exit(garry_daemons(0, 0), add = TRUE)
-  got <- collect(lazy_cog(f, grid, dequant = dequantize_aef), distributed = TRUE)
+  got <- collect(lazy_map(lazy_cog(f, grid), fn = dequantize_aef, dtype = "f32"),
+                 distributed = TRUE)
   ref <- function(x) ((x / 127.5)^2) * sign(x)
   expect_equal(dim(got), c(128L, 128L, 3L))
   expect_equal(unname(got[1, 1, 1]), ref(-40), tolerance = 1e-4)

@@ -57,7 +57,9 @@ NULL
 #' (one asset-slice, or the single COG's bands) is fetched together in one
 #' cptkirk pass, staged as a grid-aligned native-dtype raster, and read from
 #' there. The source nodata sentinel is carried through so those pixels read as
-#' NaN. `dequant` fuses a decode onto the read (e.g. [dequantize_aef()]).
+#' NaN. `lazy_cog` only reads: value transforms (a decode such as
+#' [dequantize_aef()], scaling, ...) go downstream as maps
+#' (`lazy_map(ds, fn = ...)`), which garry fuses onto the read at `collect()`.
 #'
 #' @param sources A `stac_sources()`-style dataframe for the time-series form, or
 #'   a COG path / character vector of tiles (remote `http(s)://` or `/vsicurl/`)
@@ -65,8 +67,6 @@ NULL
 #' @param grid Target `GridSpec`.
 #' @param assets Asset names to read (dataframe form; a band each).
 #' @param bands Source band indices (single-COG form; default: all).
-#' @param dequant Optional garry map `fn(x)` applied per value band and fused at
-#'   `collect()` (e.g. [dequantize_aef()]).
 #' @param resampling GDAL resampling (default `"near"`, right for quantised
 #'   codes).
 #' @param names Optional band names (single-COG form; default `b<index>`).
@@ -80,7 +80,7 @@ NULL
 #' @param lon Optional longitude for local-time slicing (dataframe form).
 #' @return A `LazyDataset`.
 #' @export
-lazy_cog <- function(sources, grid, assets = NULL, bands = NULL, dequant = NULL,
+lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
                      resampling = "near", names = NULL, mask_asset = NULL,
                      granularity = "day", sort_field = "datetime",
                      nodata = NULL, lon = NULL) {
@@ -89,15 +89,15 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL, dequant = NULL,
   .assert_class(grid, GridSpec, "GridSpec")
   if (is.data.frame(sources))
     return(.lazy_cog_series(sources, grid, assets, mask_asset, granularity,
-                            sort_field, nodata, dequant, resampling, lon))
-  .lazy_cog_single(as.character(sources), grid, bands, dequant, resampling, names)
+                            sort_field, nodata, resampling, lon))
+  .lazy_cog_single(as.character(sources), grid, bands, resampling, names)
 }
 
 # Single (multi-band) COG or tile mosaic -> one time slice, a band per selected
 # source band. Reads at the source's NATIVE dtype (the grid fixes geometry, not
 # the read type): an integer source carrying a `nodata` then promotes to f32 with
-# the sentinel as NaN (D8), so the decode never sees it.
-.lazy_cog_single <- function(path, grid, bands, dequant, resampling, names) {
+# the sentinel as NaN (D8), so a downstream decode never sees it.
+.lazy_cog_single <- function(path, grid, bands, resampling, names) {
   nb <- gdal_band_count(path[[1L]])
   bands <- if (is.null(bands)) seq_len(nb) else as.integer(bands)
   if (length(bands) < 1L) cli::cli_abort("{.arg bands} selects no bands.")
@@ -108,11 +108,8 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL, dequant = NULL,
   ndv <- if (length(nd)) as.numeric(nd) else NULL
   g   <- graph_new()
   nm  <- names %||% paste0("b", bands)
-  layers <- stats::setNames(lapply(seq_along(bands), function(i) {
-    lr <- lazy_source(ckpath, band = i, graph = g, grid = rgrid, nodata = ndv)
-    if (!is.null(dequant)) lr <- lazy_map(lr, fn = dequant, dtype = "f32")
-    lr
-  }), nm)
+  layers <- stats::setNames(lapply(seq_along(bands), function(i)
+    lazy_source(ckpath, band = i, graph = g, grid = rgrid, nodata = ndv)), nm)
   as_dataset(layers)
 }
 
@@ -121,7 +118,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL, dequant = NULL,
 # GDAL warp-on-read. mask()/reduce_over()/collect() are engine-agnostic dataset
 # ops, so they work unchanged; .ck_resolve coalesces per asset-slice source set.
 .lazy_cog_series <- function(sources, grid, assets, mask_asset, granularity,
-                             sort_field, nodata, dequant, resampling, lon) {
+                             sort_field, nodata, resampling, lon) {
   if (is.null(assets) || length(assets) < 1L)
     cli::cli_abort("{.arg assets} must name at least one asset (dataframe form).")
   all_assets <- unique(c(assets, mask_asset))
@@ -143,15 +140,12 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL, dequant = NULL,
     sdt     <- gdal_grid_spec(first, band = 1L)$grid@dtype
     rgrid   <- if (!identical(sdt, grid@dtype)) .grid_retype(grid, sdt) else grid
     ndv     <- if (length(nd)) as.numeric(nd) else NULL
-    is_mask <- !is.null(mask_asset) && a %in% mask_asset
     slices  <- sort(unique(a_rows$slice))
     layers  <- lapply(slices, function(sl) {
       items  <- a_rows$location[a_rows$slice == sl][order(
         a_rows$datetime[a_rows$slice == sl])]
       ckpath <- .ck_register(items, 1L, resampling, nd, grid)
-      lr <- lazy_source(ckpath, band = 1L, graph = g, grid = rgrid, nodata = ndv)
-      if (!is.null(dequant) && !is_mask) lr <- lazy_map(lr, fn = dequant, dtype = "f32")
-      lr
+      lazy_source(ckpath, band = 1L, graph = g, grid = rgrid, nodata = ndv)
     })
     names(layers) <- slices
     bands[[a]] <- layers
