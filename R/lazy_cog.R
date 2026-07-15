@@ -267,6 +267,35 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   vrt
 }
 
+#' Read-pool fetch task: cptkirk a CK source set to a staged VRT (daemon entry).
+#'
+#' Runs on a scheduler read daemon (via `prepare_cptkirk`): `ck_warp_to_buffer`
+#' fetches+warps+mosaics the set onto the grid into a native buffer, staged as a
+#' raw `.bin` + VRTRawRasterBand VRT the compute daemons read. Exported only to
+#' cross the mirai boundary.
+#'
+#' @param srcs Source URL(s) (cptkirk-ready, /vsicurl stripped).
+#' @param bin,vrt Staging paths (siblings on shared tmpfs).
+#' @param crs,te,ts Target CRS / extent / dims.
+#' @param bands Source band indices.
+#' @param r Resampling.
+#' @param nodata Fill/nodata sentinel, or NULL.
+#' @return TRUE.
+#' @keywords internal
+#' @export
+.daemon_ck_fetch <- function(srcs, bin, vrt, crs, te, ts, bands, r,
+                             nodata = NULL) {
+  res <- cptkirk::ck_warp_to_buffer(srcs, t_srs = crs, te = te, ts = ts,
+                                    bands = bands, r = r, fill = nodata)
+  writeBin(res$data, bin)
+  ndv <- if (!is.null(nodata)) res$nodata else NULL
+  writeLines(.raw_bsq_vrt_xml(
+    basename(bin), res$nx, res$ny,
+    paste(sprintf("%.16g", res$geotransform), collapse = ", "),
+    res$crs, res$dtype, res$nbands, ndv), vrt)
+  TRUE
+}
+
 # Source metadata (band count, garry dtype, nodata sentinel) via cptkirk's native
 # header read. Deliberately NOT GDAL: a plain https path without /vsicurl makes
 # GDAL try to pull the whole remote COG (a 2.7 GB AEF tile hangs), and cptkirk

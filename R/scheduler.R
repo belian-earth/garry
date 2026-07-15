@@ -509,6 +509,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   fetch_made <- new.env(parent = emptyenv())   # fetch task key -> TRUE
   fetch_files_of <- new.env(parent = emptyenv())  # sid -> files to unlink
   fetch_reads_left <- new.env(parent = emptyenv())  # sid -> open read tasks
+  ck_state <- new.env(parent = emptyenv())     # "CK:" path -> {task, local, files}
   on.exit(if (!is.null(fetch_root))
     unlink(fetch_root, recursive = TRUE), add = TRUE)
 
@@ -570,6 +571,48 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     }
     list(deps = keys, local = st$local,
          files = st$dst[rows])
+  }
+
+  # Sibling of prepare_fetch for lazy_cog "CK:" sources: register ONE read-pool
+  # fetch task per source set (ck_warp_to_buffer -> staged .bin + VRT on shared
+  # tmpfs), so the source read waits on it and the scheduler overlaps the fetch
+  # with compute exactly as for GTI fetches. Deduped per CK path -- a multi-band
+  # COG's band reads share one fetch.
+  prepare_cptkirk <- function(rpath, roo, rnodata, grid) {
+    if (!startsWith(rpath, "CK:")) return(NULL)
+    st <- ck_state[[rpath]]
+    if (is.null(st)) {
+      spec <- .ck_lookup(rpath)
+      if (is.null(spec)) return(NULL)
+      if (is.null(fetch_root)) {
+        base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
+        fetch_root <<- file.path(base, sprintf("garry-fetch-%d", run_id))
+        dir.create(fetch_root)
+      }
+      fetch_n_idx <<- fetch_n_idx + 1L
+      sub <- file.path(fetch_root, sprintf("ck%d", fetch_n_idx))
+      dir.create(sub)
+      bin <- file.path(sub, "buf.bin"); vrt <- file.path(sub, "buf.vrt")
+      key <- sprintf("ckf_%d", fetch_n_idx)
+      local({
+        srcs <- spec$srcs; te <- spec$te; ts <- spec$ts; cr <- spec$crs
+        bnds <- spec$bands; rr <- spec$resampling
+        nd <- if (length(spec$nodata)) spec$nodata else NULL
+        binf <- bin; vrtf <- vrt
+        add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
+          mirai::mirai(
+            garry::.daemon_ck_fetch(srcs, binf, vrtf, cr, te, ts, bnds, rr, nd),
+            srcs = srcs, binf = binf, vrtf = vrtf, cr = cr, te = te, ts = ts,
+            bnds = bnds, rr = rr, nd = nd, .compute = prof)
+        })
+      })
+      st <- list(task = key, local = vrt)
+      ck_state[[rpath]] <- st
+    }
+    # files = character(0): one fetch is shared by every band read of a multi-band
+    # COG, so per-stage cleanup would unlink the VRT while other bands still read
+    # it. The fetch_root on.exit sweeps the whole staging dir at the end instead.
+    list(deps = st$task, local = st$local, files = character(0))
   }
 
 
@@ -677,6 +720,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       task_mb_read <- 0
       if (s@kind == "source_read") {
         fp <- prepare_fetch(rpath, roo, rnodata, s@grid)
+        if (is.null(fp)) fp <- prepare_cptkirk(rpath, roo, rnodata, s@grid)
         if (!is.null(fp)) {
           fetch_deps <- fp$deps
           rpath <- fp$local
