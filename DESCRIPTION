@@ -22,6 +22,8 @@ Imports:
 Remotes:
     hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
     belian-earth/anvl@raw-payload-nv-array
+Additional_repositories:
+    https://r-xla.r-universe.dev
 Suggests:
     anvl,
     knitr,
