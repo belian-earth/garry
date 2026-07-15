@@ -138,9 +138,26 @@ coalescing key is therefore the source SET, not a single file.
 
 ## Phased plan (revised for the decisions)
 
-- **B1**: cptkirk -> `Imports` + Rust in CI; `lazy_cog()` emitting `"CK:"`
-  sources; `prepare_cptkirk` + fetch task + coalescing cache. End-to-end lazy
-  read of ONE multi-band COG -> dataset -> band algebra -> collect. Rewire
-  `read_cog` onto `lazy_cog` (or remove).
-- **B2**: mosaic (multiple tiles) coalescing in one `ck_warp_to_buffer`.
+- **B1 (BUILT)**: `lazy_cog()` emitting `"CK:"` sources (fetches nothing at
+  construction); a collect-time pre-pass `.ck_resolve` in `collect()` that
+  fetches each source set once (one `ck_warp_to_buffer`), stages the native BSQ
+  buffer as a `.bin` + VRTRawRasterBand VRT, and rewrites the source paths so
+  BOTH executors read the VRT unchanged. cptkirk is `Suggests` guarded by
+  `rlang::check_installed` (pak builds the Rust; nothing special in CI, so no
+  workflow change). `read_cog` removed. 17/17 lazy-cog tests pass end-to-end on a
+  local tiled COG.
+- **B2**: mosaic (multiple tiles) via a `lazy_cog(path = c(...))` vector -> one
+  `ck_warp_to_buffer`. (The plumbing accepts a source vector already; needs a
+  live mosaic test.)
 - **B3**: `/vsimem` staging (drop the disk `.bin`); optional native-i8 upload.
+
+### Why the pre-pass, not `prepare_cptkirk` in the scheduler
+
+The scoped `prepare_cptkirk` (a `prepare_fetch` sibling that overlaps fetch with
+compute) would need mirroring into BOTH `execute_plan_mirai` and the
+single-threaded `execute_plan` (used as the test baseline), a large intricate
+surface for little gain on the COG case: a single multi-band stack is one fetch
+then compute, not many overlapped time-slices. The pre-pass gives lazy-at-collect
+and per-source-set coalescing with no executor changes and clean offline testing.
+Fetch/compute overlap in the scheduler stays a later optimization if `lazy_cog`
+over many tiles/slices shows it matters.

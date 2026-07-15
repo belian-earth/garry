@@ -26,6 +26,7 @@ Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
     anvl,
+    cptkirk,
     knitr,
     mirai,
     mori,
@@ -60,6 +61,6 @@ Collate:
     'draw.R'
     'gradient.R'
     'grid_from.R'
+    'lazy_cog.R'
     'preview.R'
-    'read_cog.R'
     'zzz.R'

@@ -32,7 +32,7 @@ reference:
     band axis.
   contents:
   - lazy_dataset
-  - read_cog
+  - lazy_cog
   - dequantize_aef
   - as_dataset
   - LazyDataset

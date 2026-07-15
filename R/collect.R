@@ -45,6 +45,11 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   }
   p <- plan_lazy(x)
   if (plan_only) return(p)
+  # lazy_cog sources ("CK:") fetch nothing until here: resolve each source set to
+  # a staged grid-aligned VRT once, then the executors read it as normal.
+  ck <- .ck_resolve(p)
+  p <- ck$plan
+  if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
   res <- if (distributed) {
     if (!garry_daemons_set())
       cli::cli_abort(c(
