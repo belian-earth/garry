@@ -9,7 +9,10 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.path = "figure/",
+                      fig.width = 6, fig.height = 5, dpi = 96, error = FALSE)
+```
 
 The Harmonized Landsat Sentinel-2 (HLS) project delivers a common surface
 reflectance product from two sensors, giving a land observation every 2-3 days
@@ -25,8 +28,7 @@ Planetary Computer, which is pre-signed and fast.
 Query both collections over an area of interest, filter cloudy scenes, and drop
 duplicate acquisitions.
 
-
-``` r
+```{r discover, message = FALSE}
 library(garry)
 
 aoi <- c(144.24, -7.66, 144.36, -7.54)   # lon/lat bbox
@@ -46,8 +48,7 @@ SWIR `S1`/`S2`, thermal `T1`/`T2`. Unmapped assets (view angles, previews) drop
 out, so the map doubles as the band selector. `stac_merge()` concatenates the
 two harmonized tables.
 
-
-``` r
+```{r harmonize}
 l30 <- stac_sources(query("hls2-l30")) |>
   stac_filter_cloud(80) |> stac_drop_duplicates() |>
   stac_rename_assets(c(
@@ -63,7 +64,6 @@ s30 <- stac_sources(query("hls2-s30")) |>
 
 src <- stac_merge(l30, s30)
 cat("bands:", paste(sort(unique(src$asset)), collapse = " "), "\n")
-#> bands: A B C Fmask G N N2 R RE1 RE2 RE3 S1 S2 T1 T2 WV
 ```
 
 No empty-band padding or reordering is needed (unlike a VRT-based approach):
@@ -74,8 +74,7 @@ observations.
 
 ## Cloud-masked median composite
 
-
-``` r
+```{r composite}
 bands  <- c("A", "B", "G", "R", "RE1", "RE2", "RE3", "N",
             "N2", "WV", "C", "S1", "S2", "T1", "T2")
 target <- grid_from_bbox(aoi, res = 30)     # equal-area 30 m grid
@@ -90,12 +89,9 @@ comp <- lazy_dataset(
   reduce_over("median", over = "t")
 ```
 
-
-``` r
+```{r truecolour}
 preview(comp, bands = c("R", "G", "B"))      # true-colour look (band names)
 ```
-
-![plot of chunk truecolour](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/truecolour-1.png)
 
 ## PCA over the band axis
 
@@ -103,18 +99,13 @@ A per-pixel PCA collapses the spectral vector to a few components. Fit it in
 plain R on the materialized composite -- fitting a model in R is perfectly
 reasonable; not everything belongs in the lazy graph.
 
-
-``` r
+```{r pca-fit}
 cube <- stack_bands(comp)                    # LazyRaster (band, y, x)
 arr  <- collect(cube)                        # (y, x, band)
 px   <- matrix(arr, ncol = dim(arr)[[3]])
 px   <- px[stats::complete.cases(px), , drop = FALSE]
 pca  <- prcomp(px, center = TRUE, scale. = TRUE)
 round(summary(pca)$importance[, 1:3], 3)     # variance explained, PC1-3
-#>                          PC1   PC2   PC3
-#> Standard deviation     3.206 1.426 1.244
-#> Proportion of Variance 0.685 0.136 0.103
-#> Cumulative Proportion  0.685 0.821 0.924
 ```
 
 The projection onto each principal component is a **linear combination of the
@@ -123,8 +114,7 @@ reducer (centre, then weight by the loading); stacking the first three gives a
 3-band image. Because it is lazy, the same projection runs chunked and
 distributed at full resolution without ever holding the whole cube in memory.
 
-
-``` r
+```{r pca-project}
 sc  <- pca$scale                             # prcomp(scale. = TRUE): weights /= sd
 pcs <- lazy_stack(
   lapply(1:3, function(i)
@@ -135,9 +125,9 @@ pcs <- lazy_stack(
 preview(pcs)                                 # PC1-3 as R/G/B
 ```
 
-![plot of chunk pca-project](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/pca-project-1.png)
-
-
+```{r cleanup, include = FALSE}
+garry_daemons(0, 0)
+```
 
 The same `band_project()` reducer is the basis for any linear-model `predict`
 (regression, logistic, unmixing): fit in R, pass the coefficients as `weights`.
