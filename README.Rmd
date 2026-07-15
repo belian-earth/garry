@@ -16,6 +16,7 @@ knitr::opts_chunk$set(
 # garry
 
 <!-- badges: start -->
+[![R-CMD-check](https://github.com/belian-earth/garry/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/belian-earth/garry/actions/workflows/R-CMD-check.yaml)
 <!-- badges: end -->
 
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
