@@ -98,14 +98,12 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # the read type): an integer source carrying a `nodata` then promotes to f32 with
 # the sentinel as NaN (D8), so a downstream decode never sees it.
 .lazy_cog_single <- function(path, grid, bands, resampling, names) {
-  nb <- gdal_band_count(path[[1L]])
-  bands <- if (is.null(bands)) seq_len(nb) else as.integer(bands)
+  m <- .ck_meta(path[[1L]])
+  bands <- if (is.null(bands)) seq_len(m$n_bands) else as.integer(bands)
   if (length(bands) < 1L) cli::cli_abort("{.arg bands} selects no bands.")
-  nd  <- .src_nodata(path[[1L]])                            # dynamic sentinel
-  sdt <- gdal_grid_spec(path[[1L]], band = 1L)$grid@dtype
-  ckpath <- .ck_register(path, bands, resampling, nd, grid)
-  rgrid <- if (!identical(sdt, grid@dtype)) .grid_retype(grid, sdt) else grid
-  ndv <- if (length(nd)) as.numeric(nd) else NULL
+  ckpath <- .ck_register(path, bands, resampling, m$nodata, grid)
+  rgrid <- if (!identical(m$dtype, grid@dtype)) .grid_retype(grid, m$dtype) else grid
+  ndv <- if (length(m$nodata)) m$nodata else NULL
   g   <- graph_new()
   nm  <- names %||% paste0("b", bands)
   layers <- stats::setNames(lapply(seq_along(bands), function(i)
@@ -135,10 +133,9 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   for (a in all_assets) {
     a_rows <- sources[sources$asset == a, , drop = FALSE]
     if (!nrow(a_rows)) cli::cli_abort("No sources for asset {.val {a}}.")
-    first   <- a_rows$location[[1L]]
-    nd      <- resolve_nodata(a, .src_nodata(first))
-    sdt     <- gdal_grid_spec(first, band = 1L)$grid@dtype
-    rgrid   <- if (!identical(sdt, grid@dtype)) .grid_retype(grid, sdt) else grid
+    m       <- .ck_meta(a_rows$location[[1L]])
+    nd      <- resolve_nodata(a, m$nodata)
+    rgrid   <- if (!identical(m$dtype, grid@dtype)) .grid_retype(grid, m$dtype) else grid
     ndv     <- if (length(nd)) as.numeric(nd) else NULL
     slices  <- sort(unique(a_rows$slice))
     layers  <- lapply(slices, function(sl) {
@@ -213,13 +210,19 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   vrt
 }
 
-# Read the source's band-1 nodata sentinel (whatever it is), or numeric(0) if the
-# source declares none. All bands are assumed to share one sentinel (the case for
-# geo-embedding stacks), matching ck_warp_to_buffer's single-fill model. Via the
-# adapter (gdal_grid_spec) -- garry keeps gdalraster:: calls out of the cube code.
-.src_nodata <- function(path) {
-  nd <- gdal_grid_spec(path, band = 1L)$nodata
-  if (is.null(nd) || length(nd) == 0L || is.na(nd)) numeric(0) else as.numeric(nd)
+# Source metadata (band count, garry dtype, nodata sentinel) via cptkirk's native
+# header read. Deliberately NOT GDAL: a plain https path without /vsicurl makes
+# GDAL try to pull the whole remote COG (a 2.7 GB AEF tile hangs), and cptkirk
+# reads the raw URL its async-tiff way in one fast call -- the same URL it fetches
+# with. nodata comes back numeric(0) when the source declares none. All bands are
+# assumed to share one sentinel (the case for geo-embedding stacks).
+.ck_meta <- function(src) {
+  info <- cptkirk::cog_info(src)
+  nd <- info$nodata
+  list(n_bands = info$n_bands,
+       dtype   = .gdal_dtype_map[[info$dtype]] %||% info$dtype,
+       nodata  = if (is.null(nd) || (length(nd) == 1L && is.na(nd))) numeric(0)
+                 else as.numeric(nd))
 }
 
 # Bytes per sample for a GDAL data-type name.
