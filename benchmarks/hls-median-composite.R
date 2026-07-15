@@ -64,7 +64,7 @@ t_query <- system.time({
     start_date = "2023-01-01",
     end_date = "2023-12-31"
   )
-  its <- rstac::items_sign(its, rstac::sign_planetary_computer())
+  its <- stac_sign_mpc(its)   # collection-level token cache (memory + disk)
 
   src <- stac_sources(its, assets = c(bands, "Fmask")) |>
     stac_drop_duplicates() |>

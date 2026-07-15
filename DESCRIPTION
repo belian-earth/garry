@@ -27,6 +27,7 @@ Additional_repositories:
 Suggests:
     anvl,
     cptkirk,
+    httr2,
     knitr,
     mirai,
     mori,

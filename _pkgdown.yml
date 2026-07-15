@@ -15,6 +15,7 @@ reference:
     (Planetary Computer / element84) collections.
   contents:
   - stac_query
+  - stac_sign_mpc
   - stac_sources
   - stac_filter_cloud
   - stac_drop_duplicates

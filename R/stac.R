@@ -54,6 +54,89 @@ stac_query <- function(bbox, stac_source, collection, start_date, end_date,
   rstac::items_fetch(res)
 }
 
+# Package env: MPC collection name -> signing token (in-memory cache).
+.mpc_token_cache <- new.env(parent = emptyenv())
+
+#' Sign Planetary Computer STAC items, caching the token per collection.
+#'
+#' Microsoft Planetary Computer assets need a SAS token appended to each asset
+#' href before they can be read. Unlike `rstac::items_sign()`, which requests a
+#' token on every call and can storm the MPC signing endpoint into 429s when
+#' signing many items, `stac_sign_mpc()` caches the **collection-level** token in
+#' memory AND on disk (under [tools::R_user_dir()]) and reuses it until it
+#' expires (`msft:expiry`) -- one request per collection instead of one per item.
+#' Use it in place of `rstac::items_sign()` after [stac_query()].
+#'
+#' @param items An rstac `doc_items` from [stac_query()].
+#' @param subscription_key Optional MPC subscription key (defaults to the
+#'   `MPC_TOKEN` environment variable). Not required for public data.
+#' @return `items` with every asset href signed.
+#' @export
+stac_sign_mpc <- function(items,
+                          subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)) {
+  .require_rstac()
+  rlang::check_installed("httr2", reason = "to request Planetary Computer tokens.")
+  if (!length(items$features)) {
+    cli::cli_warn("No STAC items to sign.")
+    return(items)
+  }
+  token <- .mpc_token(items$features[[1L]]$collection, subscription_key)
+  items$features <- lapply(items$features, function(f) {
+    f$assets <- lapply(f$assets, function(a) {
+      a$href <- paste0(a$href, "?", token); a
+    })
+    f
+  })
+  items
+}
+
+# The collection SAS token: memory cache, then disk cache, then a fresh request
+# (saved to both). Reused until msft:expiry.
+.mpc_token <- function(collection, subscription_key) {
+  hit <- .mpc_token_lookup(collection)
+  if (!is.null(hit)) return(hit)
+  url <- paste0("https://planetarycomputer.microsoft.com/api/sas/v1/token/",
+                collection)
+  req <- httr2::req_headers(httr2::request(url), Accept = "application/json")
+  if (!is.na(subscription_key))
+    req <- httr2::req_headers(req, "Ocp-Apim-Subscription-Key" = subscription_key)
+  tok <- httr2::resp_body_json(httr2::req_perform(req))
+  assign(collection, tok, envir = .mpc_token_cache)
+  saveRDS(tok, .mpc_token_file(collection))
+  tok$token
+}
+
+# The valid token string from the memory or disk cache, or NULL. Expired entries
+# are dropped from memory as a side effect.
+.mpc_token_lookup <- function(collection) {
+  unexpired <- function(tok) {
+    exp <- as.POSIXct(tok[["msft:expiry"]], format = "%Y-%m-%dT%H:%M:%SZ",
+                      tz = "UTC")
+    !is.na(exp) && exp > Sys.time()
+  }
+  if (exists(collection, envir = .mpc_token_cache, inherits = FALSE)) {
+    tok <- get(collection, envir = .mpc_token_cache)
+    if (unexpired(tok)) return(tok$token)
+    rm(list = collection, envir = .mpc_token_cache)
+  }
+  f <- .mpc_token_file(collection)
+  if (file.exists(f)) {
+    tok <- readRDS(f)
+    if (unexpired(tok)) {
+      assign(collection, tok, envir = .mpc_token_cache)
+      return(tok$token)
+    }
+  }
+  NULL
+}
+
+.mpc_token_file <- function(collection) {
+  dir <- tools::R_user_dir("garry", "cache")
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  file.path(dir, paste0(gsub("[^A-Za-z0-9_.-]", "_", collection),
+                        "_mpc_token.rds"))
+}
+
 #' Rectangularise STAC items into a source table.
 #'
 #' One row per item x asset: `location` (GDAL-readable href), `asset`,
