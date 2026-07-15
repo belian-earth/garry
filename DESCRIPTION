@@ -61,4 +61,5 @@ Collate:
     'gradient.R'
     'grid_from.R'
     'preview.R'
+    'read_cog.R'
     'zzz.R'
