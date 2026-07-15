@@ -4,8 +4,12 @@
 
 skip_if_not_installed("anvl")
 skip_if_not_installed("mirai")
+skip_on_os(c("windows", "mac"))   # CUDA/PJRT-CUDA is Linux-only
 
 .cuda_available <- function() {
+  # Gate on a visible NVIDIA GPU first, so PJRT_INSTALL=1 does not pull the large
+  # CUDA plugin just to fail on a GPU-less machine (e.g. CI).
+  if (!nzchar(Sys.which("nvidia-smi"))) return(FALSE)
   ok <- tryCatch({
     r <- g_download(g_jit(function(inputs) list(o = inputs[[1L]] * 2),
                           device = "cuda")(
