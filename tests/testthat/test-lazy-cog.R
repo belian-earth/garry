@@ -99,3 +99,48 @@ test_that("lazy_cog band subset reads and names only the selected bands", {
   expect_equal(unname(got[1, 1, 1]), -40)                  # band 1 raw code
   expect_equal(unname(got[1, 1, 2]),  90)                  # band 3 raw code
 })
+
+# A tiled single-band Int8 COG covering [x0, x0 + 2560) x [0, 5120), value `code`.
+.lc_tile <- function(f, x0, code) {
+  d <- gdalraster::create("GTiff", f, 256, 512, 1, "Int8", return_obj = TRUE,
+                          options = c("TILED=YES", "BLOCKXSIZE=256",
+                                      "BLOCKYSIZE=256"))
+  d$setGeoTransform(c(x0, 10, 0, 5120, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  d$write(1, 0, 0, 256, 512, rep(code, 256 * 512))
+  d$close()
+  f
+}
+
+test_that("lazy_cog mosaics a vector of tiles in one fetch (B2)", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("cptkirk")
+  dir <- withr::local_tempdir("lcmos")
+  left  <- .lc_tile(file.path(dir, "L.tif"), 0,    -40L)
+  right <- .lc_tile(file.path(dir, "R.tif"), 2560,  90L)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
+                    dims = c(4L, 4L), dtype = "f32")
+  got <- collect(lazy_cog(c(left, right), grid), distributed = FALSE)
+  expect_equal(dim(got), c(4L, 4L))                        # one band -> 2D matrix
+  expect_true(all(got[, 1:2] == -40))                      # left cols from tile L
+  expect_true(all(got[, 3:4] ==  90))                      # right cols from tile R
+})
+
+test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3)", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("cptkirk")
+  skip_if_not_installed("mirai")
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  dir <- withr::local_tempdir("lcdist")
+  f <- .lc_cog(dir)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
+                    dims = c(128L, 128L), dtype = "f32")
+  garry_daemons(2, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  got <- collect(lazy_cog(f, grid, dequant = dequantize_aef), distributed = TRUE)
+  ref <- function(x) ((x / 127.5)^2) * sign(x)
+  expect_equal(dim(got), c(128L, 128L, 3L))
+  expect_equal(unname(got[1, 1, 1]), ref(-40), tolerance = 1e-4)
+  expect_equal(unname(got[64, 64, 3]), ref(90), tolerance = 1e-4)
+})

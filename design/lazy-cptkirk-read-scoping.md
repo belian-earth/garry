@@ -146,10 +146,13 @@ coalescing key is therefore the source SET, not a single file.
   `rlang::check_installed` (pak builds the Rust; nothing special in CI, so no
   workflow change). `read_cog` removed. 17/17 lazy-cog tests pass end-to-end on a
   local tiled COG.
-- **B2**: mosaic (multiple tiles) via a `lazy_cog(path = c(...))` vector -> one
-  `ck_warp_to_buffer`. (The plumbing accepts a source vector already; needs a
-  live mosaic test.)
-- **B3**: `/vsimem` staging (drop the disk `.bin`); optional native-i8 upload.
+- **B2 (BUILT)**: mosaic via `lazy_cog(path = c(...))` -> one `ck_warp_to_buffer`
+  that stitches the tiles. Tested on two adjacent local tiled COGs.
+- **B3 (BUILT)**: stage on tmpfs `/dev/shm` when available (RAM-backed, no disk
+  round-trip) rather than `/vsimem`. NOTE: `/vsimem` is per-process and invisible
+  to the mirai daemons; `/dev/shm` is a real shared path they can read, matching
+  `prepare_fetch`. Validated by a distributed-daemon read test. Optional native-i8
+  upload (vs the f32 read of the VRT) remains a later micro-opt.
 
 ### Why the pre-pass, not `prepare_cptkirk` in the scheduler
 

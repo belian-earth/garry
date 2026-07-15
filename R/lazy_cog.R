@@ -104,7 +104,11 @@ lazy_cog <- function(path, grid, bands = NULL, dequant = NULL,
   }, graph_ids(g))
   if (!length(ids)) return(list(plan = p, root = NULL))
   keys <- vapply(ids, function(id) graph_get(g, id)@path, "")
-  root <- file.path(tempdir(), paste0("garry-ck-", rlang::hash(sort(unique(keys)))))
+  # Stage on tmpfs (/dev/shm) when available: RAM-backed, so no disk round-trip,
+  # AND a real shared path the mirai daemons can read -- unlike /vsimem, which is
+  # per-process and invisible across the daemon boundary. Matches prepare_fetch.
+  base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
+  root <- file.path(base, paste0("garry-ck-", rlang::hash(sort(unique(keys)))))
   dir.create(root, showWarnings = FALSE, recursive = TRUE)
   for (k in unique(keys)) {
     spec <- .ck_lookup(k)
