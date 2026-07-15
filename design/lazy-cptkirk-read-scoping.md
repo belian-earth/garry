@@ -115,16 +115,6 @@ coalescing key is therefore the source SET, not a single file.
   native i8 to anvl instead of f32 is a later micro-opt; the f32 VRT path reuses
   the existing `g_upload_raw` "f32" contract.
 
-## Phased plan
-
-- **B1**: `prepare_cptkirk` + fetch task + coalescing cache; the lazy reader
-  emitting `"CK:"` sources. End-to-end lazy read of ONE multi-band COG -> dataset
-  -> band algebra -> collect. (B1 is the minimum end-to-end slice; the reader and
-  the scheduler hook land together because neither is useful alone.)
-- **B2**: mosaic (multiple tiles) coalescing in one `ck_warp_to_buffer`.
-- **B3**: cptkirk -> `Imports`; Rust in CI; remove/rewire `read_cog`.
-- **B4**: `/vsimem` staging (drop the disk `.bin`); optional native-i8 upload.
-
 ## Risks
 
 - `prepare_fetch`'s per-plan state and task-dependency wiring (deps, pool
@@ -135,10 +125,22 @@ coalescing key is therefore the source SET, not a single file.
   was kept soft so far. Sequence B3 after B1/B2 prove out.
 - Live testing needs network + an AEF tile (deferred to a fast link).
 
-## Open decisions for Hugh
+## Resolved decisions (2026-07-15, Hugh)
 
-1. API shape: `lazy_cog` (b) vs `lazy_dataset` expansion (a) vs both.
-2. Engine marker: the `"CK:"` path prefix (recommended, no IR change) vs a new
-   `SourceNode` field.
-3. cptkirk -> `Imports` now (with B1) or keep the soft shim until the lazy path
-   proves out.
+1. API shape: **dedicated `lazy_cog`** (option b). A lazy multi-band reader
+   emitting `"CK:"`-flagged sources; multi-band COG -> cptkirk, single-band ->
+   plain `lazy_source`. `lazy_dataset` multi-band-asset expansion is deferred.
+2. Engine marker: the **`"CK:"` path prefix** (no `SourceNode` field change).
+3. cptkirk -> **`Imports` now, with B1**: call `cptkirk::` directly (drop the
+   `getExportedValue` shim) and add the Rust build to CI from the start, so CI
+   exercises the real dependency. The phased plan below folds the former B3
+   Imports step into B1.
+
+## Phased plan (revised for the decisions)
+
+- **B1**: cptkirk -> `Imports` + Rust in CI; `lazy_cog()` emitting `"CK:"`
+  sources; `prepare_cptkirk` + fetch task + coalescing cache. End-to-end lazy
+  read of ONE multi-band COG -> dataset -> band algebra -> collect. Rewire
+  `read_cog` onto `lazy_cog` (or remove).
+- **B2**: mosaic (multiple tiles) coalescing in one `ck_warp_to_buffer`.
+- **B3**: `/vsimem` staging (drop the disk `.bin`); optional native-i8 upload.
