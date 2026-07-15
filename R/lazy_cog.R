@@ -22,8 +22,16 @@ NULL
 # boundary.
 .ck_registry <- new.env(parent = emptyenv())
 
+# cptkirk reads raw URLs through its own async-tiff/obstore HTTP path, so strip
+# the GDAL /vsicurl/ prefix that stac_sources() adds for the GDAL reader. A
+# pre-signed Azure blob URL keeps its SAS query -- cptkirk detects it
+# (azure_sas_opt) and reads it; an UNSIGNED Azure URL falls back to the Azure
+# credential chain (IMDS) and fails off-Azure, so pass signed URLs (as
+# stac_query() + rstac::items_sign() produce).
+.ck_url <- function(p) sub("^/vsicurl/", "", as.character(p))
+
 .ck_register <- function(srcs, bands, resampling, nodata, grid) {
-  spec <- list(srcs = srcs, bands = bands, resampling = resampling,
+  spec <- list(srcs = .ck_url(srcs), bands = bands, resampling = resampling,
                nodata = if (length(nodata)) as.numeric(nodata) else numeric(0),
                te = as.numeric(grid@extent),
                ts = c(unname(grid@dims[["x"]]), unname(grid@dims[["y"]])),
@@ -155,11 +163,14 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
                                  detail = max(vapply(bands, length, 1L)))))
 }
 
-# Collect-time pre-pass: fetch every "CK:" source set once (all its bands in one
-# ck_warp_to_buffer), stage the native BSQ buffer as a raw .bin + VRTRawRasterBand
-# VRT, and rewrite the source-node paths to the VRT so the executors read it as
-# an ordinary grid-aligned GDAL source. Returns the (mutated) plan and a staging
-# root to unlink after collect, or root = NULL when there is nothing to resolve.
+# Collect-time pre-pass: fetch every "CK:" source set and rewrite the source-node
+# paths to a staged grid-aligned raster the executors read as an ordinary GDAL
+# source. Single-item source sets that share (grid, bands, resampling) are fetched
+# TOGETHER through ONE cptkirk pool (ck_batch) -- the win for many-slice time
+# series, where per-set sequential fetches would serialise the network. Lone sets
+# and spatial mosaics keep ck_warp_to_buffer's no-encode buffer path. Returns the
+# (mutated) plan and a staging root to unlink after collect, or root = NULL when
+# there is nothing to resolve.
 .ck_resolve <- function(p) {
   g   <- p@graph
   ids <- Filter(function(id) {
@@ -174,18 +185,64 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
   root <- file.path(base, paste0("garry-ck-", rlang::hash(sort(unique(keys)))))
   dir.create(root, showWarnings = FALSE, recursive = TRUE)
-  for (k in unique(keys)) {
-    spec <- .ck_lookup(k)
-    if (is.null(spec))
-      cli::cli_abort("Unresolved {.fn lazy_cog} source {.val {k}}.")
-    vrt <- .ck_fetch(spec, root)
-    for (id in ids[keys == k]) {
-      n <- graph_get(g, id)
-      n@path <- vrt
-      graph_replace(g, id, n)
+
+  ukeys <- unique(keys)
+  specs <- stats::setNames(lapply(ukeys, .ck_lookup), ukeys)
+  if (any(vapply(specs, is.null, TRUE)))
+    cli::cli_abort("Unresolved {.fn lazy_cog} source.")
+  staged <- new.env(parent = emptyenv())            # ukey -> staged path
+
+  # Single-band source sets (one band per file, each a 1+ tile mosaic) go through
+  # ONE ck_batch pool per grid/resampling signature -- every tile of every set is
+  # fetched concurrently, the saturation win for many-slice time series. Mosaics
+  # are then assembled locally (gdalbuildvrt overlay). Multi-band single files
+  # (geo-embedding stacks) keep ck_warp_to_buffer's no-encode buffer path.
+  single <- ukeys[vapply(ukeys, function(k) length(specs[[k]]$bands) == 1L, TRUE)]
+  if (length(single)) {
+    sig <- vapply(single, function(k) {
+      s <- specs[[k]]; rlang::hash(list(s$te, s$ts, s$crs, s$resampling, s$bands))
+    }, "")
+    for (grp in unique(sig)) {
+      members <- single[sig == grp]
+      if (length(members) > 1L)                 # >1 set: one pool. Lone -> buffer.
+        .ck_batch_mosaic(members, specs, root, staged)
     }
   }
+  for (k in ukeys) if (is.null(staged[[k]]))    # lone single-band sets + multi-band
+    staged[[k]] <- .ck_fetch(specs[[k]], root)
+
+  for (i in seq_along(ids)) {
+    n <- graph_get(g, ids[[i]])
+    n@path <- staged[[keys[[i]]]]
+    graph_replace(g, ids[[i]], n)
+  }
   list(plan = p, root = root)
+}
+
+# Fetch a group of single-band source sets (each a 1+ tile mosaic) sharing an
+# AOI/resampling through ONE cptkirk pool. ck_batch(stack = FALSE) returns one
+# warped file PER TILE, so every tile of every set streams through one io budget
+# concurrently. Then mosaic each set's tiles locally -- a gdalbuildvrt overlay,
+# no network -- and record the staged path. Each source's own nodata is read from
+# its header by cptkirk; garry masks on the node's nodata regardless.
+.ck_batch_mosaic <- function(members, specs, root, staged) {
+  s0  <- specs[[members[[1L]]]]
+  src <- lapply(members, function(k) specs[[k]]$srcs)       # per set: its tiles
+  dst <- unlist(lapply(seq_along(members), function(i)
+    file.path(root, sprintf("cb_%s_%02d.tif",
+                            sub("^CK:", "", members[[i]]), seq_along(src[[i]])))))
+  out <- cptkirk::ck_batch(
+    src = src, dst = dst, stack = FALSE,
+    t_srs = s0$crs, te = s0$te, ts = s0$ts,
+    bands = if (length(s0$bands)) s0$bands else NULL,
+    r = s0$resampling, io_concurrency = 32L)
+  for (i in seq_along(members)) {
+    files <- as.character(out[[i]])                          # tiles, datetime order
+    staged[[members[[i]]]] <- if (length(files) == 1L) files[[1L]]
+      else gdal_mosaic_vrt(
+        file.path(root, paste0("mos_", sub("^CK:", "", members[[i]]), ".vrt")),
+        files)
+  }
 }
 
 # The one cptkirk-dependent step: fetch+warp the source set's selected bands onto
@@ -217,7 +274,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # with. nodata comes back numeric(0) when the source declares none. All bands are
 # assumed to share one sentinel (the case for geo-embedding stacks).
 .ck_meta <- function(src) {
-  info <- cptkirk::cog_info(src)
+  info <- cptkirk::cog_info(.ck_url(src))
   nd <- info$nodata
   list(n_bands = info$n_bands,
        dtype   = .gdal_dtype_map[[info$dtype]] %||% info$dtype,

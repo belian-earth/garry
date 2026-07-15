@@ -187,6 +187,23 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
   vrt
 }
 
+#' Mosaic already-grid-aligned rasters into a VRT (adapter).
+#'
+#' `gdalbuildvrt` of same-grid single-band rasters: overlapping pixels take the
+#' LAST input, so pass `files` in ascending priority (latest datetime last, to
+#' match the highest-on-top overlap rule). Used to assemble a per-slice mosaic
+#' from cptkirk's per-tile warp outputs.
+#'
+#' @param dst Output VRT path.
+#' @param files Grid-aligned input rasters, low-to-high priority.
+#' @return `dst`.
+#' @keywords internal
+gdal_mosaic_vrt <- function(dst, files) {
+  gdalraster::buildVRT(dst, files, quiet = TRUE)
+  if (!file.exists(dst)) cli::cli_abort("buildVRT mosaic failed.")
+  dst
+}
+
 #' Create an output GTiff for a grid.
 #'
 #' A single non-spatial dim ("t" or "band") maps to GTiff bands; more

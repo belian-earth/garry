@@ -190,6 +190,41 @@ test_that("lazy_cog (dataframe form) mirrors lazy_dataset: time-series median", 
   expect_equal(unname(got[1, 1, 2]), 70)                   # median(50, 70, 90)
 })
 
+# A half-width tiled Int16 COG (nodata set), covering x in [x0, x0+320) over the
+# 640x640 test grid -- for building a 2-tile mosaic source set.
+.lc_half <- function(f, x0, code, nd = -32768L) {
+  d <- gdalraster::create("GTiff", f, 32, 64, 1, "Int16", return_obj = TRUE,
+                          options = c("TILED=YES", "BLOCKXSIZE=32",
+                                      "BLOCKYSIZE=64"))
+  d$setGeoTransform(c(x0, 10, 0, 640, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  d$setNoDataValue(1, nd)
+  d$write(1, 0, 0, 32, 64, rep(code, 32 * 64))
+  d$close()
+  f
+}
+
+test_that("lazy_cog (dataframe form) batches a mosaic slice through one pool", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("cptkirk")
+  dir <- withr::local_tempdir("lcbatchmos")
+  # asset A slice has TWO tiles (left 20 / right 30 -> mosaic); asset B one tile.
+  # Two source sets share a signature -> one ck_batch pool; A's tiles -> buildVRT.
+  src <- data.frame(
+    location = c(.lc_half(file.path(dir, "aL.tif"), 0,   20L),
+                 .lc_half(file.path(dir, "aR.tif"), 320, 30L),
+                 .lc_scog(file.path(dir, "b.tif"),  50L)),
+    datetime = "2023-01-01", asset = c("A", "A", "B"), stringsAsFactors = FALSE)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 640, 640),
+                    dims = c(16L, 16L), dtype = "f32")
+  got <- collect(reduce_over(lazy_cog(src, grid, assets = c("A", "B")),
+                             "median", "t", nan_rm = TRUE), distributed = FALSE)
+  expect_equal(dim(got), c(16L, 16L, 2L))
+  expect_true(all(got[, 1:8, 1] == 20))                    # A left half from tile aL
+  expect_true(all(got[, 9:16, 1] == 30))                   # A right half from tile aR
+  expect_true(all(got[, , 2] == 50))                       # B single tile
+})
+
 test_that("lazy_cog (dataframe form) carries a mask asset for mask()", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("cptkirk")
