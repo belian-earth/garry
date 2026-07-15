@@ -18,9 +18,9 @@ The Harmonized Landsat Sentinel-2 (HLS) project delivers a common surface
 reflectance product from two sensors, giving a land observation every 2-3 days
 at 30 m. The two collections are spectrally harmonized but **name their bands
 differently and carry different band sets** (Landsat has thermal bands and no
-red edge; Sentinel-2 has red edge and a broad NIR). This vignette combines both
-into one cloud-masked median composite that keeps every band, then reduces the
-band axis to its first three principal components. It uses the Microsoft
+red edge; Sentinel-2 has red edge and a broad NIR). This vignette harmonizes
+both onto one band schema, builds a cloud-masked median composite, and reduces
+the band axis to its first three principal components. It uses the Microsoft
 Planetary Computer, which is pre-signed and fast.
 
 ## Discover and harmonize
@@ -75,8 +75,10 @@ observations.
 ## Cloud-masked median composite
 
 ```{r composite}
+# Thermal (T1/T2) is Landsat-only and sparse, so requiring it drops most pixels
+# from the PCA; keep the reflectance/red-edge bands, which both sensors provide.
 bands  <- c("A", "B", "G", "R", "RE1", "RE2", "RE3", "N",
-            "N2", "WV", "C", "S1", "S2", "T1", "T2")
+            "N2", "WV", "C", "S1", "S2")
 target <- grid_from_bbox(aoi, res = 30)     # equal-area 30 m grid
 
 garry_daemons()
