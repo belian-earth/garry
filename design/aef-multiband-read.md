@@ -16,12 +16,28 @@ Paused 2026-07-15. This note is self-contained to resume from.
   cptkirk's existing `ck_warp` → a local GTiff; **swap to cptkirk's raw
   warp-to-bin when available** to drop the GeoTIFF round-trip.
 
-**Still to do:** run the read benchmark on a fast link; add cptkirk warp-to-bin
-(native-dtype raw, the `gdal_warp_to_buffer` contract) and swap it into
-`.ck_warp_local`; decide the Rust-direct question by measurement; optionally a
-lazy read-scheduler engine (fetch at collect, coalesce same-file bands) instead
-of the eager helper. The benchmark was inconclusive (the test link slowed to a
-crawl mid-run; rerun on a fast, idle connection).
+**CONFIRMED DIRECTION (2026-07-15): lazy-at-collect, auto-selected in
+`lazy_dataset`, cptkirk as Imports.** The eager `read_cog` was the first slice;
+the target is:
+1. **cptkirk `ck_warp_to_buffer()`** (prerequisite, Hugh implementing) — warp the
+   fetched/staged VRTs into a raw NATIVE-dtype BSQ buffer via `MEM:::DATAPOINTER`
+   (the `gdal_warp_to_buffer` contract generalized to `BANDS=N`, native). Full
+   spec: **`~/belian/cptkirk/HANDOFF-ck_warp_to_buffer.md`**.
+2. **garry `lazy_dataset()`** auto-detects tiled multi-band COG assets
+   (`gdal_band_count > 1`) → expands each to N band-sources flagged
+   `engine = "cptkirk"`; single-band assets untouched.
+3. **garry read dispatch (lazy, at collect)**: for cptkirk-flagged sources,
+   coalesce the N same-file band-sources into ONE `ck_warp_to_buffer` call, slice
+   the BSQ planes → per-band `.bin`s → anvl upload (native dtype) → fused
+   `dequantize_aef`. Replaces the per-band warp-on-read for multi-band.
+4. **Remove `read_cog`** (fold into the engine); keep `dequantize_aef`. cptkirk
+   -> **Imports** (+ a Rust build step in garry CI). Rationale (Hugh): folded in,
+   it must always be available, and multi-band remote COGs are common beyond
+   embeddings.
+
+**Also still to do:** run the read benchmark on a fast link (decisive: cptkirk
+vs one GDAL multi-band warp); decide the Rust-direct question by measurement. The
+benchmark was inconclusive (test link slowed mid-run).
 
 ## Goal
 
