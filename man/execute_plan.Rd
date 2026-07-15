@@ -14,6 +14,9 @@ chunk by chunk instead of returned in memory.}
 
 \item{nodata}{Optional sentinel recorded in the output and used to
 demote NaN on write (required for integer outputs containing NaN).}
+
+\item{band_names}{Optional character vector of band descriptions written to
+the output bands (multiband GTiff).}
 }
 \value{
 The sink stage's value (matrix for raster sinks, scalar for

@@ -15,10 +15,10 @@ NULL
                reduce = "yellow", stack = "cyan", warp = "red",
                fused = "grey", mask = "red", math = "green",
                derive = "green", node = "grey")
-.kind_glyph_u <- c(source = "◈", map = "ƒ", focal = "◫",
-                   reduce = "▸", stack = "⬚", warp = "→",
-                   fused = "▣", mask = "✕", math = "±",
-                   derive = "⊕", node = "•")
+.kind_glyph_u <- c(source = "\u25c8", map = "\u0192", focal = "\u25eb",
+                   reduce = "\u25b8", stack = "\u2b1a", warp = "\u2192",
+                   fused = "\u25a3", mask = "\u2715", math = "\u00b1",
+                   derive = "\u2295", node = "\u2022")
 .kind_glyph_a <- c(source = "o", map = "f", focal = "#", reduce = ">",
                    stack = "=", warp = "~", fused = "@", mask = "x",
                    math = "+", derive = "+", node = "*")
@@ -30,7 +30,7 @@ NULL
 }
 .box_chars <- function() {
   if (cli::is_utf8_output())
-    list(v = "│", t = "├─ ", l = "└─ ", g = "│  ")
+    list(v = "\u2502", t = "\u251c\u2500 ", l = "\u2514\u2500 ", g = "\u2502  ")
   else list(v = "|", t = "+- ", l = "\\- ", g = "|  ")
 }
 
@@ -99,7 +99,7 @@ NULL
                          box = .box_chars()) {
   conn <- if (is_root) "" else if (is_last) box$l else box$t
   mult <- if (node$mult > 1L)
-    cli::col_grey(sprintf("  %s%d", if (cli::is_utf8_output()) "×" else "x",
+    cli::col_grey(sprintf("  %s%d", if (cli::is_utf8_output()) "\u00d7" else "x",
                           node$mult)) else ""
   line <- paste0(prefix, conn, .kind_glyph(node$kind), " ", node$label, mult)
   child_prefix <- paste0(prefix, if (is_root) "" else if (is_last) "   " else box$g)

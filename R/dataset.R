@@ -68,7 +68,7 @@ LazyDataset <- S7::new_class(
 .rng <- function(v) {
   v <- sort(unique(as.integer(v)))
   if (!length(v)) return("")
-  dash <- if (cli::is_utf8_output()) "–" else "-"
+  dash <- if (cli::is_utf8_output()) "\u2013" else "-"
   brk <- c(0L, which(diff(v) != 1L), length(v))
   parts <- vapply(seq_len(length(brk) - 1L), function(i) {
     seg <- v[(brk[i] + 1L):brk[i + 1L]]

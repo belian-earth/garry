@@ -432,7 +432,7 @@ garry_daemons_set <- function() {
 #' equivalence is gate-tested).
 #'
 #' @param plan A `Plan`.
-#' @param path,nodata As in `execute_plan()`.
+#' @param path,nodata,band_names As in `execute_plan()`.
 #' @return As `execute_plan()`.
 #' @export
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {

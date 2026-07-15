@@ -26,6 +26,9 @@ gdal_read_window(
 \item{nodata}{Length-0 or length-1 sentinel to promote to NaN.}
 
 \item{open_options}{GDAL open options ("KEY=VALUE").}
+
+\item{out}{Output form: a \verb{[y, x]} \code{"matrix"} (default), or a raw f32
+store value (\code{"raw_f32"}) for the distributed store path.}
 }
 \value{
 A numeric \verb{y_size x x_size} matrix.

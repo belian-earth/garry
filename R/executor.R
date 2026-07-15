@@ -370,6 +370,8 @@ NULL
 #'   chunk by chunk instead of returned in memory.
 #' @param nodata Optional sentinel recorded in the output and used to
 #'   demote NaN on write (required for integer outputs containing NaN).
+#' @param band_names Optional character vector of band descriptions written to
+#'   the output bands (multiband GTiff).
 #' @return The sink stage's value (matrix for raster sinks, scalar for
 #'   global reductions), or `path` invisibly when writing. When
 #'   `options(garry.exec_stats = TRUE)`, in-memory results carry a

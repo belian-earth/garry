@@ -9,7 +9,7 @@ execute_plan_mirai(plan, path = NULL, nodata = NULL, band_names = NULL)
 \arguments{
 \item{plan}{A \code{Plan}.}
 
-\item{path, nodata}{As in \code{execute_plan()}.}
+\item{path, nodata, band_names}{As in \code{execute_plan()}.}
 }
 \value{
 As \code{execute_plan()}.

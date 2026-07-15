@@ -121,6 +121,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param x_off,y_off,x_size,y_size 0-based pixel window.
 #' @param nodata Length-0 or length-1 sentinel to promote to NaN.
 #' @param open_options GDAL open options ("KEY=VALUE").
+#' @param out Output form: a `[y, x]` `"matrix"` (default), or a raw f32
+#'   store value (`"raw_f32"`) for the distributed store path.
 #' @return A numeric `y_size x x_size` matrix.
 #' @export
 gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
@@ -267,6 +269,12 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
 # driver open gate, the raw data pointer, and the warp) -- callers stay clean.
 gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL) {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")   # >=3.10 gate
+  # `buf` is a RAW f32 byte vector (the raw-f32 store, D19-D21). The public
+  # gdalraster::rvector_to_MEM() infers the band type from the R vector type
+  # (integer/double/complex) and cannot expose raw bytes as Float32, so the only
+  # pure-R way to zero-copy-warp into an f32 buffer is the data pointer + an
+  # explicit DATATYPE=Float32 MEM DSN. (`:::` is deliberate; a C shim would avoid
+  # it but make garry a compiled package.)
   ptr <- gdalraster:::.get_data_ptr(buf)
   dsn <- sprintf(
     "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",

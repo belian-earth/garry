@@ -503,7 +503,7 @@ NULL
   band_p <- lapply(spec$band_srcs, fetch)
   # Warm + attach the compute pool while the read pool fetches (hides cold init).
   mirai::everywhere({
-    suppressMessages(library(garry)); try(garry:::.gd_warm(), silent = TRUE)
+    suppressMessages(library(garry)); try(garry::.gd_warm(), silent = TRUE)
   }, .compute = prof_c)
 
   # Mask: once fmask lands, compute the cleaned cube on the compute pool while
@@ -515,7 +515,7 @@ NULL
                chain = lapply(spec$mask_chain, function(n) {
                  n@fn <- .slim_fn(n@fn); n }),
                halo = spec$halo, ny = ny, nx = nx, dev = spec$device)
-    mask_p <- mirai::mirai(garry:::.gd_compute_mask(km), km = Km, .compute = prof_c)
+    mask_p <- mirai::mirai(garry::.gd_compute_mask(km), km = Km, .compute = prof_c)
   }
 
   # Per-band medians: wait each band's fetch, then dispatch its median (async)
@@ -546,7 +546,7 @@ NULL
     if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
     while (length(inflight) >= cap) harvest()         # RAM cap: bound concurrency
     jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]))
-    res_p[[bi]] <- mirai::mirai(garry:::.gd_compute_masked_band(jb, kb),
+    res_p[[bi]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
                                 jb = jb, kb = Kb, .compute = prof_c)
     inflight <- c(inflight, bi)
   }

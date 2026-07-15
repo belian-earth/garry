@@ -11,3 +11,5 @@
 \.Rmd\.orig$
 ^vignettes/figure$
 ^vignettes/precompute\.R$
+\.tif$
+^Rplots\.pdf$
