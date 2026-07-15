@@ -2,51 +2,81 @@
 % Please edit documentation in R/lazy_cog.R
 \name{lazy_cog}
 \alias{lazy_cog}
-\title{Read a multi-band COG into a lazy dataset via the cptkirk engine.}
+\title{Read COGs into a lazy dataset via the cptkirk engine.}
 \usage{
 lazy_cog(
-  path,
+  sources,
   grid,
+  assets = NULL,
   bands = NULL,
   dequant = NULL,
   resampling = "near",
-  names = NULL
+  names = NULL,
+  mask_asset = NULL,
+  granularity = "day",
+  sort_field = "datetime",
+  nodata = NULL,
+  lon = NULL
 )
 }
 \arguments{
-\item{path}{COG path/URL, or a character vector of tiles to mosaic (remote
-\verb{http(s)://} or \verb{/vsicurl/...}). All must share band layout.}
+\item{sources}{A \code{stac_sources()}-style dataframe for the time-series form, or
+a COG path / character vector of tiles (remote \verb{http(s)://} or \verb{/vsicurl/})
+for the single form.}
 
 \item{grid}{Target \code{GridSpec}.}
 
-\item{bands}{Source band indices to read (default: all).}
+\item{assets}{Asset names to read (dataframe form; a band each).}
 
-\item{dequant}{Optional garry map \code{fn(x)} applied per band and fused at
+\item{bands}{Source band indices (single-COG form; default: all).}
+
+\item{dequant}{Optional garry map \code{fn(x)} applied per value band and fused at
 \code{collect()} (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}).}
 
 \item{resampling}{GDAL resampling (default \code{"near"}, right for quantised
 codes).}
 
-\item{names}{Optional band names (default \verb{b<index>}).}
+\item{names}{Optional band names (single-COG form; default \verb{b<index>}).}
+
+\item{mask_asset}{Optional QA asset carried through for \code{\link[=mask]{mask()}} (dataframe
+form).}
+
+\item{granularity}{Time-slice granularity, e.g. \code{"day"} (dataframe form).}
+
+\item{sort_field}{Overlap-resolution field for per-slice mosaics (dataframe
+form).}
+
+\item{nodata}{Optional nodata override: one value, or a named vector per asset
+(dataframe form).}
+
+\item{lon}{Optional longitude for local-time slicing (dataframe form).}
 }
 \value{
 A \code{LazyDataset}.
 }
 \description{
-The specialist multi-band read path. Where \code{\link[=lazy_dataset]{lazy_dataset()}} is the general,
-works-on-everything GDAL reader for single-band asset time series, \code{lazy_cog}
-is for one (or a mosaic of) multi-band Cloud-Optimised GeoTIFF(s) -- geo-
-embedding stacks such as Alpha Earth -- read through
-\href{https://belian-earth.github.io/cptkirk/}{cptkirk}: its async-tiff reader
-opens each tile once and streams the band planes concurrently, then warps them
-in one pass into a native-dtype buffer, far faster than per-band GDAL
-\verb{/vsicurl} for tens of bands.
+The cptkirk read path, a drop-in alternative to \code{\link[=lazy_dataset]{lazy_dataset()}} that differs
+only in the engine: both build the same \code{LazyDataset} and support the same
+\code{mask()} / \code{reduce_over()} / \code{collect()} verbs, but \code{lazy_cog} reads each
+source set through \href{https://belian-earth.github.io/cptkirk/}{cptkirk} -- its
+async-tiff reader opens each tile once and streams the band planes
+concurrently. cptkirk's advantage is intra-file band concurrency, so it wins
+on multi-band COGs (geo-embedding stacks such as Alpha Earth); on single-band
+assets it works but has no lever GDAL lacks (use \code{\link[=lazy_dataset]{lazy_dataset()}} there).
 }
 \details{
-The read is LAZY: construction fetches nothing. At \code{\link[=collect]{collect()}} the bands drawn
-from one source set are fetched together in a single cptkirk pass, staged as a
-grid-aligned native-dtype raster, and read from there; downstream compute
-stays lazy. The source's nodata sentinel is carried through so those pixels
-read as NaN and never reach the decode. \code{dequant} fuses a decode onto the read
--- e.g. \code{\link[=dequantize_aef]{dequantize_aef()}} -- on the device, not a separate pass.
+Two input forms:
+\itemize{
+\item a \code{stac_sources()}-style dataframe (\code{location}/\code{datetime}/\code{asset}) plus
+\code{assets} -- a band per named asset, a per-\code{granularity} time slice per date,
+exactly the \code{\link[=lazy_dataset]{lazy_dataset()}} shape (mirrors its signature);
+\item a character path or vector of a single (multi-band) COG or a mosaic of
+tiles -- one time slice, a band per selected source band.
+}
+
+The read is LAZY: construction fetches nothing. At \code{\link[=collect]{collect()}} each source set
+(one asset-slice, or the single COG's bands) is fetched together in one
+cptkirk pass, staged as a grid-aligned native-dtype raster, and read from
+there. The source nodata sentinel is carried through so those pixels read as
+NaN. \code{dequant} fuses a decode onto the read (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}).
 }

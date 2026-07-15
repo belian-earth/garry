@@ -35,50 +35,75 @@ NULL
 
 .ck_lookup <- function(rpath) .ck_registry[[sub("^CK:", "", rpath)]]
 
-#' Read a multi-band COG into a lazy dataset via the cptkirk engine.
+#' Read COGs into a lazy dataset via the cptkirk engine.
 #'
-#' The specialist multi-band read path. Where [lazy_dataset()] is the general,
-#' works-on-everything GDAL reader for single-band asset time series, `lazy_cog`
-#' is for one (or a mosaic of) multi-band Cloud-Optimised GeoTIFF(s) -- geo-
-#' embedding stacks such as Alpha Earth -- read through
-#' [cptkirk](https://belian-earth.github.io/cptkirk/): its async-tiff reader
-#' opens each tile once and streams the band planes concurrently, then warps them
-#' in one pass into a native-dtype buffer, far faster than per-band GDAL
-#' `/vsicurl` for tens of bands.
+#' The cptkirk read path, a drop-in alternative to [lazy_dataset()] that differs
+#' only in the engine: both build the same `LazyDataset` and support the same
+#' `mask()` / `reduce_over()` / `collect()` verbs, but `lazy_cog` reads each
+#' source set through [cptkirk](https://belian-earth.github.io/cptkirk/) -- its
+#' async-tiff reader opens each tile once and streams the band planes
+#' concurrently. cptkirk's advantage is intra-file band concurrency, so it wins
+#' on multi-band COGs (geo-embedding stacks such as Alpha Earth); on single-band
+#' assets it works but has no lever GDAL lacks (use [lazy_dataset()] there).
 #'
-#' The read is LAZY: construction fetches nothing. At [collect()] the bands drawn
-#' from one source set are fetched together in a single cptkirk pass, staged as a
-#' grid-aligned native-dtype raster, and read from there; downstream compute
-#' stays lazy. The source's nodata sentinel is carried through so those pixels
-#' read as NaN and never reach the decode. `dequant` fuses a decode onto the read
-#' -- e.g. [dequantize_aef()] -- on the device, not a separate pass.
+#' Two input forms:
+#' * a `stac_sources()`-style dataframe (`location`/`datetime`/`asset`) plus
+#'   `assets` -- a band per named asset, a per-`granularity` time slice per date,
+#'   exactly the [lazy_dataset()] shape (mirrors its signature);
+#' * a character path or vector of a single (multi-band) COG or a mosaic of
+#'   tiles -- one time slice, a band per selected source band.
 #'
-#' @param path COG path/URL, or a character vector of tiles to mosaic (remote
-#'   `http(s)://` or `/vsicurl/...`). All must share band layout.
+#' The read is LAZY: construction fetches nothing. At [collect()] each source set
+#' (one asset-slice, or the single COG's bands) is fetched together in one
+#' cptkirk pass, staged as a grid-aligned native-dtype raster, and read from
+#' there. The source nodata sentinel is carried through so those pixels read as
+#' NaN. `dequant` fuses a decode onto the read (e.g. [dequantize_aef()]).
+#'
+#' @param sources A `stac_sources()`-style dataframe for the time-series form, or
+#'   a COG path / character vector of tiles (remote `http(s)://` or `/vsicurl/`)
+#'   for the single form.
 #' @param grid Target `GridSpec`.
-#' @param bands Source band indices to read (default: all).
-#' @param dequant Optional garry map `fn(x)` applied per band and fused at
+#' @param assets Asset names to read (dataframe form; a band each).
+#' @param bands Source band indices (single-COG form; default: all).
+#' @param dequant Optional garry map `fn(x)` applied per value band and fused at
 #'   `collect()` (e.g. [dequantize_aef()]).
 #' @param resampling GDAL resampling (default `"near"`, right for quantised
 #'   codes).
-#' @param names Optional band names (default `b<index>`).
+#' @param names Optional band names (single-COG form; default `b<index>`).
+#' @param mask_asset Optional QA asset carried through for [mask()] (dataframe
+#'   form).
+#' @param granularity Time-slice granularity, e.g. `"day"` (dataframe form).
+#' @param sort_field Overlap-resolution field for per-slice mosaics (dataframe
+#'   form).
+#' @param nodata Optional nodata override: one value, or a named vector per asset
+#'   (dataframe form).
+#' @param lon Optional longitude for local-time slicing (dataframe form).
 #' @return A `LazyDataset`.
 #' @export
-lazy_cog <- function(path, grid, bands = NULL, dequant = NULL,
-                     resampling = "near", names = NULL) {
+lazy_cog <- function(sources, grid, assets = NULL, bands = NULL, dequant = NULL,
+                     resampling = "near", names = NULL, mask_asset = NULL,
+                     granularity = "day", sort_field = "datetime",
+                     nodata = NULL, lon = NULL) {
   rlang::check_installed("cptkirk",
-                         reason = "for lazy_cog(), the multi-band COG read engine.")
+                         reason = "for lazy_cog(), the cptkirk read engine.")
   .assert_class(grid, GridSpec, "GridSpec")
-  path <- as.character(path)
+  if (is.data.frame(sources))
+    return(.lazy_cog_series(sources, grid, assets, mask_asset, granularity,
+                            sort_field, nodata, dequant, resampling, lon))
+  .lazy_cog_single(as.character(sources), grid, bands, dequant, resampling, names)
+}
+
+# Single (multi-band) COG or tile mosaic -> one time slice, a band per selected
+# source band. Reads at the source's NATIVE dtype (the grid fixes geometry, not
+# the read type): an integer source carrying a `nodata` then promotes to f32 with
+# the sentinel as NaN (D8), so the decode never sees it.
+.lazy_cog_single <- function(path, grid, bands, dequant, resampling, names) {
   nb <- gdal_band_count(path[[1L]])
   bands <- if (is.null(bands)) seq_len(nb) else as.integer(bands)
   if (length(bands) < 1L) cli::cli_abort("{.arg bands} selects no bands.")
   nd  <- .src_nodata(path[[1L]])                            # dynamic sentinel
-  sdt <- gdal_grid_spec(path[[1L]], band = 1L)$grid@dtype   # source garry dtype
+  sdt <- gdal_grid_spec(path[[1L]], band = 1L)$grid@dtype
   ckpath <- .ck_register(path, bands, resampling, nd, grid)
-  # Read at the source's NATIVE dtype (the grid fixes geometry, not the read
-  # type): an integer source carrying a `nodata` then promotes to f32 with the
-  # sentinel as NaN (D8), so the decode never sees it.
   rgrid <- if (!identical(sdt, grid@dtype)) .grid_retype(grid, sdt) else grid
   ndv <- if (length(nd)) as.numeric(nd) else NULL
   g   <- graph_new()
@@ -89,6 +114,54 @@ lazy_cog <- function(path, grid, bands = NULL, dequant = NULL,
     lr
   }), nm)
   as_dataset(layers)
+}
+
+# Time-series form: mirror lazy_dataset(). A band per named asset; a per-slice CK:
+# source over that asset-slice's items (cptkirk mosaics them), instead of a GTI +
+# GDAL warp-on-read. mask()/reduce_over()/collect() are engine-agnostic dataset
+# ops, so they work unchanged; .ck_resolve coalesces per asset-slice source set.
+.lazy_cog_series <- function(sources, grid, assets, mask_asset, granularity,
+                             sort_field, nodata, dequant, resampling, lon) {
+  if (is.null(assets) || length(assets) < 1L)
+    cli::cli_abort("{.arg assets} must name at least one asset (dataframe form).")
+  all_assets <- unique(c(assets, mask_asset))
+  sources <- stac_time_slices(sources, granularity, lon = lon)
+  resolve_nodata <- function(a, file_nd) {
+    fnd <- if (length(file_nd) == 1L) file_nd else NULL
+    if (is.null(nodata)) return(fnd)
+    if (!is.null(names(nodata)))
+      return(if (a %in% names(nodata)) unname(nodata[[a]]) else fnd)
+    as.numeric(nodata)                          # scalar for every asset
+  }
+  g <- graph_new()
+  bands <- list()
+  for (a in all_assets) {
+    a_rows <- sources[sources$asset == a, , drop = FALSE]
+    if (!nrow(a_rows)) cli::cli_abort("No sources for asset {.val {a}}.")
+    first   <- a_rows$location[[1L]]
+    nd      <- resolve_nodata(a, .src_nodata(first))
+    sdt     <- gdal_grid_spec(first, band = 1L)$grid@dtype
+    rgrid   <- if (!identical(sdt, grid@dtype)) .grid_retype(grid, sdt) else grid
+    ndv     <- if (length(nd)) as.numeric(nd) else NULL
+    is_mask <- !is.null(mask_asset) && a %in% mask_asset
+    slices  <- sort(unique(a_rows$slice))
+    layers  <- lapply(slices, function(sl) {
+      items  <- a_rows$location[a_rows$slice == sl][order(
+        a_rows$datetime[a_rows$slice == sl])]
+      ckpath <- .ck_register(items, 1L, resampling, nd, grid)
+      lr <- lazy_source(ckpath, band = 1L, graph = g, grid = rgrid, nodata = ndv)
+      if (!is.null(dequant) && !is_mask) lr <- lazy_map(lr, fn = dequant, dtype = "f32")
+      lr
+    })
+    names(layers) <- slices
+    bands[[a]] <- layers
+  }
+  bands <- bands[all_assets]
+  LazyDataset(graph = g, bands = bands,
+              mask_asset = if (is.null(mask_asset)) character(0)
+                           else as.character(mask_asset),
+              steps = list(.step("source", "source",
+                                 detail = max(vapply(bands, length, 1L)))))
 }
 
 # Collect-time pre-pass: fetch every "CK:" source set once (all its bands in one

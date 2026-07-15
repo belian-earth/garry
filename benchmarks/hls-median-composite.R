@@ -19,8 +19,10 @@
 # machine and applies the GDAL/malloc defaults); pass "READ+COMPUTE" (e.g.
 # 16+20) to pin the pools. GARRY_DEVICE=cuda runs compute on the GPU (pass a
 # small explicit pool, the daemons share one GPU); GARRY_BENCH_MORPH=0 drops
-# the mask cleanup.
+# the mask cleanup. GARRY_BENCH_ENGINE=cptkirk reads via lazy_cog (cptkirk)
+# instead of lazy_dataset (GDAL) -- same composite, different read engine.
 # e.g.  Rscript benchmarks/hls-median-composite.R auto B04 B03 B02
+#       GARRY_BENCH_ENGINE=cptkirk Rscript benchmarks/hls-median-composite.R
 #
 # For a back-to-back garry-vs-ODC run (timings + a band-by-band output check),
 # use benchmarks/compare.sh (REPS=3 benchmarks/compare.sh).
@@ -31,6 +33,12 @@ args <- commandArgs(trailingOnly = TRUE)
 daemons_arg <- if (length(args) >= 1) args[[1]] else "auto"
 bands <- if (length(args) >= 2) args[-1] else c("B04", "B03", "B02")
 device <- Sys.getenv("GARRY_DEVICE", "cpu") # "cpu" or "cuda" (GPU compute)
+# Read engine: "gdal" -> lazy_dataset (GTI + GDAL warp-on-read, the default);
+# "cptkirk" -> lazy_cog (same dataset, read through cptkirk). HLS assets are
+# single-band-per-file, so cptkirk has no intra-file band concurrency to exploit
+# here -- this branch measures exactly that (the routing thesis: cptkirk earns
+# its place on multi-band files, not single-band time series).
+engine <- Sys.getenv("GARRY_BENCH_ENGINE", "gdal")
 
 # No GDAL/network preamble: garry_daemons() (below) applies the remote-COG GDAL
 # config (HTTP/2 multiplex, the odc-stac retry cadence, a capped block cache,
@@ -90,7 +98,8 @@ t_all <- system.time({
   # per tile), all on one shared IR graph. Value bands read -9999 -> NaN,
   # Fmask reads 255 -> NaN. lazy_dataset() does the per-asset GTI index +
   # single metadata probe that the manual scaffolding used to.
-  ds <- lazy_dataset(
+  reader <- if (identical(engine, "cptkirk")) lazy_cog else lazy_dataset
+  ds <- reader(
     src, grid = target, assets = bands, mask_asset = "Fmask",
     granularity = "day", sort_field = "datetime",
     nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
@@ -117,7 +126,8 @@ t_all <- system.time({
           distributed = TRUE)
 })
 cat(sprintf(
-  "processing time (garry, %s, daemons %s): %.2fs\n",
+  "processing time (garry, %s engine, %s, daemons %s): %.2fs\n",
+  engine,
   paste(bands, collapse = "+"),
   daemons_arg,
   t_all[["elapsed"]]

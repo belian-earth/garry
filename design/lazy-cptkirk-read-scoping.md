@@ -153,6 +153,27 @@ coalescing key is therefore the source SET, not a single file.
   to the mirai daemons; `/dev/shm` is a real shared path they can read, matching
   `prepare_fetch`. Validated by a distributed-daemon read test. Optional native-i8
   upload (vs the f32 read of the VRT) remains a later micro-opt.
+- **B4 (BUILT) -- time-series form, mirrors `lazy_dataset`**: `lazy_cog` now
+  dispatches on its first argument. A `stac_sources()`-style dataframe builds the
+  same `LazyDataset` shape as `lazy_dataset` (a band per named asset, a per-slice
+  CK: source over that asset-slice's items), so `mask()`/`reduce_over()`/
+  `collect()` work unchanged and `.ck_resolve` coalesces per asset-slice. A
+  character path stays the single-COG form. This makes `lazy_cog` a drop-in
+  engine swap for `lazy_dataset` (the HLS benchmark's cptkirk branch is one line).
+  cptkirk cannot read a VRT (async-tiff rejects the XML magic bytes) -- so
+  single-band assets are read per-file, not stacked; the dataset structure holds
+  the band/time axes, no physical multi-band stacking needed. Reads at the
+  source's NATIVE dtype (mirroring `lazy_dataset`): integer + nodata promotes to
+  f32 via D8, which real HLS/AEF always trigger (a no-nodata integer source would
+  median on integers, exactly as `lazy_dataset` does).
+
+### Benchmarks
+- `benchmarks/aef-read.R`: standalone `lazy_cog` (cptkirk 64-band read + fused
+  dequant) vs one GDAL multi-band warp + anvl dequant -- the decisive multi-band
+  number.
+- `benchmarks/hls-median-composite.R`: `GARRY_BENCH_ENGINE=cptkirk` swaps
+  `lazy_dataset` -> `lazy_cog`. HLS is single-band-per-asset, so this measures the
+  routing thesis (cptkirk has no intra-file lever there).
 
 ### Why the pre-pass, not `prepare_cptkirk` in the scheduler
 

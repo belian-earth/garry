@@ -144,3 +144,60 @@ test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3
   expect_equal(unname(got[1, 1, 1]), ref(-40), tolerance = 1e-4)
   expect_equal(unname(got[64, 64, 3]), ref(90), tolerance = 1e-4)
 })
+
+# A tiled single-band COG with a nodata sentinel, for time-series fixtures. Real
+# HLS/AEF assets always carry nodata, which the D8 promotion needs to read
+# integer values as f32 (so temporal medians are exact, not integer-truncated).
+.lc_scog <- function(f, code, nd = -32768L, dtype = "Int16") {
+  d <- gdalraster::create("GTiff", f, 64, 64, 1, dtype, return_obj = TRUE,
+                          options = c("TILED=YES", "BLOCKXSIZE=64",
+                                      "BLOCKYSIZE=64"))
+  d$setGeoTransform(c(0, 10, 0, 640, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  d$setNoDataValue(1, nd)
+  d$write(1, 0, 0, 64, 64, rep(code, 64 * 64))
+  d$close()
+  f
+}
+
+test_that("lazy_cog (dataframe form) mirrors lazy_dataset: time-series median", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("cptkirk")
+  dir <- withr::local_tempdir("lcser")
+  src <- data.frame(
+    location = c(.lc_scog(file.path(dir, "a1.tif"), 10L),
+                 .lc_scog(file.path(dir, "a2.tif"), 20L),
+                 .lc_scog(file.path(dir, "a3.tif"), 30L),
+                 .lc_scog(file.path(dir, "b1.tif"), 50L),
+                 .lc_scog(file.path(dir, "b2.tif"), 70L),
+                 .lc_scog(file.path(dir, "b3.tif"), 90L)),
+    datetime = rep(c("2023-01-01", "2023-02-01", "2023-03-01"), 2),
+    asset = rep(c("A", "B"), each = 3), stringsAsFactors = FALSE)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 640, 640),
+                    dims = c(16L, 16L), dtype = "f32")
+  ds <- lazy_cog(src, grid, assets = c("A", "B"), granularity = "month")
+  expect_true(S7::S7_inherits(ds, LazyDataset))
+  expect_named(ds@bands, c("A", "B"))
+  expect_equal(vapply(ds@bands, length, 1L), c(A = 3L, B = 3L))
+
+  got <- collect(reduce_over(ds, "median", "t", nan_rm = TRUE), distributed = FALSE)
+  expect_equal(dim(got), c(16L, 16L, 2L))
+  expect_equal(unname(got[1, 1, 1]), 20)                   # median(10, 20, 30)
+  expect_equal(unname(got[1, 1, 2]), 70)                   # median(50, 70, 90)
+})
+
+test_that("lazy_cog (dataframe form) carries a mask asset for mask()", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("cptkirk")
+  dir <- withr::local_tempdir("lcmask")
+  src <- data.frame(
+    location = c(.lc_scog(file.path(dir, "v.tif"), 100L),
+                 .lc_scog(file.path(dir, "q.tif"), 1L, nd = 255L, dtype = "Byte")),
+    datetime = "2023-01-01", asset = c("V", "Q"), stringsAsFactors = FALSE)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 640, 640),
+                    dims = c(16L, 16L), dtype = "f32")
+  masked <- mask(lazy_cog(src, grid, assets = "V", mask_asset = "Q"),
+                 from = "Q", where = qa_bits(0L)) |>
+    reduce_over("median", "t", nan_rm = TRUE)
+  expect_true(all(is.na(collect(masked, distributed = FALSE))))  # Q bit0 set -> masked
+})
