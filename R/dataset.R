@@ -96,7 +96,8 @@ LazyDataset <- S7::new_class(
 #' IR graph, so a mask defined once (see `mask()`) is computed once and dedup'd
 #' across bands, and `collect()` plans the whole dataset in one pass.
 #'
-#' @param sources A `stac_sources()` table.
+#' @param sources A STAC `doc_items` (from [stac_query()], optionally filtered)
+#'   or a `stac_sources()` table.
 #' @param grid Target `GridSpec` for every band.
 #' @param assets Character vector of value assets to load.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
@@ -119,6 +120,12 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
   if (length(assets) < 1L)
     cli::cli_abort("{.arg assets} must name at least one asset.")
   all_assets <- unique(c(assets, mask_asset))
+  # Accept a STAC `doc_items` directly (the discovery/filter object), converting
+  # it to the sources table internally -- so the STAC pipeline stays on the rstac
+  # object end to end. A plain data.frame (non-STAC / manual sources) passes
+  # through unchanged.
+  if (inherits(sources, "doc_items"))
+    sources <- stac_sources(sources, assets = all_assets)
   sources <- stac_time_slices(sources, granularity, lon = lon)
 
   resolve_nodata <- function(a, meta_nodata) {

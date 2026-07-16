@@ -75,9 +75,10 @@ NULL
 #' [dequantize_aef()], scaling, ...) go downstream as maps
 #' (`lazy_map(ds, fn = ...)`), which garry fuses onto the read at `collect()`.
 #'
-#' @param sources A `stac_sources()`-style dataframe for the time-series form, or
-#'   a COG path / character vector of tiles (remote `http(s)://` or `/vsicurl/`)
-#'   for the single form.
+#' @param sources A STAC `doc_items` (from [stac_query()], optionally filtered)
+#'   or a `stac_sources()`-style dataframe for the time-series form; or a COG path
+#'   / character vector of tiles (remote `http(s)://` or `/vsicurl/`) for the
+#'   single form.
 #' @param grid Target `GridSpec`.
 #' @param assets Asset names to read (dataframe form; a band each).
 #' @param bands Source band indices (single-COG form; default: all).
@@ -101,6 +102,11 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   rlang::check_installed("cptkirk",
                          reason = "for lazy_cog(), the cptkirk read engine.")
   .assert_class(grid, GridSpec, "GridSpec")
+  # A STAC `doc_items` (post query/filter) becomes the sources table internally;
+  # a data.frame is a manual/non-STAC time series; a character path is a single
+  # (multi-band) COG or a tile mosaic.
+  if (inherits(sources, "doc_items"))
+    sources <- stac_sources(sources, assets = unique(c(assets, mask_asset)))
   if (is.data.frame(sources))
     return(.lazy_cog_series(sources, grid, assets, mask_asset, granularity,
                             sort_field, nodata, resampling, lon))

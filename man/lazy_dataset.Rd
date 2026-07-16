@@ -16,7 +16,8 @@ lazy_dataset(
 )
 }
 \arguments{
-\item{sources}{A \code{stac_sources()} table.}
+\item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally filtered)
+or a \code{stac_sources()} table.}
 
 \item{grid}{Target \code{GridSpec} for every band.}
 

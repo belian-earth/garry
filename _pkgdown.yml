@@ -18,6 +18,8 @@ reference:
   - stac_sign_mpc
   - stac_sources
   - stac_filter_cloud
+  - stac_filter_coverage
+  - stac_filter_orbit
   - stac_drop_duplicates
   - stac_rename_assets
   - stac_merge

@@ -19,9 +19,10 @@ lazy_cog(
 )
 }
 \arguments{
-\item{sources}{A \code{stac_sources()}-style dataframe for the time-series form, or
-a COG path / character vector of tiles (remote \verb{http(s)://} or \verb{/vsicurl/})
-for the single form.}
+\item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally filtered)
+or a \code{stac_sources()}-style dataframe for the time-series form; or a COG path
+/ character vector of tiles (remote \verb{http(s)://} or \verb{/vsicurl/}) for the
+single form.}
 
 \item{grid}{Target \code{GridSpec}.}
 

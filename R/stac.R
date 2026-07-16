@@ -187,9 +187,66 @@ stac_sources <- function(items, assets = NULL) {
 #' @return The filtered table.
 #' @export
 stac_filter_cloud <- function(sources, max_cloud_cover) {
-  keep <- is.na(sources$cloud_cover) |
-    sources$cloud_cover < max_cloud_cover
+  if (inherits(sources, "doc_items")) {
+    .require_rstac()
+    return(rstac::items_filter(sources, filter_fn = function(x) {
+      cc <- x$properties[["eo:cloud_cover"]]
+      is.null(cc) || cc < max_cloud_cover
+    }))
+  }
+  keep <- is.na(sources$cloud_cover) | sources$cloud_cover < max_cloud_cover
   sources[keep, , drop = FALSE]
+}
+
+#' Drop STAC items (or sources) that barely overlap an area of interest.
+#'
+#' Keeps items whose bounding box covers at least `min_coverage` of the AOI
+#' `bbox` (fraction of the AOI area, from a planar bbox overlap -- a fast proxy,
+#' not geodesic). Works on a STAC `doc_items` or a `stac_sources()` table.
+#'
+#' @param sources A STAC `doc_items` or a `stac_sources()` data frame.
+#' @param bbox AOI bounding box `c(xmin, ymin, xmax, ymax)` in the item CRS
+#'   (STAC bboxes are lon/lat).
+#' @param min_coverage Minimum AOI-overlap fraction to keep an item (0-1).
+#' @return The filtered `doc_items` / data frame.
+#' @export
+stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
+  stopifnot(length(bbox) == 4L, min_coverage >= 0, min_coverage <= 1)
+  aoi <- (bbox[[3L]] - bbox[[1L]]) * (bbox[[4L]] - bbox[[2L]])
+  frac <- function(xmin, ymin, xmax, ymax) {
+    ix <- pmax(0, pmin(xmax, bbox[[3L]]) - pmax(xmin, bbox[[1L]]))
+    iy <- pmax(0, pmin(ymax, bbox[[4L]]) - pmax(ymin, bbox[[2L]]))
+    (ix * iy) / aoi
+  }
+  if (inherits(sources, "doc_items")) {
+    .require_rstac()
+    return(rstac::items_filter(sources, filter_fn = function(x)
+      frac(x$bbox[[1L]], x$bbox[[2L]], x$bbox[[3L]], x$bbox[[4L]]) >= min_coverage))
+  }
+  keep <- frac(sources$xmin, sources$ymin, sources$xmax, sources$ymax) >= min_coverage
+  sources[keep, , drop = FALSE]
+}
+
+#' Filter STAC items by orbit state (Sentinel-1 ascending / descending).
+#'
+#' Keeps items whose `sat:orbit_state` is in `orbit_state`. STAC-only: the
+#' orbit state is not carried in the `stac_sources()` table, so pass a
+#' `doc_items` (filter before building the dataset).
+#'
+#' @param sources A STAC `doc_items`.
+#' @param orbit_state One or more of `"descending"`, `"ascending"`.
+#' @return The filtered `doc_items`.
+#' @export
+stac_filter_orbit <- function(sources,
+                              orbit_state = c("descending", "ascending")) {
+  orbit_state <- rlang::arg_match(orbit_state, multiple = TRUE)
+  if (!inherits(sources, "doc_items"))
+    cli::cli_abort(c(
+      "{.fn stac_filter_orbit} needs a STAC {.cls doc_items}.",
+      "i" = "The orbit state is not in the {.fn stac_sources} table; filter before converting."))
+  .require_rstac()
+  rstac::items_filter(sources, filter_fn = function(x)
+    isTRUE(x$properties[["sat:orbit_state"]] %in% orbit_state))
 }
 
 #' Drop duplicate acquisitions (identical footprint and datetime).
@@ -202,6 +259,14 @@ stac_filter_cloud <- function(sources, max_cloud_cover) {
 #' @return The deduplicated table.
 #' @export
 stac_drop_duplicates <- function(sources) {
+  if (inherits(sources, "doc_items")) {
+    .require_rstac()
+    keys <- vapply(sources$features, function(x) paste(
+      x$properties$platform %||% "", x$properties$datetime %||% "",
+      x$properties[["sat:orbit_state"]] %||% "",
+      paste(round(x$bbox, 4L), collapse = ",")), character(1))
+    return(rstac::items_select(sources, which(!duplicated(keys))))
+  }
   key <- paste(sources$asset, sources$datetime,
                round(sources$xmin, 4), round(sources$ymin, 4),
                round(sources$xmax, 4), round(sources$ymax, 4))
