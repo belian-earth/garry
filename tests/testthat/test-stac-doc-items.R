@@ -39,6 +39,31 @@ test_that("cloud/coverage/orbit filters compose on a doc_items", {
   expect_length(chained$features, 2L)
 })
 
+test_that("stac_filter_assets keeps only named assets (doc_items + table)", {
+  skip_if_not_installed("rstac")
+  its <- .di_items(list(
+    .di_feat("a", 5, c(0, 0, 10, 10), "descending",
+      list(B04 = "a4.tif", B03 = "a3.tif", Fmask = "af.tif", thumb = "at.png")),
+    .di_feat("b", 5, c(0, 0, 10, 10), "descending",
+      list(B04 = "b4.tif", thumb = "bt.png"))))     # b lacks B03/Fmask
+  kept <- stac_filter_assets(its, c("B04", "B03", "Fmask"))
+  expect_setequal(names(kept$features[[1L]]$assets), c("B04", "B03", "Fmask"))
+  expect_setequal(names(kept$features[[2L]]$assets), "B04")   # thumb dropped
+
+  # an item with none of the requested assets is dropped entirely, and an
+  # asset absent from every item warns
+  only_thumb <- .di_items(list(
+    .di_feat("c", 5, c(0, 0, 10, 10), "descending", list(thumb = "c.png"))))
+  expect_warning(dropped <- stac_filter_assets(only_thumb, "B04"), "not present")
+  expect_length(dropped$features, 0L)
+
+  # sources-table branch
+  df <- data.frame(asset = c("B04", "B03", "thumb"), datetime = "d",
+                   location = "x")
+  expect_setequal(stac_filter_assets(df, c("B04", "B03"))$asset,
+                  c("B04", "B03"))
+})
+
 test_that("stac_rename_assets + stac_merge harmonise across doc_items", {
   skip_if_not_installed("rstac")
   l30 <- .di_items(list(.di_feat("l1", 5, c(0, 0, 10, 10), "descending",

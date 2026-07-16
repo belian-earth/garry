@@ -249,6 +249,37 @@ stac_filter_orbit <- function(sources,
     isTRUE(x$properties[["sat:orbit_state"]] %in% orbit_state))
 }
 
+#' Keep only the named assets in a STAC item collection (or sources table).
+#'
+#' Drops every other asset from each item -- fewer assets to carry through the
+#' pipeline, and fewer to sign. Apply it BEFORE [stac_sign_mpc()] so only the
+#' assets you keep get a token (MPC returns every band plus thumbnails and
+#' rendered previews). Items left with none of the requested assets are dropped.
+#' Polymorphic: a STAC `doc_items` or a `stac_sources()` table.
+#'
+#' @param sources A STAC `doc_items` or a `stac_sources()` data frame.
+#' @param assets Asset names to keep.
+#' @return The filtered `doc_items` / data frame.
+#' @export
+stac_filter_assets <- function(sources, assets) {
+  if (inherits(sources, "doc_items")) {
+    .require_rstac()
+    present <- unique(unlist(lapply(sources$features,
+                                    function(ft) names(ft$assets))))
+    miss <- setdiff(assets, present)
+    if (length(miss))
+      cli::cli_warn("asset{?s} not present in any item (ignored): {.val {miss}}")
+    sources$features <- Filter(
+      function(ft) length(ft$assets) > 0L,
+      lapply(sources$features, function(ft) {
+        ft$assets <- ft$assets[names(ft$assets) %in% assets]
+        ft
+      }))
+    return(sources)
+  }
+  sources[sources$asset %in% assets, , drop = FALSE]
+}
+
 #' Drop duplicate acquisitions (identical footprint and datetime).
 #'
 #' Duplicate items are a known Planetary Computer quirk; equality uses

@@ -17,6 +17,7 @@ reference:
   - stac_query
   - stac_sign_mpc
   - stac_sources
+  - stac_filter_assets
   - stac_filter_cloud
   - stac_filter_coverage
   - stac_filter_orbit
