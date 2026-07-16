@@ -44,6 +44,7 @@ VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
 Collate: 
+    'band_mlp.R'
     'grid.R'
     'chunk_grid.R'
     'options.R'

@@ -56,6 +56,7 @@ reference:
   - focal_kernel
   - reduce_over
   - band_project
+  - mlp_project
   - scan_over
   - align
 

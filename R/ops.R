@@ -498,6 +498,27 @@ g_rep_t <- function(x, n) {
   array(rep(as.vector(x), each = n), c(n, d))
 }
 
+# -- Pixel-matrix bridge (band-collapsing linear algebra) ----------------------
+
+# Flatten a (band, y, x) chunk to a (band, npix) matrix and back. The
+# pixel ordering is backend-defined (anvl reshapes row-major, base R
+# column-major) so these are ONLY valid as an inverse pair around
+# per-pixel math: matmul mixes bands within a pixel column, never
+# across pixels, so the ordering cancels.
+.g_flatten_yx <- function(x) {
+  if (.g_traced(x)) {
+    sh <- .g_shape(x)
+    return(anvl::nv_reshape(x, c(sh[[1L]], prod(sh[-1L]))))
+  }
+  d <- dim(x)
+  matrix(x, nrow = d[[1L]])
+}
+
+.g_unflatten_yx <- function(v, ny, nx) {
+  if (.g_traced(v)) return(anvl::nv_reshape(v, c(as.integer(ny), as.integer(nx))))
+  matrix(as.vector(v), ny, nx)
+}
+
 # -- Reductions ---------------------------------------------------------------
 
 # Shared shape handling: `dims` are integer array margins to REDUCE
