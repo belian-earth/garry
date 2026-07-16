@@ -8,18 +8,15 @@
   # fail to open "GTI:" sources otherwise. Fires on any load (incl. `::` use).
   vn <- tryCatch(gdal_version_num(), error = function(e) NA_integer_)
   if (!is.na(vn) && vn < 3090000L) {
-    cli::cli_inform(
-      c(
-        "x" = "garry needs GDAL >= 3.9 for the GTI mosaic driver behind 
-        lazy_dataset()/lazy_cog().",
-        "i" = "found {gdal_version_str()}"
-      )
-      # call. = FALSE
-    )
+    cli::cli_inform(c(
+      "x" = "garry needs GDAL >= 3.9 for the GTI mosaic driver behind {.fn lazy_dataset} / {.fn lazy_cog}.",
+      "i" = "Found {gdal_version_str()}; those readers will fail."
+    ))
   }
 }
 
 .onAttach <- function(libname, pkgname) {
   msg <- tryCatch(gdal_version_str(), error = function(e) NULL)
-  if (!is.null(msg)) packageStartupMessage("garry: ", msg)
+  # cli styling, but through packageStartupMessage so suppressPackageStartupMessages() works.
+  if (!is.null(msg)) packageStartupMessage(cli::format_inline("{.pkg garry}: {msg}"))
 }
