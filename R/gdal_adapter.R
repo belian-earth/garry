@@ -187,6 +187,26 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
   vrt
 }
 
+#' GDAL runtime version as an integer `GDAL_VERSION_NUM` (adapter).
+#'
+#' `MAJOR*1000000 + MINOR*10000 + REV*100`, so 3.9.0 is `3090000`. `NA` if it
+#' cannot be parsed. garry needs >= 3.9 for the GTI (GDAL Tile Index) mosaic
+#' driver that backs `lazy_dataset()`.
+#'
+#' @return Integer version number, or `NA_integer_`.
+#' @keywords internal
+#' @export
+gdal_version_num <- function() {
+  n <- suppressWarnings(as.integer(gdalraster::gdal_version()[[2L]]))
+  if (length(n) != 1L || is.na(n)) NA_integer_ else n
+}
+
+#' GDAL runtime version as a human string (adapter).
+#' @return Character, e.g. `"GDAL 3.9.0, released ..."`.
+#' @keywords internal
+#' @export
+gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
+
 #' Mosaic already-grid-aligned rasters into a VRT (adapter).
 #'
 #' `gdalbuildvrt` of same-grid single-band rasters: overlapping pixels take the

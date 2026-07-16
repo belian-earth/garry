@@ -8,6 +8,7 @@ Description: Experimental. Lazy raster arrays with CRS/transform-aware
     anvl (XLA). Compute graph IR is R-native; GDAL handles IO via
     gdalraster; grid math via vaster.
 License: MIT + file LICENSE
+SystemRequirements: GDAL (>= 3.9, for the GTI mosaic driver)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:
