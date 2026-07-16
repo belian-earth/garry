@@ -293,6 +293,60 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
 }
 
+#' A bilateral (edge-preserving) focal body for [focal()].
+#'
+#' Returns a focal `fn(shifts)` computing the classic bilateral filter:
+#' each output pixel is the window mean weighted by a spatial Gaussian
+#' (distance from the centre, `sigma_d`) times a range Gaussian
+#' (difference from the centre VALUE, `sigma_r`), so smoothing stays
+#' within regions of similar value and stops at sharp transitions. Use
+#' as `focal(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
+#'
+#' Semantics match `rustyfilters::rf_bilateral(edge = "shrink",
+#' na_policy = "omit")`: a NaN centre stays NaN; NaN neighbours (and the
+#' NaN halo garry pads outside the raster) drop out of the weighted
+#' mean. `sigma_r` must be supplied: the parameter-free per-band default
+#' (the band's own sd) is a whole-raster statistic, so compute it in a
+#' separate reduce pass (or reuse fitted values) and pass it in.
+#'
+#' @param sigma_r Range Gaussian standard deviation (data units).
+#' @param sigma_d Spatial Gaussian standard deviation in pixels
+#'   (default 1, hutan's `(window - 1) / 2` for a 3x3 window).
+#' @param radius Window radius the body is built for; must match the
+#'   `radius` passed to [focal()] (default 1 = 3x3).
+#' @return A focal body `fn(shifts)` for [focal()].
+#' @export
+bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
+  for (v in c(sigma_r = sigma_r, sigma_d = sigma_d))
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0)
+      cli::cli_abort("{.arg sigma_r} and {.arg sigma_d} must be finite positive scalars")
+  r <- as.integer(radius)
+  # spatial weights in focal()'s shift order (expand.grid(dx, dy) row-major)
+  off <- expand.grid(dx = -r:r, dy = -r:r)
+  sw <- exp(-(off$dx^2 + off$dy^2) / (2 * sigma_d^2))
+  inv2sr2 <- 1 / (2 * sigma_r^2)
+  force(inv2sr2)
+  function(shifts) {
+    if (length(shifts) != length(sw))
+      cli::cli_abort("bilateral_focal(radius = {r}) got {length(shifts)} shifts; pass the same radius to focal()")
+    centre <- shifts[[(length(shifts) + 1L) %/% 2L]]
+    num <- 0
+    den <- 0
+    for (s in seq_along(shifts)) {
+      v <- shifts[[s]]
+      w <- sw[[s]] * exp(-(v - centre)^2 * inv2sr2)
+      ok <- !g_is_nodata(v)
+      wv <- g_ifelse(ok, w, 0)
+      num <- num + wv * g_ifelse(ok, v, 0)
+      den <- den + wv
+    }
+    # NaN centre: the range weight is NaN at every valid neighbour, so
+    # num/den is NaN, matching rf_bilateral. A valid centre always
+    # contributes weight sw > 0, so den > 0 there.
+    num / den
+  }
+}
+
 #' Reduction over named dims.
 #'
 #' `op` is a reduction name (see `.reduce_ops`), not a function: the

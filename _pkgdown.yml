@@ -54,6 +54,7 @@ reference:
   - lazy_stack
   - focal
   - focal_kernel
+  - bilateral_focal
   - reduce_over
   - band_project
   - mlp_project
