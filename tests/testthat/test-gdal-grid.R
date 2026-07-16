@@ -19,6 +19,22 @@ test_that("gdal_grid_spec matches terra metadata (f32 fixture)", {
   expect_length(meta$nodata, 0L)
 })
 
+test_that("gdal_grid_spec normalises a south-up geotransform to north-up", {
+  # positive y pixel size (origin at the bottom, y grows with row index), as
+  # some AEF embedding COGs store. The footprint is the same as north-up.
+  f <- tempfile(fileext = ".tif")
+  d <- gdalraster::create("GTiff", f, 64, 32, 1, "Int16", return_obj = TRUE)
+  d$setGeoTransform(c(500000, 10, 0, 8525440, 0, 10))   # gt[6] = +10, south-up
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+  d$close()
+
+  g <- gdal_grid_spec(f)$grid
+  expect_equal(unname(c(xmin(g), ymin(g), xmax(g), ymax(g))),
+               c(500000, 8525440, 500640, 8525760))   # ymin < ymax, valid
+  expect_equal(res(g), c(10, 10))                      # positive, north-up
+  expect_equal(g@transform[6], -10)                    # transform flipped up
+})
+
 test_that("gdal_grid_spec reads dtype, nodata, and block of i16 fixture", {
   f <- fixture_i16_nodata()
   meta <- gdal_grid_spec(f)

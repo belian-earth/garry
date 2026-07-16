@@ -106,13 +106,22 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 
   block <- as.integer(ds$getBlockSize(band))   # (x, y)
 
+  # Normalise to garry's north-up convention (D13). Most rasters are north-up
+  # (gt[6] < 0), but some COGs (e.g. AEF embeddings) carry a positive y pixel
+  # size (south-up); the footprint is identical, so take the corner min/max for
+  # the extent and rebuild a north-up transform. Axis-aligned only: a rotated
+  # geotransform cannot be an analysis grid.
+  if (gt[3L] != 0 || gt[5L] != 0)
+    cli::cli_abort("{.fn gdal_grid_spec}: rotated geotransform is not a valid analysis grid.")
+  x1 <- gt[1L] + nx * gt[2L]
+  y1 <- gt[4L] + ny * gt[6L]
+  xmin <- min(gt[1L], x1); xmax <- max(gt[1L], x1)
+  ymin <- min(gt[4L], y1); ymax <- max(gt[4L], y1)
+
   grid <- GridSpec(
     crs       = ds$getProjection(),
-    transform = gt,
-    extent    = c(gt[1L],                 # xmin
-                  gt[4L] + ny * gt[6L],   # ymin
-                  gt[1L] + nx * gt[2L],   # xmax
-                  gt[4L]),                # ymax
+    transform = c(xmin, abs(gt[2L]), 0, ymax, 0, -abs(gt[6L])),
+    extent    = c(xmin, ymin, xmax, ymax),
     dims      = c(x = nx, y = ny),
     dtype     = dtype
   )
