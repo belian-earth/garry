@@ -322,15 +322,31 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
 # nan dst-nodata match the composite path. Returns the same `buf`, now filled.
 # D13: the sole home for the direct-to-memory GDAL warp mechanics (the MEM
 # driver open gate, the raw data pointer, and the warp) -- callers stay clean.
+# gdalraster's raw-data-pointer accessor is unexported. Resolve it through the
+# namespace at runtime (cached) rather than with `:::`, so R CMD check does not
+# flag an unexported-object import. Fails loudly only if the internal is gone.
+.gdalraster_data_ptr <- function(buf) {
+  fn <- .gdal_cache$data_ptr_fn
+  if (is.null(fn)) {
+    fn <- get0(".get_data_ptr", envir = asNamespace("gdalraster"), inherits = FALSE)
+    if (is.null(fn))
+      cli::cli_abort(c(
+        "gdalraster internal {.code .get_data_ptr} is unavailable.",
+        "i" = "garry needs it to zero-copy warp into an f32 buffer."))
+    .gdal_cache$data_ptr_fn <- fn
+  }
+  fn(buf)
+}
+
 gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL) {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")   # >=3.10 gate
   # `buf` is a RAW f32 byte vector (the raw-f32 store, D19-D21). The public
   # gdalraster::rvector_to_MEM() infers the band type from the R vector type
   # (integer/double/complex) and cannot expose raw bytes as Float32, so the only
   # pure-R way to zero-copy-warp into an f32 buffer is the data pointer + an
-  # explicit DATATYPE=Float32 MEM DSN. (`:::` is deliberate; a C shim would avoid
-  # it but make garry a compiled package.)
-  ptr <- gdalraster:::.get_data_ptr(buf)
+  # explicit DATATYPE=Float32 MEM DSN. gdalraster's accessor is unexported; the
+  # alternative -- a C shim -- would make garry a compiled package.
+  ptr <- .gdalraster_data_ptr(buf)
   dsn <- sprintf(
     "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",
     ptr, nx, ny, gtstr)

@@ -319,9 +319,12 @@ NULL
   list(physical = as.integer(phys), logical = as.integer(logi))
 }
 
-# Available RAM in MB from /proc/meminfo (Linux); NA where it can't be read.
+# Available RAM in MB from /proc/meminfo (Linux); NA where it can't be read
+# (e.g. macOS/Windows have no /proc -- checked first so file() does not warn).
 .garry_ram_avail_mb <- function() {
-  mi <- tryCatch(readLines("/proc/meminfo", n = 40L), error = function(e) character(0))
+  if (!file.exists("/proc/meminfo")) return(NA_real_)
+  mi <- tryCatch(suppressWarnings(readLines("/proc/meminfo", n = 40L)),
+                 error = function(e) character(0))
   ln <- grep("^MemAvailable:", mi, value = TRUE)
   if (!length(ln)) return(NA_real_)
   kb <- suppressWarnings(as.numeric(sub("[^0-9]*([0-9]+).*", "\\1", ln)))
