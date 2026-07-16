@@ -30,6 +30,7 @@ Suggests:
     anvl,
     cptkirk,
     httr2,
+    KFAS,
     knitr,
     mirai,
     mori,
@@ -66,4 +67,5 @@ Collate:
     'grid_from.R'
     'lazy_cog.R'
     'preview.R'
+    'scan_kalman.R'
     'zzz.R'

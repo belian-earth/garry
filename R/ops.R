@@ -422,6 +422,62 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
   list(carry = carry, out = bufs)
 }
 
+#' Static range slice along dim 1 (the scanned axis).
+#'
+#' `x[from:to, ...]` keeping the leading axis: the building block for
+#' scan bodies that pair a series with its own shift (e.g. an RTS
+#' smoother reading the NEXT step's prediction).
+#'
+#' @param x Array with the scanned axis first.
+#' @param from,to 1-based static bounds (inclusive).
+#' @return Array with dim 1 of length `to - from + 1`.
+#' @export
+g_slice_t <- function(x, from, to) {
+  from <- as.integer(from); to <- as.integer(to)
+  if (.g_traced(x)) {
+    sh <- .g_shape(x)
+    return(anvl::nv_static_slice(
+      x,
+      start_indices = c(from, rep(1L, length(sh) - 1L)),
+      limit_indices = c(to, sh[-1L]),
+      strides = rep(1L, length(sh))))
+  }
+  d <- dim(x)
+  idx <- rep(list(quote(expr = )), length(d) - 1L)
+  do.call(`[`, c(list(x, from:to), idx, list(drop = FALSE)))
+}
+
+#' Concatenate along dim 1 (the scanned axis).
+#'
+#' Matrices are treated as single (1, y, x) slices, so a scan's stacked
+#' buffers and a final plane concatenate directly.
+#'
+#' @param xs List of arrays: (k, y, x) cubes and/or (y, x) matrices.
+#' @return Array with dim 1 = total slice count.
+#' @export
+g_concat_t <- function(xs) {
+  if (.g_traced(xs[[1L]])) {
+    ex <- lapply(xs, function(v) {
+      if (length(.g_shape(v)) == 2L) anvl::nv_unsqueeze(v, 1L) else v
+    })
+    return(do.call(anvl::nv_concatenate, c(ex, list(dimension = 1L))))
+  }
+  ex <- lapply(xs, function(v) {
+    d <- dim(v)
+    if (length(d) == 2L) array(v, c(1L, d)) else v
+  })
+  n <- sum(vapply(ex, function(v) dim(v)[[1L]], integer(1)))
+  d1 <- dim(ex[[1L]])
+  out <- array(NA_real_, c(n, d1[2L], d1[3L]))
+  at <- 0L
+  for (v in ex) {
+    k <- dim(v)[[1L]]
+    out[(at + 1L):(at + k), , ] <- v
+    at <- at + k
+  }
+  out
+}
+
 # -- Reductions ---------------------------------------------------------------
 
 # Shared shape handling: `dims` are integer array margins to REDUCE
