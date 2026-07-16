@@ -39,6 +39,23 @@ test_that("cloud/coverage/orbit filters compose on a doc_items", {
   expect_length(chained$features, 2L)
 })
 
+test_that("stac_rename_assets + stac_merge harmonise across doc_items", {
+  skip_if_not_installed("rstac")
+  l30 <- .di_items(list(.di_feat("l1", 5, c(0, 0, 10, 10), "descending",
+    list(B04 = "l_B04.tif", B05 = "l_B05.tif", Fmask = "l_Fmask.tif"))))
+  s30 <- .di_items(list(.di_feat("s1", 5, c(0, 0, 10, 10), "ascending",
+    list(B04 = "s_B04.tif", B08 = "s_B08.tif", Fmask = "s_Fmask.tif"))))
+  l30r <- stac_rename_assets(l30, c(B04 = "R", B05 = "N2", Fmask = "Fmask"))
+  s30r <- stac_rename_assets(s30, c(B04 = "R", B08 = "N", Fmask = "Fmask"))
+  expect_setequal(names(l30r$features[[1L]]$assets), c("R", "N2", "Fmask"))
+  expect_setequal(names(s30r$features[[1L]]$assets), c("R", "N", "Fmask"))
+
+  merged <- stac_merge(l30r, s30r)
+  expect_length(merged$features, 2L)
+  bands <- unique(unlist(lapply(merged$features, function(f) names(f$assets))))
+  expect_setequal(bands, c("R", "N2", "N", "Fmask"))    # the union, ragged bands
+})
+
 test_that("stac_filter_coverage also works on a sources data frame", {
   src <- data.frame(asset = "B04", datetime = "d", location = "x",
                     xmin = c(0, 9), ymin = c(0, 9),

@@ -340,9 +340,29 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
 stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
   if (!is.character(mapping) || is.null(names(mapping)) || anyNA(names(mapping)))
     cli::cli_abort("{.arg mapping} must be a named character vector {.code c(old = new)}.")
-  missing_keys <- setdiff(names(mapping), sources$asset)
-  if (length(missing_keys))
-    cli::cli_warn("mapping name{?s} not present in {.arg sources} (ignored): {.val {missing_keys}}")
+  warn_missing <- function(present) {
+    m <- setdiff(names(mapping), present)
+    if (length(m))
+      cli::cli_warn("mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}")
+  }
+  if (inherits(sources, "doc_items")) {
+    .require_rstac()
+    warn_missing(unique(unlist(lapply(sources$features,
+                                      function(ft) names(ft$assets)))))
+    sources$features <- lapply(sources$features, function(ft) {
+      an  <- names(ft$assets)
+      hit <- match(an, names(mapping))
+      if (isTRUE(drop_unmapped)) {
+        keep <- !is.na(hit); ft$assets <- ft$assets[keep]
+        an <- an[keep]; hit <- hit[keep]
+      }
+      if (length(ft$assets))
+        names(ft$assets) <- ifelse(is.na(hit), an, unname(mapping)[hit])
+      ft
+    })
+    return(sources)
+  }
+  warn_missing(sources$asset)
   if (isTRUE(drop_unmapped))
     sources <- sources[sources$asset %in% names(mapping), , drop = FALSE]
   hit <- match(sources$asset, names(mapping))
@@ -364,9 +384,21 @@ stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
 #' @export
 stac_merge <- function(...) {
   tabs <- list(...)
-  if (length(tabs) == 1L && is.data.frame(tabs[[1L]]) == FALSE && is.list(tabs[[1L]]))
+  # unwrap a single list-of-tables arg (but not a single doc_items, itself a list)
+  if (length(tabs) == 1L && !is.data.frame(tabs[[1L]]) &&
+      is.list(tabs[[1L]]) && !inherits(tabs[[1L]], "doc_items"))
     tabs <- tabs[[1L]]
-  tabs <- Filter(function(t) !is.null(t) && nrow(t) > 0L, tabs)
+  tabs <- Filter(Negate(is.null), tabs)
+  is_di <- vapply(tabs, function(t) inherits(t, "doc_items"), logical(1))
+  if (any(is_di)) {
+    if (!all(is_di))
+      cli::cli_abort("{.fn stac_merge} cannot mix {.cls doc_items} and source tables.")
+    .require_rstac()
+    merged <- tabs[[1L]]
+    merged$features <- do.call(c, lapply(tabs, function(t) t$features))
+    return(merged)
+  }
+  tabs <- Filter(function(t) nrow(t) > 0L, tabs)
   if (length(tabs) < 1L) cli::cli_abort("{.fn stac_merge} needs at least one non-empty table.")
   cols <- names(tabs[[1L]])
   for (t in tabs)
