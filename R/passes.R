@@ -143,9 +143,10 @@ NULL
     node <- graph_get(graph, id)
     if (S7::S7_inherits(node, MapNode) || S7::S7_inherits(node, FocalNode))
       node@fn <- .slim_fn(node@fn)
-    if ((S7::S7_inherits(node, ScanNode) ||
-         S7::S7_inherits(node, ReduceNode)) && length(node@fn))
-      node@fn <- list(.slim_fn(node@fn[[1L]]))
+    # Custom reducer / scan bodies are NOT slimmed: factory-built bodies
+    # (band_project, kalman_llt) reference garry internals through their
+    # namespace-parented env, which serializes compactly by reference;
+    # slimming would cut that resolution path on daemons.
     list(id = id, node = node,
          pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims))
   })
