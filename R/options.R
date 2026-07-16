@@ -86,6 +86,15 @@
   # the host, and the OS. Users never set this; it exists so "use every daemon"
   # can't OOM on a many-band job. Ignored when available RAM can't be read.
   compute_ram_fraction = 0.6,
+  # Fraction of AVAILABLE RAM the lazy_cog staging pass may commit to
+  # /dev/shm buffers. .ck_resolve stages every CK source set whole-AOI
+  # before compute; tmpfs pages are unreclaimable RAM, so an oversized
+  # staging set would OOM exactly like an oversized compute set. When the
+  # estimated staged bytes exceed this fraction, staging falls back to
+  # disk (tempdir) -- slower reads, no OOM. The compute-side cap
+  # (compute_ram_fraction) re-reads MemAvailable after staging, so the
+  # two budgets compose. Ignored when available RAM can't be read.
+  ck_stage_ram_fraction = 0.4,
   # Multi-band composites (n_bands > 1): fan the per-band medians out to the
   # (XLA-pre-warmed) compute pool instead of one whole-grid kernel in-process.
   # On a garry_daemons SPLIT pool this uses the fetch-ordered pipeline (fetch

@@ -240,3 +240,47 @@ test_that("lazy_cog (dataframe form) carries a mask asset for mask()", {
     reduce_over("median", "t", nan_rm = TRUE)
   expect_true(all(is.na(collect(masked, distributed = FALSE))))  # Q bit0 set -> masked
 })
+
+test_that(".ck_stage_mb estimates the native-dtype staging footprint", {
+  specs <- list(
+    a = list(ts = c(3660, 3660), bands = 1:64, dtype = "i8"),
+    b = list(ts = c(1000, 1000), bands = 1L, dtype = "f32")
+  )
+  # 3660^2 x 64 x 1 byte + 1000^2 x 1 x 4 bytes
+  want <- (3660^2 * 64 * 1 + 1000^2 * 4) / 2^20
+  expect_equal(garry:::.ck_stage_mb(specs), want)
+  # unknown/absent dtype falls back to 4 bytes, never errors
+  expect_equal(garry:::.ck_stage_mb(list(list(ts = c(10, 10), bands = 1L))),
+               10 * 10 * 4 / 2^20)
+})
+
+test_that(".ck_stage_base falls back to disk beyond the RAM budget", {
+  skip_if(!dir.exists("/dev/shm"), "no tmpfs on this platform")
+  frac <- garry_opt("ck_stage_ram_fraction")
+  # fits: tmpfs
+  expect_identical(garry:::.ck_stage_base(100, avail_mb = 1000), "/dev/shm")
+  # boundary: exactly the budget still fits
+  expect_identical(garry:::.ck_stage_base(frac * 1000, avail_mb = 1000),
+                   "/dev/shm")
+  # exceeds: disk, with a message saying so
+  expect_message(
+    got <- garry:::.ck_stage_base(frac * 1000 + 1, avail_mb = 1000),
+    "staging on disk")
+  expect_identical(got, tempdir())
+  # RAM unreadable: keep the historical tmpfs behaviour
+  expect_identical(garry:::.ck_stage_base(1e9, avail_mb = NA_real_), "/dev/shm")
+})
+
+test_that("lazy_cog stages on disk (and still reads right) under a tiny budget", {
+  skip_if_not_installed("cptkirk")
+  skip_if(!dir.exists("/dev/shm"), "no tmpfs on this platform")
+  dir <- withr::local_tempdir("lcbudget")
+  f <- .lc_cog(dir)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
+                    dims = c(64L, 64L), dtype = "f32")
+  ds <- lazy_cog(f, grid)
+  withr::local_options(garry.ck_stage_ram_fraction = 1e-12)
+  expect_message(got <- collect(ds[["b2"]], distributed = FALSE),
+                 "staging on disk")
+  expect_equal(unname(got[1, 1]), 50)
+})
