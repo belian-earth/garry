@@ -36,6 +36,23 @@ sensitivity of the threshold, not a compute divergence (a
 same-precision reference shows max |diff| 7e-5 across 1024 sampled
 pixels).
 
+Bilateral context (`bilateral-context-bench.R`, 2026-07-16, 24 bands
+x 2048^2, local source, 8 compute daemons vs 20 rayon threads):
+kernel-only the XLA bilateral matches rustyfilters (0.061 vs 0.065
+s/band); end-to-end (filter + MLP predict) is a wash -- rf arm
+(rustyfilters -> materialised context cube -> garry predict) 20.4 s
+vs garry "fused" 21.6 s (0.94x), fidelity 3e-6. Two reasons the
+fusion doesn't win locally: the materialisation rustyfilters forces
+lands in page cache (cheap), and garry's merge pass keeps each
+bilateral in its OWN kernel (halo stages stay narrow, passes.R), so
+the garry arm runs 6 focal kernels + 1 MLP kernel, not one fused
+kernel. The identified unlock is a planner refinement -- allow
+small-halo focal stages to fuse into a same-source multi-input
+consumer -- at which point the whole context+predict collapses to one
+kernel per chunk. On remote sources both arms read the same bytes,
+so the standing garry advantages are operational (no intermediate
+artifact, one plan, GPU option), not wall-clock.
+
 ## Results (2026-07-14, fast link)
 
 garry now runs at parity-to-ahead of ODC + dask on both the median
