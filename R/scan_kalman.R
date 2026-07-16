@@ -221,8 +221,40 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
     }
 
     sm <- smooth_llt(NULL)
-    if (robust_iters > 0L)
-      cli::cli_abort("robust_iters > 0 is not implemented yet (phase 4)")
+
+    # Robust reweighting (hutan smooth-stack.R:123-150): fixed-count
+    # passes unrolled at trace time. Pass k+1 inflates the level noise
+    # at years whose smoothed-level innovation (from pass k) exceeds
+    # `robust_threshold` per-pixel MADs. hutan's per-pixel early exit
+    # (break when Q_scale is unchanged) needs no batched equivalent:
+    # the update is a pure function of the previous Q_scale (y, H and
+    # the hyperparameters are fixed), so a converged pixel recomputes
+    # bit-identical results on every further pass and the fixed
+    # maximum count gives exactly the early-exited value.
+    if (robust_iters > 0L && T_ >= 2L) {
+      thr    <- kv(robust_threshold)
+      infl   <- kv(robust_inflation)
+      one    <- kv(1)
+      madc   <- kv(1.4826)                    # stats::mad constant
+      for (pass in seq_len(robust_iters)) {
+        m <- sm$mean
+        inn <- g_slice_t(m, 2L, T_) - g_slice_t(m, 1L, T_ - 1L)
+        med <- g_median(inn, dims = 1L, nan_rm = TRUE)
+        mad <- madc * g_median(abs(inn - g_rep_t(med, T_ - 1L)),
+                               dims = 1L, nan_rm = TRUE)
+        # z_1 = 0 (first year never inflated), z_t = |inn_{t-1}| / mad
+        z <- abs(g_concat_t(list(zero, inn))) / g_rep_t(mad, T_)
+        qs <- g_ifelse(z > thr, infl, one)
+        # hutan guard: keep Q_scale = 1 unless mad is finite and > 0
+        # (NaN/0 fail the comparison; Inf mad already yields z = 0)
+        qs <- g_ifelse(g_rep_t(mad > 0, T_), qs, one)
+        # KFAS timing: Q[,,t] drives the transition t -> t+1, so the
+        # predict INTO year t uses Q_scale(t-1); slice 1's value is
+        # immaterial against kappa.
+        q_into <- g_concat_t(list(zero + one, g_slice_t(qs, 1L, T_ - 1L)))
+        sm <- smooth_llt(q_into)
+      }
+    }
 
     g_cast(if (output == "mean") sm$mean else sm$sd, out_dtype)
   }

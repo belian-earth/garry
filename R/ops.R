@@ -478,6 +478,26 @@ g_concat_t <- function(xs) {
   out
 }
 
+#' Replicate a (y, x) plane along a new leading axis.
+#'
+#' The broadcast helper for per-pixel statistics against a (t, y, x)
+#' cube (e.g. a per-pixel MAD over the scanned axis reused at every t).
+#'
+#' @param x A (y, x) matrix (traced or plain).
+#' @param n Number of leading-axis copies.
+#' @return An (n, y, x) array.
+#' @export
+g_rep_t <- function(x, n) {
+  n <- as.integer(n)
+  if (.g_traced(x)) {
+    sh <- .g_shape(x)
+    return(anvl::nv_broadcast_to(anvl::nv_unsqueeze(x, 1L), c(n, sh)))
+  }
+  d <- dim(x)
+  # column-major: the leading axis is fastest, so each element repeats n times
+  array(rep(as.vector(x), each = n), c(n, d))
+}
+
 # -- Reductions ---------------------------------------------------------------
 
 # Shared shape handling: `dims` are integer array margins to REDUCE

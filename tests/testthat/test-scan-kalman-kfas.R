@@ -195,8 +195,108 @@ test_that("kalman_llt validates its arguments", {
   expect_error(kalman_llt(0, 0.1, 2), "finite positive")
   expect_error(kalman_llt(1, 0.1, 2, kappa = -1), "finite positive")
   expect_error(kalman_llt(1, 0.1, 2, output = "variance"), "arg")
-  body <- kalman_llt(1, 0.1, 2, robust_iters = 2L, out_dtype = "f64")
-  cube <- array(rnorm(12), c(4, 3, 1))
-  expect_error(body(list(cube), 1L), "phase 4")
+  body <- kalman_llt(1, 0.1, 2, out_dtype = "f64")
+  cube <- array(stats::rnorm(12), c(4, 3, 1))
   expect_error(body(list(cube), 2L), "margin")
+})
+
+# -- robust reweighting (phase 4) ----------------------------------------------
+
+# Faithful transcription of hutan's robust loop (smooth-stack.R:121-150)
+# around the KFAS reference, with time-varying level noise.
+kfas_llt_robust <- function(y, q_lvl, q_slp, h, iters = 2L,
+                            thr = 3, infl = 100) {
+  SSMtrend <- KFAS::SSMtrend
+  T_ <- length(y)
+  Q_scale <- rep(1, T_)
+  out <- NULL
+  for (it in seq_len(iters + 1L)) {
+    m <- KFAS::SSModel(
+      y ~ SSMtrend(degree = 2,
+                   Q = list(array(q_lvl * Q_scale, c(1, 1, T_)),
+                            matrix(q_slp))),
+      H = array(h, c(1, 1, T_))
+    )
+    ks <- KFAS::KFS(m, smoothing = "state")
+    out <- list(mean = as.numeric(ks$alphahat[, "level"]),
+                sd = sqrt(pmax(ks$V[1, 1, ], 0)),
+                q_years = which(Q_scale != 1))
+    if (it > iters) break
+    converged <- TRUE
+    inn <- diff(out$mean)
+    inn_sd <- stats::mad(inn, na.rm = TRUE)
+    if (is.finite(inn_sd) && inn_sd > 0) {
+      z <- abs(c(0, inn)) / inn_sd
+      nq <- ifelse(z > thr, infl, 1)
+      if (any(nq != Q_scale)) converged <- FALSE
+      Q_scale <- nq
+    }
+    if (converged) break
+  }
+  out
+}
+
+test_that("robust reweighting matches hutan's loop around KFAS", {
+  skip_if_not_installed("KFAS")
+  set.seed(8)
+  # series with injected level breaks (the robust loop's target)
+  cases <- list(
+    onebreak = { y <- .k_series(); y[8:15] <- y[8:15] + 25; y },
+    twobreak = { y <- .k_series(); y[5:15] <- y[5:15] - 20
+                 y[11:15] <- y[11:15] + 30; y },
+    breakgap = { y <- .k_series(); y[9:15] <- y[9:15] + 25
+                 y[c(3, 10, 11)] <- NaN; y },
+    smooth   = .k_series()               # no break: loop converges pass 1
+  )
+  bm <- .k_body("mean", robust_iters = 2L)
+  bs <- .k_body("sd", robust_iters = 2L)
+  for (nm in names(cases)) {
+    y <- cases[[nm]]
+    cube <- array(y, c(length(y), 1, 1))
+    ref <- kfas_llt_robust(y, q_lvl = 1, q_slp = 0.01, h = 4)
+    gm <- as.numeric(bm(list(cube), 1L))
+    gs <- as.numeric(bs(list(cube), 1L))
+    expect_lt(max(abs(gm - ref$mean) / pmax(abs(ref$mean), 1)), 1e-5,
+              label = paste0(nm, ": robust mean rel diff"))
+    expect_lt(max(abs(gs - ref$sd) / pmax(ref$sd, 1e-9)), 1e-5,
+              label = paste0(nm, ": robust sd rel diff"))
+  }
+  # sanity: the loop actually fired on the break series
+  y <- cases$onebreak
+  ref <- kfas_llt_robust(y, 1, 0.01, 4)
+  expect_gt(length(ref$q_years), 0L)
+  plain <- as.numeric(.k_body("mean")(list(array(y, c(15, 1, 1))), 1L))
+  robust <- as.numeric(bm(list(array(y, c(15, 1, 1))), 1L))
+  expect_gt(max(abs(plain - robust)), 0.1)
+})
+
+test_that("robust reweighting is per pixel in a batched cube", {
+  skip_if_not_installed("KFAS")
+  set.seed(9)
+  y_break <- .k_series(); y_break[8:15] <- y_break[8:15] + 25
+  y_plain <- .k_series()
+  cube <- array(NA_real_, c(15, 2, 1))
+  cube[, 1, 1] <- y_break
+  cube[, 2, 1] <- y_plain
+  gm <- .k_body("mean", robust_iters = 2L)(list(cube), 1L)
+  for (j in 1:2) {
+    ref <- kfas_llt_robust(cube[, j, 1], 1, 0.01, 4)
+    expect_lt(max(abs(gm[, j, 1] - ref$mean) / pmax(abs(ref$mean), 1)),
+              1e-5, label = paste("pixel", j))
+  }
+})
+
+test_that("robust traced (PJRT) body matches the untraced oracle", {
+  skip_if_not_installed("anvl")
+  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
+  set.seed(10)
+  cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
+  cube[8:15, 2, 2] <- cube[8:15, 2, 2] + 25       # one break pixel
+  cube[sample(length(cube), 20)] <- NaN
+  body <- .k_body("mean", robust_iters = 2L)
+  jf <- g_jit(function(x) body(list(x), 1L))
+  traced <- g_download(jf(g_upload(cube, "f32")))
+  untraced <- body(list(cube), 1L)
+  expect_identical(is.na(traced), is.na(untraced))
+  expect_lt(max(abs(traced - untraced), na.rm = TRUE), 1e-3)
 })

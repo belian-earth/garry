@@ -1,9 +1,11 @@
 # Design note: `ScanNode` (an iterative axis node) for temporal recursions
 
-Status: **design, not started.** Motivating use case: a per-pixel robust
+Status: **implemented** (2026-07-16, branch `scan-node`; anvl `nv_scan` on
+branch `nv-scan`). Motivating use case: a per-pixel robust
 local-linear-trend Kalman smoother over an annual stack (the temporal smoother in
 the `hutan` canopy-structure pipeline), which is currently the dominant
 wall-to-wall cost and runs per-pixel on CPU via `KFAS`. Written 2026-07-16.
+Recorded implementation decisions are in section 9.
 
 ## 1. Context: the missing IR shape
 
@@ -194,20 +196,44 @@ The risk is numerical fidelity to `KFAS`, not capability.
    oracle==PJRT elsewhere), then benchmark a chunk on CPU and GPU vs the current
    per-pixel `KFAS` + mirai path.
 
-## 9. Open questions
+## 9. Open questions -- RESOLVED (implementation decisions)
 
-- **Output accumulation shape.** Confirm `dynamic_update_slice` into a
-  preallocated `[T, ...]` buffer is the cheapest emit under StableHLO, vs
-  carrying a growing concatenation. Settle in the `nv_scan` wrapper.
-- **Diffuse init.** Exact vs large-variance approximation (section 8.2). This is
-  the single most likely source of divergence from `KFAS`.
-- **`bidir` contract.** Whether the RTS pass is a second `nv_scan` consuming the
-  forward node's stored `(x, P)` series, or the whole forward+backward is one
-  fused body. Prefer one body (keeps the forward state internal, avoids
-  materialising the 2x2 covariance series across a node boundary).
-- **General reuse.** `ScanNode` + `nv_scan` also cover EWMA, IIR smoothing, and
-  cumulative custom reducers; keep the API general rather than Kalman-specific so
-  it is not a one-use node.
+- **Output accumulation shape.** `nv_scan` peels the first iteration to learn
+  the out shapes, preallocates `[T, ...]` buffers with `nv_fill`, and writes
+  each step via `dynamic_update_slice` inside one `nv_while`; no growing
+  concatenation. Reverse scans read and write at the original positions
+  (`lax.scan` semantics).
+- **Diffuse init (8.2).** Big-kappa (`P1 = 1e7 * I`, f64 body) accepted; the
+  exact-diffuse fallback was NOT needed. Two findings along the way:
+  (a) f64 is mandatory -- anvl materialises R double literals as f32
+  constants, so all body constants inject via `nv_scalar_like`;
+  (b) the textbook RTS forms `J = P_f F' S^-1`,
+  `P_s = P_f + J (P_s_next - S) J'` lose ~6e-2 of the smoothed sd to
+  kappa^2-scale cancellation before a pixel's second observation.
+  Substituting `S = F P_f F' + Q` gives the exact, cancellation-free
+  equivalents `J = F^-1 (I - Q S^-1)` and
+  `P_s = F^-1 (Q - Q S^-1 Q) F^-1' + J P_s_next J'`; with those the KFAS
+  diff is ~1e-7 on dense, gappy, and minimal (3-obs) series (gate: 1e-5).
+  One KFAS convention to respect: `Q[,,t]` drives the transition t -> t+1,
+  so a time-varying (robust) Q enters the predict into year t shifted by
+  one (`Q_scale(t-1)`).
+- **`bidir` contract.** One fused body (two `g_scan`s inside one kernel);
+  forward state never crosses a node boundary. The backward pass consumes the
+  forward outputs paired with their own shift (`g_slice_t(x, 2, T)`).
+- **General reuse.** Kept general: `scan_over(x, fn, over, direction, dtype)`
+  takes any body `fn(xs, margin)`; multi-input scans read several cubes in
+  lockstep; `kalman_llt()` is just a prebuilt body factory (as `band_project`
+  is for reduce). Robust reweighting runs as `robust_iters` unrolled passes
+  around the fused smoother; hutan's per-pixel early exit needs no batched
+  equivalent because the update is a pure function of the previous
+  `Q_scale`, so converged pixels recompute bit-identical results.
+- **Executor.** As designed: `ScanNode` is a barrier over `over` with zero
+  halo, riding the ordinary compute-stage `g_jit` path; the gdal-direct
+  whitelist excludes it (automatic scheduler fallback). The kernel-cache
+  signature includes the body fn (the ReduceNode custom-fn omission was fixed
+  in passing). Custom reducer/scan bodies are NOT `.slim_fn`-slimmed:
+  factory bodies resolve garry internals through their namespace-parented
+  environment, which serializes by reference.
 
 ## 10. Sequencing
 

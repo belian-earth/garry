@@ -9,6 +9,14 @@ Open Data Cube + dask; vrtility already beats it.
 Numbers are network-sensitive: always compare runs from the same
 sitting, against a vrtility baseline measured in that sitting.
 
+Two Kalman-smoother scripts ride the ScanNode work
+(design/scan-node-design.md): `kalman-kfas-validate.R` diffs
+`kalman_llt()` against hutan's per-pixel KFAS smoother on real tile
+pixels, and `kalman-smooth-bench.R` times the end-to-end smooth
+(hutan KFAS+mirai vs garry scan on CPU / CUDA; f64 GPU throughput is
+immaterial, the pipeline is read-bound) and doubles as a live
+fidelity check.
+
 ## Results (2026-07-14, fast link)
 
 garry now runs at parity-to-ahead of ODC + dask on both the median
