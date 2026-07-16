@@ -51,18 +51,20 @@ lazy: it reads and computes only at the final `collect()`.
 
 ``` r
 library(garry)
+#> garry: GDAL 3.13.0 "Iowa City", released 2026/05/04
 
 # 1. Discover: HLS S30 over an AOI, all of 2023, pre-signed for the PC.
 aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
-its <- stac_query(
+src <- stac_query(
   bbox        = aoi,
   stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
   collection  = "hls2-s30",
   start_date  = "2023-01-01", end_date = "2023-12-31"
 ) |>
-  rstac::items_sign(rstac::sign_planetary_computer())
+  stac_sign_mpc() |> 
+  stac_filter_cloud(30) |> 
+  stac_filter_assets(c("B04", "B03", "B02", "B08", "Fmask"))
 
-src <- stac_sources(its, assets = c("B04", "B03", "B02", "B08", "Fmask")) 
 
 # 2. The analysis grid, straight from the AOI: an equal-area (LAEA) grid at 30 m
 #    centred on the bbox. No hand-picked EPSG or projected extent.
@@ -74,12 +76,15 @@ garry_daemons()
 # 4. Build the pipeline. A `LazyDataset` holds every band over time; the verbs
 #    apply across all bands at once. Still nothing has been read or computed.
 composite <- lazy_dataset(
-  src, grid = target,
-  assets     = c("B04", "B03", "B02", "B08"), mask_asset = "Fmask",
-  nodata     = c(B04 = -9999, B03 = -9999, B02 = -9999, B08 = -9999, Fmask = 255)
+  src, 
+  grid = target,
+  assets = c("B04", "B03", "B02", "B08"), 
+  mask_asset = "Fmask",
+  nodata = c(B04 = -9999, B03 = -9999, B02 = -9999, B08 = -9999, Fmask = 255),
+  resampling = "bilinear"
 ) |>
-  mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
-  reduce_over("median", over = "t")                                    # per-band temporal median
+  mask(where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
+  reduce_over("median", over = "t")       # per-band temporal median
 
 # A derived band is just more graph: NDVI from the NIR/red composites. It joins
 # the lazy pipeline like any other band, computed only at the final collect().
@@ -92,25 +97,25 @@ composite[["ndvi"]] <- (composite[["B08"]] - composite[["B04"]]) /
 print(composite)
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
 #>   bands  B04 B03 B02 B08 ndvi
-#>   time   70 slices
+#>   time   44 slices
 #>   grid   2536 x 1480 • f32
 #>   crs    Lambert Azimuthal Equal Area
-#>   graph  921 nodes • lazy
+#>   graph  583 nodes • lazy
 #>   ℹ draw(x) to see the pipeline
 draw(composite)              # the dataset's pipeline steps
 #> ── <LazyDataset> pipeline ──────────────────────────────────────────────────────
-#>   ◈ source    B04 B03 B02 B08 ndvi  •  70 slices • 2536×1480 f32
+#>   ◈ source    B04 B03 B02 B08 ndvi  •  44 slices • 2536×1480 f32
 #>   ✕ mask      from Fmask • bits 0–3 • open 2 • dilate 3
 #>   ▸ reduce    median over t
 #>   ⊕ derive    ndvi
-#>   ─ 921 nodes • crs Lambert Azimuthal Equal Area
+#>   ─ 583 nodes • crs Lambert Azimuthal Equal Area
 draw(composite[["ndvi"]])    # the NDVI band's node tree
 #> ── <LazyRaster> 2536 x 1480 • f32 ──────────────────────────────────────────────
 #> ƒ map  (2 inputs)
 #> └─ ƒ map  (2 inputs)  ×2
 #>    └─ ▸ median  over t  ×2
 #>       └─ ⬚ stack  along t
-#>          └─ ƒ map  (2 inputs)  ×70
+#>          └─ ƒ map  (2 inputs)  ×44
 #>             ├─ ◈ source  2536×1480 f32
 #>             └─ ◫ focal  r=3
 #>                └─ ◫ focal  r=2

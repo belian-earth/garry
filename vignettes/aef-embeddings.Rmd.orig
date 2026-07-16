@@ -14,11 +14,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.path = "figure/",
                       fig.width = 5, fig.height = 5, dpi = 96, error = FALSE)
 ```
 
-[Alpha Earth Foundations](https://source.coop/tge-labs/aef) (AEF) publishes
-annual geospatial embeddings as **64-band Int8 Cloud-Optimised GeoTIFFs**: each
-band is one dimension of a learned per-pixel embedding, quantised to a signed
-byte and decoded with a nonlinear, sign-preserving transform,
-`((x / 127.5)^2) * sign(x)`.
+[Alpha Earth Foundations](https://deepmind.google/blog/alphaearth-foundations-helps-map-our-planet-in-unprecedented-detail/) (AEF) by Google is published by [Source Cooperative](https://source.coop/tge-labs/aef). This dataset is a collection of annual geospatial embeddings stored as **64-band Int8 Cloud-Optimised GeoTIFFs**: each band is one dimension of a learned embedding, quantised to a signed byte and decoded with a nonlinear, sign-preserving transform, `((x / 127.5)^2) * sign(x)`.
 
 Tens of bands in one file is exactly what `lazy_cog()` is for. Where
 `lazy_dataset()` opens each band separately, `lazy_cog()` routes the read through
@@ -36,12 +32,8 @@ library(garry)
 tile <- paste0("https://data.source.coop/tge-labs/aef/v1/annual/2021/36S/",
                "xekh5rjs4wg6wb9b4-0000000000-0000000000.tiff")
 
-# A 30 m grid over a ~15 km window. resampling = "average" downsamples from the
-# ~10 m native grid, preserving the local embedding geometry while cutting the
-# pixel count ~9x -- far lighter to hold in memory than a native-resolution read.
-grid <- grid_spec("EPSG:32736",
-                  extent = c(510000, 8540000, 525360, 8555360),
-                  dims = c(512L, 512L), dtype = "f32")
+# get the grid specification from the source tile and spe
+grid <- grid_from_src(tile, 30)
 
 embeddings <- lazy_cog(tile, grid, resampling = "average") |>
   lazy_map(fn = dequantize_aef, dtype = "f32")
@@ -58,18 +50,14 @@ nonlinear decode runs on-device, not as a separate pass.
 Pick three arbitrary embedding dimensions and collect just those: the band-axis
 subset means only those three are ever computed.
 
-```{r plot}
+```{r aef-plot}
 garry_daemons()
-cube <- collect(embeddings[c("b7", "b21", "b48")])
+cube <- collect(embeddings[c("b10", "b11", "b12")])
 garry_daemons(0, 0)
 
-dim(cube)   # 512 x 512 x 3
+dim(cube)
 
-# false-colour: rescale each band to [0, 1] for display
-rescale <- function(x) { r <- range(x, na.rm = TRUE); (x - r[1]) / diff(r) }
-rgb <- array(vapply(seq_len(3), function(i) rescale(cube[, , i]),
-                    numeric(512 * 512)), dim = c(512, 512, 3))
-plot(as.raster(rgb), interpolate = FALSE)
+preview(cube, bands=c(2,1,3))   # False-colour composite
 ```
 
 Neighbouring pixels of similar land cover carry similar embeddings, so the
