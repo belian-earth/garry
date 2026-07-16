@@ -11,7 +11,8 @@ lazy_source(
   nodata = NULL,
   open_options = character(0),
   grid = NULL,
-  block_dim = NULL
+  block_dim = NULL,
+  resampling = "near"
 )
 }
 \arguments{
@@ -31,6 +32,10 @@ dtype, skipping metadata discovery (see Details).}
 
 \item{block_dim}{Optional native block size (x, y), only meaningful
 with \code{grid}; defaults to unconstrained.}
+
+\item{resampling}{GDAL resampling used when a read reprojects or rescales
+this source onto the analysis grid. \code{"near"} (default) preserves exact
+source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"}, ... to interpolate.}
 }
 \value{
 A \code{LazyRaster}.

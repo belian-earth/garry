@@ -233,6 +233,60 @@ test_that("lazy_dataset builds from a STAC table and masks end to end (offline)"
   expect_equal(got[ok], want[ok], tolerance = 1e-5)
 })
 
+test_that("lazy_dataset threads resampling to value bands, keeps the mask near", {
+  src  <- stac_sources(.ds_fake_items(), assets = c("V", "Q"))
+  grid <- gdal_grid_spec(src$location[src$asset == "V"][[1]])$grid
+  rs_of <- function(ds, b) unique(vapply(ds@bands[[b]], function(lr)
+    graph_get(lr@graph, lr@node_id)@resampling, ""))
+
+  ds <- lazy_dataset(src, grid, assets = "V", mask_asset = "Q",
+                     resampling = "average")
+  expect_identical(rs_of(ds, "V"), "average")   # value band interpolates
+  expect_identical(rs_of(ds, "Q"), "near")      # QA mask forced nearest
+
+  # named per-asset form; a default of near for anything unnamed
+  ds2 <- lazy_dataset(src, grid, assets = "V", mask_asset = "Q",
+                      resampling = c(V = "bilinear"))
+  expect_identical(rs_of(ds2, "V"), "bilinear")
+  expect_identical(rs_of(ds2, "Q"), "near")
+
+  # default is near, and an unknown method is rejected
+  expect_identical(rs_of(lazy_dataset(src, grid, assets = "V"), "V"), "near")
+  expect_error(lazy_dataset(src, grid, assets = "V", resampling = "bogus"),
+               "Invalid")
+})
+
+test_that("resampling actually rescales the warp-on-read (near vs average)", {
+  skip_if_not_installed("anvl")
+  dir <- withr::local_tempdir("dsrs")
+  s <- file.path(dir, "g.tif")
+  d <- gdalraster::create("GTiff", s, 16, 16, 1, "Float32", return_obj = TRUE)
+  d$setGeoTransform(c(0, 10, 0, 160, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  V <- outer(1:16, 1:16, function(r, c2) r * 100 + c2)     # smooth gradient
+  d$write(1, 0, 0, 16, 16, as.numeric(t(V))); d$close()
+  idx <- file.path(dir, "i.gti.fgb")
+  gti_index_create(data.frame(location = s, datetime = "2023-01-01T00:00:00Z",
+                              slice = "2023-01-01", cloud_cover = 0,
+                              xmin = 0, ymin = 0, xmax = 160, ymax = 160),
+                   idx, crs = "EPSG:3857")
+  coarse <- grid_spec("EPSG:3857", extent = c(0, 0, 160, 160),
+                      dims = c(8L, 8L), dtype = "f32")       # 2x coarser
+  meta <- gdal_grid_spec(paste0("GTI:", idx),
+                         open_options = gti_open_options(coarse))
+  rd <- function(rs) collect(lazy_source(
+    paste0("GTI:", idx), grid = meta$grid,
+    open_options = gti_open_options(coarse, filter = "slice = '2023-01-01'",
+                                    sort_field = "datetime"),
+    resampling = rs), distributed = FALSE)
+
+  near <- rd("near"); avg <- rd("average")
+  expect_false(isTRUE(all.equal(unname(near), unname(avg))))  # resampling applied
+  # the top-left coarse cell covers source pixels {101,102,201,202}: mean 151.5
+  expect_equal(unname(avg[1, 1]), 151.5, tolerance = 1e-4)
+  expect_true(unname(near[1, 1]) %in% c(101, 102, 201, 202))  # near picks a sample
+})
+
 test_that("a derived band joins the graph and is written by collect", {
   skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()

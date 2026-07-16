@@ -58,7 +58,10 @@ SourceNode <- S7::new_class(
     band         = S7::class_integer,
     nodata       = S7::class_numeric,
     block_dim    = S7::class_integer,
-    open_options = S7::class_character
+    open_options = S7::class_character,
+    # GDAL resampling used when the read reprojects/rescales onto the analysis
+    # grid ("near" preserves exact values; the default, and forced for QA masks).
+    resampling   = S7::new_property(S7::class_character, default = "near")
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L)

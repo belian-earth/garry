@@ -65,11 +65,14 @@ LazyRaster <- S7::new_class(
 #'   dtype, skipping metadata discovery (see Details).
 #' @param block_dim Optional native block size (x, y), only meaningful
 #'   with `grid`; defaults to unconstrained.
+#' @param resampling GDAL resampling used when a read reprojects or rescales
+#'   this source onto the analysis grid. `"near"` (default) preserves exact
+#'   source values; use `"bilinear"`, `"average"`, `"cubic"`, ... to interpolate.
 #' @return A `LazyRaster`.
 #' @export
 lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
                         open_options = character(0), grid = NULL,
-                        block_dim = NULL) {
+                        block_dim = NULL, resampling = "near") {
   if (is.null(grid)) {
     meta <- gdal_grid_spec(path, band = as.integer(band),
                            open_options = open_options)
@@ -92,7 +95,8 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
     band         = as.integer(band),
     nodata       = nodata,
     block_dim    = block_dim,
-    open_options = open_options
+    open_options = open_options,
+    resampling   = as.character(resampling)
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }

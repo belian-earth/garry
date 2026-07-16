@@ -338,7 +338,8 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
   fn(buf)
 }
 
-gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL) {
+gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
+                                resampling = "near") {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES")   # >=3.10 gate
   # `buf` is a RAW f32 byte vector (the raw-f32 store, D19-D21). The public
   # gdalraster::rvector_to_MEM() infers the band type from the R vector type
@@ -352,7 +353,7 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL)
     ptr, nx, ny, gtstr)
   o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
   o$setProjection(wkt)
-  cl <- c("-r", "near", "-q", "-dstnodata", "nan")
+  cl <- c("-r", resampling, "-q", "-dstnodata", "nan")
   if (length(srcnodata) == 1L)
     cl <- c(cl, "-srcnodata", format(srcnodata, scientific = FALSE))
   gdalraster::warp(srcs, o, "", cl_arg = cl)
@@ -569,6 +570,23 @@ gti_open_options <- function(grid = NULL, filter = NULL,
             paste0("SORT_FIELD_ASC=", if (isTRUE(sort_asc)) "YES" else "NO"))
   }
   oo
+}
+
+# A GTI source read at a non-nearest resampling: the GTI driver takes the method
+# from a `.gti` XML wrapper (it has no RESAMPLING open option), so wrap the index
+# once beside itself (idempotent) and return that path. "near"/"nearest" and
+# non-GTI paths pass through unchanged -- GTI already defaults to nearest. The
+# wrapper composes with the RESX/RESY/FILTER/SORT open options as usual.
+.gti_resampled_path <- function(path, resampling = "near") {
+  if (length(resampling) != 1L || resampling %in% c("", "near", "nearest") ||
+      !startsWith(path, "GTI:")) return(path)
+  idx  <- sub("^GTI:", "", path)
+  wrap <- paste0(idx, ".gti")
+  writeLines(sprintf(paste0(
+    "<GDALTileIndexDataset><IndexDataset>%s</IndexDataset>",
+    "<IndexLayer>index</IndexLayer><Resampling>%s</Resampling>",
+    "</GDALTileIndexDataset>"), idx, resampling), wrap)
+  wrap
 }
 
 # Read a vector source's bounding box in lon/lat (EPSG:4326). Lives in the

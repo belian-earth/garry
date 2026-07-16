@@ -12,7 +12,8 @@ lazy_dataset(
   granularity = "day",
   sort_field = "datetime",
   nodata = NULL,
-  lon = NULL
+  lon = NULL,
+  resampling = "near"
 )
 }
 \arguments{
@@ -38,6 +39,13 @@ different sentinels, so the named form is typical, e.g.
 
 \item{lon}{Longitude for \code{granularity = "solar_day"} (see
 \code{stac_time_slices()}).}
+
+\item{resampling}{GDAL resampling for the warp-on-read onto \code{grid}: a scalar
+(every value band) or a named character keyed by asset (unnamed assets fall
+back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardless, since
+interpolating packed QA bits corrupts them. \code{"near"} (the default)
+preserves exact source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"},
+... to interpolate. Resample after the fact instead with \code{\link[=align]{align()}}.}
 }
 \value{
 A \code{LazyDataset}.

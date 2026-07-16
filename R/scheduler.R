@@ -655,7 +655,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         roo <- character(0)
       } else {
         node <- graph_get(graph, s@members[[1L]])
-        rpath <- node@path; rband <- node@band; rnodata <- node@nodata
+        rpath <- .gti_resampled_path(node@path, node@resampling)
+        rband <- node@band; rnodata <- node@nodata
         roo <- node@open_options
       }
       skey <- .key(s@members[[1L]])

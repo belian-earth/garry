@@ -261,7 +261,8 @@ NULL
     # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
     tw <- system.time(
       buf <- gdal_warp_to_buffer(buf, nx, ny, k$gtstr, k$wkt,
-                                 j$locs[order(j$dt)], j$nodata)
+                                 j$locs[order(j$dt)], j$nodata,
+                                 resampling = j$resampling %||% "near")
     )[["elapsed"]]
     NA_character_
   }, error = function(e) conditionMessage(e))
@@ -326,14 +327,15 @@ NULL
       sl <- sub(".*'([^']*)'.*", "\\1", filt); e[e$slice == sl, , drop = FALSE]
     } else e
     list(nid = n@id, nodata = n@nodata, locs = er$location, dt = er$datetime,
-         bin = file.path(tmp, sprintf("n%d.bin", n@id)))
+         resampling = n@resampling, bin = file.path(tmp, sprintf("n%d.bin", n@id)))
   })
   names(info) <- vapply(info, function(x) as.character(x$nid), "")
   K <- list(nx = nx, ny = ny,
             gtstr = paste(sprintf("%.10g", grid@transform), collapse = "/"),
             wkt = gdalraster::srs_to_wkt(cr))
   jobs <- lapply(info, function(x)
-    list(locs = x$locs, dt = x$dt, nodata = x$nodata, bin = x$bin))
+    list(locs = x$locs, dt = x$dt, nodata = x$nodata, resampling = x$resampling,
+         bin = x$bin))
   list(info = info, K = K, jobs = jobs)
 }
 

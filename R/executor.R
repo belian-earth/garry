@@ -407,7 +407,8 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
         key <- .key(wnode@id)
       } else {
         node <- graph_get(graph, s@members[[1L]])
-        rpath <- node@path; rband <- node@band; rnodata <- node@nodata
+        rpath <- .gti_resampled_path(node@path, node@resampling)
+        rband <- node@band; rnodata <- node@nodata
         roo <- node@open_options
         key <- .key(node@id)
       }

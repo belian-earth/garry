@@ -111,11 +111,17 @@ LazyDataset <- S7::new_class(
 #'   `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
 #' @param lon Longitude for `granularity = "solar_day"` (see
 #'   `stac_time_slices()`).
+#' @param resampling GDAL resampling for the warp-on-read onto `grid`: a scalar
+#'   (every value band) or a named character keyed by asset (unnamed assets fall
+#'   back to `"near"`). `mask_asset` is always read `"near"` regardless, since
+#'   interpolating packed QA bits corrupts them. `"near"` (the default)
+#'   preserves exact source values; use `"bilinear"`, `"average"`, `"cubic"`,
+#'   ... to interpolate. Resample after the fact instead with [align()].
 #' @return A `LazyDataset`.
 #' @export
 lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
                          granularity = "day", sort_field = "datetime",
-                         nodata = NULL, lon = NULL) {
+                         nodata = NULL, lon = NULL, resampling = "near") {
   .assert_class(grid, GridSpec, "GridSpec")
   if (length(assets) < 1L)
     cli::cli_abort("{.arg assets} must name at least one asset.")
@@ -136,6 +142,18 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
     as.numeric(nodata)                     # scalar for every asset
   }
 
+  .valid_resampling <- c("near", "bilinear", "cubic", "cubicspline", "lanczos",
+                         "average", "rms", "mode", "max", "min", "med",
+                         "q1", "q3", "sum")
+  if (!all(resampling %in% .valid_resampling))
+    cli::cli_abort(c("Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .valid_resampling)}}.",
+                     "i" = "One of {.val {.valid_resampling}}."))
+  resolve_resampling <- function(a) {
+    if (!is.null(mask_asset) && a %in% mask_asset) return("near")  # QA never interpolates
+    if (is.null(names(resampling))) return(unname(resampling[[1L]]))  # scalar for all
+    if (a %in% names(resampling)) unname(resampling[[a]]) else "near"
+  }
+
   graph <- graph_new()
   bands <- list()
   for (a in all_assets) {
@@ -144,12 +162,13 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
                            open_options = gti_open_options(grid))
     nd <- resolve_nodata(a, meta$nodata)
     slices <- sort(unique(sources$slice[sources$asset == a]))
+    rs <- resolve_resampling(a)
     layers <- lapply(slices, function(sl) {
       lazy_source(
         paste0("GTI:", idx), graph = graph, nodata = nd,
         open_options = gti_open_options(
           grid, filter = sprintf("slice = '%s'", sl), sort_field = sort_field),
-        grid = meta$grid, block_dim = meta$block_dim)
+        grid = meta$grid, block_dim = meta$block_dim, resampling = rs)
     })
     names(layers) <- slices
     bands[[a]] <- layers

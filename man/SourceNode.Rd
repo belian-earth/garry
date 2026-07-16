@@ -12,7 +12,8 @@ SourceNode(
   band = integer(0),
   nodata = integer(0),
   block_dim = integer(0),
-  open_options = character(0)
+  open_options = character(0),
+  resampling = "near"
 )
 }
 \arguments{
