@@ -45,6 +45,23 @@ test_that("grid_from_src reads an AOI file and matches the bbox path", {
   expect_equal(unname(g_src@dims), unname(g_bbox@dims))
 })
 
+test_that("grid_from_src on a raster keeps its native CRS at the given res", {
+  f <- tempfile(fileext = ".tif")
+  d <- gdalraster::create("GTiff", f, 512, 512, 1, "Int16", return_obj = TRUE)
+  d$setGeoTransform(c(510000, 10, 0, 8555360, 0, -10))   # 10 m native, UTM 36S
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+  d$close()
+
+  g <- grid_from_src(f, res = 30)                         # coarsen in place
+  expect_true(crs_equal(g@crs, "EPSG:32736"))             # native CRS, not LAEA
+  expect_equal(unname(res(g)), c(30, 30))
+  # native extent (5120 m span) snapped out to whole 30 m multiples; dims match
+  expect_equal(g@extent[1], 510000)
+  expect_equal(g@extent[3], 510000 + ceiling(5120 / 30) * 30)
+  expect_equal(unname(g@dims[["x"]]), as.integer((g@extent[3] - g@extent[1]) / 30))
+  expect_equal(unname(g@dims[["y"]]), as.integer((g@extent[4] - g@extent[2]) / 30))
+})
+
 test_that("a degenerate bbox is rejected", {
   expect_error(grid_from_bbox(c(1, 2, 1, 3), res = 30), "bbox")
   expect_error(grid_from_bbox(bbox_png, res = -5), "res")

@@ -2,7 +2,7 @@
 % Please edit documentation in R/grid_from.R
 \name{grid_from_src}
 \alias{grid_from_src}
-\title{Build an analysis grid from a vector source.}
+\title{Build an analysis grid from a raster or vector source.}
 \usage{
 grid_from_src(
   x,
@@ -14,22 +14,43 @@ grid_from_src(
 )
 }
 \arguments{
-\item{x}{Path or URL to a vector source.}
+\item{x}{Path or URL to a raster or vector source.}
 
-\item{res}{Target resolution in projected units (see \code{grid_from_bbox()}).}
+\item{res}{Target resolution. For a raster, in the source's native CRS units;
+for a vector, in the chosen projected CRS units (see \code{grid_from_bbox()}).}
 
-\item{projection, ellps, buffer, dtype}{As in \code{grid_from_bbox()}.}
+\item{projection, ellps}{Vector sources only; ignored for rasters.}
+
+\item{buffer, dtype}{As in \code{grid_from_bbox()}.}
 }
 \value{
 A \code{GridSpec}.
 }
 \description{
-Reads the bounding box of a vector file or URL (any OGR-readable source: GeoJSON,
-GeoPackage, shapefile, ...), transforms it to lon/lat, then chooses a projected
-CRS and builds a \code{GridSpec} exactly as \code{grid_from_bbox()} does.
+Derives a \code{GridSpec} from any GDAL/OGR-readable file or URL. The two source
+kinds are treated differently, because they carry different information:
+}
+\details{
+\itemize{
+\item \strong{Raster} (GeoTIFF, COG, ...): the source already has a projected CRS and
+footprint, so the grid keeps that native CRS and extent and is simply
+re-gridded to \code{res} (the extent is snapped out to whole multiples of \code{res}).
+\code{projection}/\code{ellps} are ignored: reprojecting a raster's own grid would
+distort it. Use this to coarsen a tile in place, e.g. read a 10 m embedding
+COG onto a 30 m grid while preserving its geometry.
+\item \strong{Vector} (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
+so a projected CRS is chosen for it and the grid is built exactly as
+\code{grid_from_bbox()} does, honouring \code{projection}/\code{ellps}.
+}
+
+Remote sources are read via HTTP range requests (header only), so this does
+not download the whole file.
 }
 \examples{
 \dontrun{
+# Vector footprint -> equal-area 30 m grid.
 target <- grid_from_src("catchment.gpkg", res = 30)
+# Raster -> its own CRS/extent at 30 m.
+g <- grid_from_src("s3://.../embedding.tif", res = 30)
 }
 }

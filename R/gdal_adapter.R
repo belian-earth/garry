@@ -548,6 +548,16 @@ gti_open_options <- function(grid = NULL, filter = NULL,
 
 # Read a vector source's bounding box in lon/lat (EPSG:4326). Lives in the
 # adapter because it opens a GDALVector (decision D13); grid_from_src() calls it.
+# Does GDAL identify `path` as a raster source? A header-only probe (no full
+# open, no download for remote sources) that stays quiet on a non-raster, so
+# callers can branch raster-vs-vector without spewing "not recognized" errors.
+gdal_is_raster <- function(path) {
+  drv <- tryCatch(
+    gdalraster::identifyDriver(.gdal_href(path), raster = TRUE, vector = FALSE),
+    error = function(e) "")
+  isTRUE(nzchar(drv))
+}
+
 gdal_vector_bbox_ll <- function(x) {
   vec <- methods::new(gdalraster::GDALVector, .gdal_href(x))
   on.exit(vec$close())

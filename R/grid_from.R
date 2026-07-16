@@ -91,26 +91,50 @@ grid_from_bbox <- function(bbox, res,
   .grid_from_extent(proj$crs, proj$extent, res, buffer, dtype)
 }
 
-#' Build an analysis grid from a vector source.
+#' Build an analysis grid from a raster or vector source.
 #'
-#' Reads the bounding box of a vector file or URL (any OGR-readable source: GeoJSON,
-#' GeoPackage, shapefile, ...), transforms it to lon/lat, then chooses a projected
-#' CRS and builds a `GridSpec` exactly as `grid_from_bbox()` does.
+#' Derives a `GridSpec` from any GDAL/OGR-readable file or URL. The two source
+#' kinds are treated differently, because they carry different information:
 #'
-#' @param x Path or URL to a vector source.
-#' @param res Target resolution in projected units (see `grid_from_bbox()`).
-#' @param projection,ellps,buffer,dtype As in `grid_from_bbox()`.
+#' * **Raster** (GeoTIFF, COG, ...): the source already has a projected CRS and
+#'   footprint, so the grid keeps that native CRS and extent and is simply
+#'   re-gridded to `res` (the extent is snapped out to whole multiples of `res`).
+#'   `projection`/`ellps` are ignored: reprojecting a raster's own grid would
+#'   distort it. Use this to coarsen a tile in place, e.g. read a 10 m embedding
+#'   COG onto a 30 m grid while preserving its geometry.
+#' * **Vector** (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
+#'   so a projected CRS is chosen for it and the grid is built exactly as
+#'   `grid_from_bbox()` does, honouring `projection`/`ellps`.
+#'
+#' Remote sources are read via HTTP range requests (header only), so this does
+#' not download the whole file.
+#'
+#' @param x Path or URL to a raster or vector source.
+#' @param res Target resolution. For a raster, in the source's native CRS units;
+#'   for a vector, in the chosen projected CRS units (see `grid_from_bbox()`).
+#' @param projection,ellps Vector sources only; ignored for rasters.
+#' @param buffer,dtype As in `grid_from_bbox()`.
 #' @return A `GridSpec`.
 #' @examples
 #' \dontrun{
+#' # Vector footprint -> equal-area 30 m grid.
 #' target <- grid_from_src("catchment.gpkg", res = 30)
+#' # Raster -> its own CRS/extent at 30 m.
+#' g <- grid_from_src("s3://.../embedding.tif", res = 30)
 #' }
 #' @export
 grid_from_src <- function(x, res,
                           projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
                           ellps = "WGS84", buffer = 0, dtype = "f32") {
   if (!is.character(x) || length(x) != 1L || !nzchar(x))
-    cli::cli_abort("{.arg x} must be a single path or URL to a vector source.")
+    cli::cli_abort("{.arg x} must be a single path or URL to a raster or vector source.")
+  # A raster keeps its native CRS/extent (just re-gridded to res); anything else
+  # is treated as a vector footprint to be reprojected. The probe reads the
+  # header only, so remote sources are not downloaded.
+  if (gdal_is_raster(x)) {
+    g <- gdal_grid_spec(x)$grid
+    return(.grid_from_extent(g@crs, g@extent, res, buffer, dtype))
+  }
   grid_from_bbox(gdal_vector_bbox_ll(x), res, projection = rlang::arg_match(projection),
                  ellps = ellps, buffer = buffer, dtype = dtype)
 }
