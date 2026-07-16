@@ -11,6 +11,29 @@ test_that("GridSpec validates shape", {
   )
 })
 
+test_that("grid_spec derives dims from res and snaps the extent", {
+  # exact fit: 15360 / 30 = 512, extent unchanged
+  g <- grid_spec("EPSG:32736", extent = c(510000, 8540000, 525360, 8555360),
+                 res = 30)
+  expect_equal(unname(g@dims), c(512L, 512L))
+  expect_equal(unname(res(g)), c(30, 30))
+  expect_equal(g@extent, c(510000, 8540000, 525360, 8555360))
+
+  # non-exact: 1000 / 30 = 33.3 -> 33 whole pixels, extent snapped to the
+  # top-left anchor (990 x 990 wide, ymin lifted, xmax pulled in)
+  g2 <- grid_spec("EPSG:3857", extent = c(0, 0, 1000, 1000), res = 30)
+  expect_equal(unname(g2@dims), c(33L, 33L))
+  expect_equal(unname(res(g2)), c(30, 30))
+  expect_equal(g2@extent, c(0, 10, 990, 1000))
+
+  # dims and res are mutually exclusive; exactly one is required
+  expect_error(grid_spec("EPSG:3857", c(0, 0, 1, 1)), "exactly one")
+  expect_error(grid_spec("EPSG:3857", c(0, 0, 1, 1),
+                         dims = c(2L, 2L), res = 30), "exactly one")
+  expect_error(grid_spec("EPSG:3857", c(0, 0, 10, 10), res = 100),
+               "coarser")
+})
+
 test_that("grid_equal detects geometry-only differences", {
   g1 <- GridSpec(crs = "EPSG:4326", transform = c(0, 1, 0, 0, 0, -1),
                  extent = c(0, -10, 10, 0), dims = c(10L, 10L), dtype = "f32")

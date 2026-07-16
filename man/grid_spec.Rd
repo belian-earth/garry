@@ -2,22 +2,29 @@
 % Please edit documentation in R/grid.R
 \name{grid_spec}
 \alias{grid_spec}
-\title{Convenience constructor: derive the transform from extent + dims.}
+\title{Convenience constructor: derive the transform from extent + dims (or res).}
 \usage{
-grid_spec(crs, extent, dims, dtype = "f32")
+grid_spec(crs, extent, dims = NULL, dtype = "f32", res = NULL)
 }
 \arguments{
 \item{crs}{CRS string in any GDAL-interpretable form.}
 
 \item{extent}{Numeric length 4: xmin, ymin, xmax, ymax.}
 
-\item{dims}{Integer dimensions: nx, ny.}
+\item{dims}{Integer dimensions \code{c(nx, ny)}. Provide this OR \code{res}, not both.}
 
 \item{dtype}{dtype string from the garry vocabulary.}
+
+\item{res}{Pixel resolution in the units of \code{crs}: a scalar (square pixels) or
+\code{c(xres, yres)}. Derives \code{dims} from \code{extent} and snaps \code{extent} to a whole
+number of pixels (anchored at the top-left, so the resolution is exactly
+\code{res}). Provide this OR \code{dims}, not both.}
 }
 \value{
 A \code{GridSpec}.
 }
 \description{
-Convenience constructor: derive the transform from extent + dims.
+Give the pixel grid either directly as \code{dims} (nx, ny) or as \code{res} (pixel
+size), from which \code{dims} is derived and the \code{extent} snapped to a whole number
+of pixels. Exactly one of the two.
 }

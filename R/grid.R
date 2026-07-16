@@ -197,15 +197,40 @@ GridSpec <- S7::new_class(
   }
 )
 
-#' Convenience constructor: derive the transform from extent + dims.
+#' Convenience constructor: derive the transform from extent + dims (or res).
+#'
+#' Give the pixel grid either directly as `dims` (nx, ny) or as `res` (pixel
+#' size), from which `dims` is derived and the `extent` snapped to a whole number
+#' of pixels. Exactly one of the two.
 #'
 #' @param crs CRS string in any GDAL-interpretable form.
 #' @param extent Numeric length 4: xmin, ymin, xmax, ymax.
-#' @param dims Integer dimensions: nx, ny.
+#' @param dims Integer dimensions `c(nx, ny)`. Provide this OR `res`, not both.
 #' @param dtype dtype string from the garry vocabulary.
+#' @param res Pixel resolution in the units of `crs`: a scalar (square pixels) or
+#'   `c(xres, yres)`. Derives `dims` from `extent` and snaps `extent` to a whole
+#'   number of pixels (anchored at the top-left, so the resolution is exactly
+#'   `res`). Provide this OR `dims`, not both.
 #' @return A `GridSpec`.
 #' @export
-grid_spec <- function(crs, extent, dims, dtype = "f32") {
+grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
+  extent <- as.numeric(extent)
+  if (is.null(dims) == is.null(res))
+    cli::cli_abort(c(
+      "Provide exactly one of {.arg dims} or {.arg res}.",
+      "i" = "{.arg dims} sets the pixel grid directly; {.arg res} derives it from {.arg extent}."))
+  if (!is.null(res)) {
+    res <- rep_len(as.numeric(res), 2L)      # scalar (square) or c(xres, yres)
+    if (any(res <= 0)) cli::cli_abort("{.arg res} must be positive.")
+    dims <- c(round((extent[3L] - extent[1L]) / res[1L]),
+              round((extent[4L] - extent[2L]) / res[2L]))
+    if (any(dims < 1L))
+      cli::cli_abort("{.arg res} is coarser than {.arg extent}; no whole pixels fit.")
+    # Snap the extent to a whole number of `res` pixels, anchored at the
+    # top-left (xmin, ymax), so the derived resolution is exactly `res`.
+    extent <- c(extent[1L], extent[4L] - dims[2L] * res[2L],
+                extent[1L] + dims[1L] * res[1L], extent[4L])
+  }
   dims <- as.integer(dims)
   dx <- (extent[3L] - extent[1L]) / dims[1L]
   dy <- (extent[4L] - extent[2L]) / dims[2L]
