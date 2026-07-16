@@ -19,6 +19,7 @@ S7::method(required_halo, SourceNode) <- function(node) 0L
 S7::method(required_halo, MapNode)    <- function(node) 0L
 S7::method(required_halo, FocalNode)  <- function(node) node@radius
 S7::method(required_halo, ReduceNode) <- function(node) 0L
+S7::method(required_halo, ScanNode)   <- function(node) 0L
 S7::method(required_halo, WarpNode)   <- function(node) 0L
 S7::method(required_halo, StackNode)  <- function(node) 0L
 S7::method(required_halo, FusedNode)  <- function(node) node@halo
@@ -43,6 +44,7 @@ S7::method(fusable, Node)      <- function(node) FALSE   # default: barrier
 #' @export
 is_barrier <- S7::new_generic("is_barrier", "node")
 S7::method(is_barrier, ReduceNode) <- function(node) TRUE
+S7::method(is_barrier, ScanNode)   <- function(node) TRUE
 S7::method(is_barrier, WarpNode)   <- function(node) TRUE
 S7::method(is_barrier, Node)       <- function(node) FALSE
 
@@ -72,6 +74,12 @@ S7::method(output_grid, FusedNode)  <- function(node, parent_grids) parent_grids
 S7::method(output_grid, WarpNode)   <- function(node, parent_grids) node@target_grid
 S7::method(output_grid, ReduceNode) <- function(node, parent_grids) {
   .reduce_grid(parent_grids[[1L]], node@op, node@over)
+}
+S7::method(output_grid, ScanNode) <- function(node, parent_grids) {
+  # Length-preserving: the scanned axis and its length survive. Only the
+  # dtype may change (explicit override on the node).
+  pg <- parent_grids[[1L]]
+  if (!length(node@dtype)) pg else .grid_retype(pg, node@dtype)
 }
 
 # Output dtype of a reduction (decision D7/D12): float-producing ops

@@ -296,6 +296,15 @@ NULL
       base$op <- n@op
       base$over <- n@over
       base$nan_rm <- n@nan_rm
+      # A custom reducer's identity lives in its fn, not `op`; omitting
+      # it would alias distinct kernels in the jit cache.
+      if (length(n@fn)) base$fn <- norm_fn(n@fn[[1L]])
+    }
+    if (S7::S7_inherits(n, ScanNode)) {
+      base$over <- n@over
+      base$direction <- n@direction
+      base$out_dtype <- n@dtype
+      base$fn <- norm_fn(n@fn[[1L]])
     }
     base
   })

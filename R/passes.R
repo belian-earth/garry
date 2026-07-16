@@ -78,6 +78,10 @@ NULL
     margins <- .dim_margins(parent_dim_names, node@over)
     if (length(node@fn)) node@fn[[1L]](pv[[1L]], margins)   # custom anvl reducer
     else .apply_reduce(node@op, pv[[1L]], margins, node@nan_rm)
+  } else if (S7::S7_inherits(node, ScanNode)) {
+    # Body contract: fn(xs, margin) over the LIST of parent values; the
+    # scanned axis survives, so the output keeps the parent's shape.
+    node@fn[[1L]](pv, .dim_margins(parent_dim_names, node@over))
   } else {
     .garry_error(paste0("node class not executable in a compute stage: ",
                         class(node)[[1L]]), "garry_plan_error")
@@ -139,6 +143,9 @@ NULL
     node <- graph_get(graph, id)
     if (S7::S7_inherits(node, MapNode) || S7::S7_inherits(node, FocalNode))
       node@fn <- .slim_fn(node@fn)
+    if ((S7::S7_inherits(node, ScanNode) ||
+         S7::S7_inherits(node, ReduceNode)) && length(node@fn))
+      node@fn <- list(.slim_fn(node@fn[[1L]]))
     list(id = id, node = node,
          pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims))
   })
@@ -273,9 +280,10 @@ NULL
       if (!.spatial_equal(p$grid, q$grid)) next
       if (length(q$inputs) > 1L) {
         roots <- intersect(p$members, q$input_nodes)
-        if (any(vapply(roots, function(m)
-          S7::S7_inherits(graph_get(graph, m), ReduceNode),
-          logical(1)))) next
+        if (any(vapply(roots, function(m) {
+          n <- graph_get(graph, m)
+          S7::S7_inherits(n, ReduceNode) || S7::S7_inherits(n, ScanNode)
+        }, logical(1)))) next
       }
       members <- sort(unique(c(p$members, q$members)))
       input_nodes <- setdiff(unique(c(p$input_nodes, q$input_nodes)),

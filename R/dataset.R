@@ -306,6 +306,24 @@ S7::method(`[[<-`, LazyDataset) <- function(x, i, value) {
                                  paste(over, collapse = ","))))))
 }
 
+.ds_scan <- function(x, fn, over, direction, dtype, bands) {
+  if (!identical(over, "t"))
+    cli::cli_abort(c(
+      "{.fn scan_over} over a LazyDataset supports {.code over = \"t\"} only.",
+      "i" = "Use {.fn stack_bands} + {.fn scan_over} for a band scan."))
+  sel <- bands %||% names(x@bands)
+  newbands <- x@bands
+  for (a in sel) {
+    lr <- lazy_stack(unname(x@bands[[a]]), along = "t")
+    newbands[[a]] <- list(scan_over(lr, fn, over = over,
+                                    direction = direction, dtype = dtype))
+  }
+  LazyDataset(graph = x@graph, bands = newbands,
+              mask_asset = intersect(x@mask_asset, names(newbands)),
+              steps = c(x@steps, list(.step("scan", "scan",
+                        detail = sprintf("%s over %s", direction, over)))))
+}
+
 # ---------------------------------------------------------------------------
 # Temporal grouping: group_by_time() partitions a dataset's slices into calendar
 # groups (month, quarter, year, ...) so a following reduce_over(over = "t")

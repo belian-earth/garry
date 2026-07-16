@@ -339,6 +339,66 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
 
+#' Scan along an axis, keeping it (temporal recursions).
+#'
+#' The length-preserving sibling of [reduce_over()]: carry state
+#' sequentially along `over` while emitting a same-length series
+#' (Kalman smoothers, EWMA, IIR filters, cumulative custom ops). The
+#' output grid is the input grid unchanged; only the dtype may differ.
+#'
+#' `fn` is the scan body `fn(xs, margin) -> y`, written in the
+#' `g_*` vocabulary and typically built around [g_scan()]: `xs` is the
+#' LIST of parent chunk values (pass a list of LazyRasters on the same
+#' grid to scan several cubes in lockstep), `margin` is the scanned
+#' axis position, and `y` has the shape of `xs[[1]]`. Like a custom
+#' reducer, a scan holds the full `over` axis per spatial chunk, so it
+#' is supported over `"t"`/`"band"` only.
+#'
+#' Over a `LazyDataset`, each band's slices are stacked along `"t"` and
+#' scanned independently (`bands` restricts which).
+#'
+#' @param x A `LazyRaster`, a list of `LazyRaster`s on the same graph
+#'   and grid (multi-input scan), or a `LazyDataset`.
+#' @param fn Scan body `fn(xs, margin)`.
+#' @param over Single dim name to scan along (default `"t"`).
+#' @param direction `"forward"`, `"backward"`, or `"bidir"` (the body
+#'   encapsulates direction; this is declarative metadata).
+#' @param dtype Optional output dtype override (default: input dtype).
+#' @param bands `LazyDataset` only: bands to scan (default: all).
+#' @return A `LazyRaster` on the unchanged grid, or a `LazyDataset`.
+#' @export
+scan_over <- function(x, fn, over = "t", direction = "forward",
+                      dtype = NULL, bands = NULL) {
+  if (S7::S7_inherits(x, LazyDataset))
+    return(.ds_scan(x, fn, over, direction, dtype, bands))
+  xs <- if (is.list(x)) x else list(x)
+  for (lr in xs) .assert_class(lr, LazyRaster, "LazyRaster")
+  lead <- xs[[1L]]
+  graph <- lead@graph
+  parents <- vapply(xs, function(lr) {
+    if (!grid_equal(lead@grid, lr@grid))
+      cli::cli_abort("all scan inputs must share one grid")
+    if (identical(graph@nodes, lr@graph@nodes)) lr@node_id
+    else graph_import(graph, lr@graph, lr@node_id)
+  }, integer(1))
+  if (!is.function(fn))
+    cli::cli_abort("{.arg fn} must be a scan body function {.code fn(xs, margin)}")
+  if (length(over) != 1L || !over %in% names(lead@grid@dims))
+    cli::cli_abort("{.arg over} must name one dim of the input grid")
+  grid <- if (is.null(dtype)) lead@grid else .grid_retype(lead@grid, dtype)
+  id <- graph_add(
+    graph,
+    ScanNode,
+    parents   = parents,
+    grid      = grid,
+    over      = over,
+    direction = direction,
+    fn        = list(fn),
+    dtype     = dtype %||% character(0)
+  )
+  LazyRaster(graph = graph, node_id = id, grid = grid)
+}
+
 #' A band reducer for a linear combination of bands.
 #'
 #' Returns an anvl reducer `fn(x, dims)` for `reduce_over(cube, fn, over =

@@ -300,6 +300,128 @@ g_index_scalar <- function(v, i) {
   v[[i]]
 }
 
+# -- Scan (carried-state loop along dim 1) ------------------------------------
+
+# Does the installed anvl provide nv_scan? Released anvl does not; the
+# patched local branch does. Probe existence, memoised per process.
+.g_scan_probe <- new.env(parent = emptyenv())
+
+#' Can scans take the traced path?
+#'
+#' Internal capability probe (exported for daemon use via `::`).
+#' @return `TRUE` if `anvl::nv_scan` is available.
+#' @keywords internal
+#' @export
+.g_has_nv_scan <- function() {
+  ok <- .g_scan_probe$ok
+  if (!is.null(ok)) return(ok)
+  ok <- rlang::is_installed("anvl") &&
+    is.function(asNamespace("anvl")$nv_scan)
+  .g_scan_probe$ok <- ok
+  ok
+}
+
+# Slice step `t` off dim 1 of a plain-R array, dropping the unit axis
+# (a 1-D input yields a scalar) -- the oracle mirror of nv_scan's read.
+.g_scan_slice <- function(x, t) {
+  d <- dim(x) %||% length(x)
+  if (length(d) == 1L) return(x[[t]])
+  idx <- rep(list(quote(expr = )), length(d) - 1L)
+  out <- do.call(`[`, c(list(x, t), idx, list(drop = FALSE)))
+  array(out, dim = d[-1L])
+}
+
+# Write a step's leaf into row `t` of its (n, ...) buffer.
+.g_scan_assign <- function(buf, leaf, t) {
+  idx <- rep(list(quote(expr = )), length(dim(buf)) - 1L)
+  do.call(`[<-`, c(list(buf, t), idx, list(value = leaf)))
+}
+
+# Recursive tree helpers for the oracle path (leaves = non-list values;
+# the traced path delegates tree handling to anvl::nv_scan).
+.g_tree_map <- function(x, f) {
+  if (is.list(x)) lapply(x, .g_tree_map, f = f) else f(x)
+}
+.g_tree_map2 <- function(x, y, f) {
+  if (is.list(x)) Map(.g_tree_map2, x, y, MoreArgs = list(f = f)) else f(x, y)
+}
+.g_tree_any <- function(x, f) {
+  if (is.list(x) && !.g_traced(x)) any(vapply(x, .g_tree_any, logical(1), f = f))
+  else f(x)
+}
+
+#' Scan: carry state along dim 1, emitting per-step outputs.
+#'
+#' The loop op behind [scan_over()] bodies (Kalman smoothers, EWMA, IIR
+#' filters, cumulative custom ops). At step `t`, `body(carry, x)` gets
+#' the current carry and the step-`t` slice of `xs` (taken along dim 1
+#' with that unit axis dropped) and returns `list(carry = , out = )`;
+#' the `out`s are stacked into `(length, ...)` buffers. `reverse = TRUE`
+#' runs `t = length..1`, still reading and writing at position `t` (what
+#' an RTS backward pass needs). Traced values route to `anvl::nv_scan`;
+#' plain R arrays take the pure-R oracle loop with identical semantics.
+#'
+#' The scanned axis must be dim 1 of every `xs` leaf (garry's canonical
+#' layout puts the scanned non-spatial axis first); bodies scanning a
+#' non-leading margin must permute first.
+#'
+#' @param init Initial carry: array or (nested) named list of arrays.
+#' @param body Step function `function(carry, x) -> list(carry, out)`;
+#'   `out` may be an array, a (nested) list, or `NULL`.
+#' @param xs Per-step inputs sliced along dim 1 (array, nested list, or
+#'   NULL).
+#' @param length Static trip count; required when `xs` is NULL.
+#' @param reverse Run steps in reverse order?
+#' @return `list(carry = final carry, out = stacked outputs)`.
+#' @export
+g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
+  traced <- .g_tree_any(init, .g_traced) ||
+    (!is.null(xs) && .g_tree_any(xs, .g_traced))
+  if (traced) {
+    .require_anvl()
+    if (!.g_has_nv_scan())
+      cli::cli_abort(c(
+        "The installed {.pkg anvl} does not provide {.fn nv_scan}.",
+        "i" = "Install the anvl branch with the scan wrapper (nv-scan)."))
+    return(anvl::nv_scan(init, body, xs = xs, length = length,
+                         reverse = reverse))
+  }
+  # -- pure-R oracle path ------------------------------------------------------
+  n <- if (!is.null(xs)) {
+    lens <- unlist(.g_tree_map(xs, function(x) (dim(x) %||% length(x))[[1L]]))
+    if (!all(lens == lens[[1L]]))
+      cli::cli_abort("all leaves of {.arg xs} must agree on the size of dim 1")
+    if (!is.null(length) && as.integer(length) != lens[[1L]])
+      cli::cli_abort("{.arg length} disagrees with dim 1 of {.arg xs}")
+    as.integer(lens[[1L]])
+  } else {
+    if (is.null(length))
+      cli::cli_abort("{.arg length} is required when {.arg xs} is NULL")
+    as.integer(length)
+  }
+  carry <- init
+  bufs <- NULL
+  steps <- if (isTRUE(reverse)) rev(seq_len(n)) else seq_len(n)
+  for (t in steps) {
+    x_t <- if (!is.null(xs)) .g_tree_map(xs, function(x) .g_scan_slice(x, t))
+    st <- body(carry, x_t)
+    if (!is.list(st) || is.null(names(st)) ||
+        !setequal(names(st), c("carry", "out")))
+      cli::cli_abort("{.arg body} must return {.code list(carry = , out = )}")
+    carry <- st$carry
+    if (is.null(bufs) && !is.null(st$out))
+      bufs <- .g_tree_map(st$out, function(leaf) {
+        d <- dim(leaf)
+        if (is.null(d) && length(leaf) > 1L) d <- length(leaf)
+        array(NA_real_, dim = c(n, d))
+      })
+    if (!is.null(st$out))
+      bufs <- .g_tree_map2(bufs, st$out, function(buf, leaf)
+        .g_scan_assign(buf, leaf, t))
+  }
+  list(carry = carry, out = bufs)
+}
+
 # -- Reductions ---------------------------------------------------------------
 
 # Shared shape handling: `dims` are integer array margins to REDUCE

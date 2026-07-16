@@ -165,6 +165,65 @@ ReduceNode <- S7::new_class(
   }
 )
 
+#' Scan along a named dim, preserving it. Barrier over `over`.
+#'
+#' The missing IR shape between `MapNode` and `ReduceNode`: carry state
+#' sequentially along one non-spatial axis while emitting a same-length
+#' series (Kalman smoothers, EWMA, IIR filters, cumulative ops). The
+#' output grid is the parent grid unchanged (the scanned axis survives),
+#' optionally with a dtype override.
+#'
+#' The body kernel is `fn(xs, margin) -> y`: `xs` is the LIST of parent
+#' chunk values (length >= 1; multi-parent scans read several cubes in
+#' lockstep), `margin` is the scanned axis position from `.dim_margins`,
+#' and `y` has the same shape as `xs[[1]]`. Inside, the body uses
+#' `g_scan()` to carry state along `margin`; everything else in the
+#' chunk (the spatial axes) is batched through the carry. Like a custom
+#' reducer, a scan cannot be decomposed across spatial chunks, so it is
+#' supported over `t`/`band` only (each spatial chunk holds the full
+#' axis).
+#'
+#' `direction` is declarative metadata (drawn, hashed into the kernel
+#' signature): `"bidir"` bodies run a forward and a reverse `g_scan()`
+#' internally as ONE fused kernel, so forward state never crosses a node
+#' boundary.
+#'
+#' @param id Integer node id (assigned by `graph_add()`).
+#' @param parents Integer ids of parent nodes.
+#' @param grid Output `GridSpec` of this node.
+#' @param over Single dim name to scan along (`"t"` or `"band"`).
+#' @param direction One of `"forward"`, `"backward"`, `"bidir"`.
+#' @param fn Length-1 list holding the scan body `fn(xs, margin)`.
+#' @param dtype Length-0 (parent's dtype) or length-1 dtype override.
+#' @return A `ScanNode`.
+#' @export
+ScanNode <- S7::new_class(
+  "ScanNode",
+  parent = Node,
+  properties = list(
+    over      = S7::class_character,
+    direction = S7::class_character,
+    fn        = S7::class_list,
+    dtype     = S7::class_character
+  ),
+  validator = function(self) {
+    if (length(self@over) != 1L)
+      return("`over` must name exactly one dim")
+    if (self@over %in% c("x", "y"))
+      return("scanning over a spatial dim is not supported (chunks tile x/y)")
+    if (length(self@direction) != 1L ||
+        !self@direction %in% c("forward", "backward", "bidir"))
+      return("`direction` must be one of: forward, backward, bidir")
+    if (length(self@fn) != 1L || !is.function(self@fn[[1L]]))
+      return("`fn` must be a length-1 list holding the scan body function")
+    if (length(self@dtype) > 1L ||
+        (length(self@dtype) == 1L && !dtype_valid(self@dtype)))
+      return(paste0("`dtype` must be empty or one of: ",
+                    paste(.garry_dtypes, collapse = ", ")))
+    NULL
+  }
+)
+
 #' Lazy resample/reproject to a target grid. Output of `align()`. Barrier.
 #' At execution time this materialises as a gdalraster VRT warp.
 #'
