@@ -17,6 +17,25 @@ pixels, and `kalman-smooth-bench.R` times the end-to-end smooth
 immaterial, the pipeline is read-bound) and doubles as a live
 fidelity check.
 
+Kalman results (2026-07-16, synthetic 15 x 1024 x 1024 stack, robust
+LLT mean + sd, 8 compute daemons; CUDA = RTX A1000 4 GB with a
+2-daemon pool -- larger pools exhaust the card):
+
+| arm | wall | MPix-yr/s | vs hutan |
+|---|---|---|---|
+| hutan (KFAS per pixel + mirai) | 282.2 s | 0.06 | 1x |
+| garry scan, CPU PJRT | 58.4 s | 0.27 | 4.8x |
+| garry scan, CUDA | 36.0 s | 0.44 | 7.8x |
+
+Fidelity garry-vs-hutan: NaN patterns identical, p99 |diff| 8e-6
+(mean) / 5e-7 (sd). A handful of pixels per megapixel differ visibly:
+hutan's robust loop takes a hard z > 3 threshold, so pixels whose
+standardised innovation sits within float noise of 3 flip their
+Q_scale between two implementations that agree to 1e-7. Knife-edge
+sensitivity of the threshold, not a compute divergence (a
+same-precision reference shows max |diff| 7e-5 across 1024 sampled
+pixels).
+
 ## Results (2026-07-14, fast link)
 
 garry now runs at parity-to-ahead of ODC + dask on both the median
