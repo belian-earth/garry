@@ -26,3 +26,4 @@ prerender_it <- function(filename) {
 }
 
 prerender_it("hls-harmonized-pca.Rmd")
+prerender_it("aef-embeddings.Rmd")
