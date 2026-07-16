@@ -48,6 +48,8 @@ Node <- S7::new_class(
 #' @param block_dim Native GDAL block size (length 2), or length 0 if
 #'   unknown; the chunking pass snaps chunk sizes to it.
 #' @param open_options GDAL open options ("KEY=VALUE"), e.g. GTI FILTER.
+#' @param resampling GDAL resampling used when a read reprojects/rescales the
+#'   source onto the analysis grid (default "near").
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(

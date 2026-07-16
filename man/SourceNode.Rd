@@ -33,6 +33,9 @@ SourceNode(
 unknown; the chunking pass snaps chunk sizes to it.}
 
 \item{open_options}{GDAL open options ("KEY=VALUE"), e.g. GTI FILTER.}
+
+\item{resampling}{GDAL resampling used when a read reprojects/rescales the
+source onto the analysis grid (default "near").}
 }
 \value{
 A \code{SourceNode}.
