@@ -174,11 +174,6 @@ stac_sources <- function(items, assets = NULL) {
   out[order(out$datetime, out$item_id, out$asset), , drop = FALSE]
 }
 
-# http(s) hrefs need the vsicurl prefix for GDAL.
-.gdal_href <- function(href) {
-  if (grepl("^(http|https)://", href)) paste0("/vsicurl/", href) else href
-}
-
 #' Filter a source table by maximum cloud cover.
 #'
 #' @param sources A `stac_sources()` table.

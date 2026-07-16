@@ -33,7 +33,16 @@ NULL
 .gdal_cache <- new.env(parent = emptyenv())
 .gdal_cache$handles <- list()   # named, insertion-ordered = LRU order
 
+# http(s) URLs need the /vsicurl prefix so GDAL reads via HTTP range requests --
+# metadata (header/IFD) and windowed pixel reads only -- instead of downloading
+# the whole file. Idempotent: already-/vsicurl, /vsi*, GTI: and local paths pass
+# through unchanged.
+.gdal_href <- function(href) {
+  if (grepl("^https?://", href)) paste0("/vsicurl/", href) else href
+}
+
 .gdal_handle <- function(path, open_options = character(0)) {
+  path <- .gdal_href(path)                 # range-read remote COGs, never pull whole
   key <- paste(c(path, open_options), collapse = "\x1f")
   h <- .gdal_cache$handles[[key]]
   if (!is.null(h)) {
@@ -540,7 +549,7 @@ gti_open_options <- function(grid = NULL, filter = NULL,
 # Read a vector source's bounding box in lon/lat (EPSG:4326). Lives in the
 # adapter because it opens a GDALVector (decision D13); grid_from_src() calls it.
 gdal_vector_bbox_ll <- function(x) {
-  vec <- methods::new(gdalraster::GDALVector, x)
+  vec <- methods::new(gdalraster::GDALVector, .gdal_href(x))
   on.exit(vec$close())
   bb  <- as.numeric(vec$bbox())
   srs <- vec$getSpatialRef()
