@@ -21,9 +21,9 @@ Imports:
     methods,
     rlang
 Remotes:
-    hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
+    hypertidy/vaster,
     belian-earth/anvl@raw-payload-nv-array,
-    belian-earth/cptkirk@ck_warp_to_buffer
+    belian-earth/cptkirk
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:

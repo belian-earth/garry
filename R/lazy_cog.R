@@ -178,9 +178,10 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # Collect-time pre-pass: fetch every "CK:" source set and rewrite the source-node
 # paths to a staged grid-aligned raster the executors read as an ordinary GDAL
 # source. Single-item source sets that share (grid, bands, resampling) are fetched
-# TOGETHER through ONE cptkirk pool (ck_batch) -- the win for many-slice time
-# series, where per-set sequential fetches would serialise the network. Lone sets
-# and spatial mosaics keep ck_warp_to_buffer's no-encode buffer path. Returns the
+# TOGETHER through ONE cptkirk pool (ck_batch_to_buffer) -- the win for many-slice
+# time series, where per-set sequential fetches would serialise the network. Lone
+# sets take ck_warp_to_buffer directly; both stage the same raw-buffer VRT bridge
+# (.stage_buffer), no GeoTIFF encode/decode. Returns the
 # (mutated) plan and a staging root to unlink after collect, or root = NULL when
 # there is nothing to resolve.
 .ck_resolve <- function(p) {
@@ -205,10 +206,11 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   staged <- new.env(parent = emptyenv())            # ukey -> staged path
 
   # Single-band source sets (one band per file, each a 1+ tile mosaic) go through
-  # ONE ck_batch pool per grid/resampling signature -- every tile of every set is
-  # fetched concurrently, the saturation win for many-slice time series. Mosaics
-  # are then assembled locally (gdalbuildvrt overlay). Multi-band single files
-  # (geo-embedding stacks) keep ck_warp_to_buffer's no-encode buffer path.
+  # ONE ck_batch_to_buffer pool per grid/resampling signature -- every tile of
+  # every set is fetched concurrently, the saturation win for many-slice time
+  # series. Tiles are staged as raw-buffer VRTs and mosaicked locally (nested
+  # VRT). Multi-band single files (geo-embedding stacks) and lone sets take
+  # ck_warp_to_buffer directly.
   single <- ukeys[vapply(ukeys, function(k) length(specs[[k]]$bands) == 1L, TRUE)]
   if (length(single)) {
     sig <- vapply(single, function(k) {
@@ -232,46 +234,58 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 }
 
 # Fetch a group of single-band source sets (each a 1+ tile mosaic) sharing an
-# AOI/resampling through ONE cptkirk pool. ck_batch(stack = FALSE) returns one
-# warped file PER TILE, so every tile of every set streams through one io budget
-# concurrently. Then mosaic each set's tiles locally -- a gdalbuildvrt overlay,
-# no network -- and record the staged path. Each source's own nodata is read from
-# its header by cptkirk; garry masks on the node's nodata regardless.
+# AOI/resampling through ONE cptkirk pool. ck_batch_to_buffer(stack = FALSE)
+# returns one native BSQ buffer PER TILE (no GeoTIFF to encode/decode), every
+# tile of every set streaming through one io budget concurrently. Each tile is
+# staged as a raw .bin + VRTRawRasterBand VRT, then a set's tiles are mosaicked
+# locally into one nested VRT -- no network. Each source's own nodata is read
+# from its header by cptkirk; garry masks on the node's nodata regardless.
 .ck_batch_mosaic <- function(members, specs, root, staged) {
   s0  <- specs[[members[[1L]]]]
   src <- lapply(members, function(k) specs[[k]]$srcs)       # per set: its tiles
-  dst <- unlist(lapply(seq_along(members), function(i)
-    file.path(root, sprintf("cb_%s_%02d.tif",
-                            sub("^CK:", "", members[[i]]), seq_along(src[[i]])))))
-  out <- cptkirk::ck_batch(
-    src = src, dst = dst, stack = FALSE,
+  out <- cptkirk::ck_batch_to_buffer(
+    src = src, stack = FALSE,
     t_srs = s0$crs, te = s0$te, ts = s0$ts,
     bands = if (length(s0$bands)) s0$bands else NULL,
     r = s0$resampling, io_concurrency = 32L)
   for (i in seq_along(members)) {
-    files <- as.character(out[[i]])                          # tiles, datetime order
-    staged[[members[[i]]]] <- if (length(files) == 1L) files[[1L]]
-      else gdal_mosaic_vrt(
-        file.path(root, paste0("mos_", sub("^CK:", "", members[[i]]), ".vrt")),
-        files)
+    key     <- sub("^CK:", "", members[[i]])
+    want_nd <- length(specs[[members[[i]]]]$nodata) > 0L
+    descs   <- out[[i]]                                      # tiles, datetime order
+    vrts <- character(0)
+    for (j in seq_along(descs)) {
+      d <- descs[[j]]
+      if (!is.list(d) || is.null(d$data)) next               # tile did not overlap
+      vrts <- c(vrts, .stage_buffer(
+        d, file.path(root, sprintf("cb_%s_%02d", key, j)), want_nd))
+    }
+    if (!length(vrts)) next            # no overlap; .ck_resolve falls back to .ck_fetch
+    staged[[members[[i]]]] <- if (length(vrts) == 1L) vrts[[1L]]
+      else gdal_mosaic_vrt(file.path(root, paste0("mos_", key, ".vrt")), vrts)
   }
 }
 
 # The one cptkirk-dependent step: fetch+warp the source set's selected bands onto
-# the target grid into a native-dtype BSQ buffer, staged as a raw .bin described
-# by a VRTRawRasterBand VRT (relativeToVRT sibling, satisfying GDAL's raw-band
-# security gate). Returns the VRT path.
+# the target grid into a native-dtype BSQ buffer, staged via .stage_buffer.
 .ck_fetch <- function(spec, root) {
   res <- cptkirk::ck_warp_to_buffer(
     spec$srcs, t_srs = spec$crs, te = spec$te, ts = spec$ts,
     bands = spec$bands, r = spec$resampling,
     fill = if (length(spec$nodata)) spec$nodata else NULL)
-  sub <- file.path(root, substr(rlang::hash(spec), 1L, 16L))
-  dir.create(sub, showWarnings = FALSE)
+  .stage_buffer(res, file.path(root, substr(rlang::hash(spec), 1L, 16L)),
+                length(spec$nodata) > 0L)
+}
+
+# Stage a cptkirk buffer descriptor (data + nx/ny/dtype/nodata/geotransform/crs)
+# as a raw .bin described by a VRTRawRasterBand VRT (relativeToVRT sibling, so
+# GDAL's raw-band security gate is satisfied without loosening it). Returns the
+# VRT path. Shared by the single-source fetch and the batched mosaic.
+.stage_buffer <- function(res, sub, want_nodata) {
+  dir.create(sub, showWarnings = FALSE, recursive = TRUE)
   bin <- file.path(sub, "buf.bin")
   writeBin(res$data, bin)
   vrt <- file.path(sub, "buf.vrt")
-  ndv <- if (length(spec$nodata)) res$nodata else NULL
+  ndv <- if (isTRUE(want_nodata)) res$nodata else NULL
   writeLines(.raw_bsq_vrt_xml(
     basename(bin), res$nx, res$ny,
     paste(sprintf("%.16g", res$geotransform), collapse = ", "),
