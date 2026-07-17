@@ -124,8 +124,8 @@ test_that("multi-export: distributed streamed writes match memory results", {
     on.exit(d$close())
     matrix(d$read(b, 0, 0, 60, 40, 60, 40), 40, 60, byrow = TRUE)
   }
-  expect_equal(rd(file.path(dir, "cum.tif"), 2), unclass(ms$cum)[2, , ],
-               tolerance = 1e-6, ignore_attr = TRUE)
+  expect_equal(rd(file.path(dir, "cum.tif"), 2), unclass(ms$cum)[, , 2],
+               tolerance = 1e-6, ignore_attr = TRUE)   # memory layout is (y,x,t)
   expect_equal(rd(file.path(dir, "tot.tif"), 1), unclass(ms$tot),
                tolerance = 1e-6, ignore_attr = TRUE)
 })
