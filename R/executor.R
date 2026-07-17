@@ -390,7 +390,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
     consumers <- Filter(function(t2) s@id %in% t2@inputs, plan@stages)
     s@kind == "source_read" && length(consumers) > 0L &&
       all(vapply(consumers, function(t2) t2@kind == "warp", logical(1))) &&
-      plan@sink != s@id
+      plan@sink != s@id && !any(plan@sinks %in% s@members)
   }, logical(1))
 
   for (s in plan@stages[.stage_launch_order(plan)]) {
@@ -470,6 +470,37 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
       .garry_error(paste0("stage kind not executable: ", s@kind),
                    "garry_not_implemented_error")
     }
+  }
+
+  # Multi-export: several sinks share the ONE execution above; each is
+  # assembled/written from its own stage's per-chunk exports.
+  if (length(plan@sinks) > 1L) {
+    res <- lapply(seq_along(plan@sinks), function(k) {
+      nid <- plan@sinks[[k]]
+      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
+        nid %in% s@members, logical(1))))]]
+      chunks <- lapply(out[[st@id]], `[[`, .key(nid))
+      it <- chunk_iter(st@chunks)
+      pad <- .exec_out_pad(st)
+      # the exported node's grid, not the stage tail's
+      ngrid <- graph_get(graph, nid)@grid
+      if (!is.null(path)) {
+        p <- if (length(path) == 1L && dir.exists(path))
+          file.path(path, paste0(names(plan@sinks)[[k]], ".tif"))
+        else path[[names(plan@sinks)[[k]]]]
+        sk <- st; S7::prop(sk, "grid") <- ngrid
+        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names))
+      }
+      if (nrow(it) == 1L) {
+        v <- chunks[[1L]]
+        if (is.matrix(v)) v <- .exec_trim(v, pad)
+        if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
+      } else {
+        .exec_assemble(chunks, it, ngrid, pad)
+      }
+    })
+    names(res) <- names(plan@sinks)
+    return(if (is.null(path)) res else invisible(path))
   }
 
   sink <- plan@stages[[plan@sink]]

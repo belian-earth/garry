@@ -618,3 +618,15 @@ gdal_band_count <- function(path) {
   on.exit(ds$close())
   ds$getRasterCount()
 }
+
+
+# Toggle GDAL error-logging to R off for a code block (thread-safety:
+# gdalraster's R-callback handler aborts the process when a GDAL worker
+# thread warns; see lazy_cog's .ck_quiet). Lives here per the gdalraster
+# quarantine.
+.gdal_log_errors_off <- function(code) {
+  prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
+  gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")
+  on.exit(gdalraster::set_config_option("CPL_LOG_ERRORS", prev), add = TRUE)
+  force(code)
+}

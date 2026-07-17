@@ -45,6 +45,28 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   }
   p <- plan_lazy(x)
   if (plan_only) return(p)
+  # Multi-export v1 (design/multi-export-collect.md): several sinks share
+  # ONE single-threaded execution; the distributed scheduler learns
+  # multi-sink next.
+  if (length(p@sinks) > 1L) {
+    if (distributed)
+      cli::cli_inform("multi-export collect runs single-process in v1")
+    ck <- .ck_resolve(p)
+    p <- ck$plan
+    if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
+    res <- execute_plan(p, path = path, nodata = nodata)
+    if (!is.null(path)) return(invisible(res))
+    # per-sink: same layout + gis attribute as a single-sink collect
+    return(lapply(stats::setNames(seq_along(res), names(res)), function(k) {
+      out <- .collect_layout(res[[k]])
+      if (!is.null(dim(out))) {
+        grid <- graph_get(p@graph, p@sinks[[k]])@grid
+        nb <- if (length(dim(out)) == 3L) dim(out)[[3L]] else 1L
+        attr(out, "gis") <- .gis_attr(grid, nb)
+      }
+      out
+    }))
+  }
   # lazy_cog sources ("CK:") fetch nothing until here: resolve each source set to
   # a staged grid-aligned raster once (single-band sets through one concurrent
   # ck_batch pool), then the executors read it as an ordinary GDAL source.

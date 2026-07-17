@@ -82,6 +82,9 @@ Plan <- S7::new_class(
   properties = list(
     stages = S7::class_list,
     sink   = S7::class_integer,
+    # Multi-export (design/multi-export-collect.md): named NODE ids, one
+    # per requested sink. Length <= 1 means the classic single-sink plan.
+    sinks  = S7::new_property(S7::class_integer, default = quote(integer(0))),
     graph  = Graph
   )
 )

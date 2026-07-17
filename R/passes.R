@@ -320,9 +320,29 @@ NULL
 #' @return A `Plan`.
 #' @export
 plan_lazy <- function(x) {
+  # Multi-export: a NAMED list of LazyRasters plans as ONE graph with one
+  # execution and several sinks (design/multi-export-collect.md).
+  if (is.list(x) && !S7::S7_inherits(x, LazyRaster)) {
+    stopifnot(length(x) >= 1L, !is.null(names(x)), all(nzchar(names(x))))
+    graph <- x[[1L]]@graph
+    sink_ids <- vapply(seq_along(x), function(i) {
+      lr <- x[[i]]
+      if (!S7::S7_inherits(lr, LazyRaster))
+        cli::cli_abort("sink {i} must be a {.cls LazyRaster}")
+      if (identical(graph@nodes, lr@graph@nodes)) lr@node_id
+      else graph_import(graph, lr@graph, lr@node_id)
+    }, integer(1))
+    names(sink_ids) <- names(x)
+    return(.plan_lazy_impl(graph, x[[length(x)]]@node_id, sink_ids))
+  }
   stopifnot(S7::S7_inherits(x, LazyRaster))
-  graph <- x@graph
-  ids <- .reachable(graph, x@node_id)
+  .plan_lazy_impl(x@graph, x@node_id,
+                  stats::setNames(x@node_id, "sink"))
+}
+
+.plan_lazy_impl <- function(graph, primary_id, sink_ids) {
+  ids <- sort(unique(unlist(lapply(unique(sink_ids), function(i)
+    .reachable(graph, i)))))
 
   # required_halo is static per node; computed once here, threaded
   # through the merge pass and finalise (S7 dispatch per call adds up
@@ -478,7 +498,9 @@ plan_lazy <- function(x) {
     s$members <- sort(s$members)
     tail_id <- s$members[[length(s$members)]]
     ext_refs <- unlist(all_inputs[-i], use.names = FALSE)
-    s$exports <- sort(unique(c(intersect(s$members, ext_refs), tail_id)))
+    # Every requested sink node must leave its stage (multi-export).
+    s$exports <- sort(unique(c(intersect(s$members, ext_refs), tail_id,
+                               intersect(s$members, unname(sink_ids)))))
     protos[[i]] <- s
   }
 
@@ -541,9 +563,10 @@ plan_lazy <- function(x) {
   # spatially-reduced root is a member of BOTH its reduce_partial and
   # reduce_combine stages; the combine stage (created later) is the
   # sink, so take the last match.
-  sinks <- Filter(function(s) x@node_id %in% s$members, protos)
+  sinks <- Filter(function(s) primary_id %in% s$members, protos)
   Plan(stages = stage_objs,
-       sink = as.integer(sinks[[length(sinks)]]$id), graph = graph)
+       sink = as.integer(sinks[[length(sinks)]]$id),
+       sinks = sink_ids, graph = graph)
 }
 
 # Reachable ids from a sink, ascending (= topo in an append-only graph).

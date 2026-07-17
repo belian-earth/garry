@@ -4,7 +4,7 @@
 \alias{Plan}
 \title{A physical execution plan: stages in dependency order.}
 \usage{
-Plan(stages = list(), sink = integer(0), graph = Graph())
+Plan(stages = list(), sink = integer(0), sinks = integer(0), graph = Graph())
 }
 \arguments{
 \item{stages}{List of \code{Stage}, indexed by stage id.}

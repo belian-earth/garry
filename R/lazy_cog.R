@@ -277,12 +277,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # no-declared-nodata source holds exact zeros (decoded FSQ embeddings
 # do). CPL_LOG_ERRORS=OFF makes gdalraster's handler skip the R
 # callback for the duration of the fetch.
-.ck_quiet <- function(code) {
-  prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
-  gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")
-  on.exit(gdalraster::set_config_option("CPL_LOG_ERRORS", prev), add = TRUE)
-  force(code)
-}
+.ck_quiet <- function(code) .gdal_log_errors_off(code)
 
 # The one cptkirk-dependent step: fetch+warp the source set's selected bands onto
 # the target grid into a native-dtype BSQ buffer, staged via .stage_buffer.
