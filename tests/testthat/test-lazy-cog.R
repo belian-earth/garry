@@ -284,3 +284,28 @@ test_that("lazy_cog stages on disk (and still reads right) under a tiny budget",
                  "staging on disk")
   expect_equal(unname(got[1, 1]), 50)
 })
+
+test_that("lazy_cog survives no-nodata sources holding exact zeros", {
+  # Regression: GDAL's warp warning ("value 0 changed to 1.4e-45 to avoid
+  # being treated as NoData") fired on a worker thread reaches gdalraster's
+  # R-callback error handler and ABORTS the process unless the CK fetch
+  # runs under CPL_LOG_ERRORS=OFF (.ck_quiet). A failure here may crash
+  # the test runner outright -- that is the regression signal.
+  skip_if_not_installed("cptkirk")
+  dir <- withr::local_tempdir("lczero")
+  f <- file.path(dir, "zero.tif")
+  d <- gdalraster::create("GTiff", f, 512, 512, 2, "Float32",
+                          return_obj = TRUE,
+                          options = c("TILED=YES", "BLOCKXSIZE=256",
+                                      "BLOCKYSIZE=256"))
+  d$setGeoTransform(c(0, 10, 0, 5120, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  v <- rep(c(0, 1.5), each = 512 * 256)      # exact zeros, no declared nodata
+  for (b in 1:2) d$write(b, 0, 0, 512, 512, v)
+  d$close()
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
+                    dims = c(128L, 128L), dtype = "f32")
+  got <- collect(lazy_cog(f, grid)[["b1"]], distributed = FALSE)
+  expect_equal(unname(got[1, 1]), 0)
+  expect_equal(unname(got[128, 1]), 1.5)
+})

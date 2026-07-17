@@ -247,11 +247,11 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 .ck_batch_mosaic <- function(members, specs, root, staged) {
   s0  <- specs[[members[[1L]]]]
   src <- lapply(members, function(k) specs[[k]]$srcs)       # per set: its tiles
-  out <- cptkirk::ck_batch_to_buffer(
+  out <- .ck_quiet(cptkirk::ck_batch_to_buffer(
     src = src, stack = FALSE,
     t_srs = s0$crs, te = s0$te, ts = s0$ts,
     bands = if (length(s0$bands)) s0$bands else NULL,
-    r = s0$resampling, io_concurrency = 32L)
+    r = s0$resampling, io_concurrency = 32L))
   for (i in seq_along(members)) {
     key     <- sub("^CK:", "", members[[i]])
     want_nd <- length(specs[[members[[i]]]]$nodata) > 0L
@@ -269,13 +269,28 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   }
 }
 
+# cptkirk's warp runs GDAL worker threads; gdalraster's GLOBAL error
+# handler calls back into R, and an R callback on a non-main thread
+# aborts the whole process (Rcpp longjmp across a noexcept boundary ->
+# std::terminate). Any warp warning triggers it -- e.g. GDAL's "value 0
+# changed to 1.4e-45 to avoid being treated as NoData" when a
+# no-declared-nodata source holds exact zeros (decoded FSQ embeddings
+# do). CPL_LOG_ERRORS=OFF makes gdalraster's handler skip the R
+# callback for the duration of the fetch.
+.ck_quiet <- function(code) {
+  prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
+  gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")
+  on.exit(gdalraster::set_config_option("CPL_LOG_ERRORS", prev), add = TRUE)
+  force(code)
+}
+
 # The one cptkirk-dependent step: fetch+warp the source set's selected bands onto
 # the target grid into a native-dtype BSQ buffer, staged via .stage_buffer.
 .ck_fetch <- function(spec, root) {
-  res <- cptkirk::ck_warp_to_buffer(
+  res <- .ck_quiet(cptkirk::ck_warp_to_buffer(
     spec$srcs, t_srs = spec$crs, te = spec$te, ts = spec$ts,
     bands = spec$bands, r = spec$resampling,
-    fill = if (length(spec$nodata)) spec$nodata else NULL)
+    fill = if (length(spec$nodata)) spec$nodata else NULL))
   .stage_buffer(res, file.path(root, substr(rlang::hash(spec), 1L, 16L)),
                 length(spec$nodata) > 0L)
 }
