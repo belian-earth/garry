@@ -70,3 +70,30 @@ test_that("bilateral_focal validates", {
   fn <- bilateral_focal(1, radius = 2L)
   expect_error(fn(vector("list", 9L)), "same radius")
 })
+
+test_that("bilateral_focal: per-channel sigma_r filters a cube in one node", {
+  skip_if_not_installed("anvl")
+  set.seed(41)
+  nch <- 3L; ny <- 24L; nx <- 20L
+  cube <- array(rnorm(nch * ny * nx), c(nch, ny, nx))
+  sig <- c(0.6, 1.4, 2.5)
+  g <- graph_new()
+  slices <- lapply(1:nch, function(k) {
+    f <- tempfile(fileext = ".tif")
+    d <- gdalraster::create("GTiff", f, nx, ny, 1, "Float32", return_obj = TRUE)
+    d$setGeoTransform(c(0, 30, 0, 4600000, 0, -30))
+    d$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+    d$write(1, 0, 0, nx, ny, as.numeric(t(cube[k, , ])))
+    d$close()
+    lazy_source(f, graph = g)
+  })
+  stk <- lazy_stack(slices, along = "band")
+  got <- execute_plan(plan_lazy(
+    focal(stk, fn = bilateral_focal(sigma_r = sig), radius = 1L)))
+  for (k in 1:nch) {
+    ref <- execute_plan(plan_lazy(
+      focal(slices[[k]], fn = bilateral_focal(sigma_r = sig[k]), radius = 1L)))
+    expect_equal(got[k, , ], ref, tolerance = 1e-5,
+                 ignore_attr = TRUE, label = paste("channel", k))
+  }
+})

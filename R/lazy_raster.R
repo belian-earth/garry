@@ -317,16 +317,32 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
 #' @return A focal body `fn(shifts)` for [focal()].
 #' @export
 bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
-  for (v in c(sigma_r = sigma_r, sigma_d = sigma_d))
-    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0)
-      cli::cli_abort("{.arg sigma_r} and {.arg sigma_d} must be finite positive scalars")
+  if (!is.numeric(sigma_r) || length(sigma_r) < 1L ||
+      !all(is.finite(sigma_r)) || any(sigma_r <= 0))
+    cli::cli_abort("{.arg sigma_r} must be finite positive (scalar or per-channel vector)")
+  if (!is.numeric(sigma_d) || length(sigma_d) != 1L ||
+      !is.finite(sigma_d) || sigma_d <= 0)
+    cli::cli_abort("{.arg sigma_d} must be a finite positive scalar")
   r <- as.integer(radius)
   # spatial weights in focal()'s shift order (expand.grid(dx, dy) row-major)
   off <- expand.grid(dx = -r:r, dy = -r:r)
   sw <- exp(-(off$dx^2 + off$dy^2) / (2 * sigma_d^2))
   inv2sr2 <- 1 / (2 * sigma_r^2)
-  force(inv2sr2)
+  # Per-channel sigmas (length > 1): the body runs on a (channel, y, x)
+  # cube and the inverse-variance broadcasts along the leading axis, so
+  # ONE FocalNode filters every channel with its own range sigma.
+  per_channel <- length(sigma_r) > 1L
+  force(inv2sr2); force(per_channel)
   function(shifts) {
+    inv2 <- if (!per_channel) inv2sr2 else {
+      centre0 <- shifts[[(length(shifts) + 1L) %/% 2L]]
+      rank <- if (.g_traced(centre0)) length(.g_shape(centre0))
+              else length(dim(centre0))
+      if (rank < 3L)
+        cli::cli_abort("per-channel sigma_r needs a (channel, y, x) cube input")
+      a <- array(inv2sr2, c(length(inv2sr2), rep(1L, rank - 1L)))
+      if (.g_traced(centre0)) g_upload(a, "f32") else a
+    }
     if (length(shifts) != length(sw))
       cli::cli_abort("bilateral_focal(radius = {r}) got {length(shifts)} shifts; pass the same radius to focal()")
     centre <- shifts[[(length(shifts) + 1L) %/% 2L]]
@@ -334,7 +350,13 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
     den <- 0
     for (s in seq_along(shifts)) {
       v <- shifts[[s]]
-      w <- sw[[s]] * exp(-(v - centre)^2 * inv2sr2)
+      d2 <- (v - centre)^2
+      w <- if (per_channel) {
+        b <- g_broadcast_arrays(d2, inv2)
+        sw[[s]] * exp(-b[[1L]] * b[[2L]])
+      } else {
+        sw[[s]] * exp(-d2 * inv2)
+      }
       ok <- !g_is_nodata(v)
       wv <- g_ifelse(ok, w, 0)
       num <- num + wv * g_ifelse(ok, v, 0)

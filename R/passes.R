@@ -60,8 +60,11 @@ NULL
   } else if (S7::S7_inherits(node, FocalNode)) {
     x <- pv[[1L]]
     r <- node@radius
-    nr <- nrow(x) - 2L * r
-    nc <- ncol(x) - 2L * r
+    # window from the LAST two (spatial) dims: focal ops vectorise over
+    # leading dims (a (band, y, x) cube filters every channel at once)
+    sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
+    nr <- sh[[length(sh) - 1L]] - 2L * r
+    nc <- sh[[length(sh)]] - 2L * r
     offsets <- expand.grid(dx = -r:r, dy = -r:r)   # row-major over (dy, dx)
     shifts <- lapply(seq_len(nrow(offsets)), function(i) {
       g_shift_slice(x, offsets$dy[i], offsets$dx[i], nr, nc, r)
