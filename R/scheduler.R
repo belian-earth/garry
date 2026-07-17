@@ -909,7 +909,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # (On error the partially written file is left behind; the
   # single-threaded executor still writes at the end.)
   sink <- plan@stages[[plan@sink]]
-  stream_write <- !is.null(path) && sink@kind != "reduce_combine"
+  # Multi-export writes per sink host-side after the drain (per-sink
+  # streaming is a later optimisation).
+  stream_write <- !is.null(path) && sink@kind != "reduce_combine" &&
+    length(plan@sinks) <= 1L
   sink_ds <- NULL
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
@@ -1078,6 +1081,43 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # Combine closures run host-side on R arrays.
     partials <- lapply(lapply(out_of(part), `[[`, key), .sv_materialise)
     combine_vals[[.key(s@id)]] <- s@fn(partials)
+  }
+
+  # Multi-export: assemble/write every requested sink from the ONE run
+  # (mirrors execute_plan's multi-sink tail; raw store values
+  # materialise in .exec_assemble / write via .exec_write_sink).
+  if (length(plan@sinks) > 1L) {
+    res <- lapply(seq_along(plan@sinks), function(kk) {
+      nid <- plan@sinks[[kk]]
+      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
+        nid %in% s@members, logical(1))))]]
+      skey <- .key(nid)
+      chunks <- if (st@kind == "reduce_combine") {
+        list(combine_vals[[.key(st@id)]][[skey]])
+      } else {
+        lapply(out_of(st), `[[`, skey)
+      }
+      it <- chunk_iter(st@chunks)
+      pad <- .exec_out_pad(st)
+      ngrid <- graph_get(plan@graph, nid)@grid
+      if (!is.null(path)) {
+        p <- if (length(path) == 1L && dir.exists(path))
+          file.path(path, paste0(names(plan@sinks)[[kk]], ".tif"))
+        else path[[names(plan@sinks)[[kk]]]]
+        sk <- st
+        S7::prop(sk, "grid") <- ngrid
+        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names))
+      }
+      if (nrow(it) == 1L) {
+        v <- .sv_materialise(chunks[[1L]])
+        if (is.matrix(v)) v <- .exec_trim(v, pad)
+        if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
+      } else {
+        .exec_assemble(chunks, it, ngrid, pad)
+      }
+    })
+    names(res) <- names(plan@sinks)
+    return(if (is.null(path)) res else invisible(path))
   }
 
   key <- .key(sink@members[[length(sink@members)]])

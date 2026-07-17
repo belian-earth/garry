@@ -49,12 +49,14 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   # ONE single-threaded execution; the distributed scheduler learns
   # multi-sink next.
   if (length(p@sinks) > 1L) {
-    if (distributed)
-      cli::cli_inform("multi-export collect runs single-process in v1")
     ck <- .ck_resolve(p)
     p <- ck$plan
     if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
-    res <- execute_plan(p, path = path, nodata = nodata)
+    res <- if (distributed) {
+      execute_plan_mirai(p, path = path, nodata = nodata)
+    } else {
+      execute_plan(p, path = path, nodata = nodata)
+    }
     if (!is.null(path)) return(invisible(res))
     # per-sink: same layout + gis attribute as a single-sink collect
     return(lapply(stats::setNames(seq_along(res), names(res)), function(k) {

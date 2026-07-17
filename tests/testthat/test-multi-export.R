@@ -74,3 +74,26 @@ test_that("multi-export validates its input", {
   expect_error(plan_lazy(list(a + 1)))                   # unnamed
   expect_error(plan_lazy(list(x = 1)))                   # not a LazyRaster
 })
+
+test_that("multi-export: distributed == single-process", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("mirai")
+  skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
+  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
+  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
+
+  garry_daemons(2, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  f <- fixture_gradient_f32()
+  a <- lazy_source(f); b <- lazy_source(f)
+  stk <- lazy_stack(list(a + 1, b * 2, a - b))
+  sc <- scan_over(stk, function(xs, m)
+    g_scan(0, function(c, v) list(carry = c + v, out = c + v),
+           xs = xs[[1L]])$out)
+  red <- reduce_over(stk, "mean", "t")
+  md <- .with_px(400, collect(list(cum = sc, mn = red), distributed = TRUE))
+  ms <- .with_px(400, collect(list(cum = sc, mn = red), distributed = FALSE))
+  for (nm in names(ms))
+    expect_equal(unclass(md[[nm]]), unclass(ms[[nm]]), tolerance = 1e-6,
+                 label = nm)
+})
