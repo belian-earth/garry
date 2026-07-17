@@ -112,7 +112,18 @@ NULL
   if (is.null(env) || identical(env, globalenv()) ||
       isNamespace(env)) return(fn)
   g <- codetools::findGlobals(fn, merge = FALSE)
-  e <- new.env(parent = globalenv())
+  # Reparent onto the closure's terminal environment: a namespace when
+  # the chain ends in one (serialises by reference and keeps unexported
+  # helpers resolvable on daemons and in sessions where the package is
+  # not attached -- e.g. garry's own factory bodies like bilateral_focal),
+  # else globalenv as before.
+  terminal <- env
+  while (!identical(terminal, globalenv()) &&
+         !identical(terminal, emptyenv()) && !isNamespace(terminal)) {
+    terminal <- parent.env(terminal)
+  }
+  if (!isNamespace(terminal)) terminal <- globalenv()
+  e <- new.env(parent = terminal)
   for (v in unique(c(g$variables, g$functions))) {
     # Copy only bindings that live BELOW globalenv/namespace boundaries
     # (true captures); package and global bindings resolve at run time.

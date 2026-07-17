@@ -97,3 +97,16 @@ test_that("bilateral_focal: per-channel sigma_r filters a cube in one node", {
                  ignore_attr = TRUE, label = paste("channel", k))
   }
 })
+
+test_that("slimmed factory bodies keep their defining namespace as parent", {
+  # bilateral_focal's closure lives in a garry exec env; slimming must
+  # reparent onto the garry namespace (not globalenv) so unqualified g_*
+  # calls resolve on daemons and in sessions where garry is not attached.
+  fn <- bilateral_focal(1.5)
+  slim <- garry:::.slim_fn(fn)
+  env <- environment(slim)
+  expect_true(isNamespace(parent.env(env)))
+  expect_identical(environmentName(parent.env(env)), "garry")
+  # captures copied into the slim env
+  expect_true(length(ls(env)) > 0L)
+})
