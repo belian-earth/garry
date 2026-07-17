@@ -909,21 +909,45 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # (On error the partially written file is left behind; the
   # single-threaded executor still writes at the end.)
   sink <- plan@stages[[plan@sink]]
-  # Multi-export writes per sink host-side after the drain (per-sink
-  # streaming is a later optimisation).
-  stream_write <- !is.null(path) && sink@kind != "reduce_combine" &&
-    length(plan@sinks) <= 1L
+  wnodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+  multi <- length(plan@sinks) > 1L
+  stream_write <- !is.null(path) && sink@kind != "reduce_combine" && !multi
   sink_ds <- NULL
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
     sink_it <- chunk_iter(sink@chunks)
     sink_spad <- .exec_out_pad(sink)
-    wnodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
     sink_task_j <- stats::setNames(
       seq_len(nrow(sink_it)),
       sprintf("s%d_c%d", sink@id, seq_len(nrow(sink_it))))
     sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata, band_names = band_names)
     on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
+            add = TRUE)
+  }
+  # Multi-export streaming: every non-combine sink gets its own open
+  # output and writes each chunk the moment its stage task lands.
+  # reduce_combine sinks (host-side combines) write after the drain.
+  stream_sinks <- list()
+  if (!is.null(path) && multi) {
+    for (kk in seq_along(plan@sinks)) {
+      nid <- plan@sinks[[kk]]
+      nm <- names(plan@sinks)[[kk]]
+      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
+        nid %in% s@members, logical(1))))]]
+      if (st@kind == "reduce_combine") next
+      p <- if (length(path) == 1L && dir.exists(path))
+        file.path(path, paste0(nm, ".tif")) else path[[nm]]
+      ngrid <- graph_get(plan@graph, nid)@grid
+      it <- chunk_iter(st@chunks)
+      ds <- gdal_create_output(p, ngrid, nodata = wnodata,
+                               band_names = band_names)
+      stream_sinks[[nm]] <- list(
+        key = .key(nid), it = it, pad = .exec_out_pad(st), ds = ds,
+        dtype = ngrid@dtype, path = p,
+        task_j = stats::setNames(seq_len(nrow(it)),
+                                 sprintf("s%d_c%d", st@id, seq_len(nrow(it)))))
+    }
+    on.exit(for (sp in stream_sinks) try(sp$ds$close(), silent = TRUE),
             add = TRUE)
   }
 
@@ -1029,6 +1053,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                             ch, sink_spad, sink@grid@dtype, wnodata)
           log_line("write", k)
         }
+        for (sp in stream_sinks) {
+          if (is.na(sp$task_j[k])) next
+          j <- sp$task_j[[k]]
+          ch <- chunk_vals[[k]][[sp$key]]
+          .exec_check_writable(ch, nrow(sp$it))
+          .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
+                            ch, sp$pad, sp$dtype, wnodata)
+          log_line("write", k)
+        }
         release_reads(k)
         # Eager fetch-cache cleanup: a fetch-backed source stage's
         # window files unlink once its last read (assemble) task is
@@ -1089,6 +1122,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   if (length(plan@sinks) > 1L) {
     res <- lapply(seq_along(plan@sinks), function(kk) {
       nid <- plan@sinks[[kk]]
+      nm <- names(plan@sinks)[[kk]]
+      if (!is.null(path) && !is.null(stream_sinks[[nm]])) {
+        sp <- stream_sinks[[nm]]
+        sp$ds$close()
+        stream_sinks[[nm]]$ds <<- NULL
+        return(sp$path)                     # streamed as chunks landed
+      }
       st <- plan@stages[[max(which(vapply(plan@stages, function(s)
         nid %in% s@members, logical(1))))]]
       skey <- .key(nid)
@@ -1102,8 +1142,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       ngrid <- graph_get(plan@graph, nid)@grid
       if (!is.null(path)) {
         p <- if (length(path) == 1L && dir.exists(path))
-          file.path(path, paste0(names(plan@sinks)[[kk]], ".tif"))
-        else path[[names(plan@sinks)[[kk]]]]
+          file.path(path, paste0(nm, ".tif"))
+        else path[[nm]]
         sk <- st
         S7::prop(sk, "grid") <- ngrid
         return(.exec_write_sink(chunks, it, sk, p, nodata, band_names))

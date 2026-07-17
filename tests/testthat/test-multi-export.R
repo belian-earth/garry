@@ -97,3 +97,35 @@ test_that("multi-export: distributed == single-process", {
     expect_equal(unclass(md[[nm]]), unclass(ms[[nm]]), tolerance = 1e-6,
                  label = nm)
 })
+
+test_that("multi-export: distributed streamed writes match memory results", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("mirai")
+  skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
+  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
+  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
+
+  garry_daemons(2, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  f <- fixture_gradient_f32()
+  a <- lazy_source(f); b <- lazy_source(f)
+  stk <- lazy_stack(list(a + 1, b * 2))
+  sc <- scan_over(stk, function(xs, m)
+    g_scan(0, function(c, v) list(carry = c + v, out = c + v),
+           xs = xs[[1L]])$out)
+  red <- reduce_over(stk, "sum", "t")
+  dir <- withr::local_tempdir("mstream")
+  .with_px(400, collect(list(cum = sc, tot = red), path = dir,
+                        distributed = TRUE))
+  ms <- .with_px(400, collect(list(cum = sc, tot = red),
+                              distributed = FALSE))
+  rd <- function(fp, b) {
+    d <- methods::new(gdalraster::GDALRaster, fp)
+    on.exit(d$close())
+    matrix(d$read(b, 0, 0, 60, 40, 60, 40), 40, 60, byrow = TRUE)
+  }
+  expect_equal(rd(file.path(dir, "cum.tif"), 2), unclass(ms$cum)[2, , ],
+               tolerance = 1e-6, ignore_attr = TRUE)
+  expect_equal(rd(file.path(dir, "tot.tif"), 1), unclass(ms$tot),
+               tolerance = 1e-6, ignore_attr = TRUE)
+})
