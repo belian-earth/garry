@@ -91,11 +91,21 @@ NULL
   }
 }
 
-# Trim `d` cells of padding from every side (centered slice).
+# Trim `d` cells of padding from every side (centered slice) of the
+# LAST two (spatial) dims; leading dims (t/band cubes) pass in full.
 .trim_to_pad <- function(x, d) {
   d <- as.integer(d)
   if (d == 0L) return(x)
-  g_shift_slice(x, 0L, 0L, nrow(x) - 2L * d, ncol(x) - 2L * d, d)
+  sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
+  if (is.null(sh)) sh <- length(x)
+  nr <- sh[[length(sh) - 1L]] - 2L * d
+  nc <- sh[[length(sh)]] - 2L * d
+  if (.g_traced(x) || length(sh) == 2L)
+    return(g_shift_slice(x, 0L, 0L, nr, nc, d))
+  # untraced (outer, y, x) cube
+  idx <- c(rep(list(quote(expr = )), length(sh) - 2L),
+           list((d + 1L):(d + nr), (d + 1L):(d + nc)))
+  do.call(`[`, c(list(x), idx, list(drop = FALSE)))
 }
 
 # Rebind a user node fn onto a minimal environment holding only its
@@ -143,16 +153,18 @@ NULL
 
 # Composed closure for a compute stage: runs members in ascending (topo)
 # order, returns the named list of exports. Each value carries a
-# remaining-pad count: inputs start at the stage halo, focal members
-# consume `radius`, and map members that join branches with different
-# pads trim the larger to the common minimum (the halo contract in
-# plan.R generalised to DAGs).
+# remaining-pad count: inputs start at `halo + out_pad` (D22), focal
+# members consume `radius`, and map members that join branches with
+# different pads trim the larger to the common minimum (the halo
+# contract in plan.R generalised to DAGs). `.stage_export_pads` is the
+# static mirror of this walk; keep them in lockstep.
 #
 # The closure captures per-member SPECS extracted from the graph, never
 # the graph itself: stage closures are serialized to daemons per task,
 # and a graph capture multiplies the whole plan into every payload (see
 # .slim_fn). rm() below keeps the closure environment minimal.
-.compose_stage_fn <- function(graph, members, input_nodes, exports, halo) {
+.compose_stage_fn <- function(graph, members, input_nodes, exports, halo,
+                              out_pad = 0L) {
   specs <- lapply(members, function(id) {
     node <- graph_get(graph, id)
     if (S7::S7_inherits(node, MapNode) || S7::S7_inherits(node, FocalNode))
@@ -164,15 +176,16 @@ NULL
     list(id = id, node = node,
          pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims))
   })
-  force(input_nodes); force(exports); force(halo)
-  rm(graph, members)
+  in_pad <- as.integer(halo + out_pad)
+  force(input_nodes); force(exports)
+  rm(graph, members, halo, out_pad)
   function(inputs) {
     vals <- new.env(parent = emptyenv())
     pads <- new.env(parent = emptyenv())
     for (i in seq_along(input_nodes)) {
       k <- .key(input_nodes[[i]])
       assign(k, inputs[[i]], envir = vals)
-      assign(k, halo, envir = pads)
+      assign(k, in_pad, envir = pads)
     }
     for (sp in specs) {
       node <- sp$node
@@ -195,6 +208,25 @@ NULL
       lapply(exports, function(e) get(.key(e), envir = vals)),
       vapply(exports, .key, character(1)))
   }
+}
+
+# Static mirror of .compose_stage_fn's pad walk (D22): the padding each
+# export value carries at run time, computed at plan time so consumers
+# and sink writers know how much to trim without inspecting values.
+.stage_export_pads <- function(graph, members, input_nodes, exports,
+                               halo, out_pad) {
+  pads <- new.env(parent = emptyenv())
+  for (i in input_nodes)
+    assign(.key(i), as.integer(halo + out_pad), envir = pads)
+  for (id in members) {
+    node <- graph_get(graph, id)
+    pp <- vapply(node@parents, function(p) get(.key(p), envir = pads),
+                 integer(1))
+    out <- if (S7::S7_inherits(node, FocalNode)) pp[[1L]] - node@radius
+           else min(pp)
+    assign(.key(id), as.integer(out), envir = pads)
+  }
+  vapply(exports, function(e) get(.key(e), envir = pads), integer(1))
 }
 
 # Pass-through closure for source_read / warp stages (executor supplies
@@ -259,8 +291,8 @@ NULL
 #   - spatially identical grids, so chunk tables stay aligned (the
 #     executors match input chunks by index);
 #   - the merged stage must need no halo: focal members keep their own
-#     source/warp-fed stage (D11), and padded values never meet stack
-#     members inside one stage;
+#     narrow stage so the halo lands on the fewest reads (a cost
+#     choice since D22 made padded compute boundaries executable);
 #   - fusion never crosses a reduction into a join: a stage whose
 #     consumed root is a ReduceNode does not fold into a consumer with
 #     other inputs. Folding it would widen every chunk's dependency
@@ -440,10 +472,12 @@ plan_lazy <- function(x) {
           # external inputs into a focal-bearing stage would put the
           # stage's halo on every added source's reads (measured:
           # band reads inheriting the mask chain's halo-7 windows)
-          # and widen its export set. Materialise the boundary
-          # instead; the merge pass cannot re-fold it (halo > 0).
-          # This is also what keeps source-fed kernel chains
-          # single-input/single-export for compute-on-read.
+          # and widen its export set. Cut the boundary instead; D22
+          # pad propagation keeps it executable (the producer emits
+          # a recomputed ring), so this is a cost choice, not a
+          # placement restriction. This is also what keeps source-fed
+          # kernel chains single-input/single-export for
+          # compute-on-read.
           # Weighted (differentiable) kernels are EXEMPT — see the
           # has_focal setters: the v1 gradient tape requires the
           # whole loss pipeline in one compute stage.
@@ -519,23 +553,48 @@ plan_lazy <- function(x) {
   }
 
   for (i in seq_along(protos)) {
-    s <- protos[[i]]
-    node <- graph_get(graph, s$members[[1L]])
-    if (s$kind == "compute") {
-      s$halo <- .stage_halo(graph, s$members, s$input_nodes, halos)
-      s$fn <- .compose_stage_fn(graph, s$members, s$input_nodes,
-                                s$exports, s$halo)
-      if (s$halo > 0L) {
-        in_kinds <- vapply(s$inputs, function(j) protos[[j]]$kind,
-                           character(1))
-        if (!all(in_kinds %in% c("source_read", "warp")))
-          .garry_error(paste0(
-            "focal ops are only supported in stages fed directly by a ",
-            "source or warp (D11); this stage is fed by: ",
-            paste(in_kinds, collapse = ", "),
-            ". Materialise first or restructure the pipeline."),
-            "garry_focal_placement_error")
+    if (protos[[i]]$kind == "compute")
+      protos[[i]]$halo <- .stage_halo(graph, protos[[i]]$members,
+                                      protos[[i]]$input_nodes, halos)
+    protos[[i]]$out_pad <- 0L
+  }
+
+  # D22: propagate output padding backwards over the stage DAG. A stage
+  # whose consumer needs `halo + out_pad` cells computes its chunks
+  # enlarged by that ring (recompute, not exchange:
+  # design/halo-propagation.md). Fixpoint iteration — stage ids are
+  # creation-ordered, not topological, and the DAG is small.
+  repeat {
+    changed <- FALSE
+    for (i in seq_along(protos)) {
+      if (protos[[i]]$kind %in% c("source_read", "warp")) next
+      cons <- Filter(function(s) i %in% s$inputs, protos)
+      need <- if (length(cons) == 0L) 0L else
+        max(vapply(cons, function(s) as.integer(s$halo + s$out_pad),
+                   integer(1)))
+      if (need != protos[[i]]$out_pad) {
+        protos[[i]]$out_pad <- need
+        changed <- TRUE
       }
+    }
+    if (!changed) break
+  }
+  for (s in protos) {
+    if (s$kind == "reduce_combine" && s$out_pad > 0L)
+      .garry_error(paste0(
+        "a focal window cannot follow a spatial reduction: the reduced ",
+        "value has no neighbourhood to recompute (D22). Materialise ",
+        "first or restructure the pipeline."),
+        "garry_focal_placement_error")
+  }
+
+  for (i in seq_along(protos)) {
+    s <- protos[[i]]
+    if (s$kind == "compute") {
+      s$fn <- .compose_stage_fn(graph, s$members, s$input_nodes,
+                                s$exports, s$halo, s$out_pad)
+      s$export_pads <- .stage_export_pads(graph, s$members, s$input_nodes,
+                                          s$exports, s$halo, s$out_pad)
     } else if (s$kind == "reduce_partial") {
       rnode <- graph_get(graph, s$members[[1L]])
       pgrid <- graph_get(graph, rnode@parents[[1L]])@grid
@@ -548,13 +607,14 @@ plan_lazy <- function(x) {
     protos[[i]] <- s
   }
 
-  # Source/warp stages inherit the max halo of their consumers: halos are
-  # satisfied by enlarging the read window (D11).
+  # Source/warp stages inherit the max NEED (halo + out_pad, D22) of
+  # their consumers: satisfied by enlarging the read window (D11).
   for (i in seq_along(protos)) {
     if (!protos[[i]]$kind %in% c("source_read", "warp")) next
-    halos <- vapply(Filter(function(s) i %in% s$inputs, protos),
-                    function(s) s$halo, integer(1))
-    protos[[i]]$halo <- if (length(halos)) max(0L, halos) else 0L
+    needs <- vapply(Filter(function(s) i %in% s$inputs, protos),
+                    function(s) as.integer(s$halo + s$out_pad),
+                    integer(1))
+    protos[[i]]$halo <- if (length(needs)) max(0L, needs) else 0L
   }
 
   chunk_dim <- .plan_chunk_dim(graph, protos)
@@ -569,7 +629,9 @@ plan_lazy <- function(x) {
         garry_opt("device") else "cpu",
       inputs = as.integer(s$inputs),
       input_nodes = as.integer(s$input_nodes),
-      exports = as.integer(s$exports %||% integer(0))
+      exports = as.integer(s$exports %||% integer(0)),
+      out_pad = as.integer(s$out_pad %||% 0L),
+      export_pads = as.integer(s$export_pads %||% integer(0))
     )
   })
 

@@ -117,7 +117,11 @@ NULL
   m <- .exec_read_padded(path, band, nodata, cg, core,
                          open_options = open_options,
                          out = if (read_raw) "raw_f32" else "matrix")
-  if (!is.null(fuse)) m <- .apply_fuse(m, fuse, store_raw)
+  if (!is.null(fuse)) {
+    m <- .apply_fuse(m, fuse, store_raw)
+    if ((fuse$out_pad %||% 0L) > 0L)
+      m <- .exec_mask_edge(m, fuse$out_pad, core, cg@grid@dims)
+  }
   val <- if (is.null(parts)) stats::setNames(list(m), key) else if (.sv_is(m)) {
     slc <- .sv_slicer(m)
     stats::setNames(
@@ -191,7 +195,7 @@ NULL
 .daemon_run_compute_shm <- function(cache_key, fn, in_vals, in_keys,
                                     trims, dtypes, reg_key,
                                     out_keys = NULL, device = "cpu",
-                                    store_raw = FALSE) {
+                                    store_raw = FALSE, edge = NULL) {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
   dev <- .exec_device(device)
@@ -209,6 +213,12 @@ NULL
   # to whichever stage compiled it, so rename positionally (exports
   # are ascending in every composed closure).
   if (!is.null(out_keys)) names(res) <- out_keys
+  if (!is.null(edge)) {
+    for (k in names(edge$pads)) {
+      res[[k]] <- .exec_mask_edge(res[[k]], edge$pads[[k]],
+                                  edge$core, edge$gdims)
+    }
+  }
   sh <- mori::share(res)
   .daemon_shm[[reg_key]] <- sh
   # Release this chunk's device buffers and input copies now: nothing
@@ -308,7 +318,8 @@ NULL
     }
     base
   })
-  sig <- list(kind = s@kind, halo = s@halo, parts = parts,
+  sig <- list(kind = s@kind, halo = s@halo, out_pad = s@out_pad,
+              parts = parts,
               n_inputs = length(s@input_nodes),
               exports = unname(local[as.character(s@exports)]))
   tf <- tempfile("garry-sig-")
@@ -636,7 +647,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       ck = paste0(.stage_kernel_sig(graph, C), "@", C@device),
       fn = C@fn,
       dtype = graph_get(graph, C@input_nodes[[1L]])@grid@dtype,
-      out_key = .key(C@exports[[1L]]))
+      out_key = .key(C@exports[[1L]]),
+      out_pad = C@out_pad)
     fused_cid[[.key(C@id)]] <- TRUE
   }
 
@@ -738,8 +750,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         # slice their window zero-copy. Either way compute chunk j's
         # dependency is the READ task covering it.
         its <- chunk_iter(split_cg)
-        # A fused kernel consumes the pad: its output is core-sized.
-        H2 <- if (is.null(fspec)) 2L * split_cg@halo else 0L
+        # A fused kernel consumes the halo; its output carries the
+        # fused stage's out_pad ring (D22), 0 in the common case.
+        H2 <- if (is.null(fspec)) 2L * split_cg@halo
+              else 2L * (fspec$out_pad %||% 0L)
         dep_of <- character(nrow(its))
         elt_of <- sprintf("%s\x1f%d", skey, seq_len(nrow(its)))
         if (length(fetch_deps))
@@ -785,8 +799,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       sig <- paste0(.stage_kernel_sig(graph, s), "@", s@device)
       okeys <- vapply(s@exports, .key, character(1))
       cd <- s@chunks@chunk_dim
+      need <- s@halo + s@out_pad
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
-        prod(as.numeric(cd) + 2 * s@halo) / 2^20
+        prod(as.numeric(cd) + 2 * need) / 2^20
       # The per-px estimate is calibrated for the rds store, where
       # every input lands as a private R double. Under mori the
       # inputs are shared mappings (zero-copy extraction) and the
@@ -802,11 +817,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         fn = s@fn,
         device = s@device,
         dtypes = vapply(in_meta, function(m) m$dtype, character(1)),
-        nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * s@halo,
-        nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * s@halo)
+        nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * need,
+        nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * need)
       for (j in seq_len(nrow(it))) {
         local({
-          sid <- s@id; jj <- j; fn <- s@fn; halo <- s@halo
+          sid <- s@id; jj <- j; fn <- s@fn; need <- s@halo + s@out_pad
+          epads <- if (length(s@export_pads)) stats::setNames(
+            as.integer(s@export_pads),
+            vapply(s@exports, .key, character(1))) else integer(0)
+          edge <- if (any(epads > 0L)) list(
+            pads = epads[epads > 0L], core = it[jj, ],
+            gdims = s@grid@dims)
           meta <- in_meta
           ck <- sig                       # content-addressed jit key
           out_keys <- okeys
@@ -822,7 +843,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             if (is.null(el)) in_keys[[i]] else el[[jj]]
           }, character(1))
           trims <- vapply(meta, function(m)
-            as.integer(m$pad - halo), integer(1))
+            as.integer(m$pad - need), integer(1))
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- sprintf("s%d_c%d", sid, jj)
           sr <- use_raw
@@ -837,13 +858,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                                              trims, dtypes, reg,
                                              out_keys = ok,
                                              device = dv,
-                                             store_raw = sr),
+                                             store_raw = sr,
+                                             edge = eg),
               ck = ck, fn = fn,
               in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
               in_keys = shm_keys,
               trims = trims, dtypes = dtypes,
               reg = sprintf("r%d_%s", run_id, key),
-              ok = out_keys, dv = sdev, sr = sr,
+              ok = out_keys, dv = sdev, sr = sr, eg = edge,
               .compute = prof)
           })
           comp_stage_of[[key]] <- sid
@@ -916,7 +938,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
     sink_it <- chunk_iter(sink@chunks)
-    sink_spad <- .exec_out_pad(sink)
+    sink_spad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
     sink_task_j <- stats::setNames(
       seq_len(nrow(sink_it)),
       sprintf("s%d_c%d", sink@id, seq_len(nrow(sink_it))))
@@ -942,7 +964,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       ds <- gdal_create_output(p, ngrid, nodata = wnodata,
                                band_names = band_names)
       stream_sinks[[nm]] <- list(
-        key = .key(nid), it = it, pad = .exec_out_pad(st), ds = ds,
+        key = .key(nid), it = it, pad = .exec_export_pad(st, nid), ds = ds,
         dtype = ngrid@dtype, path = p,
         task_j = stats::setNames(seq_len(nrow(it)),
                                  sprintf("s%d_c%d", st@id, seq_len(nrow(it)))))
@@ -1138,7 +1160,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         lapply(out_of(st), `[[`, skey)
       }
       it <- chunk_iter(st@chunks)
-      pad <- .exec_out_pad(st)
+      pad <- .exec_export_pad(st, nid)
       ngrid <- graph_get(plan@graph, nid)@grid
       if (!is.null(path)) {
         p <- if (length(path) == 1L && dir.exists(path))
@@ -1146,11 +1168,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         else path[[nm]]
         sk <- st
         S7::prop(sk, "grid") <- ngrid
-        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names))
+        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names,
+                                sink_pad = pad))
       }
       if (nrow(it) == 1L) {
-        v <- .sv_materialise(chunks[[1L]])
-        if (is.matrix(v)) v <- .exec_trim(v, pad)
+        v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
         if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
       } else {
         .exec_assemble(chunks, it, ngrid, pad)
@@ -1167,20 +1189,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     lapply(out_of(sink), `[[`, key)
   }
   it <- chunk_iter(sink@chunks)
-  sink_pad <- .exec_out_pad(sink)
+  sink_pad <- if (sink@kind == "reduce_combine") 0L else
+    .exec_export_pad(sink, sink@members[[length(sink@members)]])
 
   if (!is.null(path))
-    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names))
+    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names,
+                            sink_pad = sink_pad))
 
   if (nrow(it) == 1L) {
-    v <- chunks[[1L]]
-    if (.sv_is(v) && length(.sv_dim(v)) == 2L) {
-      v <- .sv_to_matrix(.exec_trim(v, sink_pad))
-    } else if (.sv_is(v)) {
-      v <- .sv_materialise(v)
-    } else if (is.matrix(v)) {
-      v <- .exec_trim(v, sink_pad)
-    }
+    v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) return(v[1L, 1L])
     return(v)
   }

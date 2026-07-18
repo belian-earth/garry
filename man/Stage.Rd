@@ -15,7 +15,9 @@ Stage(
   device = character(0),
   inputs = integer(0),
   input_nodes = integer(0),
-  exports = integer(0)
+  exports = integer(0),
+  out_pad = 0L,
+  export_pads = integer(0)
 )
 }
 \arguments{
@@ -42,6 +44,15 @@ Stage(
 
 \item{exports}{Member node ids \code{fn} returns, ascending (consumed by
 other stages, plus the stage tail).}
+
+\item{out_pad}{Spatial padding the stage's chunks are computed with
+(D22): consumers needing a halo on this stage's exports receive it
+as a recomputed ring instead of a materialise-first refusal.
+Inputs arrive padded to \code{halo + out_pad}.}
+
+\item{export_pads}{Integer vector parallel to \code{exports}: the padding
+each export value carries (post-focal exports carry less than
+pre-focal ones). Empty means all zero.}
 }
 \value{
 A \code{Stage}.

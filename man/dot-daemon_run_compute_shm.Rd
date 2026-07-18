@@ -15,7 +15,8 @@ inputs.}
   reg_key,
   out_keys = NULL,
   device = "cpu",
-  store_raw = FALSE
+  store_raw = FALSE,
+  edge = NULL
 )
 }
 \arguments{

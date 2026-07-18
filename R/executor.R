@@ -52,11 +52,17 @@ NULL
   buf
 }
 
-# Trim k cells from every side (matrix or raw store value).
+# Trim k cells from every side of the LAST two (spatial) dims: matrix,
+# (outer, y, x) array, or raw store value.
 .exec_trim <- function(x, k) {
   if (k == 0L) return(x)
   if (.sv_is(x)) return(.sv_trim(x, k))
-  x[(k + 1L):(nrow(x) - k), (k + 1L):(ncol(x) - k), drop = FALSE]
+  d <- dim(x)
+  if (is.null(d)) return(x)
+  if (length(d) == 2L)
+    return(x[(k + 1L):(d[[1L]] - k), (k + 1L):(d[[2L]] - k), drop = FALSE])
+  stopifnot(length(d) == 3L)
+  x[, (k + 1L):(d[[2L]] - k), (k + 1L):(d[[3L]] - k), drop = FALSE]
 }
 
 # -- Raw f32 store values (phase 12c, decisions D19/D20) ----------------------
@@ -102,15 +108,32 @@ NULL
 # runs on align-style plans only.
 .sv_trim <- function(v, k) {
   k <- as.integer(k)
+  if (k == 0L) return(v)
   d <- .sv_dim(v)
-  nr <- d[[1L]] - 2L * k
-  nc <- d[[2L]] - 2L * k
-  ncb <- 4L * d[[2L]]
+  if (length(d) == 2L) {
+    nr <- d[[1L]] - 2L * k
+    nc <- d[[2L]] - 2L * k
+    ncb <- 4L * d[[2L]]
+    rows0 <- (k + seq_len(nr) - 1L) * ncb
+    cols <- 4L * k + seq_len(4L * nc)
+    out <- v[rep(rows0, each = length(cols)) + cols]
+    attributes(out) <- NULL
+    return(structure(out, gdim = c(nr, nc), gdt = "f32"))
+  }
+  # rank-3 (outer, y, x) row-major payload: per-plane 2D trim (D22
+  # padded stack exports written as sinks).
+  stopifnot(length(d) == 3L)
+  nr <- d[[2L]] - 2L * k
+  nc <- d[[3L]] - 2L * k
+  ncb <- 4L * d[[3L]]
+  plane <- d[[2L]] * ncb
   rows0 <- (k + seq_len(nr) - 1L) * ncb
   cols <- 4L * k + seq_len(4L * nc)
-  out <- v[rep(rows0, each = length(cols)) + cols]
+  base2 <- rep(rows0, each = length(cols)) + cols
+  idx <- rep((seq_len(d[[1L]]) - 1L) * plane, each = length(base2)) + base2
+  out <- v[idx]
   attributes(out) <- NULL
-  structure(out, gdim = c(nr, nc), gdt = "f32")
+  structure(out, gdim = c(d[[1L]], nr, nc), gdt = "f32")
 }
 
 # Raw payload -> `[y, x]` matrix (sink writes, collect assembly,
@@ -181,9 +204,52 @@ NULL
 .exec_use_raw_store <- function() .g_has_raw_upload()
 
 # Output padding a stage's chunks carry: source/warp emit halo-padded
-# windows; compute stages consume their padding and emit chunk cores.
+# windows; compute stages emit their `out_pad` ring (D22, 0 when no
+# consumer needs a halo on them).
 .exec_out_pad <- function(stage) {
-  if (stage@kind %in% c("source_read", "warp")) stage@halo else 0L
+  if (stage@kind %in% c("source_read", "warp")) stage@halo else stage@out_pad
+}
+
+# Padding a SPECIFIC export of a stage carries: source/warp exports the
+# stage halo; compute exports their static `export_pads` entry (a
+# pre-focal export in a halo stage carries more than the stage tail).
+.exec_export_pad <- function(stage, nid) {
+  if (stage@kind %in% c("source_read", "warp")) return(stage@halo)
+  if (length(stage@export_pads) == 0L) return(0L)
+  i <- match(as.integer(nid), stage@exports)
+  if (is.na(i)) 0L else stage@export_pads[[i]]
+}
+
+# NaN out the beyond-raster margin of a padded chunk value (D22 + D8):
+# the ring a padded stage computes past the raster edge starts as NaN
+# at the read, but a member fn need not map NaN to NaN (integer casts
+# do not), so every stage boundary re-presents beyond-edge cells as
+# NaN. Interior chunks return untouched; raw payloads materialise
+# (edge chunks only, and only under a nonzero pad).
+.exec_mask_edge <- function(v, pad, core, gdims) {
+  pad <- as.integer(pad)
+  if (pad == 0L) return(v)
+  top <- max(0L, pad - core$y_off)
+  left <- max(0L, pad - core$x_off)
+  bot <- max(0L, core$y_off + core$y_size + pad - gdims[["y"]])
+  right <- max(0L, core$x_off + core$x_size + pad - gdims[["x"]])
+  if (top + left + bot + right == 0L) return(v)
+  if (.sv_is(v)) v <- .sv_materialise(v)
+  d <- dim(v)
+  nr <- d[[length(d) - 1L]]
+  nc <- d[[length(d)]]
+  if (length(d) == 2L) {
+    if (top > 0L) v[seq_len(top), ] <- NaN
+    if (bot > 0L) v[(nr - bot + 1L):nr, ] <- NaN
+    if (left > 0L) v[, seq_len(left)] <- NaN
+    if (right > 0L) v[, (nc - right + 1L):nc] <- NaN
+  } else {
+    if (top > 0L) v[, seq_len(top), ] <- NaN
+    if (bot > 0L) v[, (nr - bot + 1L):nr, ] <- NaN
+    if (left > 0L) v[, , seq_len(left)] <- NaN
+    if (right > 0L) v[, , (nc - right + 1L):nc] <- NaN
+  }
+  v
 }
 
 # Stage device -> anvl device argument: "cpu" means anvl's default
@@ -201,7 +267,7 @@ NULL
   }
   lapply(s@input_nodes, function(nid) {
     prod <- producer_of(nid)
-    list(id = prod@id, pad = .exec_out_pad(prod),
+    list(id = prod@id, pad = .exec_export_pad(prod, nid),
          dtype = graph_get(graph, nid)@grid@dtype)
   })
 }
@@ -274,19 +340,20 @@ NULL
 
 # Write one sink chunk to an open output dataset. 2D chunks write to
 # band 1; (outer, y, x) chunks write one GTiff band per outer layer
-# (t or band, D17). Only source/warp sinks carry padding, and those
-# are always 2D, so stacked chunks never need trimming.
+# (t or band, D17). Padding (source/warp sinks, or D22 padded compute
+# exports) trims off first.
 .exec_write_chunk <- function(ds, x_off, y_off, ch, sink_pad, dtype,
                               nodata) {
+  ch <- .exec_trim(ch, sink_pad)
   if (.sv_is(ch)) {
     d <- .sv_dim(ch)
     if (length(d) == 2L) {
-      gdal_write_window(ds, x_off, y_off, .exec_trim(ch, sink_pad),
+      gdal_write_window(ds, x_off, y_off, ch,
                         dtype = dtype, nodata = nodata)
     } else {
       # Row-major (band, y, x) payload: each band's plane is one
       # contiguous byte range.
-      stopifnot(sink_pad == 0L, length(d) == 3L)
+      stopifnot(length(d) == 3L)
       plane <- 4L * prod(d[2:3])
       for (b in seq_len(d[[1L]])) {
         bytes <- ch[((b - 1L) * plane + 1L):(b * plane)]
@@ -296,10 +363,9 @@ NULL
       }
     }
   } else if (is.matrix(ch)) {
-    gdal_write_window(ds, x_off, y_off, .exec_trim(ch, sink_pad),
-                      dtype = dtype, nodata = nodata)
+    gdal_write_window(ds, x_off, y_off, ch, dtype = dtype,
+                      nodata = nodata)
   } else {
-    stopifnot(sink_pad == 0L)
     for (b in seq_len(dim(ch)[[1L]])) {
       m <- ch[b, , , drop = FALSE]
       dim(m) <- dim(ch)[2:3]
@@ -326,9 +392,10 @@ NULL
 # Write sink chunks to a GTiff (single-threaded executor; the
 # distributed scheduler streams chunks through .exec_write_chunk as
 # they land instead).
-.exec_write_sink <- function(chunks, it, sink, path, nodata, band_names = NULL) {
+.exec_write_sink <- function(chunks, it, sink, path, nodata, band_names = NULL,
+                             sink_pad = NULL) {
   .exec_check_writable(chunks[[1L]], nrow(it))
-  sink_pad <- .exec_out_pad(sink)
+  if (is.null(sink_pad)) sink_pad <- .exec_out_pad(sink)
   nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
   ds <- gdal_create_output(path, sink@grid, nodata = nodata, band_names = band_names)
   on.exit(ds$close(), add = TRUE)
@@ -354,11 +421,12 @@ NULL
     }
     return(full)
   }
-  stopifnot(length(outer_dims) == 1L, sink_pad == 0L)
+  stopifnot(length(outer_dims) == 1L)
   full <- array(NA_real_, c(outer_dims[[1L]], dims[["y"]], dims[["x"]]))
   for (j in seq_len(nrow(it))) {
     full[, (it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
-         (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <- chunks[[j]]
+         (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <-
+      .exec_trim(chunks[[j]], sink_pad)
   }
   full
 }
@@ -445,19 +513,29 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
       dev <- .exec_device(s@device)
       jf <- g_jit(s@fn, device = dev)
       in_meta <- .exec_in_meta(graph, s, plan@stages)
+      epads <- if (length(s@export_pads)) stats::setNames(
+        as.integer(s@export_pads), vapply(s@exports, .key, character(1)))
+      else integer(0)
+      gdims <- s@grid@dims
       shapes <- character(0)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
         inputs <- lapply(seq_along(s@input_nodes), function(k) {
           meta <- in_meta[[k]]
           v <- out[[meta$id]][[j]][[.key(s@input_nodes[[k]])]]
-          extra <- meta$pad - s@halo
+          extra <- meta$pad - (s@halo + s@out_pad)
           stopifnot(extra >= 0L)
           g_upload(.exec_trim(v, extra), meta$dtype, device = dev)
         })
         shapes <<- unique(c(shapes, paste(
           vapply(inputs, function(a) paste(dim(a), collapse = "x"),
                  character(1)), collapse = "|")))
-        g_download(jf(inputs))
+        res <- g_download(jf(inputs))
+        if (any(epads > 0L)) {
+          for (k2 in names(res))
+            res[[k2]] <- .exec_mask_edge(res[[k2]], epads[[k2]] %||% 0L,
+                                         it[j, ], gdims)
+        }
+        res
       })
       stats[[s@id]] <- shapes
 
@@ -481,7 +559,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
         nid %in% s@members, logical(1))))]]
       chunks <- lapply(out[[st@id]], `[[`, .key(nid))
       it <- chunk_iter(st@chunks)
-      pad <- .exec_out_pad(st)
+      pad <- .exec_export_pad(st, nid)
       # the exported node's grid, not the stage tail's
       ngrid <- graph_get(graph, nid)@grid
       if (!is.null(path)) {
@@ -489,11 +567,11 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
           file.path(path, paste0(names(plan@sinks)[[k]], ".tif"))
         else path[[names(plan@sinks)[[k]]]]
         sk <- st; S7::prop(sk, "grid") <- ngrid
-        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names))
+        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names,
+                                sink_pad = pad))
       }
       if (nrow(it) == 1L) {
-        v <- chunks[[1L]]
-        if (is.matrix(v)) v <- .exec_trim(v, pad)
+        v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
         if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
       } else {
         .exec_assemble(chunks, it, ngrid, pad)
@@ -507,15 +585,15 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
   key <- .key(sink@members[[length(sink@members)]])
   chunks <- lapply(out[[sink@id]], `[[`, key)
   it <- chunk_iter(sink@chunks)
-  # Sink chunks may still carry source/warp output padding.
-  sink_pad <- .exec_out_pad(sink)
+  # Sink chunks may carry source/warp or D22 export padding.
+  sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
 
   if (!is.null(path))
-    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names))
+    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names,
+                            sink_pad = sink_pad))
 
   result <- if (nrow(it) == 1L) {
-    v <- chunks[[1L]]
-    if (is.matrix(v)) v <- .exec_trim(v, sink_pad)
+    v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
   } else {
     .exec_assemble(chunks, it, sink@grid, sink_pad)
