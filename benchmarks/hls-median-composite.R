@@ -106,6 +106,7 @@ t_all <- system.time({
     mask_asset = "Fmask",
     granularity = "day",
     sort_field = "datetime",
+    resampling = "bilinear",
     nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
   )
 
