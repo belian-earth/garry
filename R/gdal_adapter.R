@@ -236,8 +236,22 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #' @param files Grid-aligned input rasters, low-to-high priority.
 #' @return `dst`.
 #' @keywords internal
-gdal_mosaic_vrt <- function(dst, files) {
-  gdalraster::buildVRT(dst, files, quiet = TRUE)
+gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
+                            vrtnodata = NULL) {
+  args <- character(0)
+  if (!is.null(te)) {
+    te <- as.numeric(te)
+    if (is.null(ts)) cli::cli_abort("`te` requires `ts`.")
+    ts <- as.numeric(ts)
+    tr <- c((te[[3L]] - te[[1L]]) / ts[[1L]],
+            (te[[4L]] - te[[2L]]) / ts[[2L]])
+    args <- c("-te", sprintf("%.16g", te), "-tr", sprintf("%.16g", tr))
+  }
+  if (length(vrtnodata))
+    args <- c(args, "-vrtnodata", sprintf("%.16g", vrtnodata[[1L]]))
+  gdalraster::buildVRT(dst, files,
+                       cl_arg = if (length(args)) args else NULL,
+                       quiet = TRUE)
   if (!file.exists(dst)) cli::cli_abort("buildVRT mosaic failed.")
   dst
 }

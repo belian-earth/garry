@@ -248,6 +248,14 @@ NULL
 # `j` carries only this slice's varying data (locs, dt, nodata, bin); `k` is
 # the grid-constant bundle passed once via mirai `.args` (embedding it in every
 # task instead throttles the dispatcher and starves the daemon pool).
+#' Daemon task body: warp one slice's remote items into an f32 buffer.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#' @param j Per-slice job (locs/dt/nodata/resampling/bin).
+#' @param k Grid-constant bundle (nx/ny/gtstr/wkt).
+#' @return List with `err`, `tf`, `tw`.
+#' @keywords internal
+#' @export
 .cd_fetch_warp <- function(j, k) {
   nx <- k$nx; ny <- k$ny
   buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny)   # all-nodata default
@@ -349,16 +357,17 @@ NULL
   }, .compute = prof)
 }
 
-# Launch the parallel warp-on-read WITHOUT blocking (one mirai_map over ALL
-# sources). Returns a handle to collect later, so the caller can warm the
-# compute pool while the fetch drains. Pass the BARE namespace function (a local
-# closure would capture the whole IR frame and throttle dispatch per task).
+# Launch the parallel warp-on-read WITHOUT blocking (raw mirai() per
+# source, task fn resolved by name on the daemon). Returns handles to
+# collect later, so the caller can warm the compute pool while the
+# fetch drains.
 .gd_warp_launch <- function(plan, grid, tmp) {
   b <- .gd_build_jobs(plan, grid, tmp)
   prof <- .gd_profile()
   .gd_daemon_prep(prof)
-  promise <- mirai::mirai_map(unname(b$jobs), .cd_fetch_warp,
-                              .args = list(k = b$K), .compute = prof)
+  promise <- lapply(unname(b$jobs), function(j)
+    mirai::mirai(garry::.cd_fetch_warp(j, k), j = j, k = b$K,
+                 .compute = prof))
   list(info = b$info, promise = promise, t0 = proc.time()[["elapsed"]])
 }
 
@@ -368,7 +377,7 @@ NULL
 .gd_warp_collect <- function(launched) {
   info <- launched$info
   progress <- isTRUE(getOption("garry.progress", FALSE))
-  r <- launched$promise[]
+  r <- lapply(launched$promise, function(h) h[])
   t <- proc.time()[["elapsed"]] - launched$t0
   errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
                  conditionMessage, "")
@@ -493,9 +502,17 @@ NULL
   b <- .gd_build_jobs(plan, spec$grid, tmp)
   info <- b$info; K <- b$K
   bin_of <- function(ids) vapply(ids, function(id) info[[as.character(id)]]$bin, "")
-  fetch <- function(ids) mirai::mirai_map(
-    lapply(ids, function(id) b$jobs[[as.character(id)]]),
-    .cd_fetch_warp, .args = list(k = K), .compute = prof_r)
+  # Raw mirai() per job with the task fn resolved BY NAME on the daemon
+  # (garry::), the same pattern as the scheduler's launch functions.
+  # mirai_map() ships the function object inside every task's .args;
+  # measured on this pipeline that per-task overhead inflates from
+  # ~6 ms (idle pool) to ~100 ms once the read daemons are busy with
+  # live warps, serialising a 220-task dispatch into ~25 s of host
+  # stall that delayed every downstream phase (the "slow lead-in").
+  fetch <- function(ids) lapply(ids, function(id)
+    mirai::mirai(garry::.cd_fetch_warp(j, k),
+                 j = b$jobs[[as.character(id)]], k = K,
+                 .compute = prof_r))
 
   t0 <- proc.time()[["elapsed"]]
   .gd_daemon_prep(prof_r)
@@ -512,7 +529,12 @@ NULL
   # the bands are still fetching. One mask .bin, read by every band median.
   mask_bin <- tempfile("mask", tmpdir = tmp, fileext = ".bin"); mask_p <- NULL
   if (masked) {
-    .gd_check_fetch(fmask_p[], "fmask")
+    fmr <- lapply(fmask_p, function(h) h[])
+    .gd_check_fetch(fmr, "fmask")
+    if (progress) cli::cli_inform(sprintf(
+      "[gdal-direct] fmask drain=%.2fs (%d tasks, warp sum=%.1fs)",
+      proc.time()[["elapsed"]] - t0, length(fmr),
+      sum(vapply(fmr, function(r) r$tw, 0))))
     Km <- list(fmask_bins = bin_of(spec$fmask_srcs), out_bin = mask_bin,
                chain = lapply(spec$mask_chain, function(n) {
                  n@fn <- .slim_fn(n@fn); n }),
@@ -544,7 +566,11 @@ NULL
     res[[bi]] <<- v
   }
   for (bi in seq_along(spec$band_srcs)) {
-    .gd_check_fetch(band_p[[bi]][], sprintf("band %d", bi))
+    bres <- lapply(band_p[[bi]], function(h) h[])
+    .gd_check_fetch(bres, sprintf("band %d", bi))
+    if (progress) cli::cli_inform(sprintf(
+      "[gdal-direct] band %d drained at %.2fs",
+      bi, proc.time()[["elapsed"]] - t0))
     if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
     while (length(inflight) >= cap) harvest()         # RAM cap: bound concurrency
     jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]))

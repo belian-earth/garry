@@ -277,15 +277,8 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # tile. Uncovered area reads the set's nodata sentinel when it has one
 # (masked to NaN downstream, matching the GDAL/GTI engine's gaps).
 .ck_mosaic_pinned <- function(dst, files, spec) {
-  te <- as.numeric(spec$te)
-  ts <- as.numeric(spec$ts)
-  tr <- c((te[[3L]] - te[[1L]]) / ts[[1L]], (te[[4L]] - te[[2L]]) / ts[[2L]])
-  args <- c("-te", sprintf("%.16g", te), "-tr", sprintf("%.16g", tr))
-  if (length(spec$nodata))
-    args <- c(args, "-vrtnodata", sprintf("%.16g", spec$nodata[[1L]]))
-  gdalraster::buildVRT(dst, files, cl_arg = args, quiet = TRUE)
-  if (!file.exists(dst)) cli::cli_abort("buildVRT mosaic failed.")
-  dst
+  gdal_mosaic_vrt(dst, files, te = spec$te, ts = spec$ts,
+                  vrtnodata = spec$nodata)
 }
 
 # cptkirk's warp runs GDAL worker threads; gdalraster's GLOBAL error
