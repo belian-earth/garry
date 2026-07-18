@@ -309,3 +309,31 @@ test_that("lazy_cog survives no-nodata sources holding exact zeros", {
   expect_equal(unname(got[1, 1]), 0)
   expect_equal(unname(got[128, 1]), 1.5)
 })
+
+test_that("tile mosaics pin to the full target grid (partial-coverage slices)", {
+  # A day slice whose tiles cover only part of the AOI must still stage
+  # a grid-sized buffer: read windows are grid-relative, and an
+  # unpinned union-extent VRT read "Access window out of range".
+  td <- withr::local_tempdir()
+  mk_tile <- function(p, x0, nx) {
+    ds <- gdalraster::create("GTiff", p, nx, 20, 1, "Int16",
+                             return_obj = TRUE)
+    ds$setGeoTransform(c(x0, 10, 0, 4600200, 0, -10))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+    ds$setNoDataValue(1, -9999)
+    ds$write(1, 0, 0, nx, 20, rep(7, nx * 20))
+    ds$close()
+    p
+  }
+  # grid: 60 cols x 20 rows from x=500000; tiles cover cols 1-25 only
+  tile <- mk_tile(file.path(td, "tile1.tif"), 500000, 25)
+  spec <- list(te = c(500000, 4600000, 500600, 4600200), ts = c(60L, 20L),
+               nodata = -9999)
+  vrt <- garry:::.ck_mosaic_pinned(file.path(td, "mos.vrt"), tile, spec)
+  d <- methods::new(gdalraster::GDALRaster, vrt)
+  on.exit(d$close())
+  expect_equal(c(d$getRasterXSize(), d$getRasterYSize()), c(60, 20))
+  row <- d$read(1, 0, 0, 60, 1, 60, 1)
+  expect_equal(row[1], 7)               # covered
+  expect_true(is.na(row[40]))           # uncovered -> sentinel (NA on read)
+})

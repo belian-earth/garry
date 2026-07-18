@@ -38,7 +38,7 @@ device <- Sys.getenv("GARRY_DEVICE", "cpu") # "cpu" or "cuda" (GPU compute)
 # single-band-per-file, so cptkirk has no intra-file band concurrency to exploit
 # here -- this branch measures exactly that (the routing thesis: cptkirk earns
 # its place on multi-band files, not single-band time series).
-engine <- Sys.getenv("GARRY_BENCH_ENGINE", "gdal")
+engine <- Sys.getenv("GARRY_BENCH_ENGINE", "cptkirk")
 
 # No GDAL/network preamble: garry_daemons() (below) applies the remote-COG GDAL
 # config (HTTP/2 multiplex, the odc-stac retry cadence, a capped block cache,
@@ -64,7 +64,7 @@ t_query <- system.time({
     start_date = "2023-01-01",
     end_date = "2023-12-31"
   )
-  its <- stac_sign_mpc(its)   # collection-level token cache (memory + disk)
+  its <- stac_sign_mpc(its) # collection-level token cache (memory + disk)
 
   src <- stac_sources(its, assets = c(bands, "Fmask")) |>
     stac_drop_duplicates() |>

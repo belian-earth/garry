@@ -264,9 +264,28 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
         d, file.path(root, sprintf("cb_%s_%02d", key, j)), want_nd))
     }
     if (!length(vrts)) next            # no overlap; .ck_resolve falls back to .ck_fetch
-    staged[[members[[i]]]] <- if (length(vrts) == 1L) vrts[[1L]]
-      else gdal_mosaic_vrt(file.path(root, paste0("mos_", key, ".vrt")), vrts)
+    staged[[members[[i]]]] <- .ck_mosaic_pinned(
+      file.path(root, paste0("mos_", key, ".vrt")), vrts,
+      specs[[members[[i]]]])
   }
+}
+
+# Pin a tile mosaic to the FULL target grid. Per-tile buffers cover only
+# their tiles' extents; garry's read windows are grid-relative, so an
+# unpinned (union-extent) VRT reads out of range on partially covered
+# slices ("Access window out of range"). Always built, even for a lone
+# tile. Uncovered area reads the set's nodata sentinel when it has one
+# (masked to NaN downstream, matching the GDAL/GTI engine's gaps).
+.ck_mosaic_pinned <- function(dst, files, spec) {
+  te <- as.numeric(spec$te)
+  ts <- as.numeric(spec$ts)
+  tr <- c((te[[3L]] - te[[1L]]) / ts[[1L]], (te[[4L]] - te[[2L]]) / ts[[2L]])
+  args <- c("-te", sprintf("%.16g", te), "-tr", sprintf("%.16g", tr))
+  if (length(spec$nodata))
+    args <- c(args, "-vrtnodata", sprintf("%.16g", spec$nodata[[1L]]))
+  gdalraster::buildVRT(dst, files, cl_arg = args, quiet = TRUE)
+  if (!file.exists(dst)) cli::cli_abort("buildVRT mosaic failed.")
+  dst
 }
 
 # cptkirk's warp runs GDAL worker threads; gdalraster's GLOBAL error
