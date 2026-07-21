@@ -8,7 +8,7 @@ gdal_create_output(
   path,
   grid,
   nodata = numeric(0),
-  options = c("COMPRESS=DEFLATE"),
+  options = NULL,
   band_names = NULL
 )
 }
@@ -19,7 +19,12 @@ gdal_create_output(
 
 \item{nodata}{Optional sentinel to record in metadata (all bands).}
 
-\item{options}{GTiff creation options.}
+\item{options}{GTiff creation options. \code{NULL} (default) uses tiled DEFLATE
+(\code{TILED=YES}, 256x256 blocks, \code{BIGTIFF=IF_SAFER}) plus \code{INTERLEAVE=BAND}
+for multi-band grids. Band interleave matters: GDAL's GTiff defaults
+(pixel interleave, full-width 1-row strips) make every later per-band
+read decompress ALL bands of each strip, which amplifies read cost by
+the band count on files garry itself wrote.}
 
 \item{band_names}{Optional character vector of band descriptions, in band
 order; written as each band's GDAL description (shows in \code{gdalinfo}).}

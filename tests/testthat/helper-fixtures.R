@@ -73,3 +73,25 @@ fixture_random_f32 <- function() {
   .fixture_env$rand <- f
   f
 }
+
+# 6-band f32 GTiff with DEFLATE (pixel-interleaved 1-row strips: the
+# production embed_read layout), asymmetric per-band values. Returns
+# list(path, nx, ny, nb, vals).
+fixture_multiband <- function() {
+  if (!is.null(.fixture_env$mb)) return(.fixture_env$mb)
+  f <- file.path(tempdir(), "garry-fixture-mb.tif")
+  nx <- 60L; ny <- 40L; nb <- 6L
+  ds <- gdalraster::create("GTiff", f, nx, ny, nb, "Float32",
+                           options = c("COMPRESS=DEFLATE",
+                                       "INTERLEAVE=PIXEL"),
+                           return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 10, 0, 4600000, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  vals <- lapply(seq_len(nb), function(b)
+    .fixture_values(nx, ny) * b / 10)
+  for (b in seq_len(nb))
+    ds$write(b, 0, 0, nx, ny, as.numeric(t(vals[[b]])))
+  ds$close()
+  .fixture_env$mb <- list(path = f, nx = nx, ny = ny, nb = nb, vals = vals)
+  .fixture_env$mb
+}

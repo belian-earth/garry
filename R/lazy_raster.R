@@ -128,11 +128,23 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   stopifnot(length(xs) >= 1L, is.function(fn))
   if (S7::S7_inherits(xs[[1L]], LazyDataset)) return(.ds_map(xs, fn, dtype, bands))
   graph <- xs[[1L]]@graph
+  .outer_dims <- function(g) g@dims[!names(g@dims) %in% c("x", "y")]
   ids <- vapply(seq_along(xs), function(i) {
     x <- xs[[i]]
     if (!S7::S7_inherits(x, LazyRaster))
       cli::cli_abort("input {i} must be a {.cls LazyRaster}")
-    if (!grid_equal(xs[[1L]]@grid, x@grid))
+    # Inputs normally share the WHOLE grid. The one relaxation: a purely
+    # spatial (y, x) input may join a cube input, so a per-pixel plane can
+    # be applied across a (t/band, y, x) cube -- e.g. gating every band of
+    # a stack by one QA plane. `fn` must broadcast it itself (see
+    # [g_rep_t()]); nothing here reshapes. Without this the caller has to
+    # apply the plane per band BEFORE stacking, which leaves the stack's
+    # parents computed rather than bare sources and so blocks multi-band
+    # read coalescing.
+    ok <- grid_equal(xs[[1L]]@grid, x@grid) ||
+      (length(.outer_dims(x@grid)) == 0L &&
+         .spatial_equal(xs[[1L]]@grid, x@grid))
+    if (!ok)
       cli::cli_abort("input {i} is not on the same grid; {.fn align} it first")
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
     else graph_import(graph, x@graph, x@node_id)

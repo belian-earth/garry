@@ -19,12 +19,15 @@ NULL
 
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
-# stay NaN (nodata boundary, D8).
+# stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
+# coalesced band stack) reads as a (band, y, x) cube; the halo pads
+# the spatial dims only.
 .exec_read_padded <- function(path, band, nodata, cg, core,
                               open_options = character(0),
                               out = c("matrix", "raw_f32")) {
   out <- rlang::arg_match(out)
   H <- cg@halo
+  nb <- length(band)
   # Raw store payloads (D19) only take the halo-free path: padding
   # embeds into a matrix buffer below.
   stopifnot(out == "matrix" || H == 0L)
@@ -39,12 +42,27 @@ NULL
       cli::cli_warn(
         "read failed, filling with nodata: {.path {path}} ({conditionMessage(e)})")
       if (out == "raw_f32") {
-        .sv_from_vec(rep(NaN, w$y_size * w$x_size), w$y_size, w$x_size)
+        v <- rep(NaN, nb * w$y_size * w$x_size)
+        if (nb > 1L) {
+          structure(writeBin(v, raw(), size = 4L),
+                    gdim = c(nb, w$y_size, w$x_size), gdt = "f32")
+        } else {
+          .sv_from_vec(v, w$y_size, w$x_size)
+        }
+      } else if (nb > 1L) {
+        array(NaN, c(nb, w$y_size, w$x_size))
       } else {
         matrix(NaN, w$y_size, w$x_size)
       }
     })
   if (H == 0L) return(sub)
+  if (nb > 1L) {
+    buf <- array(NaN, c(nb, core$y_size + 2L * H, core$x_size + 2L * H))
+    r0 <- H - w$pad_top
+    c0 <- H - w$pad_left
+    buf[, (r0 + 1L):(r0 + w$y_size), (c0 + 1L):(c0 + w$x_size)] <- sub
+    return(buf)
+  }
   buf <- matrix(NaN, core$y_size + 2L * H, core$x_size + 2L * H)
   r0 <- H - w$pad_top
   c0 <- H - w$pad_left
@@ -88,10 +106,22 @@ NULL
 # Producer-side window slice. `v` is private (fresh read output), so
 # the byte-matrix view (one column per row of the image) costs one
 # dim-stamped copy for the whole window, amortised over its parts.
+# Rank-3 (band, y, x) payloads slice every band plane of the window
+# (multi-band coalesced reads).
 .sv_slicer <- function(v) {
   d <- .sv_dim(v)
   bm <- unclass(v)
   attributes(bm) <- NULL
+  if (length(d) == 3L) {
+    dim(bm) <- c(4L * d[[3L]], d[[2L]], d[[1L]])
+    nb <- d[[1L]]
+    return(function(r0, c0, nr, nc) {
+      out <- bm[(4L * c0 + 1L):(4L * (c0 + nc)), (r0 + 1L):(r0 + nr), ,
+                drop = FALSE]
+      attributes(out) <- NULL
+      structure(out, gdim = c(nb, nr, nc), gdt = "f32")
+    })
+  }
   dim(bm) <- c(4L * d[[2L]], d[[1L]])
   function(r0, c0, nr, nc) {
     out <- bm[(4L * c0 + 1L):(4L * (c0 + nc)), (r0 + 1L):(r0 + nr),
@@ -163,6 +193,11 @@ NULL
 
 # Upload a store value (raw or matrix) after trimming `k`.
 .sv_upload <- function(v, k, dtype, dev) {
+  # A negative trim on the raw path would silently read out-of-range
+  # raw bytes as 00 (raw OOB subsetting zero-fills) and produce
+  # corrupt f32 planes; the matrix path errors naturally. Planner
+  # invariants keep k >= 0 today; fail loudly if one breaks.
+  stopifnot(k >= 0L)
   if (.sv_is(v)) {
     v <- .exec_trim(v, k)
     g_upload_raw(v, "f32", .sv_dim(v), device = dev)
@@ -261,8 +296,12 @@ NULL
 # Per-input fetch metadata for a compute/reduce_partial stage. Stage
 # outputs are always stored at the plan-wide compute chunk granularity
 # (coarse source reads split on write), so consumers index by chunk.
-.exec_in_meta <- function(graph, s, plan_stages) {
+.exec_in_meta <- function(graph, s, plan_stages, node_stage = NULL) {
+  # `node_stage` (optional): node id -> producing stage id, first-wins
+  # as the Find below. The linear Find is O(stages x members) per input
+  # node — the distributed task build passes the precomputed index.
   producer_of <- function(nid) {
+    if (!is.null(node_stage)) return(plan_stages[[node_stage[[nid]]]])
     Find(function(p) nid %in% p@members, plan_stages)
   }
   lapply(s@input_nodes, function(nid) {
@@ -281,10 +320,18 @@ NULL
 # table's halo says by how much), which is contained in the coarse
 # padded buffer because coarse chunks are unions of whole compute
 # chunks.
-.exec_split_cg <- function(plan, s) {
-  cons <- Filter(function(t2)
-    s@id %in% t2@inputs &&
-      t2@kind %in% c("compute", "reduce_partial"), plan@stages)
+.exec_split_cg <- function(plan, s, consumer_ids = NULL) {
+  # `consumer_ids` (optional): stage ids consuming s, precomputed by
+  # the caller — the Filter below is O(stages) per call, O(stages^2)
+  # over a task build.
+  cons <- if (is.null(consumer_ids)) {
+    Filter(function(t2)
+      s@id %in% t2@inputs &&
+        t2@kind %in% c("compute", "reduce_partial"), plan@stages)
+  } else {
+    Filter(function(t2) t2@kind %in% c("compute", "reduce_partial"),
+           plan@stages[unique(consumer_ids)])
+  }
   if (length(cons) == 0L) return(NULL)
   cg <- cons[[1L]]@chunks
   if (all(cg@chunk_dim == s@chunks@chunk_dim)) return(NULL)
@@ -498,13 +545,18 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
         for (r in seq_len(nrow(it))) {
           buf <- .exec_read_padded(rpath, rband, rnodata, s@chunks,
                                    it[r, ], open_options = roo)
+          rank3 <- length(dim(buf)) == 3L
           for (j in .exec_split_members(its, it[r, ])) {
             r0 <- its$y_off[[j]] - it$y_off[[r]]
             c0 <- its$x_off[[j]] - it$x_off[[r]]
-            out[[s@id]][[j]] <- stats::setNames(list(
+            part <- if (rank3) {
+              buf[, (r0 + 1L):(r0 + its$y_size[[j]] + H2),
+                  (c0 + 1L):(c0 + its$x_size[[j]] + H2), drop = FALSE]
+            } else {
               buf[(r0 + 1L):(r0 + its$y_size[[j]] + H2),
-                  (c0 + 1L):(c0 + its$x_size[[j]] + H2), drop = FALSE]),
-              key)
+                  (c0 + 1L):(c0 + its$x_size[[j]] + H2), drop = FALSE]
+            }
+            out[[s@id]][[j]] <- stats::setNames(list(part), key)
           }
         }
       }

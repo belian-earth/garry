@@ -7,7 +7,7 @@
 garry_daemons(
   read = NULL,
   compute = NULL,
-  read_handles = 1L,
+  read_handles = NULL,
   gdal_config = TRUE,
   ...
 )
@@ -20,10 +20,13 @@ cores. \code{0} tears the pool down.}
 physical cores. \code{0} tears down.}
 
 \item{read_handles}{Open-handle cache depth on read daemons.
-Readers open per-slice mosaics that are rarely revisited, and
-every open warped mosaic pins warper and connection memory, so
-the default keeps only the most recent handle (measured ~15
-MB/daemon saved at no wall cost on the benchmark).}
+\code{NULL} (default) uses \code{garry_opt("read_handles")}. Depth 1 suits
+per-slice mosaics that are rarely revisited (every open warped
+mosaic pins warper and connection memory; measured ~15 MB/daemon
+saved at no wall cost on the benchmark); plans revisiting a few
+local multi-band files across many windows want a depth covering
+the interleaved file count, since closing a dataset discards its
+GDAL block cache.}
 
 \item{gdal_config}{Apply \code{\link[=garry_gdal_config]{garry_gdal_config()}} on the host and read
 daemons (default \code{TRUE}). Set \code{FALSE} to leave session GDAL config

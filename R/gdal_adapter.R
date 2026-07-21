@@ -149,6 +149,9 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
                              out = c("matrix", "raw_f32")) {
   out <- rlang::arg_match(out)
   ds <- .gdal_handle(path, open_options)
+  if (length(band) > 1L)
+    return(.gdal_read_window_bands(ds, band, x_off, y_off, x_size, y_size,
+                                   nodata, out))
   v <- ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size)
   v <- as.numeric(v)
   if (length(nodata) == 1L) {
@@ -159,6 +162,56 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
   # converts it directly, skipping the byrow transpose below.
   if (out == "raw_f32") return(.sv_from_vec(v, y_size, x_size))
   matrix(v, nrow = y_size, byrow = TRUE)
+}
+
+# Multi-band window read: every band of the window in ONE pass, as a
+# (band, y, x) cube (matrix out) or a rank-3 row-major raw f32 payload
+# (band planes contiguous). Bands are read together inside row SLABS
+# sized to the GDAL block cache: on interleaved files every native
+# strip/tile holds all bands, so reading band-by-band over a window
+# larger than the cache re-decompresses each block once per band as
+# the cache evicts (measured 31x on a 72-band 1-row-strip DEFLATE
+# file); slab-sized reads keep a slab's blocks resident across the
+# band loop, so each block decompresses once regardless of cache size.
+.gdal_read_window_bands <- function(ds, band, x_off, y_off, x_size, y_size,
+                                    nodata, out) {
+  nb <- length(band)
+  bs <- as.integer(ds$getBlockSize(band[[1L]]))       # (x, y)
+  el_b <- tryCatch(.gdal_dtype_bytes(ds$getDataTypeName(band[[1L]])),
+                   error = function(e) 8L)
+  # Native bytes one image row of all bands pins in cache (strips span
+  # the full raster width whatever the window; tiles at least the
+  # window's columns).
+  row_b <- max(bs[[1L]], x_size) * nb * el_b
+  cache_b <- garry_opt("gdal_cachemax_mb") * 2^20
+  by <- max(1L, bs[[2L]])
+  slab <- max(by, as.integer(floor(cache_b * 0.5 / row_b) %/% by) * by)
+  slab <- min(slab, y_size)
+
+  n_px <- as.numeric(y_size) * x_size
+  res <- if (out == "raw_f32") raw(4 * nb * n_px)
+         else array(NA_real_, c(nb, y_size, x_size))
+  r0 <- 0L
+  while (r0 < y_size) {
+    rows <- min(slab, y_size - r0)
+    for (k in seq_len(nb)) {
+      v <- as.numeric(ds$read(band[[k]], x_off, y_off + r0, x_size, rows,
+                              x_size, rows))
+      if (length(nodata) == 1L) v[!is.na(v) & v == nodata] <- NaN
+      v[is.na(v) & !is.nan(v)] <- NaN
+      if (out == "raw_f32") {
+        p0 <- 4 * ((k - 1) * n_px + as.numeric(r0) * x_size)
+        res[(p0 + 1):(p0 + 4 * length(v))] <- writeBin(v, raw(), size = 4L)
+      } else {
+        res[k, (r0 + 1L):(r0 + rows), ] <- matrix(v, nrow = rows, byrow = TRUE)
+      }
+    }
+    r0 <- r0 + rows
+  }
+  if (out == "raw_f32")
+    return(structure(res, gdim = as.integer(c(nb, y_size, x_size)),
+                     gdt = "f32"))
+  res
 }
 
 # Reverse dtype map for writing.
@@ -264,13 +317,18 @@ gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
 #' @param path Destination path.
 #' @param grid Output `GridSpec`.
 #' @param nodata Optional sentinel to record in metadata (all bands).
-#' @param options GTiff creation options.
+#' @param options GTiff creation options. `NULL` (default) uses tiled DEFLATE
+#'   (`TILED=YES`, 256x256 blocks, `BIGTIFF=IF_SAFER`) plus `INTERLEAVE=BAND`
+#'   for multi-band grids. Band interleave matters: GDAL's GTiff defaults
+#'   (pixel interleave, full-width 1-row strips) make every later per-band
+#'   read decompress ALL bands of each strip, which amplifies read cost by
+#'   the band count on files garry itself wrote.
 #' @param band_names Optional character vector of band descriptions, in band
 #'   order; written as each band's GDAL description (shows in `gdalinfo`).
 #' @return An open dataset object; caller must `$close()`.
 #' @export
 gdal_create_output <- function(path, grid, nodata = numeric(0),
-                               options = c("COMPRESS=DEFLATE"),
+                               options = NULL,
                                band_names = NULL) {
   dt <- .gdal_dtype_rev[[grid@dtype]]
   if (is.null(dt)) cli::cli_abort("cannot write dtype: {.val {grid@dtype}}")
@@ -279,6 +337,11 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
     cli::cli_abort(
       "cannot write a grid with more than one non-spatial dim ({names(outer)})")
   n_bands <- if (length(outer) == 1L) as.integer(outer[[1L]]) else 1L
+  if (is.null(options)) {
+    options <- c("COMPRESS=DEFLATE", "TILED=YES",
+                 "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=IF_SAFER")
+    if (n_bands > 1L) options <- c(options, "INTERLEAVE=BAND")
+  }
   ds <- gdalraster::create("GTiff", path,
                            grid@dims[["x"]], grid@dims[["y"]], n_bands, dt,
                            options = options, return_obj = TRUE)
@@ -406,7 +469,7 @@ garry_gdal_config <- function() {
   sc("GDAL_HTTP_RETRY_CODES", "429,500,502,503")
   sc("GDAL_HTTP_TIMEOUT", "60")
   sc("GDAL_HTTP_CONNECTTIMEOUT", "10")
-  sc("GDAL_CACHEMAX", "256")                       # MB, per process
+  sc("GDAL_CACHEMAX", as.character(as.integer(garry_opt("gdal_cachemax_mb"))))
   sc("GDAL_INGESTED_BYTES_AT_OPEN", "32768")       # one range grabs the COG header
   sc("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   sc("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")

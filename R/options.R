@@ -21,12 +21,48 @@
   # eviction). Open warped/GTI mosaics pin warper + cache memory; on
   # daemons this bounds it. Reopening an evicted dataset is cheap.
   handle_cache_max = 4L,
+  # Default open-handle cache depth on READ daemons (garry_daemons()'s
+  # read_handles argument when not given explicitly). Depth 1 suits
+  # rarely-revisited per-slice remote mosaics; plans that revisit a
+  # handful of local files across many windows (per-band sources over
+  # multi-band GTiffs) want a depth >= the number of files interleaved
+  # by the launch order, because closing a dataset discards its GDAL
+  # block cache.
+  read_handles = 1L,
+  # GDAL block cache (MB, per process) applied by garry_gdal_config()
+  # on read daemons. GDAL's own default is 5% of RAM PER PROCESS,
+  # which a read fleet multiplies; this caps it. Raise it when reads
+  # revisit interleaved multi-band files: a pixel-interleaved strip
+  # decompresses ALL bands, and only blocks that stay cached let
+  # later band reads of the same window skip the re-inflate.
+  gdal_cachemax_mb = 256,
   # Pixels a single source/warp read task aims for. Reads are coarser
   # than compute chunks (windowed reads of warped mosaics decompress
   # the same source blocks regardless of window size, so small read
   # windows amplify transfer); compute chunks slice out of the read
   # buffer. Applies only to halo-free plans.
   read_target_px = 3.2e7,
+  # Cap (MB) on RESIDENT inter-stage read regions. Source/warp store
+  # values live in shared memory from launch until every consumer has
+  # retired, so residency — not concurrency — is what a read fleet
+  # costs. Two things are sized against this: the coarse read window
+  # (a stage consuming n bands pins n regions at once, so the read
+  # target shrinks as n grows) and the scheduler's read-launch gate
+  # (independent read stages in one plan would otherwise all drain
+  # into RAM before the first compute stage releases any of them).
+  # Without it a 145-band MLP predict over a 23 Mpx mosaic pins
+  # ~12 GB per year, and a 22-year multi-export collect asks for
+  # ~210 GB.
+  read_budget_mb = 4096,
+  # Collapse a band stack of single-band SourceNodes addressing the
+  # SAME file into one multi-band SourceNode at plan time (multi-band
+  # read coalescing). One read task then reads every band of a window
+  # in one decompress pass instead of one task per band: per-band
+  # reads of an N-band pixel-interleaved file decompress ~N x the
+  # window bytes (each band's read inflates every band's strips), and
+  # the task count scales as bands^2 once the read budget shrinks the
+  # windows. FALSE restores the per-band plan shape (debugging).
+  read_coalesce = TRUE,
   # Path to a CSV the distributed scheduler appends per-task
   # launch/done timestamps to (plus drain_end/host_end marks), for
   # profiling where a plan's wall time goes. NULL disables.
@@ -43,6 +79,19 @@
   # flow at full pool width, big fused medians self-limit). NULL =
   # twice the compute pool.
   compute_inflight = NULL,
+  # Fraction of AVAILABLE RAM (MemAvailable, re-read during the drain)
+  # the distributed scheduler may commit to in-flight compute working
+  # sets plus resident read regions. The configured budgets
+  # (ram_budget_mb x compute pool, read_budget_mb) are CAPS, not
+  # entitlements: a fixed budget is blind to what else is resident, so
+  # a caller whose own session already holds tens of GB (fits, point
+  # tables, a previous stage's outputs) would otherwise have the
+  # scheduler launch as though it owned the machine and OOM mid-drain.
+  # Re-read on a clock so a host that grows DURING the run tightens the
+  # gates instead of overcommitting. The remainder (1 - fraction) covers
+  # the host, the read daemons' buffers and the OS. Ignored where
+  # available RAM cannot be read (no /proc/meminfo).
+  exec_ram_fraction = 0.6,
   # Pooled scheduler: pre-compile each compute stage's modal chunk
   # shape on every compute-pool daemon at run start, while the read
   # pool owns the drain. Removes the first-execution compile
