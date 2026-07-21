@@ -275,10 +275,16 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # unpinned (union-extent) VRT reads out of range on partially covered
 # slices ("Access window out of range"). Always built, even for a lone
 # tile. Uncovered area reads the set's nodata sentinel when it has one
-# (masked to NaN downstream, matching the GDAL/GTI engine's gaps).
+# (masked to NaN downstream, matching the GDAL/GTI engine's gaps); a
+# FLOAT set with no sentinel gets NaN, matching the GTI path's
+# `-dstnodata nan` (D8) — 0 would be indistinguishable from data
+# (decoded embeddings legitimately hold exact zeros).
 .ck_mosaic_pinned <- function(dst, files, spec) {
+  nd <- spec$nodata
+  if (!length(nd) && .dtype_family(spec$dtype %||% "f32") == "float")
+    nd <- NaN
   gdal_mosaic_vrt(dst, files, te = spec$te, ts = spec$ts,
-                  vrtnodata = spec$nodata)
+                  vrtnodata = nd)
 }
 
 # cptkirk's warp runs GDAL worker threads; gdalraster's GLOBAL error

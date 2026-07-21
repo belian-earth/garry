@@ -146,6 +146,21 @@ NULL
 # Given a ReduceNode, lift one band's pieces: per-slice band + fmask sources,
 # the masked-apply fn F, and the mask CHAIN (Map/Focal nodes, replayed on the
 # cube; may include morphology focals). NULL if not reconstructible.
+# Structural signature of a mask chain / member fn, for per-slice
+# homogeneity checks: the lean kernel lifts F and the mask chain from
+# slice 1 and applies them cube-wide, so slices carrying a DIFFERENT
+# fn or chain must disqualify the plan (silently computing slice-1
+# semantics diverges from execute_plan).
+.cd_fn_sig <- function(fn) rlang::hash(serialize(.slim_fn(fn), NULL))
+.cd_chain_sig <- function(chain) {
+  rlang::hash(lapply(chain, function(n) list(
+    cls = class(n)[[1L]],
+    fn = serialize(.slim_fn(n@fn), NULL),
+    radius = if (S7::S7_inherits(n, FocalNode)) n@radius else integer(0),
+    boundary = if (S7::S7_inherits(n, FocalNode)) n@boundary else character(0),
+    weights = if (S7::S7_inherits(n, FocalNode)) n@weights else numeric(0))))
+}
+
 .cd_reduce_spec <- function(gg, red) {
   if (!S7::S7_inherits(red, ReduceNode)) return(NULL)
   if (!("t" %in% red@over) ||
@@ -158,19 +173,34 @@ NULL
   first <- gg(masked[[1L]])
   if (S7::S7_inherits(first, MapNode)) {
     if (length(first@parents) != 2L) return(NULL)
+    # Every slice must be a 2-parent masked MapNode: a stack mixing
+    # masked and bare slices is legal IR, and probing it must fall
+    # through to the scheduler, not subscript-error out of collect().
+    if (!all(vapply(masked, function(id) {
+      n <- gg(id)
+      S7::S7_inherits(n, MapNode) && length(n@parents) == 2L
+    }, logical(1)))) return(NULL)
     band_srcs <- vapply(masked, function(id) gg(id)@parents[[1L]], integer(1))
     if (!all(vapply(band_srcs,
                     function(id) S7::S7_inherits(gg(id), SourceNode), logical(1))))
       return(NULL)
+    # Per-slice homogeneity of F.
+    f_sig <- .cd_fn_sig(first@fn)
+    if (!all(vapply(masked, function(id)
+      identical(.cd_fn_sig(gg(id)@fn), f_sig), logical(1)))) return(NULL)
     m0 <- .cd_walk_mask(gg, first@parents[[2L]]); if (is.null(m0)) return(NULL)
+    c_sig <- .cd_chain_sig(m0$chain)
     fmask_srcs <- vapply(masked, function(id) {
       w <- .cd_walk_mask(gg, gg(id)@parents[[2L]])
-      if (is.null(w)) NA_integer_ else w$src
+      if (is.null(w) || !identical(.cd_chain_sig(w$chain), c_sig))
+        NA_integer_ else w$src
     }, integer(1))
     if (anyNA(fmask_srcs)) return(NULL)
     list(band = band_srcs, fmask = fmask_srcs, F = first@fn,
          mask_chain = m0$chain, halo = m0$halo, op = red@op, nan_rm = red@nan_rm)
   } else if (S7::S7_inherits(first, SourceNode)) {
+    if (!all(vapply(masked, function(id)
+      S7::S7_inherits(gg(id), SourceNode), logical(1)))) return(NULL)
     list(band = as.integer(masked), fmask = integer(0), F = NULL,
          mask_chain = list(), halo = 0L, op = red@op, nan_rm = red@nan_rm)
   } else NULL
@@ -371,6 +401,34 @@ NULL
   list(info = b$info, promise = promise, t0 = proc.time()[["elapsed"]])
 }
 
+# Errors from a collected fetch group: transport failures (miraiError,
+# daemon died) AND errors .cd_fetch_warp caught in-task into `$err`.
+# The caught kind matters most: the task always writes a complete
+# (all-NaN) slice, so without reading `$err` a transient vsicurl/IO
+# failure produces a plausible-looking composite with a hole and no
+# diagnostic.
+.gd_fetch_errs <- function(r) {
+  transport <- vapply(r, function(x) inherits(x, "miraiError"), FALSE)
+  caught <- vapply(r, function(x)
+    is.list(x) && length(x$err) == 1L && !is.na(x$err), FALSE)
+  c(vapply(r[transport], conditionMessage, ""),
+    vapply(r[caught], function(x) x$err, ""))
+}
+
+# Enforce the read-failure contract on a fetch group, matching the
+# scheduler: `garry.read_fail = "error"` (the default) aborts the run,
+# "nodata" warns and keeps the NaN-filled slices.
+.gd_fetch_fail <- function(errs, n, label) {
+  if (length(errs) == 0L) return(invisible(NULL))
+  msg <- sprintf("gdal-direct: %d/%d %s warps failed (e.g. %s)",
+                 length(errs), n, label, errs[[1L]])
+  if (!identical(garry_opt("read_fail"), "nodata"))
+    cli::cli_abort(c(msg,
+      "i" = paste0("failed slices would read as all-nodata; set ",
+                   "options(garry.read_fail = \"nodata\") to accept holes")))
+  cli::cli_warn(paste0(msg, "; slices filled with nodata"))
+}
+
 # Block on a launched warp, report per-task timing + failures, return `info`
 # (keyed by source node id, each with its .bin path). The elapsed clock runs
 # from launch, so it includes any work the caller overlapped with the drain.
@@ -379,17 +437,13 @@ NULL
   progress <- isTRUE(getOption("garry.progress", FALSE))
   r <- lapply(launched$promise, function(h) h[])
   t <- proc.time()[["elapsed"]] - launched$t0
-  errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
-                 conditionMessage, "")
   if (progress) {
     ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
     cli::cli_inform(sprintf("[gdal-direct] per-task sums: fetch=%.1fs warp=%.1fs",
                     sum(vapply(ok, function(x) x$tf, 0)),
                     sum(vapply(ok, function(x) x$tw, 0))))
   }
-  if (length(errs))
-    cli::cli_warn(sprintf("gdal-direct: %d/%d source warps failed (e.g. %s)",
-                    length(errs), length(info), errs[[1L]]))
+  .gd_fetch_fail(.gd_fetch_errs(r), length(info), "source")
   if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+warp=%.2fs", t))
   info
 }
@@ -417,13 +471,10 @@ NULL
   invisible(path)
 }
 
-# Warn on any warp failures in a collected fetch group.
+# Surface warp failures (transport AND in-task caught) in a collected
+# fetch group under the read-failure contract.
 .gd_check_fetch <- function(r, label) {
-  errs <- vapply(r[vapply(r, function(x) inherits(x, "miraiError"), FALSE)],
-                 conditionMessage, "")
-  if (length(errs))
-    cli::cli_warn(sprintf("gdal-direct: %d %s warps failed (e.g. %s)",
-                    length(errs), label, errs[[1L]]))
+  .gd_fetch_fail(.gd_fetch_errs(r), length(r), label)
 }
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
