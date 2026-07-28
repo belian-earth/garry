@@ -870,16 +870,20 @@ plan_lazy <- function(x) {
       d <- .node_grid(graph_get(graph, nid))@dims
       max(1, prod(d[!names(d) %in% c("x", "y")]))
     }, numeric(1)))
-  # A scan body holds far more than its output: the forward pass emits
-  # ~7 (T, y, x) f64 state cubes that stay live until the backward
-  # pass consumes them (kalman_llt), ~56 x T B/px against the ~8 x T
-  # the outer term charges. Without this a scan chunk's true working
-  # set is ~6x the model and the chunk sizing oversizes it.
+  # A scan body holds far more than its output. A forward filter emits
+  # ~7 (T, y, x) f64 state cubes that stay live for the step (kalman_llt).
+  # A BIDIRECTIONAL smoother additionally keeps the whole forward set live
+  # while the backward RTS pass consumes it and emits its own, and a
+  # robust reweight re-runs both -- ~20 live cubes at peak. Charge bidir
+  # scans for that; a one-way scan keeps the ~7-cube figure. Undercounting
+  # here oversizes the scan chunk and lets the compute budget over-admit
+  # concurrent scan chunks against their true f64 working set.
   scan_px <- max(c(0, vapply(members, function(id) {
     n <- graph_get(graph, id)
     if (!S7::S7_inherits(n, ScanNode)) return(0)
     d <- .node_grid(n)@dims
-    56 * max(1, prod(d[!names(d) %in% c("x", "y")]))
+    cubes <- if (identical(n@direction, "bidir")) 20 else 7
+    8 * cubes * max(1, prod(d[!names(d) %in% c("x", "y")]))
   }, numeric(1))))
   8 * outer_max + 8 * max(1, in_px) + 16 + scan_px
 }

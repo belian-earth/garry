@@ -928,16 +928,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       need <- s@halo + s@out_pad
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
         prod(as.numeric(cd) + 2 * need) / 2^20
-      # The per-px estimate is calibrated for the rds store, where
-      # every input lands as a private R double. Under mori the
-      # inputs are shared mappings (zero-copy extraction) and the
-      # resident cost is mostly the f32 device copies — roughly
-      # half. The planner's chunk sizing keeps the conservative
-      # figure; this only loosens the in-flight budget.
-      # Inputs are shared mori mappings (zero-copy extraction); the resident
-      # cost is mostly the f32 device copies -- roughly half the per-px
-      # estimate, which is calibrated for private R-double inputs.
-      task_mb <- task_mb / 2
+      # The /2 discount reflects mori's zero-copy shared INPUT mappings:
+      # the per-px estimate is calibrated for private R-double inputs, but
+      # under mori the inputs are shared and the resident cost is mostly
+      # the f32 device copies (~half). It does NOT apply to a scan stage,
+      # whose cost is dominated by the body's PRIVATE live f64 state cubes,
+      # not its inputs -- halving those under-counted the robust Kalman
+      # tail's working set and let the budget over-admit concurrent scan
+      # chunks. The planner's chunk sizing keeps the full figure.
+      has_scan <- any(vapply(s@members, function(id)
+        S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1)))
+      if (!has_scan) task_mb <- task_mb / 2
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         fn = s@fn,
