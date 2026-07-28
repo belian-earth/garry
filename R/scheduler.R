@@ -435,15 +435,16 @@ NULL
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses logical
 #'   cores. `0` tears the pool down.
-#' @param compute Compute-pool daemon count; `NULL` (default) uses ONE.
-#'   Each compute daemon is a full XLA client that spawns an all-cores
-#'   CPU thread pool (~63 threads measured on a 20-core box); N of them
-#'   oversubscribe the machine and hold N working sets, which costs
-#'   memory and thread contention without buying throughput on the
-#'   read- and fit-bound pipelines garry runs -- XLA already parallelises
-#'   each kernel across the box from a single process. Raise it only for
-#'   multiple GPUs (one daemon per device) or a NUMA server where one
-#'   client per socket wins. `0` tears down.
+#' @param compute Compute-pool daemon count; `NULL` (default) uses TWO.
+#'   Each compute daemon is a full XLA client that spawns an all-cores CPU
+#'   thread pool (~63 threads measured on a 20-core box). One daemon cannot
+#'   overlap two chunks or overlap compute with the host harvest, so a
+#'   second buys real concurrency; but a third oversubscribes the machine
+#'   (and adds another multi-GB compile for large fused kernels), so past
+#'   two both wall time and memory rise. Two is the smallest count that
+#'   unlocks concurrency below that thread cliff. Raise only for multiple
+#'   GPUs (one daemon per device) or a NUMA server (one client per
+#'   socket); drop to 1 on a memory-tight box. `0` tears down.
 #' @param read_handles Open-handle cache depth on read daemons.
 #'   `NULL` (default) uses `garry_opt("read_handles")`. Depth 1 suits
 #'   per-slice mosaics that are rarely revisited (every open warped
@@ -463,7 +464,18 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
-    if (is.null(compute)) compute <- 1L
+    # TWO compute daemons by default. Two forces set the optimum. A single
+    # daemon is one worker and cannot overlap two chunks nor compute with
+    # the host's harvest/stage, so a second daemon captures real
+    # concurrency (measured ~12% on the SI tail). But each daemon is a full
+    # XLA client with an all-cores CPU thread pool (~63 threads/client on a
+    # 20-core box), so a third oversubscribes the machine and, for large
+    # fused kernels, adds another multi-GB compile: past two, wall time and
+    # memory both rise (measured 2->4: slower AND +14 GB peak; 8 OOMs).
+    # Two is the smallest count that unlocks concurrency below the thread
+    # cliff. Raise only for multiple GPUs (one daemon per device) or a NUMA
+    # server (one client per socket); drop to 1 on a memory-tight box.
+    if (is.null(compute)) compute <- 2L
     if (is.null(read))    read    <- cr$logical
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
