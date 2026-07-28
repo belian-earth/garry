@@ -551,7 +551,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   cap_read <- max(2L * n_read, 4L)
   cap_comp <- 2L * n_comp                    # comp-pool slot depth
   cap_comp_opt <- garry_opt("compute_inflight")  # optional hard cap
-  spill_ok <- isTRUE(garry_opt("compute_spill"))  # compute -> read-pool spill
   # In-flight compute is bounded by the RAM pool (refresh_mem_budgets,
   # below) and the cap_comp slot count -- NOT a fixed per-daemon constant.
   # ram_budget_mb is the per-CHUNK size target (the chunking pass, passes.R);
@@ -1112,8 +1111,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   warm_handle <- NULL
   # Cache keys the warm-up broadcast to every COMPUTE daemon: tasks
   # launched onto that pool send fn = NULL (key only) — the daemon
-  # already holds the jitted closure. Read-pool spill launches and
-  # warm-up failures fall back through the garry_jit_miss resend.
+  # already holds the jitted closure. Kernels the warm-up missed (or a
+  # warm-up failure) fall back through the garry_jit_miss resend.
   warmed_ck <- new.env(parent = emptyenv())
   if (pooled && isTRUE(garry_opt("jit_warmup")) && length(warm_specs)) {
     # Content-addressed keys collapse structurally identical stages
@@ -1285,18 +1284,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
 
   # Polling ready-queue with per-pool in-flight caps; compute
   # launches additionally gated by the byte budget (always at least
-  # one runs, so a single over-budget task cannot deadlock).
-  # Profile spill: pools are routing labels, and static membership
-  # wastes half the box in each phase (measured: 16 readers idle
-  # while 6 computers grind the tail, or vice versa). Comp-tagged
-  # tasks launch on the compute pool while it has slots; once ALL
-  # read-tagged work is done they also take idle read-pool slots —
-  # the tail runs on the whole fleet.
+  # one runs, so a single over-budget task cannot deadlock). Pools are
+  # strict: read-tagged tasks run on read daemons, comp-tagged on the
+  # compute pool. Compute tasks never spill onto readers -- a spilled
+  # task would load anvl on a lean reader and spin up a whole all-cores
+  # XLA client there, reintroducing the thread contention and unbounded
+  # per-daemon working set a small compute pool exists to avoid.
   inflight <- list()
   n_inflight <- c(read = 0L, comp = 0L)   # by task TAG (byte budget)
   n_slot <- c(read = 0L, comp = 0L)       # by launched PROFILE slot
-  n_readwork_left <- sum(vapply(task_keys, function(k)
-    tasks[[k]]$pool == "read", logical(1)))
   mb_inflight <- 0
   # Reads self-limit on RESIDENT store bytes, not in-flight count: a
   # read region lives until its last consumer retires, so a plan with
@@ -1378,8 +1374,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           # throttles genuine reads into the serial escape hatch.
           if (t$store_mb > 0 && !read_ok(t)) next
           if (n_slot[["comp"]] < cap_comp) slot <- "comp"
-          else if (spill_ok && n_readwork_left == 0L && identical(t$dev, "cpu") &&
-                   n_slot[["read"]] < cap_read) slot <- "read"
           else next
         }
       }
@@ -1387,8 +1381,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       prof <- if (slot == "read") read_prof else comp_prof
       inflight[[k]] <- if (is.null(t$ck)) t$launch(prof) else {
         # Compute-pool launches of warmed kernels ship the cache key
-        # only; spill launches onto the read pool (no warm-up there)
-        # always carry the closure.
+        # only; a kernel the warm-up did not cover carries its closure so
+        # the daemon compiles it on first use.
         t$launch(prof, with_fn = !(slot == "comp" &&
                                      isTRUE(warmed_ck[[t$ck]])))
       }
@@ -1434,7 +1428,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
         n_slot[[tasks[[k]]$slot]] <- n_slot[[tasks[[k]]$slot]] - 1L
-        if (pool_k == "read") n_readwork_left <- n_readwork_left - 1L
         if (pool_k == "comp") mb_inflight <- mb_inflight - tasks[[k]]$mb
         harvested <- TRUE
         log_line("done", k)

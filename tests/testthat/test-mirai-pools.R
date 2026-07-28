@@ -43,8 +43,7 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
     }
   }
 
-  # (Read daemons MAY load anvl now: once all read-tagged work is
-  # done, comp-tagged tail tasks spill onto idle readers by design.)
+  # (Read daemons stay anvl-free: compute tasks never spill onto them.)
 
   # Warm-up populated the compute pool's jit cache (per-run keys, so
   # >= one entry per run that had compute stages).
