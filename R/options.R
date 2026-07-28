@@ -79,6 +79,16 @@
   # flow at full pool width, big fused medians self-limit). NULL =
   # twice the compute pool.
   compute_inflight = NULL,
+  # Pooled scheduler: allow CPU compute tasks to spill onto idle READ
+  # daemons once all read-tagged work is done. Off by default. A spilled
+  # task calls the JIT on a lean read daemon (which carries no anvl), so
+  # it loads anvl/PJRT there and spins up a full all-cores XLA thread
+  # pool: this reintroduces the cross-process thread contention a small
+  # compute pool exists to avoid, and unbounds the live working-set count
+  # (each spilled daemon holds its own chunk). Enable only when the
+  # compute pool is deliberately narrower than the read pool AND the tail
+  # is compute-bound rather than memory-bound.
+  compute_spill = FALSE,
   # Fraction of AVAILABLE RAM (MemAvailable, re-read during the drain)
   # the distributed scheduler may commit to in-flight compute working
   # sets plus resident read regions. The configured budgets

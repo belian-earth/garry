@@ -435,8 +435,15 @@ NULL
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses logical
 #'   cores. `0` tears the pool down.
-#' @param compute Compute-pool daemon count; `NULL` (default) uses
-#'   physical cores. `0` tears down.
+#' @param compute Compute-pool daemon count; `NULL` (default) uses ONE.
+#'   Each compute daemon is a full XLA client that spawns an all-cores
+#'   CPU thread pool (~63 threads measured on a 20-core box); N of them
+#'   oversubscribe the machine and hold N working sets, which costs
+#'   memory and thread contention without buying throughput on the
+#'   read- and fit-bound pipelines garry runs -- XLA already parallelises
+#'   each kernel across the box from a single process. Raise it only for
+#'   multiple GPUs (one daemon per device) or a NUMA server where one
+#'   client per socket wins. `0` tears down.
 #' @param read_handles Open-handle cache depth on read daemons.
 #'   `NULL` (default) uses `garry_opt("read_handles")`. Depth 1 suits
 #'   per-slice mosaics that are rarely revisited (every open warped
@@ -456,7 +463,7 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
-    if (is.null(compute)) compute <- cr$physical
+    if (is.null(compute)) compute <- 1L
     if (is.null(read))    read    <- cr$logical
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
@@ -532,7 +539,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   cap_read <- max(2L * n_read, 4L)
   cap_comp <- 2L * n_comp                    # comp-pool slot depth
   cap_comp_opt <- garry_opt("compute_inflight")  # optional hard cap
-  comp_budget_mb <- garry_opt("ram_budget_mb") * n_comp
+  spill_ok <- isTRUE(garry_opt("compute_spill"))  # compute -> read-pool spill
+  # In-flight compute is bounded by the RAM pool (refresh_mem_budgets,
+  # below) and the cap_comp slot count -- NOT a fixed per-daemon constant.
+  # ram_budget_mb is the per-CHUNK size target (the chunking pass, passes.R);
+  # using ram_budget_mb x n_comp as the in-flight byte cap starved a single
+  # daemon's second (queued) slot -- so the daemon idled between runs -- and
+  # at high daemon counts grew the cap past real RAM into OOM. The pool
+  # fraction is the true bound.
+  comp_budget_mb <- Inf
   read_budget_mb <- garry_opt("read_budget_mb")
   # Largest co-resident read SET (one window per input of the widest
   # compute stage): filled during task build; the effective read budget
@@ -1202,11 +1217,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # third of the pool, compute the rest.
     rb <- max(store_mb_max, min(read_budget_cfg, pool / 3))
     cb <- max(task_mb_max, min(comp_budget_cfg, pool - rb))
-    if (announce && (cb < comp_budget_cfg || rb < read_budget_cfg))
+    # Announce only on a genuine squeeze: reads capped below their
+    # configured budget, or the pool cannot hold even two compute chunks.
+    # (comp_budget_cfg is Inf by default -- compute is RAM-pool-driven --
+    # so a bare "cb < cfg" would fire every refresh.)
+    if (announce && (rb < read_budget_cfg ||
+                     (task_mb_max > 0 && cb < 2 * task_mb_max)))
       cli::cli_inform(paste0(
-        "garry: {round(avail/1024, 1)} GiB available; capping in-flight ",
-        "compute at {round(cb)} MB (configured {round(comp_budget_cfg)}) ",
-        "and resident reads at {round(rb)} MB (configured ",
+        "garry: {round(avail/1024, 1)} GiB available; in-flight compute ",
+        "budget {round(cb)} MB, resident reads {round(rb)} MB (configured ",
         "{round(read_budget_cfg)})"))
     comp_budget_mb <<- cb
     read_budget_mb <<- rb
@@ -1346,7 +1365,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           # throttles genuine reads into the serial escape hatch.
           if (t$store_mb > 0 && !read_ok(t)) next
           if (n_slot[["comp"]] < cap_comp) slot <- "comp"
-          else if (n_readwork_left == 0L && identical(t$dev, "cpu") &&
+          else if (spill_ok && n_readwork_left == 0L && identical(t$dev, "cpu") &&
                    n_slot[["read"]] < cap_read) slot <- "read"
           else next
         }
