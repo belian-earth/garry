@@ -446,6 +446,44 @@ NULL
   if (length(unset)) do.call(Sys.setenv, as.list(unset))
 }
 
+# Cap each read daemon's schedulable CPUs with a disjoint interleaved
+# affinity mask, so a fused XLA client created there sizes its thread
+# pool to k CPUs instead of all cores. XLA sizes its eigen pool via
+# tsl::port::MaxParallelism() = NumSchedulableCPUs, which respects
+# sched_setaffinity, and the client inits lazily on the first g_jit —
+# so affinity applied at pool creation bounds every later client
+# (spike A, benchmarks/README.md 2026-07-29: uncapped 93
+# threads/daemon on 0-19; k=2 -> 39 threads on disjoint pairs; the
+# pool scales with the mask). k has a HARD floor of 2: a 1-CPU XLA
+# client segfaults (measured). Linux + taskset only; anywhere else the
+# readers stay uncapped and the placement pass's fuse_flops_max gate
+# keeps wide kernels off them. Records the cap in
+# .garry_state$reader_threads for the placement pass's cost mode.
+.read_affinity_apply <- function(n_read) {
+  .garry_state$reader_threads <- NULL
+  if (!identical(Sys.info()[["sysname"]], "Linux")) return(invisible(NULL))
+  if (!nzchar(Sys.which("taskset"))) return(invisible(NULL))
+  cores <- .garry_cores()$logical
+  k <- as.integer(max(2L, cores %/% max(1L, as.integer(n_read))))
+  if (k >= cores) return(invisible(NULL))     # cap would be a no-op
+  pids <- tryCatch(
+    vapply(mirai::everywhere(Sys.getpid(), .compute = "garry_read"),
+           function(m) m[], integer(1)),
+    error = function(e) integer(0))
+  if (length(pids) == 0L) return(invisible(NULL))
+  ok <- TRUE
+  for (i in seq_along(pids)) {
+    lo <- ((i - 1L) * k) %% cores
+    cpus <- paste(seq(lo, lo + k - 1L) %% cores, collapse = ",")
+    st <- suppressWarnings(
+      system2("taskset", c("-a", "-cp", cpus, pids[[i]]),
+              stdout = FALSE, stderr = FALSE))
+    if (!identical(st, 0L)) ok <- FALSE
+  }
+  if (ok) .garry_state$reader_threads <- k
+  invisible(NULL)
+}
+
 #' Set up split mirai daemon pools for distributed execution.
 #'
 #' Two pools instead of one: `read` daemons execute source/warp read
@@ -540,6 +578,13 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
     cfg = isTRUE(gdal_config),
     .compute = "garry_read")
     invisible(lapply(w, function(m) m[]))
+    # Reader CPU affinity (see .read_affinity_apply): applied at pool
+    # creation, BEFORE any fused kernel jits an XLA client there.
+    if (identical(garry_opt("read_affinity"), "auto"))
+      .read_affinity_apply(read)
+    else .garry_state$reader_threads <- NULL
+  } else {
+    .garry_state$reader_threads <- NULL
   }
   invisible(list(read = read, compute = compute))
 }

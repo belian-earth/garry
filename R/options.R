@@ -181,6 +181,14 @@
   # 2026-07-29). Mask cleanup (~10 flops/px) fuses either way; a
   # 145-band MLP (~2e4) needs the cap.
   fuse_flops_max = 128,
+  # Reader CPU affinity: "auto" pins each read daemon to a disjoint
+  # interleaved set of k = max(2, cores %/% n_read) CPUs at pool
+  # creation (Linux + taskset only; silently off elsewhere). A fused
+  # XLA client created on a reader then sizes its thread pool to k
+  # instead of all cores — the enabler for fusing wide kernels
+  # (placement cost mode) without N all-cores clients. k floors at 2:
+  # a 1-CPU XLA client segfaults (spike A). "off" disables.
+  read_affinity = "auto",
   # Cost-mode memory admission: estimated resident cost of one XLA CPU
   # client on a read daemon (client + jitted kernel state; spike A
   # measured ~277 MB after one trivial jit). Fusion is refused when
