@@ -393,6 +393,42 @@ NULL
   if (is.na(cg)) host else if (is.na(host)) cg else min(host, cg)
 }
 
+# Free space on /dev/shm in MB, NA when absent or unreadable. The mori
+# store and the fetch cache live on tmpfs, whose pages are
+# unreclaimable RAM; the budget's resident-byte accounting is an
+# estimate decremented at queue-drop time, so physical high-water can
+# run ahead of it within a flush window. This is the ground truth the
+# budget refresh clamps against.
+.garry_shm_free_mb <- function() {
+  if (!dir.exists("/dev/shm")) return(NA_real_)
+  df <- tryCatch(system2("df", c("-kP", "/dev/shm"), stdout = TRUE,
+                         stderr = FALSE),
+                 error = function(e) character(0))
+  if (length(df) < 2L) return(NA_real_)
+  avail_kb <- suppressWarnings(as.numeric(
+    strsplit(trimws(df[[2L]]), "\\s+")[[1L]][[4L]]))
+  if (!is.finite(avail_kb)) return(NA_real_)
+  avail_kb / 1024
+}
+
+# Store-resident bytes (MB) one region pins: core window clipped to the
+# grid, padded by `pad` per side, times the outer-dim plane count, in
+# raw f32 or R doubles. Shared by read windows (pad = halo), fused
+# outputs (pad = out_pad, nb = the EXPORT's planes -- pricing a fused
+# region from its source window over-charged a fused multi-band read by
+# the band count and would serialise the fleet) and compute outputs.
+.store_region_mb <- function(chunk_dim, grid_dims, pad, nb, use_raw) {
+  prod(pmin(as.numeric(chunk_dim),
+            as.numeric(grid_dims[c("x", "y")])) + 2 * pad) *
+    max(1, nb) * (if (use_raw) 4 else 8) / 2^20
+}
+
+# Outer-dim plane count of a node's grid (bands, time slices).
+.node_outer_nb <- function(graph, nid) {
+  d <- graph_get(graph, nid)@grid@dims
+  max(1, prod(as.numeric(d[!names(d) %in% c("x", "y")])))
+}
+
 # glibc malloc thresholds: big freed buffers get mmap'd and really returned to
 # the OS instead of retained in arenas (a fused chunk otherwise leaves a daemon
 # resident at its peak). These are read at process start, so they MUST be in the
@@ -740,7 +776,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
 
   # Compute-on-read (phase 12b, CPU only): a compute stage with ONE
   # input stage — a source read consumed by nobody else — and a
-  # single export executes inside the source's read tasks: the
+  # single export can execute inside the source's read tasks: the
   # kernel runs once per read window and only its OUTPUT is stored
   # and split. The per-chunk task fleet for source-fed kernel chains
   # (mask cleanup: 330 tasks on the benchmark) disappears, with its
@@ -754,11 +790,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     S <- plan@stages[[C@inputs[[1L]]]]
     if (S@kind != "source_read" || warp_only[[S@id]]) next
     if (length(unique(consumers_of[[S@id]])) != 1L) next
-    # A coalesced multi-band source keeps its consumer on the COMPUTE
-    # pool: fusing a wide kernel (e.g. a 145-band MLP reduce) into the
-    # read task would move the plan's whole compute onto the lean read
-    # daemons and idle the warm pool. Single-band chains (mask
-    # cleanup) keep the fusion win.
     if (length(graph_get(graph, S@members[[1L]])@band) > 1L) next
     fuse_of[[.key(S@id)]] <- list(
       cid = C@id,
@@ -766,7 +797,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       fn = C@fn,
       dtype = graph_get(graph, C@input_nodes[[1L]])@grid@dtype,
       out_key = .key(C@exports[[1L]]),
-      out_pad = C@out_pad)
+      out_pad = C@out_pad,
+      out_nb = .node_outer_nb(graph, C@exports[[1L]]))
     fused_cid[[.key(C@id)]] <- TRUE
   }
 
@@ -840,13 +872,18 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # launch gate budgets against the sum of these, not the task
       # count: a read fleet costs residency, not concurrency. A
       # coalesced multi-band window pins every band plane in ONE
-      # region, so the outer-dim product multiplies in.
-      nb_read <- max(1, prod(as.numeric(
-        s@grid@dims[!names(s@grid@dims) %in% c("x", "y")])))
-      store_mb_read <-
-        prod(pmin(as.numeric(s@chunks@chunk_dim),
-                  as.numeric(s@grid@dims[c("x", "y")])) +
-             2 * s@chunks@halo) * nb_read * (if (use_raw) 4 else 8) / 2^20
+      # region, so the outer-dim product multiplies in. A FUSED read
+      # stores only the kernel's export (core + out_pad ring): price
+      # the export's planes, or a fused multi-band read is over-charged
+      # by the band count and the budget serialises the fleet.
+      store_mb_read <- if (is.null(fspec)) {
+        .store_region_mb(s@chunks@chunk_dim, s@grid@dims, s@chunks@halo,
+                         .node_outer_nb(graph, s@members[[1L]]), use_raw)
+      } else {
+        .store_region_mb(s@chunks@chunk_dim, s@grid@dims,
+                         fspec$out_pad %||% 0L, fspec$out_nb %||% 1,
+                         use_raw)
+      }
       stage_store_mb[[.key(oid)]] <- store_mb_read
       split_cg <- .exec_split_cg(plan, s, consumers_of[[s@id]])
       if (is.null(split_cg)) {
@@ -964,6 +1001,18 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         }, integer(1)),
         nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * need,
         nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * need)
+      # Compute outputs pin store regions exactly like read windows —
+      # from launch until the last consumer retires (or, for host_keep
+      # stages, until end of run) — but previously carried store_mb = 0
+      # and were invisible to the residency gate: a chain of compute
+      # stages could flood the store unbudgeted.
+      epads_all <- if (length(s@export_pads)) as.integer(s@export_pads)
+                   else integer(length(s@exports))
+      store_mb_comp <- sum(vapply(seq_along(s@exports), function(ei) {
+        .store_region_mb(cd, s@grid@dims, epads_all[[ei]],
+                         .node_outer_nb(graph, s@exports[[ei]]), use_raw)
+      }, numeric(1)))
+      stage_store_mb[[.key(s@id)]] <- store_mb_comp
       for (j in seq_len(nrow(it))) {
         local({
           sid <- s@id; jj <- j; fn <- s@fn; need <- s@halo + s@out_pad
@@ -993,6 +1042,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           key <- sprintf("s%d_c%d", sid, jj)
           sr <- use_raw
           add_task(key, unique(in_deps), "comp", mb = task_mb,
+                   store_mb = store_mb_comp,
                    dev = sdev, ck = sig,
                    launch = function(prof, with_fn = TRUE) {
             # Handles resolve at launch time: dependencies are done, so
@@ -1030,8 +1080,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     }
   }
 
-  # Store bytes currently pinned by launched-but-unreleased reads.
-  mb_read_resident <- 0
+  # Store bytes currently pinned by launched-but-unreleased regions:
+  # read windows AND compute outputs (both live in the mori store from
+  # launch until their last consumer retires).
+  mb_store_resident <- 0
 
   # host_keep (filled after the streaming-sink setup below): store
   # stage ids whose regions the host must read AFTER the drain —
@@ -1050,7 +1102,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       if (is.null(sid)) next                       # no store region (fetch)
       if (isTRUE(host_keep[[.key(sid)]])) next
       task_stage_of[[rk]] <- NULL                  # drop at most once
-      mb_read_resident <<- mb_read_resident - (tasks[[rk]]$store_mb %||% 0)
+      mb_store_resident <<- mb_store_resident - (tasks[[rk]]$store_mb %||% 0)
       pending_drop <<- c(pending_drop, rk)
       pending_drop_mb <<- pending_drop_mb + (tasks[[rk]]$store_mb %||% 0)
     }
@@ -1058,7 +1110,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   }
   # Throttled: the host gc() that releases mori mappings costs seconds
   # on a large host heap, so drops flush on a clock, not per sweep.
-  # Budget ACCOUNTING (mb_read_resident) is decremented at queue time,
+  # Budget ACCOUNTING (mb_store_resident) is decremented at queue time,
   # so read launches unblock immediately; only the physical unlink
   # lags, bounded by the flush interval — and by BYTES: once the
   # queued-but-unfreed regions exceed a quarter of the read budget,
@@ -1229,6 +1281,20 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # third of the pool, compute the rest.
     rb <- max(store_mb_max, min(read_budget_cfg, pool / 3))
     cb <- max(task_mb_max, min(comp_budget_cfg, pool - rb))
+    # /dev/shm ground truth backstop: the resident-byte accounting is
+    # an estimate decremented at queue-drop time, so physical
+    # high-water can run ahead of it within a flush window, and other
+    # tmpfs consumers (the fetch cache, other processes) share the
+    # mount. Clamp the store budget so resident + admissible fits in
+    # what /dev/shm actually has free, and force the queued drops out
+    # when free space breaches the headroom.
+    shm_free <- .garry_shm_free_mb()
+    if (is.finite(shm_free)) {
+      headroom <- garry_opt("shm_headroom_mb")
+      rb <- min(rb, max(store_mb_max,
+                        mb_store_resident + shm_free - headroom))
+      if (shm_free < headroom) flush_drops(force = TRUE)
+    }
     # Announce only on a genuine squeeze: reads capped below their
     # configured budget, or the pool cannot hold even two compute chunks.
     # (comp_budget_cfg is Inf by default -- compute is RAM-pool-driven --
@@ -1294,17 +1360,22 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   n_inflight <- c(read = 0L, comp = 0L)   # by task TAG (byte budget)
   n_slot <- c(read = 0L, comp = 0L)       # by launched PROFILE slot
   mb_inflight <- 0
-  # Reads self-limit on RESIDENT store bytes, not in-flight count: a
-  # read region lives until its last consumer retires, so a plan with
-  # many independent read stages (per-year predictions in one collect)
-  # would otherwise drain its entire read fleet into RAM long before
-  # the first compute stage released any of it. The escape hatch is
-  # "no read in flight", so a stage whose own input set exceeds the
-  # budget still makes progress one read at a time rather than
-  # deadlocking.
+  # Launches self-limit on RESIDENT store bytes, not in-flight count:
+  # a store region (read window or compute output) lives until its
+  # last consumer retires, so a plan with many independent read stages
+  # (per-year predictions in one collect) would otherwise drain its
+  # entire read fleet into RAM long before the first compute stage
+  # released any of it, and a chain of compute stages could pile
+  # outputs unbudgeted. The escape hatch is "no read in flight", so a
+  # stage whose own input set exceeds the budget still makes progress
+  # one region at a time rather than deadlocking. host_keep regions
+  # (non-streamed sinks, combine partials) never release mid-run, so
+  # their bytes squeeze the gate as the run progresses; that is real
+  # tmpfs pressure, and the floor at store_mb_max keeps the tail
+  # serial rather than stuck.
   read_ok <- function(t) {
     n_inflight[["read"]] == 0L ||
-      mb_read_resident + t$store_mb <= read_budget_mb
+      mb_store_resident + t$store_mb <= read_budget_mb
   }
   comp_ok <- function(t) {
     if (!is.null(cap_comp_opt) &&
@@ -1368,10 +1439,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           if (!read_ok(t)) next
         } else {
           if (!comp_ok(t)) next
-          # Fetch-backed assembles run on the compute pool but pin
-          # read-store bytes like any read; gate them by the read
-          # budget too, or a fetch-heavy plan drains past it and then
-          # throttles genuine reads into the serial escape hatch.
+          # Compute tasks pin their OUTPUT region from launch, and
+          # fetch-backed assembles pin read-store bytes like any read:
+          # gate both by the store budget too, or a fetch-heavy or
+          # compute-chained plan drains past it and then throttles
+          # genuine reads into the serial escape hatch.
           if (t$store_mb > 0 && !read_ok(t)) next
           if (n_slot[["comp"]] < cap_comp) slot <- "comp"
           else next
@@ -1393,7 +1465,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # Read-producing tasks pin their region from launch, not from
       # completion (fetch-backed assembles run on the compute pool but
       # pin store bytes just the same).
-      mb_read_resident <- mb_read_resident + t$store_mb
+      mb_store_resident <- mb_store_resident + t$store_mb
       tasks[[k]]$state <- "running"
       log_line("launch", k)
     }

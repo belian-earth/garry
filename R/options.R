@@ -152,7 +152,15 @@
   # the medians across the shared pool. Single-band runs are unaffected (the
   # whole-grid kernel is already fetch-bound). FALSE forces the whole-grid
   # kernel and re-enables the scheduler route for heavy composites.
-  gd_parallel = TRUE
+  gd_parallel = TRUE,
+  # Pooled scheduler: /dev/shm headroom the store must leave free, in MB.
+  # The mori store, the fetch cache and gdal-direct cubes all live on
+  # tmpfs, whose pages are unreclaimable RAM; the budget's resident-byte
+  # accounting is an estimate decremented at queue-drop time, so it can
+  # run ahead of the physical unlink. refresh_mem_budgets clamps the
+  # store budget against ACTUAL free /dev/shm minus this headroom and
+  # force-flushes queued drops when free space falls below it.
+  shm_headroom_mb = 512
 )
 
 #' Read a garry policy option.
