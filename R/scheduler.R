@@ -1327,8 +1327,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # tmpfs consumers (the fetch cache, other processes) share the
     # mount. Clamp the store budget so resident + admissible fits in
     # what /dev/shm actually has free, and force the queued drops out
-    # when free space breaches the headroom.
+    # when free space breaches the headroom. tmpfs pages charge the
+    # creating process's CGROUP (a systemd-run scope counts them
+    # against MemoryMax while host df still shows free space), so the
+    # effective free space is the MINIMUM of the mount and the cgroup
+    # headroom — without the cgroup term the backstop never fires
+    # inside a confined run and the scope thrashes at its ceiling.
     shm_free <- .garry_shm_free_mb()
+    cg_free <- .garry_cgroup_avail_mb()
+    if (!is.na(cg_free))
+      shm_free <- if (is.na(shm_free)) cg_free else min(shm_free, cg_free)
     if (is.finite(shm_free)) {
       headroom <- garry_opt("shm_headroom_mb")
       rb <- min(rb, max(store_mb_max,
@@ -1417,6 +1425,18 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     n_inflight[["read"]] == 0L ||
       mb_store_resident + t$store_mb <= read_budget_mb
   }
+  # Store-bearing COMPUTE launches get their own escape hatch. Sharing
+  # read_ok's "no read in flight" escape starved the drain: reads sort
+  # earlier in the launch order, so whenever the escape opened a read
+  # took it, compute never launched over budget, and the regions only
+  # compute retirement can free accumulated to the memory ceiling
+  # (measured: crop=2048 SI bench pinned its 24G scope at task ~70 and
+  # hung on tmpfs reclaim). With its own escape, at least one compute
+  # task always drains a saturated store.
+  store_ok_comp <- function(t) {
+    n_inflight[["comp"]] == 0L ||
+      mb_store_resident + t$store_mb <= read_budget_mb
+  }
   comp_ok <- function(t) {
     if (!is.null(cap_comp_opt) &&
         n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
@@ -1481,10 +1501,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           if (!comp_ok(t)) next
           # Compute tasks pin their OUTPUT region from launch, and
           # fetch-backed assembles pin read-store bytes like any read:
-          # gate both by the store budget too, or a fetch-heavy or
-          # compute-chained plan drains past it and then throttles
-          # genuine reads into the serial escape hatch.
-          if (t$store_mb > 0 && !read_ok(t)) next
+          # gate both by the store budget, with the comp-pool escape so
+          # a saturated store still drains (see store_ok_comp).
+          if (t$store_mb > 0 && !store_ok_comp(t)) next
           if (n_slot[["comp"]] < cap_comp) slot <- "comp"
           else next
         }
