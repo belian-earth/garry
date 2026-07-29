@@ -1217,6 +1217,35 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     for (sp in warm_specs) warmed_ck[[sp$ck]] <- TRUE
   }
 
+  # Fused-aware stage chunk lookup. A FUSED stage's chunks live under
+  # its SOURCE's read task keys: whole-window reads store one region
+  # per chunk keyed by the export; split coarse reads store one region
+  # per read task with an element per compute chunk. Everything that
+  # retrieves stage chunks by (stage, j) — the streaming writers, the
+  # post-drain assembly, in-memory multi-export — goes through here.
+  # (source_deps is also populated for UNFUSED split sources, so gate
+  # on the placement table, not on the env.)
+  chunk_of <- function(sid, j) {
+    deps <- if (isTRUE(fused_cid[[.key(sid)]]))
+      source_deps[[.key(sid)]]
+    if (is.null(deps)) return(chunk_vals[[sprintf("s%d_c%d", sid, j)]])
+    v <- chunk_vals[[deps[[j]]]]
+    el <- source_elts[[.key(sid)]]
+    if (is.null(el)) v
+    else stats::setNames(list(v[[el[[j]]]]), sub("\x1f.*$", "", el[[j]]))
+  }
+  # Task -> sink chunk map for a streaming writer: which chunks of
+  # stage `st_id` land when task `key` completes. One chunk per task
+  # for ordinary stages; a fused stage under a coarse read lands ALL of
+  # a read window's chunks at once.
+  sink_task_map <- function(st_id, n_chunks) {
+    deps <- if (isTRUE(fused_cid[[.key(st_id)]]))
+      source_deps[[.key(st_id)]]
+    keys <- if (is.null(deps))
+      sprintf("s%d_c%d", st_id, seq_len(n_chunks)) else deps
+    split(seq_len(n_chunks), keys)
+  }
+
   # Streaming sink writes (phase 11.3): with a file destination, each
   # sink chunk writes the moment it lands, so all but the last band's
   # writes hide under the drain instead of running serially after it.
@@ -1231,15 +1260,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     sink_skey <- .key(sink@members[[length(sink@members)]])
     sink_it <- chunk_iter(sink@chunks)
     sink_spad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
-    sink_task_j <- stats::setNames(
-      seq_len(nrow(sink_it)),
-      sprintf("s%d_c%d", sink@id, seq_len(nrow(sink_it))))
+    sink_task_j <- sink_task_map(sink@id, nrow(sink_it))
     sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata, band_names = band_names)
     on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
             add = TRUE)
   }
   # Multi-export streaming: every non-combine sink gets its own open
-  # output and writes each chunk the moment its stage task lands.
+  # output and writes each chunk the moment its stage task lands (for
+  # a FUSED sink stage: the moment its source's read task lands).
   # reduce_combine sinks (host-side combines) write after the drain.
   stream_sinks <- list()
   if (!is.null(path) && multi) {
@@ -1256,10 +1284,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       ds <- gdal_create_output(p, ngrid, nodata = wnodata,
                                band_names = band_names)
       stream_sinks[[nm]] <- list(
+        sid = st@id,
         key = .key(nid), it = it, pad = .exec_export_pad(st, nid), ds = ds,
         dtype = ngrid@dtype, path = p,
-        task_j = stats::setNames(seq_len(nrow(it)),
-                                 sprintf("s%d_c%d", st@id, seq_len(nrow(it)))))
+        task_j = sink_task_map(st@id, nrow(it)))
     }
     on.exit(for (sp in stream_sinks) try(sp$ds$close(), silent = TRUE),
             add = TRUE)
@@ -1562,21 +1590,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         if (pool_k == "comp") mb_inflight <- mb_inflight - tasks[[k]]$mb
         harvested <- TRUE
         log_line("done", k)
-        if (stream_write && !is.na(sink_task_j[k])) {
-          j <- sink_task_j[[k]]
-          ch <- chunk_vals[[k]][[sink_skey]]
-          .exec_check_writable(ch, nrow(sink_it))
-          .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
-                            ch, sink_spad, sink@grid@dtype, wnodata)
+        if (stream_write && !is.null(sink_task_j[[k]])) {
+          for (j in sink_task_j[[k]]) {
+            ch <- chunk_of(sink@id, j)[[sink_skey]]
+            .exec_check_writable(ch, nrow(sink_it))
+            .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
+                              ch, sink_spad, sink@grid@dtype, wnodata)
+          }
           log_line("write", k)
         }
         for (sp in stream_sinks) {
-          if (is.na(sp$task_j[k])) next
-          j <- sp$task_j[[k]]
-          ch <- chunk_vals[[k]][[sp$key]]
-          .exec_check_writable(ch, nrow(sp$it))
-          .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
-                            ch, sp$pad, sp$dtype, wnodata)
+          if (is.null(sp$task_j[[k]])) next
+          for (j in sp$task_j[[k]]) {
+            ch <- chunk_of(sp$sid, j)[[sp$key]]
+            .exec_check_writable(ch, nrow(sp$it))
+            .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
+                              ch, sp$pad, sp$dtype, wnodata)
+          }
           log_line("write", k)
         }
         release_store(k)
@@ -1622,7 +1652,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   flush_drops(force = TRUE)
   log_line("drain_end", "-")
   on.exit(log_line("host_end", "-"), add = TRUE)
-  read_chunk <- function(sid, j) chunk_vals[[sprintf("s%d_c%d", sid, j)]]
+  read_chunk <- chunk_of   # fused-aware (see chunk_of above)
   out_of <- function(s) {
     it <- chunk_iter(s@chunks)
     lapply(seq_len(nrow(it)), function(j) read_chunk(s@id, j))

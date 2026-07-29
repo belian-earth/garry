@@ -68,54 +68,65 @@ test_that("a coalesced multi-band chain is a candidate that stays comp", {
   expect_null(.pl(p)$by_source[[garry:::.key(mb$source)]])
 })
 
-test_that("sinks and multi-consumer sources are not candidates", {
+test_that("sink chains are sinkful candidates; multi-consumer sources are not", {
   f <- fixture_gradient_f32()
 
-  # sink fed by one source: chunks must exist under the sink stage's keys
+  # sink fed by one source: a candidate (the scheduler's chunk lookup
+  # is fused-aware), but rules mode keeps phase 12b behaviour
   a <- lazy_source(f)
   p1 <- plan_lazy(a * 2 + 1)
-  expect_identical(nrow(.pl(p1)$table), 0L)
+  t1 <- .pl(p1)$table
+  expect_identical(nrow(t1), 1L)
+  expect_identical(t1$decision, "comp")
+  expect_match(t1$reason, "sink stage")
 
-  # source with TWO compute consumers: other consumers need the window.
-  # Whatever stage shape the planner picks here, every chain is either
-  # multi-consumer or the sink, so no candidate may survive.
+  # both consumers of b fuse into ONE stage, so the source has a single
+  # consuming stage and the (sink) chain is a candidate; rules mode
+  # keeps it materialised
   b <- lazy_source(f)
   p2 <- plan_lazy(reduce_over(lazy_stack(list(b + 1, b * 2)), "median",
                               "t", nan_rm = TRUE))
-  expect_identical(nrow(.pl(p2)$table), 0L)
+  t2 <- .pl(p2)$table
+  expect_identical(nrow(t2), 1L)
+  expect_identical(t2$decision, "comp")
 })
 
-test_that("multi-export sink chains are not candidates and round-trip", {
+test_that("multi-export sink chains round-trip in both placement modes", {
   skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   f <- fixture_gradient_f32()
-  # y is a single-export source-fed chain AND a requested sink: fusing
-  # it stored its chunks under the read task keys and the sink came
-  # back empty (all-zero streamed file). Regression for the 2026-07-29
-  # find.
+  # y is a single-export source-fed chain AND a requested sink. Under
+  # rules it stays materialised (phase 12b, which fused it and wrote
+  # all-zero output — the 2026-07-29 find); under cost it FUSES and the
+  # streaming writer pulls its chunks from the read tasks.
   a <- lazy_source(f)
   y <- a * 2 + 1
   b <- lazy_source(f, graph = a@graph)
   z <- reduce_over(lazy_stack(list(b + 1, b * 3)), "median", "t",
                    nan_rm = TRUE)
   p <- plan_lazy(list(y = y, z = z))
-  expect_identical(nrow(.pl(p)$table), 0L)
+  tab <- .pl(p)$table
+  expect_true(all(tab$decision == "comp"))   # rules: sinks stay put
 
   single <- execute_plan(p)
   garry_daemons(2, 1)
   on.exit(garry_daemons(0, 0), add = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist$y, single$y, tolerance = 1e-12)
-  expect_equal(dist$z, single$z, tolerance = 1e-12)
+  for (m in c("rules", "cost")) {
+    old_m <- options(garry.placement = m)
+    dist <- execute_plan_mirai(p)
+    expect_equal(dist$y, single$y, tolerance = 1e-12, label = m)
+    expect_equal(dist$z, single$z, tolerance = 1e-12, label = m)
 
-  d <- withr::local_tempdir()
-  execute_plan_mirai(p, path = d)
-  y1 <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0,
-                         ncol(single$y), nrow(single$y))
-  expect_equal(y1, single$y, tolerance = 1e-6)
+    d <- withr::local_tempdir()
+    execute_plan_mirai(p, path = d)
+    y1 <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0,
+                           ncol(single$y), nrow(single$y))
+    expect_equal(y1, single$y, tolerance = 1e-6, label = m)
+    options(old_m)
+  }
 })
 
 test_that("unknown placement mode errors", {

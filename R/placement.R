@@ -42,30 +42,29 @@ NULL
 }
 
 # Correctness preconditions: which source -> compute chains CAN fuse.
-# Lifted verbatim from the phase 12b predicate. These are not policy:
-# a violated precondition means fusion is wrong (the sink's chunks
-# must exist under the sink stage's own task keys; a GPU stage would
-# jit on a reader; a multi-consumer source's other consumers would
-# find no stored window; multi-input/multi-export kernels do not fit
-# the one-window-in, one-export-out fused task body). The dtype/halo
-# raw-store gates stay in the scheduler: they are per-read-task store
-# decisions, not placement.
+# These are not policy: a violated precondition means fusion is wrong
+# (a GPU stage would jit on a reader; a multi-consumer source's other
+# consumers would find no stored window; multi-input/multi-export
+# kernels do not fit the one-window-in, one-export-out fused task
+# body). SINK stages are eligible since the scheduler's chunk lookup
+# and streaming writers became fused-aware (chunk_of/sink_task_map):
+# a fused sink's chunks stream from its source's read tasks. They are
+# flagged `sinkful` so rules mode can keep the exact phase 12b
+# behaviour (sinks stayed materialised). The dtype/halo raw-store
+# gates stay in the scheduler: they are per-read-task store decisions,
+# not placement.
 .placement_candidates <- function(plan, consumers_of, warp_only) {
   out <- list()
   for (C in plan@stages) {
-    if (C@kind != "compute" || C@id == plan@sink) next
-    # Multi-export: a stage carrying ANY requested sink must keep its
-    # own chunk tasks — streamed writes and host retrieval both key on
-    # them. Fusing such a stage stored its output under the READ task
-    # keys and the sink came back empty (found 2026-07-29; the phase
-    # 12b predicate only excluded the primary sink).
-    if (any(plan@sinks %in% C@members)) next
+    if (C@kind != "compute") next
     if (!identical(C@device, "cpu")) next
     if (length(C@inputs) != 1L || length(C@exports) != 1L) next
     S <- plan@stages[[C@inputs[[1L]]]]
     if (S@kind != "source_read" || warp_only[[S@id]]) next
     if (length(unique(consumers_of[[S@id]])) != 1L) next
-    out[[length(out) + 1L]] <- list(sid = S@id, cid = C@id)
+    out[[length(out) + 1L]] <- list(
+      sid = S@id, cid = C@id,
+      sinkful = C@id == plan@sink || any(plan@sinks %in% C@members))
   }
   out
 }
@@ -103,12 +102,15 @@ NULL
     nb_src <- length(graph_get(graph, S@members[[1L]])@band)
     flops_px <- cost_fuse <- cost_mat <- move_mb <- NA_real_
     if (identical(mode, "rules")) {
-      # Phase 12b behaviour: a coalesced multi-band source keeps its
-      # consumer on the COMPUTE pool (fusing a wide kernel onto the
-      # lean readers would idle the warm pool); single-band chains
-      # (mask cleanup) keep the fusion win.
-      decision <- if (nb_src > 1L) "comp" else "fuse"
-      reason <- if (nb_src > 1L)
+      # Phase 12b behaviour: sinks stay materialised, and a coalesced
+      # multi-band source keeps its consumer on the COMPUTE pool
+      # (fusing a wide kernel onto the lean readers would idle the
+      # warm pool); single-band non-sink chains (mask cleanup) keep
+      # the fusion win.
+      decision <- if (cc$sinkful || nb_src > 1L) "comp" else "fuse"
+      reason <- if (cc$sinkful)
+        "rules: sink stage keeps its own tasks"
+      else if (nb_src > 1L)
         "rules: multi-band source stays on the warm pool"
       else "rules: single-band source-fed chain fuses"
     } else {

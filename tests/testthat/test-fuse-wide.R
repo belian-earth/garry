@@ -54,3 +54,48 @@ test_that("cost mode fuses a multi-band MLP chain onto capped readers", {
   tl <- read.csv(tlog, header = FALSE, col.names = c("ts", "e", "key"))
   expect_false(any(grepl(sprintf("^s%d_c", mlp$compute), tl$key)))
 })
+
+test_that("a SINK-shaped MLP predict fuses and streams (the SI shape)", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  # The SI predict collect: per-embedding predictions are multi-export
+  # SINKS. Under cost mode they fuse onto the readers and the streaming
+  # writers pull each sink chunk out of its source's read task.
+  fx <- fixture_multiband()
+  g <- graph_new()
+  mk_pred <- function(w_out) {
+    bands <- lapply(seq_len(fx$nb), function(b)
+      lazy_source(fx$path, band = b, graph = g))
+    st <- lazy_stack(bands, along = "band")
+    w1 <- matrix(runif(w_out * fx$nb), w_out)
+    w2 <- matrix(runif(w_out), 1L)
+    reduce_over(st, mlp_project(list(w1, w2), list(rep(0, w_out), 0)),
+                over = "band")
+  }
+  sinks <- list(p8 = mk_pred(8L), p16 = mk_pred(16L))
+  p <- plan_lazy(sinks)
+
+  single <- execute_plan(p)
+
+  garry_daemons(4, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+
+  tab <- garry_explain_placement(p)
+  expect_true(all(tab$decision == "fuse"))
+
+  # in-memory retrieval from the fused read tasks
+  dist <- execute_plan_mirai(p)
+  expect_equal(dist$p8, single$p8, tolerance = 1e-12)
+  expect_equal(dist$p16, single$p16, tolerance = 1e-12)
+
+  # streamed writes from the fused read tasks
+  d <- withr::local_tempdir()
+  execute_plan_mirai(p, path = d)
+  for (nm in names(sinks)) {
+    got <- gdal_read_window(file.path(d, paste0(nm, ".tif")), 1L, 0, 0,
+                            ncol(single[[nm]]), nrow(single[[nm]]))
+    expect_equal(got, single[[nm]], tolerance = 1e-6, label = nm)
+  }
+})
