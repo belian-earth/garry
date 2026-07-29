@@ -1,0 +1,128 @@
+# Placement pass extraction (PR2 of design/placement-cost-pass.md).
+# Rules mode must reproduce the phase 12b predicate exactly:
+# single-band source-fed single-consumer chains fuse; coalesced
+# multi-band sources stay on the warm pool; sinks and multi-consumer
+# sources are not candidates at all. Behavioural equivalence of the
+# fused execution is gated by test-compute-on-read.R, unchanged.
+
+skip_if_not_installed("anvl")
+
+.pl <- function(p, mode = "rules") {
+  sc <- garry:::.placement_scan(p)
+  garry:::.plan_placement(p, sc$consumers_of, sc$warp_only, mode = mode)
+}
+
+test_that("single-band source-fed chain fuses with a full spec", {
+  f <- fixture_gradient_f32()
+  # benchmark-mini shape (as test-compute-on-read): qa source -> mask
+  # map+focal chain, consumed by two band medians.
+  qa <- lazy_source(f)
+  mask <- focal(
+    lazy_map(qa, dtype = "f32",
+             fn = function(x) g_cast(x > 0.5, "f32")),
+    radius = 1L, fn = function(sh) Reduce(`*`, sh))
+  G <- qa@graph
+  bands <- lapply(1:2, function(i) {
+    b <- lazy_source(f, graph = G)
+    masked <- lazy_map(b, mask, dtype = "f32",
+                       fn = function(x, m) g_ifelse(m > 0.5, NaN, x))
+    reduce_over(lazy_stack(list(masked, masked * 2)), "median", "t",
+                nan_rm = TRUE)
+  })
+  p <- plan_lazy(lazy_stack(bands, along = "band"))
+
+  pl <- .pl(p)
+  tab <- pl$table
+  expect_true(nrow(tab) >= 1L)
+  expect_true(all(tab$decision == "fuse"))
+  expect_true(all(tab$bands == 1L))
+
+  # the fused spec carries exactly what the task bodies consume
+  sid <- tab$source[[1L]]
+  spec <- pl$by_source[[garry:::.key(sid)]]
+  expect_identical(sort(names(spec)),
+                   sort(c("cid", "ck", "fn", "dtype", "out_key",
+                          "out_pad", "out_nb")))
+  expect_identical(spec$cid, tab$compute[[1L]])
+  expect_true(isTRUE(pl$fused[[garry:::.key(spec$cid)]]))
+  expect_identical(spec$out_nb, 1)
+})
+
+test_that("a coalesced multi-band chain is a candidate that stays comp", {
+  fx <- fixture_multiband()
+  g <- graph_new()
+  bands <- lapply(seq_len(fx$nb), function(b)
+    lazy_source(fx$path, band = b, graph = g))
+  st <- lazy_stack(bands, along = "band")
+  # a trailing spatial reduce keeps the band-reduce chain in its own
+  # NON-SINK compute stage (spatial reduces split partial/combine)
+  out <- reduce_over(reduce_over(st, "mean", "band", nan_rm = TRUE) * 2,
+                     "mean", c("x", "y"), nan_rm = TRUE)
+  p <- plan_lazy(out)
+
+  tab <- .pl(p)$table
+  mb <- tab[tab$bands > 1L, ]
+  expect_identical(nrow(mb), 1L)
+  expect_identical(mb$decision, "comp")
+  # not fused: no spec, no fused mark
+  expect_null(.pl(p)$by_source[[garry:::.key(mb$source)]])
+})
+
+test_that("sinks and multi-consumer sources are not candidates", {
+  f <- fixture_gradient_f32()
+
+  # sink fed by one source: chunks must exist under the sink stage's keys
+  a <- lazy_source(f)
+  p1 <- plan_lazy(a * 2 + 1)
+  expect_identical(nrow(.pl(p1)$table), 0L)
+
+  # source with TWO compute consumers: other consumers need the window.
+  # Whatever stage shape the planner picks here, every chain is either
+  # multi-consumer or the sink, so no candidate may survive.
+  b <- lazy_source(f)
+  p2 <- plan_lazy(reduce_over(lazy_stack(list(b + 1, b * 2)), "median",
+                              "t", nan_rm = TRUE))
+  expect_identical(nrow(.pl(p2)$table), 0L)
+})
+
+test_that("multi-export sink chains are not candidates and round-trip", {
+  skip_if_not_installed("mirai")
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  f <- fixture_gradient_f32()
+  # y is a single-export source-fed chain AND a requested sink: fusing
+  # it stored its chunks under the read task keys and the sink came
+  # back empty (all-zero streamed file). Regression for the 2026-07-29
+  # find.
+  a <- lazy_source(f)
+  y <- a * 2 + 1
+  b <- lazy_source(f, graph = a@graph)
+  z <- reduce_over(lazy_stack(list(b + 1, b * 3)), "median", "t",
+                   nan_rm = TRUE)
+  p <- plan_lazy(list(y = y, z = z))
+  expect_identical(nrow(.pl(p)$table), 0L)
+
+  single <- execute_plan(p)
+  garry_daemons(2, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  old <- options(garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+  dist <- execute_plan_mirai(p)
+  expect_equal(dist$y, single$y, tolerance = 1e-12)
+  expect_equal(dist$z, single$z, tolerance = 1e-12)
+
+  d <- withr::local_tempdir()
+  execute_plan_mirai(p, path = d)
+  y1 <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0,
+                         ncol(single$y), nrow(single$y))
+  expect_equal(y1, single$y, tolerance = 1e-6)
+})
+
+test_that("unknown placement mode errors", {
+  f <- fixture_gradient_f32()
+  a <- lazy_source(f)
+  qa <- lazy_map(a, dtype = "f32", fn = function(x) x + 1)
+  p <- plan_lazy(reduce_over(lazy_stack(list(qa, qa * 2)), "median", "t",
+                             nan_rm = TRUE))
+  expect_error(.pl(p, mode = "bogus"), class = "garry_placement_error")
+})

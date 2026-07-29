@@ -780,27 +780,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # kernel runs once per read window and only its OUTPUT is stored
   # and split. The per-chunk task fleet for source-fed kernel chains
   # (mask cleanup: 330 tasks on the benchmark) disappears, with its
-  # dispatch, extract, upload and store round-trips.
-  fused_cid <- new.env(parent = emptyenv())   # fused compute sid -> TRUE
-  fuse_of <- new.env(parent = emptyenv())     # source sid -> fuse spec
-  for (C in plan@stages) {
-    if (C@kind != "compute" || C@id == plan@sink) next
-    if (!identical(C@device, "cpu")) next
-    if (length(C@inputs) != 1L || length(C@exports) != 1L) next
-    S <- plan@stages[[C@inputs[[1L]]]]
-    if (S@kind != "source_read" || warp_only[[S@id]]) next
-    if (length(unique(consumers_of[[S@id]])) != 1L) next
-    if (length(graph_get(graph, S@members[[1L]])@band) > 1L) next
-    fuse_of[[.key(S@id)]] <- list(
-      cid = C@id,
-      ck = paste0(.stage_kernel_sig(graph, C), "@", C@device),
-      fn = C@fn,
-      dtype = graph_get(graph, C@input_nodes[[1L]])@grid@dtype,
-      out_key = .key(C@exports[[1L]]),
-      out_pad = C@out_pad,
-      out_nb = .node_outer_nb(graph, C@exports[[1L]]))
-    fused_cid[[.key(C@id)]] <- TRUE
-  }
+  # dispatch, extract, upload and store round-trips. WHICH eligible
+  # chains fuse is the placement pass's decision (R/placement.R),
+  # returned as a side table the task build consumes.
+  placement <- .plan_placement(plan, consumers_of, warp_only,
+                               n_read = n_read, n_comp = n_comp)
+  fuse_of <- placement$by_source     # source sid -> fuse spec
+  fused_cid <- placement$fused       # fused compute sid -> TRUE
 
   # Jit warm-up specs, one per compute stage (pooled mode): the modal
   # (full) chunk shape, compiled on every compute daemon at run start.

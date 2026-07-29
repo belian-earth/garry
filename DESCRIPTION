@@ -59,6 +59,7 @@ Collate:
     'gdal_adapter.R'
     'executor.R'
     'scheduler.R'
+    'placement.R'
     'composite_direct.R'
     'lazy_raster.R'
     'stac.R'
