@@ -95,6 +95,51 @@ than ODC's (whole-slice warp reads vs ODC's fine-window threaded
 reads) but it stays ahead across reps. Tightening read variance is the
 remaining frontier, orthogonal to the compute paths.
 
+## Thread-topology spikes (2026-07-29, placement-pass branch)
+
+Evidence for the placement cost pass (`design/placement-cost-pass.md`,
+`design/scheduling-review-2026-07-29.md`). 20 logical cores.
+
+**Spike A: CPU affinity bounds the XLA CPU client pool.** Affinity is
+applied to freshly spawned mirai daemons with `taskset -a -cp` BEFORE
+the first `g_jit` (the client inits lazily), then one trivial kernel is
+jitted and `/proc/<pid>/status` read:
+
+| condition | threads/daemon | Cpus_allowed_list | note |
+|---|---|---|---|
+| uncapped | 93 | 0-19 | baseline (32 pre-anvl + ~61 XLA) |
+| k=4 disjoint | 45 | e.g. 0-3 | pool scales with the mask |
+| k=2 disjoint | 39 | e.g. 0-1 | stable across 4 and 8 readers |
+| k=1 | segfault | - | XLA client dies; k=2 is a HARD floor |
+
+The pool follows `NumSchedulableCPUs` as expected; disjoint sets bound
+machine-wide contention regardless of the residual per-process thread
+count (the 32-thread baseline is mostly an idle BLAS pool). Reader RSS
+after one trivial jit is ~277 MB: the "lean ~60 MB reader" figure does
+not survive fusion, and N-reader XLA memory must be priced by the
+placement pass. Daemons with a live XLA client segfault at teardown
+(`daemons(0)`) after results are returned; this predates the spike
+(today's compute pool has the same lifecycle) but is now visible.
+
+**Spike B (micro): MLP-shaped throughput by pool topology.** Kernel
+`relu(W1[64x145] %*% x[145x262144]); W2[1x64] %*% h` per 512x512
+window, input resident on the daemon, 600 windows dispatched from the
+host (dispatch+harvest included, as in the real drain):
+
+| topology | win/s | vs 2 fat |
+|---|---|---|
+| 2 daemons, uncapped (current compute pool) | 81.4 | 1.00x |
+| 6 daemons, k=3 | 109.6 | 1.35x |
+| 10 daemons, k=2 | 159.8 | 1.96x |
+| 16 daemons, k=2 (oversubscribed: 32 masked CPUs) | worse than 10 | short-run check only |
+
+N narrow XLA clients beat 2 fat ones ~2x on exactly the kernel shape
+the SI predict is bottlenecked on, host dispatch included. This is the
+data (not a shipped change) for revisiting the fixed 2-daemon compute
+pool once the placement pass can price thread width; the real SI-tail
+benchmark rerun happens at PR5 validation. Scripts:
+`benchmarks/spike_a_affinity.R` / `benchmarks/spike_b_topology.R`.
+
 ## Historical results (phases 9-11)
 
 2026-07-08 ~00:30, ODC baseline added (same-sitting triple; cgroup
