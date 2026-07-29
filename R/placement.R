@@ -87,27 +87,76 @@ NULL
                             n_read = NULL, n_comp = NULL,
                             reader_threads = NULL, avail_mb = NULL,
                             mode = "rules") {
-  if (!identical(mode, "rules"))
+  if (!mode %in% c("rules", "cost"))
     .garry_error(sprintf("unknown placement mode: %s", mode),
                  "garry_placement_error")
   graph <- plan@graph
   cands <- .placement_candidates(plan, consumers_of, warp_only)
   by_source <- new.env(parent = emptyenv())
   fused <- new.env(parent = emptyenv())
+  cores <- .garry_cores()$logical
+  k <- reader_threads %||% NA_real_
   rows <- list()
   for (cc in cands) {
     S <- plan@stages[[cc$sid]]
     C <- plan@stages[[cc$cid]]
     nb_src <- length(graph_get(graph, S@members[[1L]])@band)
-    # A coalesced multi-band source keeps its consumer on the COMPUTE
-    # pool: fusing a wide kernel (e.g. a 145-band MLP reduce) into
-    # the read task would move the plan's whole compute onto the
-    # lean read daemons and idle the warm pool. Single-band chains
-    # (mask cleanup) keep the fusion win.
-    decision <- if (nb_src > 1L) "comp" else "fuse"
-    reason <- if (nb_src > 1L)
-      "rules: multi-band source stays on the warm pool"
-    else "rules: single-band source-fed chain fuses"
+    flops_px <- cost_fuse <- cost_mat <- move_mb <- NA_real_
+    if (identical(mode, "rules")) {
+      # Phase 12b behaviour: a coalesced multi-band source keeps its
+      # consumer on the COMPUTE pool (fusing a wide kernel onto the
+      # lean readers would idle the warm pool); single-band chains
+      # (mask cleanup) keep the fusion win.
+      decision <- if (nb_src > 1L) "comp" else "fuse"
+      reason <- if (nb_src > 1L)
+        "rules: multi-band source stays on the warm pool"
+      else "rules: single-band source-fed chain fuses"
+    } else {
+      # Cost mode: modelled wall-time contribution of the chain under
+      # each route. Fuse runs the kernel on the read fleet (thread
+      # width n_read x k, machine-bounded) with nothing crossing shm;
+      # materialise ships the read window through shm to the compute
+      # pool (whose fat clients are machine-bounded regardless of
+      # daemon count). Coarse constants; the separations that matter
+      # are orders of magnitude.
+      flops_px <- .stage_flops_per_px(graph, C@members)
+      px <- prod(as.numeric(S@grid@dims[c("x", "y")]))
+      move_mb <- px * .node_outer_nb(graph, S@members[[1L]]) * 4 / 2^20
+      gf <- garry_opt("cost_gflops_core") * 1e9
+      fl <- flops_px * px
+      eff_fuse <- if (is.finite(k))
+        min(cores, max(1, n_read %||% 1) * k) else cores
+      cost_fuse <- fl / (gf * eff_fuse)
+      cost_mat <- 2 * move_mb / garry_opt("cost_shm_bw_mbs") +
+        fl / (gf * cores)
+      mem_need <- (n_read %||% 1) * garry_opt("cost_xla_client_mb")
+      mem_free <- if (is.null(avail_mb) || is.na(avail_mb)) Inf else
+        avail_mb * (1 - garry_opt("exec_ram_fraction"))
+      if (is.na(flops_px)) {
+        decision <- "comp"
+        reason <- "cost: unknown compute cost (scan / opaque custom body)"
+      } else if (!is.finite(k) &&
+                 flops_px > garry_opt("fuse_flops_max")) {
+        decision <- "comp"
+        reason <- sprintf(
+          "cost: no reader thread cap and %.0f flops/px > fuse_flops_max %.0f (N uncapped XLA clients)",
+          flops_px, garry_opt("fuse_flops_max"))
+      } else if (mem_need > mem_free) {
+        decision <- "comp"
+        reason <- sprintf(
+          "cost: %d readers x %.0f MB XLA does not fit %.0f MB free headroom",
+          as.integer(n_read %||% 1), garry_opt("cost_xla_client_mb"),
+          mem_free)
+      } else if (cost_fuse <= cost_mat) {
+        decision <- "fuse"
+        reason <- sprintf("cost: fuse %.3fs <= materialise %.3fs",
+                          cost_fuse, cost_mat)
+      } else {
+        decision <- "comp"
+        reason <- sprintf("cost: materialise %.3fs < fuse %.3fs",
+                          cost_mat, cost_fuse)
+      }
+    }
     if (decision == "fuse") {
       by_source[[.key(S@id)]] <- list(
         cid = C@id,
@@ -121,11 +170,50 @@ NULL
     }
     rows[[length(rows) + 1L]] <- data.frame(
       source = S@id, compute = C@id, bands = nb_src,
+      flops_px = flops_px, move_mb = move_mb,
+      cost_fuse_s = cost_fuse, cost_mat_s = cost_mat,
       decision = decision, reason = reason)
   }
   list(by_source = by_source, fused = fused,
        table = if (length(rows)) do.call(rbind, rows) else
          data.frame(source = integer(0), compute = integer(0),
-                    bands = integer(0), decision = character(0),
+                    bands = integer(0), flops_px = numeric(0),
+                    move_mb = numeric(0), cost_fuse_s = numeric(0),
+                    cost_mat_s = numeric(0), decision = character(0),
                     reason = character(0)))
+}
+
+#' Explain the scheduler's placement decisions for a computation.
+#'
+#' Runs the placement pass (see `design/placement-cost-pass.md`) over
+#' the plan the same way `collect(distributed = TRUE)` would, and
+#' returns its decision table: one row per fusable source -> compute
+#' chain with the decision, the modelled costs (cost mode), and the
+#' reason. Placement depends on runtime resources, so pool widths are
+#' read from the live [garry_daemons()] pools when present; pass
+#' `read` / `compute` to ask "what would the pass do with this
+#' topology" without daemons running.
+#'
+#' @param x A `LazyRaster`, a named list of them (multi-export), or a
+#'   `Plan`.
+#' @param read,compute Pool widths to assume; default = the live pools
+#'   (0 when none are running).
+#' @param mode `"rules"` or `"cost"`; default `garry_opt("placement")`.
+#' @return A data.frame with columns `source`, `compute`, `bands`,
+#'   `flops_px`, `move_mb`, `cost_fuse_s`, `cost_mat_s`, `decision`,
+#'   `reason`.
+#' @export
+garry_explain_placement <- function(x, read = NULL, compute = NULL,
+                                    mode = garry_opt("placement")) {
+  p <- if (S7::S7_inherits(x, Plan)) x else plan_lazy(x)
+  sc <- .placement_scan(p)
+  n_read <- as.integer(read %||%
+    tryCatch(.gd_n_compute("garry_read"), error = function(e) 0L))
+  n_comp <- as.integer(compute %||%
+    tryCatch(.gd_n_compute("garry_compute"), error = function(e) 0L))
+  .plan_placement(p, sc$consumers_of, sc$warp_only,
+                  n_read = n_read, n_comp = n_comp,
+                  reader_threads = .garry_state$reader_threads,
+                  avail_mb = .garry_ram_avail_mb(),
+                  mode = mode)$table
 }

@@ -888,6 +888,41 @@ plan_lazy <- function(x) {
   8 * outer_max + 8 * max(1, in_px) + 16 + scan_px
 }
 
+# Per-pixel COMPUTE estimate for one stage's kernel, in flops. The
+# memory companion to .stage_bytes_per_px, consumed by the placement
+# pass's fuse-vs-materialise comparison. Coarse by design: the
+# placement decision rides on order-of-magnitude separations (an
+# elementwise mask ~10 flops/px, a 145-band MLP ~2e4), not
+# percentages. Custom reducers are introspected: an mlp_project
+# reducer's layer matrices live in its closure environment, which
+# custom bodies keep (.slim_fn exemption), so matmul flops are
+# recoverable as 2 * sum(nrow x ncol). A custom body without
+# recognisable weights — or any scan — returns NA: unknown compute
+# cost, which the placement pass treats as never-fuse-uncapped.
+.stage_flops_per_px <- function(graph, members) {
+  sum(vapply(members, function(id) {
+    n <- graph_get(graph, id)
+    if (S7::S7_inherits(n, FocalNode)) return((2 * n@radius + 1)^2)
+    if (S7::S7_inherits(n, ScanNode)) return(NA_real_)
+    if (S7::S7_inherits(n, ReduceNode)) {
+      if (!identical(n@op, "custom")) {
+        pd <- .node_grid(graph_get(graph, n@parents[[1L]]))@dims
+        return(max(1, prod(pd[names(pd) %in% n@over])))
+      }
+      if (!length(n@fn)) return(NA_real_)
+      w <- tryCatch(get("weights", envir = environment(n@fn[[1L]]),
+                        inherits = FALSE),
+                    error = function(e) NULL)
+      if (is.list(w) && length(w) &&
+          all(vapply(w, is.matrix, logical(1))))
+        return(2 * sum(vapply(w, function(m)
+          nrow(m) * ncol(m), numeric(1))))
+      return(NA_real_)
+    }
+    1
+  }, numeric(1)))
+}
+
 .gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
 .lcm2 <- function(a, b) as.integer(a / .gcd2(a, b) * b)
 

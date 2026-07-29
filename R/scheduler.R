@@ -22,6 +22,12 @@ NULL
 # Per-process cache used on daemons (jitted stage closures by stage id).
 .daemon_cache <- new.env(parent = emptyenv())
 
+# Package-local runtime state shared across scheduler calls: daemon
+# topology recorded by garry_daemons() (reader_threads = the per-reader
+# CPU-affinity width, NA/NULL when uncapped), read by the placement
+# pass's cost mode.
+.garry_state <- new.env(parent = emptyenv())
+
 # Daemon-side registry pinning mori shared-memory regions. A region
 # lives only while its creator holds a reference (mori unlinks on GC),
 # and task locals die with the task, so every share() lands here until
@@ -784,7 +790,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # chains fuse is the placement pass's decision (R/placement.R),
   # returned as a side table the task build consumes.
   placement <- .plan_placement(plan, consumers_of, warp_only,
-                               n_read = n_read, n_comp = n_comp)
+                               n_read = n_read, n_comp = n_comp,
+                               reader_threads = .garry_state$reader_threads,
+                               avail_mb = .garry_ram_avail_mb(),
+                               mode = garry_opt("placement"))
   fuse_of <- placement$by_source     # source sid -> fuse spec
   fused_cid <- placement$fused       # fused compute sid -> TRUE
 

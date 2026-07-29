@@ -160,7 +160,32 @@
   # run ahead of the physical unlink. refresh_mem_budgets clamps the
   # store budget against ACTUAL free /dev/shm minus this headroom and
   # force-flushes queued drops when free space falls below it.
-  shm_headroom_mb = 512
+  shm_headroom_mb = 512,
+  # Placement decision mode for source->compute chains in the pooled
+  # scheduler (design/placement-cost-pass.md): "rules" reproduces the
+  # phase 12b structural predicate (single-band chains fuse, coalesced
+  # multi-band sources stay on the warm pool); "cost" compares modelled
+  # fuse-vs-materialise wall time per chain. Stays "rules" until the
+  # cost mode validates on the SI predict benchmarks (PR5).
+  placement = "rules",
+  # Cost-mode calibration: sustained per-core throughput (GFLOP/s) of
+  # jitted kernels, and effective /dev/shm copy bandwidth (MB/s).
+  # Order-of-magnitude constants; tune from garry.task_log traces of
+  # both routes rather than a priori.
+  cost_gflops_core = 4,
+  cost_shm_bw_mbs = 2000,
+  # Cost mode: without a reader thread cap (garry.read_affinity), a
+  # kernel above this flops/px never fuses. Fusing wide compute onto N
+  # uncapped readers spawns N all-cores XLA clients — a bigger thread
+  # cliff than the 2-daemon pool it escapes (scheduling review
+  # 2026-07-29). Mask cleanup (~10 flops/px) fuses either way; a
+  # 145-band MLP (~2e4) needs the cap.
+  fuse_flops_max = 128,
+  # Cost-mode memory admission: estimated resident cost of one XLA CPU
+  # client on a read daemon (client + jitted kernel state; spike A
+  # measured ~277 MB after one trivial jit). Fusion is refused when
+  # n_read x this does not fit in the RAM the exec budget leaves free.
+  cost_xla_client_mb = 350
 )
 
 #' Read a garry policy option.

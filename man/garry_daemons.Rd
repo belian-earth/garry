@@ -16,8 +16,16 @@ garry_daemons(
 \item{read}{Read-pool daemon count; \code{NULL} (default) uses logical
 cores. \code{0} tears the pool down.}
 
-\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses
-physical cores. \code{0} tears down.}
+\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses TWO.
+Each compute daemon is a full XLA client that spawns an all-cores CPU
+thread pool (~63 threads measured on a 20-core box). One daemon cannot
+overlap two chunks or overlap compute with the host harvest, so a
+second buys real concurrency; but a third oversubscribes the machine
+(and adds another multi-GB compile for large fused kernels), so past
+two both wall time and memory rise. Two is the smallest count that
+unlocks concurrency below that thread cliff. Raise only for multiple
+GPUs (one daemon per device) or a NUMA server (one client per
+socket); drop to 1 on a memory-tight box. \code{0} tears down.}
 
 \item{read_handles}{Open-handle cache depth on read daemons.
 \code{NULL} (default) uses \code{garry_opt("read_handles")}. Depth 1 suits
