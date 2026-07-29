@@ -1,8 +1,20 @@
 # Cost-based placement pass: dissolving the hand-coded fusion rules
 
-Status: **design, amended 2026-07-29 after the scheduling review
-(`scheduling-review-2026-07-29.md`); implementation started on branch
-`placement-pass`.** Self-contained.
+Status: **implemented through PR4 on branch `placement-pass`
+(2026-07-29); default remains `garry.placement = "rules"` pending PR5
+benchmark validation.** Amended after the scheduling review
+(`scheduling-review-2026-07-29.md`). Self-contained.
+
+Landed: residency fixes (compute-output store bytes, /dev/shm
+backstop, fused-region pricing), the placement pass with rules and
+cost modes plus `garry_explain_placement()`, `.stage_flops_per_px`
+with MLP closure introspection, reader CPU affinity
+(`garry.read_affinity`), and an end-to-end gate (`test-fuse-wide.R`)
+proving a multi-band MLP chain fuses onto capped readers under cost
+mode with oracle-identical results. Also fixed en route: a phase 12b
+defect where a fused chain that was itself a multi-export sink wrote
+all-zero output. PR5 remains: the SI predict / HLS morphology /
+ndvi-composite / crop=0 benchmark validation, then the default flip.
 
 ## Amendments from the 2026-07-29 review
 
