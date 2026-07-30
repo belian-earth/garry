@@ -966,8 +966,10 @@ plan_lazy <- function(x) {
 # while the same kernel fit at crop=1024).
 .stage_fuse_act_bytes_px <- function(graph, members, nb_in) {
   maxw <- 0
+  f64 <- FALSE
   for (id in members) {
     n <- graph_get(graph, id)
+    if (identical(n@grid@dtype, "f64")) f64 <- TRUE
     if (S7::S7_inherits(n, ReduceNode) && identical(n@op, "custom") &&
         length(n@fn)) {
       w <- tryCatch(get("weights", envir = environment(n@fn[[1L]]),
@@ -977,7 +979,8 @@ plan_lazy <- function(x) {
         maxw <- max(maxw, 2 * max(vapply(w, nrow, numeric(1))))
     }
   }
-  4 * (max(1, nb_in) + max(2, maxw))
+  # f64 members double the activation element size (defect hunt L4).
+  (if (f64) 8 else 4) * (max(1, nb_in) + max(2, maxw))
 }
 
 .gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
@@ -1040,8 +1043,11 @@ plan_lazy <- function(x) {
   set_bpx <- vapply(protos, function(s) {
     if (length(s$input_nodes) == 0L) return(4)
     sum(vapply(s$input_nodes, function(nid) {
-      d <- .node_grid(graph_get(graph, nid))@dims
-      4 * max(1, prod(d[!names(d) %in% c("x", "y")]))
+      g <- .node_grid(graph_get(graph, nid))
+      d <- g@dims
+      # true element size: f64 inputs pin twice the bytes (L4)
+      (if (identical(g@dtype, "f64")) 8 else 4) *
+        max(1, prod(d[!names(d) %in% c("x", "y")]))
     }, numeric(1)))
   }, numeric(1))
   cap <- garry_opt("read_budget_mb") * 2^20 / (2 * max(c(4, set_bpx)))

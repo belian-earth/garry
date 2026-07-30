@@ -139,7 +139,8 @@ NULL
       # are orders of magnitude.
       flops_px <- .stage_flops_per_px(graph, C@members)
       px <- prod(as.numeric(S@grid@dims[c("x", "y")]))
-      move_mb <- px * .node_outer_nb(graph, S@members[[1L]]) * 4 / 2^20
+      move_mb <- px * .node_outer_nb(graph, S@members[[1L]]) *
+        (if (identical(S@grid@dtype, "f64")) 8 else 4) / 2^20
       gf <- garry_opt("cost_gflops_core") * 1e9
       fl <- flops_px * px
       eff_fuse <- if (is.finite(k))

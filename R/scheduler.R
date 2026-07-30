@@ -636,14 +636,19 @@ NULL
   if (k >= cores) return(NULL)                # cap would be a no-op
   pids <- .garry_pool_pids(profile)
   if (length(pids) == 0L) return(NULL)
+  # Apply EVERY mask before judging success: returning early on one
+  # failed taskset left the pool half re-masked while the recorded
+  # thread state kept the old width (defect hunt L5).
+  ok <- TRUE
   for (i in seq_along(pids)) {
     lo <- ((i - 1L) * k) %% cores
     cpus <- paste(seq(lo, lo + k - 1L) %% cores, collapse = ",")
     st <- suppressWarnings(
       system2("taskset", c("-a", "-cp", cpus, pids[[i]]),
               stdout = FALSE, stderr = FALSE))
-    if (!identical(st, 0L)) return(NULL)
+    if (!identical(st, 0L)) ok <- FALSE
   }
+  if (!ok) return(NULL)
   k
 }
 
@@ -1800,7 +1805,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                  (ck_done[[t$ck]] %||% 0L) < n_comp) t$cold_mb else 0
   }
   comp_ok <- function(t) {
-    if (!is.null(cap_comp_opt) &&
+    # The optional hard count cap applies to COMPUTE-POOL tasks only:
+    # fused reads ride comp_ok for the byte budget but never count
+    # toward the compute in-flight tally, so capping them against it
+    # throttled ready reads for no resource reason (defect hunt L1).
+    if (!is.null(cap_comp_opt) && identical(t$pool, "comp") &&
         n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
     mb_inflight == 0 ||
       mb_inflight + mb_eff(t) <= comp_budget_mb

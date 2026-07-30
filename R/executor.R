@@ -293,7 +293,9 @@ NULL
   bot <- max(0L, core$y_off + core$y_size + pad - gdims[["y"]])
   right <- max(0L, core$x_off + core$x_size + pad - gdims[["x"]])
   if (top + left + bot + right == 0L) return(v)
-  if (.sv_is(v)) v <- .sv_materialise(v)
+  was_raw <- .sv_is(v)
+  gdt0 <- if (was_raw) attr(v, "gdt") %||% "f32"
+  if (was_raw) v <- .sv_materialise(v)
   d <- dim(v)
   nr <- d[[length(d) - 1L]]
   nc <- d[[length(d)]]
@@ -307,6 +309,16 @@ NULL
     if (bot > 0L) v[, (nr - bot + 1L):nr, ] <- NaN
     if (left > 0L) v[, , seq_len(left)] <- NaN
     if (right > 0L) v[, , (nc - right + 1L):nc] <- NaN
+  }
+  # Re-wrap raw payloads (row-major, original element size): leaving the
+  # masked edge chunk as R doubles stored 8 B/px while the budget booked
+  # the raw element size under-accounts boundary chunks 2x (defect
+  # hunt L2).
+  if (was_raw) {
+    x <- if (length(d) == 2L) as.numeric(t(v))
+         else as.numeric(aperm(v, rev(seq_along(d))))
+    return(structure(writeBin(x, raw(), size = .sv_es(gdt0)),
+                     gdim = d, gdt = gdt0))
   }
   v
 }
