@@ -1508,6 +1508,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # the done set for every pending task every sweep — O(tasks^2 x deps)
   # over the drain, which at ~10^4 tasks (a 22-year multi-band predict)
   # costs the host more than the tasks themselves.
+  # Cold-kernel slow start. A kernel the warm-up did not cover
+  # compiles on each daemon's first task of it, and an XLA compile can
+  # hold multi-GB privately (an unrolled scan measured 6-12 GB).
+  # Admission prices working sets, not compiles, so without a ramp a
+  # wide pool starts N simultaneous cold compiles the moment such a
+  # stage becomes ready. Allow one more in-flight task of a cold
+  # kernel than have ever COMPLETED: the ramp is 1, 2, 3, ... and by
+  # mid-ramp the early daemons hold the kernel warm.
+  ck_inflight <- new.env(parent = emptyenv())  # kernel sig -> in flight
+  ck_done <- new.env(parent = emptyenv())      # kernel sig -> completed
   dep_left <- new.env(parent = emptyenv())    # task -> unmet dep count
   dependents <- new.env(parent = emptyenv())  # task -> tasks waiting on it
   for (k in task_keys) {
@@ -1568,11 +1578,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           # gate both by the store budget, with the comp-pool escape so
           # a saturated store still drains (see store_ok_comp).
           if (t$store_mb > 0 && !store_ok_comp(t)) next
+          # Cold-kernel slow start (see ck_inflight above).
+          if (!is.null(t$ck) && !isTRUE(warmed_ck[[t$ck]]) &&
+              (ck_inflight[[t$ck]] %||% 0L) > (ck_done[[t$ck]] %||% 0L))
+            next
           if (n_slot[["comp"]] < cap_comp) slot <- "comp"
           else next
         }
       }
       if (!is_ready(k)) next
+      if (!is.null(t$ck))
+        ck_inflight[[t$ck]] <- (ck_inflight[[t$ck]] %||% 0L) + 1L
       prof <- if (slot == "read") read_prof else comp_prof
       inflight[[k]] <- if (is.null(t$ck)) t$launch(prof) else {
         # Compute-pool launches of warmed kernels ship the cache key
@@ -1619,6 +1635,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         n_done <- n_done + 1L
         for (k2 in dependents[[k]])
           dep_left[[k2]] <- dep_left[[k2]] - 1L
+        if (!is.null(tasks[[k]]$ck)) {
+          ckk <- tasks[[k]]$ck
+          ck_inflight[[ckk]] <- (ck_inflight[[ckk]] %||% 1L) - 1L
+          ck_done[[ckk]] <- (ck_done[[ckk]] %||% 0L) + 1L
+        }
         inflight[[k]] <- NULL
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
