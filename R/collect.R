@@ -122,6 +122,34 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   out
 }
 
+#' Convert a collected result to a terra SpatRaster.
+#'
+#' `collect()` results carry a `gis` attribute (bbox, CRS, dims); this
+#' wraps the array as a `terra::SpatRaster` for hand-off to the terra
+#' ecosystem (plotting, zonal statistics, vector ops). Band
+#' names/descriptions are preserved when present.
+#'
+#' @param x A matrix or `(y, x, band)` array from [collect()] (must
+#'   carry the `gis` attribute).
+#' @return A `terra::SpatRaster`.
+#' @export
+as_terra <- function(x) {
+  rlang::check_installed("terra", reason = "for as_terra().")
+  gis <- attr(x, "gis")
+  if (is.null(gis))
+    cli::cli_abort(paste0(
+      "{.arg x} has no {.code gis} attribute; pass an in-memory ",
+      "{.fn collect} result (matrix or (y, x, band) array)"))
+  a <- if (length(dim(x)) == 2L) array(x, c(dim(x), 1L)) else unclass(x)
+  attr(a, "gis") <- NULL
+  r <- terra::rast(a, crs = gis$srs,
+                   extent = terra::ext(gis$bbox[[1L]], gis$bbox[[3L]],
+                                       gis$bbox[[2L]], gis$bbox[[4L]]))
+  nms <- dimnames(x)[[3L]]
+  if (!is.null(nms)) names(r) <- nms
+  r
+}
+
 #' Which execution route did the last `collect()` take?
 #'
 #' The distributed `collect()` silently picks between the

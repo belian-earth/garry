@@ -334,6 +334,38 @@ grid_equal <- function(a, b, tol = 1e-9) {
     all(a@dims == b@dims)
 }
 
+#' Describe how two grids differ.
+#'
+#' The diagnostic companion to [grid_equal()]: names the FIRST differing
+#' component (CRS, resolution, extent offset in pixels, dims) so a
+#' "grids differ" abort tells the user what to fix rather than only that
+#' something is wrong. Embedded in every alignment error.
+#'
+#' @param a,b `GridSpec` objects.
+#' @param tol Numeric tolerance, as in [grid_equal()].
+#' @return A single character description; `"grids are equal"` when
+#'   [grid_equal()] holds.
+#' @export
+grid_diff <- function(a, b, tol = 1e-9) {
+  if (!crs_equal(a@crs, b@crs))
+    return("CRS differs")
+  ra <- c(a@transform[[2L]], -a@transform[[6L]])
+  rb <- c(b@transform[[2L]], -b@transform[[6L]])
+  if (any(abs(ra - rb) > tol))
+    return(sprintf("resolution differs: %g x %g vs %g x %g",
+                   ra[[1L]], ra[[2L]], rb[[1L]], rb[[2L]]))
+  if (any(abs(a@extent - b@extent) > tol)) {
+    off <- (b@extent - a@extent) / c(ra[[1L]], ra[[2L]], ra[[1L]], ra[[2L]])
+    return(sprintf("extents differ by %.3g px in x, %.3g px in y",
+                   max(abs(off[c(1L, 3L)])), max(abs(off[c(2L, 4L)]))))
+  }
+  if (length(a@dims) != length(b@dims) || any(a@dims != b@dims))
+    return(sprintf("dims differ: (%s) vs (%s)",
+                   paste(a@dims, collapse = ","),
+                   paste(b@dims, collapse = ",")))
+  "grids are equal"
+}
+
 # Internal: same CRS, spatial dims and affine transform; non-spatial
 # dims and dtype ignored (a stack and its median share spatial
 # geometry). Used by the planner's stage-merge pass.

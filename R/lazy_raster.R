@@ -145,7 +145,9 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
       (length(.outer_dims(x@grid)) == 0L &&
          .spatial_equal(xs[[1L]]@grid, x@grid))
     if (!ok)
-      cli::cli_abort("input {i} is not on the same grid; {.fn align} it first")
+      cli::cli_abort(paste0(
+        "input {i} is not on the same grid ",
+        "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"))
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
     else graph_import(graph, x@graph, x@node_id)
   }, integer(1))
@@ -178,7 +180,9 @@ lazy_stack <- function(xs, along = "t") {
     if (!S7::S7_inherits(x, LazyRaster))
       cli::cli_abort("layer {i} must be a {.cls LazyRaster}")
     if (!grid_equal(xs[[1L]]@grid, x@grid))
-      cli::cli_abort("layer {i} is not on the same grid; {.fn align} it first")
+      cli::cli_abort(paste0(
+        "layer {i} is not on the same grid ",
+        "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"))
     if (identical(graph@nodes, x@graph@nodes)) x@node_id
     else graph_import(graph, x@graph, x@node_id)
   }, integer(1))
@@ -273,14 +277,17 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 # Binary op helper. Grid mismatch errors (align stays explicit, decision
 # D8's cousin); graph mismatch auto-merges by importing b's subgraph into
 # a's graph (decision D6) — users never manage graphs by hand.
-.lazy_binop <- function(a, b, op, divide = FALSE) {
+.lazy_binop <- function(a, b, op, divide = FALSE, dtype = NULL) {
   if (!grid_equal(a@grid, b@grid))
-    cli::cli_abort("grids differ; use {.code align(a, b, to = ...)} first")
+    cli::cli_abort(paste0(
+      "grids differ ({grid_diff(a@grid, b@grid)}); ",
+      "use {.code align(a, b, to = ...)} first"))
   graph <- a@graph
   b_id <- if (identical(graph@nodes, b@graph@nodes)) b@node_id
           else graph_import(graph, b@graph, b@node_id)
   grid <- .grid_retype(
-    a@grid, dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide))
+    a@grid,
+    dtype %||% dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide))
   id <- graph_add(
     graph,
     MapNode,
@@ -293,10 +300,12 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 
 # Scalar op helper: scalar on one side. Scalars are weakly typed: they
 # never widen the raster dtype; only division forces a float result.
-.lazy_scalar_op <- function(lr, s, op, scalar_first, divide = FALSE) {
+.lazy_scalar_op <- function(lr, s, op, scalar_first, divide = FALSE,
+                            dtype = NULL) {
   fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
   grid <- .grid_retype(
-    lr@grid, dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = divide))
+    lr@grid,
+    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = divide))
   id <- graph_add(
     lr@graph,
     MapNode,
@@ -328,6 +337,76 @@ for (op_name in c("+", "-", "*", "/")) {
       function(e1, e2) .lazy_scalar_op(e2, e1, f, TRUE, divide = d)
     })
 }
+
+# Comparisons produce f32 0/1 masks, not logical: the map-algebra
+# masking idiom then composes directly ((x > 5) * y, mask sums, ...).
+for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
+  op_fn <- get(op_name, envir = baseenv())
+  S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
+    local({
+      f <- op_fn
+      function(e1, e2) .lazy_binop(
+        e1, e2, function(x, y) g_cast(f(x, y), "f32"), dtype = "f32")
+    })
+  S7::method(op_fn, list(LazyRaster, S7::class_numeric)) <-
+    local({
+      f <- op_fn
+      function(e1, e2) .lazy_scalar_op(
+        e1, e2, function(x, y) g_cast(f(x, y), "f32"), FALSE, dtype = "f32")
+    })
+  S7::method(op_fn, list(S7::class_numeric, LazyRaster)) <-
+    local({
+      f <- op_fn
+      function(e1, e2) .lazy_scalar_op(
+        e2, e1, function(x, y) g_cast(f(x, y), "f32"), TRUE, dtype = "f32")
+    })
+}
+
+# ^ promotes to float (R's semantics: int^int is double); %% keeps the
+# input dtype.
+for (op_name in c("^", "%%")) {
+  op_fn <- get(op_name, envir = baseenv())
+  is_pow <- op_name == "^"
+  S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
+    local({
+      f <- op_fn; d <- is_pow
+      function(e1, e2) .lazy_binop(e1, e2, f, divide = d)
+    })
+  S7::method(op_fn, list(LazyRaster, S7::class_numeric)) <-
+    local({
+      f <- op_fn; d <- is_pow
+      function(e1, e2) .lazy_scalar_op(e1, e2, f, FALSE, divide = d)
+    })
+  S7::method(op_fn, list(S7::class_numeric, LazyRaster)) <-
+    local({
+      f <- op_fn; d <- is_pow
+      function(e1, e2) .lazy_scalar_op(e2, e1, f, TRUE, divide = d)
+    })
+}
+
+# Math group generic (sqrt, log, exp, abs, floor, sin, ...): one
+# elementwise MapNode over the g_-compatible base function. cum*
+# members need an axis and are refused (scan_over is that verb).
+# Registered as an S3 group method in NAMESPACE (S7 instances carry
+# class "garry::LazyRaster").
+.lazy_math <- function(x, generic, ...) {
+  if (startsWith(generic, "cum"))
+    cli::cli_abort(paste0(
+      "{.fn ", generic, "} is cumulative; use {.fn scan_over} ",
+      "for running values along an axis"))
+  fn <- get(generic, envir = baseenv())
+  dots <- list(...)
+  keeps_dtype <- generic %in% c("abs", "sign", "floor", "ceiling",
+                                "trunc", "round", "signif")
+  body_fn <- if (length(dots)) function(v) do.call(fn, c(list(v), dots))
+             else function(v) fn(v)
+  dtype <- if (S7::S7_inherits(x, LazyRaster) && !keeps_dtype)
+    dtype_promote(x@grid@dtype, x@grid@dtype, divide = TRUE)
+  lazy_map(x, fn = body_fn, dtype = dtype)
+}
+
+#' @rawNamespace S3method(Math, "garry::LazyRaster", .lazy_math_raster)
+.lazy_math_raster <- function(x, ...) .lazy_math(x, .Generic, ...)
 
 # ---------------------------------------------------------------------------
 # Methods
@@ -534,7 +613,9 @@ scan_over <- function(x, fn, over = "t", direction = "forward",
   graph <- lead@graph
   parents <- vapply(xs, function(lr) {
     if (!grid_equal(lead@grid, lr@grid))
-      cli::cli_abort("all scan inputs must share one grid")
+      cli::cli_abort(paste0(
+        "all scan inputs must share one grid ",
+        "({grid_diff(lead@grid, lr@grid)})"))
     if (identical(graph@nodes, lr@graph@nodes)) lr@node_id
     else graph_import(graph, lr@graph, lr@node_id)
   }, integer(1))

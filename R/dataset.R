@@ -434,6 +434,85 @@ group_by_time <- function(x, by = "month") {
   LazyDatasetGroups(groups = groups, by = lab)
 }
 
+#' Fill nodata gaps along the time axis.
+#'
+#' The temporal gap-filling verbs xarray spells `ffill`/`bfill`/
+#' `interpolate_na`, expressed on garry's own IR as [scan_over()]
+#' bodies (documented here rather than left as folklore):
+#' * `"ffill"` carries the last valid value forward;
+#' * `"bfill"` carries the next valid value backward;
+#' * `"linear"` interpolates between the nearest valid neighbours
+#'   (index-weighted, i.e. by slice position, not calendar spacing),
+#'   falling back to ffill/bfill at the ends.
+#'
+#' Works on a `(t, y, x)` `LazyRaster` cube or per band of a
+#' `LazyDataset`. All-nodata pixels stay NaN.
+#'
+#' @param x A `LazyRaster` with a `t` dim, or a `LazyDataset`.
+#' @param method `"ffill"`, `"bfill"` or `"linear"`.
+#' @param over Axis to fill along (only `"t"` is meaningful today).
+#' @return The filled object, same class as `x`.
+#' @export
+fill_gaps <- function(x, method = c("ffill", "bfill", "linear"),
+                      over = "t") {
+  method <- rlang::arg_match(method)
+  if (S7::S7_inherits(x, LazyDataset)) {
+    newbands <- x@bands
+    for (a in setdiff(names(x@bands), x@mask_asset)) {
+      lr <- if (length(x@bands[[a]]) == 1L) x@bands[[a]][[1L]]
+            else lazy_stack(x@bands[[a]], along = "t")
+      newbands[[a]] <- list(fill_gaps(lr, method, over))
+    }
+    return(LazyDataset(graph = x@graph, bands = newbands,
+                       mask_asset = x@mask_asset,
+                       steps = c(x@steps, list(.step("fill", "fill_gaps",
+                                                     detail = method)))))
+  }
+  .assert_class(x, LazyRaster, "LazyRaster")
+  # Carry the last valid value; a NaN carry (init) means "none yet".
+  # ScanNode `direction` is declarative metadata — the body itself must
+  # run g_scan(reverse=) — so the factories bake the direction in.
+  carry_body <- function(reverse) {
+    force(reverse)
+    function(xs, margin) {
+      g_scan(init = NaN, body = function(carry, v) {
+        nv <- g_ifelse(g_is_nodata(v), carry, v)
+        list(carry = nv, out = nv)
+      }, xs = xs[[1L]], reverse = reverse)$out
+    }
+  }
+  if (method == "ffill")
+    return(scan_over(x, carry_body(FALSE), over = over,
+                     direction = "forward"))
+  if (method == "bfill")
+    return(scan_over(x, carry_body(TRUE), over = over,
+                     direction = "backward"))
+  # linear: nearest-valid value and distance in both directions, then a
+  # distance-weighted combination per pixel. The zero branch is v * 0
+  # (an ARRAY) so the carried distance is array-shaped from step one.
+  dist_body <- function(reverse) {
+    force(reverse)
+    function(xs, margin) {
+      g_scan(init = 1e30, body = function(carry, v) {
+        d <- g_ifelse(g_is_nodata(v), carry + 1, v * 0)
+        list(carry = d, out = d)
+      }, xs = xs[[1L]], reverse = reverse)$out
+    }
+  }
+  vf <- scan_over(x, carry_body(FALSE), over = over, direction = "forward")
+  vb <- scan_over(x, carry_body(TRUE), over = over, direction = "backward")
+  df <- scan_over(x, dist_body(FALSE), over = over, direction = "forward",
+                  dtype = "f32")
+  db <- scan_over(x, dist_body(TRUE), over = over, direction = "backward",
+                  dtype = "f32")
+  lazy_map(x, vf, vb, df, db, fn = function(v, f, b, dfv, dbv) {
+    interp <- (f * dbv + b * dfv) / (dfv + dbv)
+    fill <- g_ifelse(g_is_nodata(f), b,
+                     g_ifelse(g_is_nodata(b), f, interp))
+    g_ifelse(g_is_nodata(v), fill, v)
+  })
+}
+
 # reduce_over() dispatch for grouped datasets: reduce each group independently.
 .dsg_reduce <- function(x, op, over, nan_rm, bands) {
   LazyDatasetGroups(
@@ -681,7 +760,11 @@ qa_bits <- function(bits) {
                         detail = sprintf("bands %s dataset", sym)))))
 }
 
-for (op_name in c("+", "-", "*", "/")) {
+# Comparisons, ^ and %% ride the same per-slice machinery: `f` here is
+# the BASE operator, whose per-slice application dispatches back to the
+# LazyRaster method (comparisons -> f32 0/1 masks there).
+for (op_name in c("+", "-", "*", "/",
+                  ">", "<", ">=", "<=", "==", "!=", "^", "%%")) {
   op_fn <- get(op_name, envir = baseenv())
   S7::method(op_fn, list(LazyDataset, LazyDataset)) <-
     local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_ds_arith(e1, e2, f, s) })
@@ -690,3 +773,6 @@ for (op_name in c("+", "-", "*", "/")) {
   S7::method(op_fn, list(S7::class_numeric, LazyDataset)) <-
     local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_scalar_arith(e2, e1, f, s, TRUE) })
 }
+
+#' @rawNamespace S3method(Math, "garry::LazyDataset", .lazy_math_dataset)
+.lazy_math_dataset <- function(x, ...) .lazy_math(x, .Generic, ...)
