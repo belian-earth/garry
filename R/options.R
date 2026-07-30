@@ -258,3 +258,155 @@ garry_opt <- function(name) {
     cli::cli_abort("unknown garry option: {.val {name}}")
   getOption(paste0("garry.", name), .garry_defaults[[name]])
 }
+
+# ---------------------------------------------------------------------------
+# Option registry: tier + one-liner + value validator per option, so the
+# 30-plus flat garry.* namespace is discoverable (garry_options()) and a
+# typo'd VALUE fails loudly at execute entry instead of silently meaning
+# something else (a read_fail typo used to silently mean "error",
+# inverting the operator's stated intent on a long run).
+# Tiers: "user" (day-one switches), "tuning" (budgets/targets),
+# "calibration" (cost-model constants measured on one machine).
+# ---------------------------------------------------------------------------
+
+# Validator constructors. Each returns function(value) -> TRUE or a
+# short problem string.
+.opt_num <- function(min = -Inf, max = Inf, int = FALSE, null_ok = FALSE) {
+  force(min); force(max); force(int); force(null_ok)
+  function(v) {
+    if (is.null(v)) return(if (null_ok) TRUE else "must not be NULL")
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v))
+      return("must be a single finite number")
+    if (int && v != as.integer(v)) return("must be a whole number")
+    if (v < min || v > max)
+      return(sprintf("must be in [%s, %s]", format(min), format(max)))
+    TRUE
+  }
+}
+.opt_flag <- function() function(v)
+  if (isTRUE(v) || isFALSE(v)) TRUE else "must be TRUE or FALSE"
+.opt_choice <- function(...) {
+  choices <- c(...)
+  function(v) {
+    if (is.character(v) && length(v) == 1L && v %in% choices) TRUE
+    else sprintf("must be one of %s", paste0('"', choices, '"', collapse = ", "))
+  }
+}
+.opt_path <- function() function(v) {
+  if (is.null(v) || (is.character(v) && length(v) == 1L && nzchar(v))) TRUE
+  else "must be NULL or a single path"
+}
+
+.garry_opt_info <- list(
+  chunk_target_px  = list(tier = "tuning", check = .opt_num(min = 1),
+    desc = "minimum pixels per compute chunk the planner aims for"),
+  ram_budget_mb    = list(tier = "tuning", check = .opt_num(min = 1),
+    desc = "per-worker RAM budget (MB) capping chunk size"),
+  window_margin    = list(tier = "tuning", check = .opt_num(min = 0, int = TRUE),
+    desc = "safety margin (input cells) on cross-CRS planning windows"),
+  progress         = list(tier = "user", check = .opt_flag(),
+    desc = "print task-completion progress during distributed drains"),
+  handle_cache_max = list(tier = "tuning", check = .opt_num(min = 1, int = TRUE),
+    desc = "max open GDAL dataset handles per process (LRU)"),
+  read_handles     = list(tier = "tuning", check = .opt_num(min = 1, int = TRUE),
+    desc = "default open-handle cache depth on read daemons"),
+  gdal_cachemax_mb = list(tier = "tuning", check = .opt_num(min = 8),
+    desc = "GDAL block cache (MB per process) on read daemons"),
+  read_target_px   = list(tier = "tuning", check = .opt_num(min = 1),
+    desc = "pixels a single source/warp read task aims for"),
+  read_budget_mb   = list(tier = "tuning", check = .opt_num(min = 1),
+    desc = "cap (MB) on resident inter-stage read regions"),
+  read_coalesce    = list(tier = "user", check = .opt_flag(),
+    desc = "collapse same-file band stacks into multi-band reads"),
+  task_log         = list(tier = "user", check = .opt_path(),
+    desc = "CSV path for task events (see garry_task_report()); NULL off"),
+  read_fail        = list(tier = "user", check = .opt_choice("error", "nodata"),
+    desc = "failed read: abort the plan, or warn and read a nodata hole"),
+  read_retry       = list(tier = "user", check = .opt_num(min = 0, max = 10, int = TRUE),
+    desc = "task-scoped retries for reads/fetches (jittered backoff)"),
+  compute_inflight = list(tier = "tuning", check = .opt_num(min = 1, int = TRUE, null_ok = TRUE),
+    desc = "optional hard cap on in-flight compute chunks"),
+  exec_ram_fraction = list(tier = "tuning", check = .opt_num(min = 1e-9, max = 1),
+    desc = "fraction of available RAM the scheduler may commit"),
+  jit_warmup       = list(tier = "user", check = .opt_flag(),
+    desc = "pre-compile modal chunk shapes on the compute pool at run start"),
+  device           = list(tier = "user", check = .opt_choice("cpu", "cuda"),
+    desc = "device compute stages jit and upload on"),
+  fetch            = list(tier = "user", check = .opt_choice("auto", "direct", "force"),
+    desc = "fetch/assemble split for GTI sources"),
+  composite_direct = list(tier = "user", check = .opt_flag(),
+    desc = "GDAL-direct composite fast path (default route)"),
+  gd_compute_budget = list(tier = "tuning", check = .opt_num(min = 1),
+    desc = "composite-direct routing threshold (bands x slices x px)"),
+  compute_ram_fraction = list(tier = "tuning", check = .opt_num(min = 1e-9, max = 1),
+    desc = "fraction of available RAM for pipeline compute working sets"),
+  ck_stage_ram_fraction = list(tier = "tuning", check = .opt_num(min = 1e-9, max = 1),
+    desc = "fraction of available RAM for lazy_cog tmpfs staging"),
+  gd_parallel      = list(tier = "user", check = .opt_flag(),
+    desc = "fan multi-band composite medians across the compute pool"),
+  shm_headroom_mb  = list(tier = "tuning", check = .opt_num(min = 0),
+    desc = "/dev/shm headroom (MB) the store must leave free"),
+  placement        = list(tier = "user", check = .opt_choice("cost", "rules"),
+    desc = "fuse-vs-materialise decision mode for source->compute chains"),
+  cost_gflops_core = list(tier = "calibration", check = .opt_num(min = 1e-9),
+    desc = "sustained per-core kernel throughput (GFLOP/s)"),
+  cost_shm_bw_mbs  = list(tier = "calibration", check = .opt_num(min = 1e-9),
+    desc = "effective /dev/shm copy bandwidth (MB/s)"),
+  cost_comp_efficiency = list(tier = "calibration", check = .opt_num(min = 1e-9, max = 1),
+    desc = "fat compute pool efficiency vs narrow clients"),
+  fuse_flops_max   = list(tier = "calibration", check = .opt_num(min = 0),
+    desc = "flops/px above which kernels never fuse onto uncapped readers"),
+  pool_affinity    = list(tier = "user", check = .opt_choice("auto", "off"),
+    desc = "disjoint per-daemon CPU pinning at pool creation"),
+  fuse_reader_mb   = list(tier = "tuning", check = .opt_num(min = 1),
+    desc = "per-reader budget (MB) for a fused kernel's working set"),
+  scan_compile_mb  = list(tier = "calibration", check = .opt_num(min = 0),
+    desc = "admission surcharge (MB) for a cold scan-kernel compile"),
+  cost_xla_client_mb = list(tier = "calibration", check = .opt_num(min = 0),
+    desc = "estimated resident cost (MB) of one XLA CPU client")
+)
+
+#' List every garry option: default, current value, tier, description.
+#'
+#' The registry surface for the flat `garry.*` option namespace: one row
+#' per option with its tier (`user` day-one switches, `tuning`
+#' budgets/targets, `calibration` cost-model constants), package
+#' default, current session value and a one-line description. Values are
+#' validated against the same registry at execute entry
+#' (`.garry_opt_check()`).
+#'
+#' @return A data.frame with columns `option`, `tier`, `default`,
+#'   `current`, `set` (is the session overriding the default?) and
+#'   `description`.
+#' @export
+garry_options <- function() {
+  fmt <- function(v) if (is.null(v)) "NULL" else paste(format(v), collapse = ",")
+  nm <- names(.garry_defaults)
+  data.frame(
+    option = nm,
+    tier = vapply(nm, function(n) .garry_opt_info[[n]]$tier, ""),
+    default = vapply(nm, function(n) fmt(.garry_defaults[[n]]), ""),
+    current = vapply(nm, function(n) fmt(garry_opt(n)), ""),
+    set = vapply(nm, function(n)
+      !is.null(getOption(paste0("garry.", n))), logical(1)),
+    description = vapply(nm, function(n) .garry_opt_info[[n]]$desc, ""),
+    row.names = NULL)
+}
+
+# Validate every registered option's CURRENT value; classed abort naming
+# the option, its value and the constraint. Runs at execute entry
+# (execute_plan / execute_plan_mirai / collect routes), so a typo fails
+# the run in seconds, not silently after hours.
+.garry_opt_check <- function() {
+  for (n in names(.garry_defaults)) {
+    info <- .garry_opt_info[[n]]
+    if (is.null(info)) next
+    ok <- info$check(garry_opt(n))
+    if (!isTRUE(ok))
+      .garry_error(sprintf(
+        "invalid value for option garry.%s (%s): it %s",
+        n, paste(deparse(garry_opt(n)), collapse = ""), ok),
+        "garry_option_error")
+  }
+  invisible(NULL)
+}

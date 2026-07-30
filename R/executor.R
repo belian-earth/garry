@@ -521,6 +521,7 @@ NULL
 #' @export
 execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
   .require_anvl()
+  .garry_opt_check()
   graph <- plan@graph
   out <- vector("list", length(plan@stages))
   stats <- lapply(plan@stages, function(s) character(0))

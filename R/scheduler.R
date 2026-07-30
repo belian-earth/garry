@@ -827,6 +827,7 @@ garry_daemons_set <- function() {
 #' @export
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
   rlang::check_installed("mirai", reason = "for distributed execution.")
+  .garry_opt_check()
   # Distributed execution runs on the garry_daemons() split pools: read/warp
   # tasks route to the read pool — where anvl/PJRT never loads, so a reader
   # stays at ~60 MB — and compute tasks to a small pool of fat daemons,

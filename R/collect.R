@@ -31,6 +31,7 @@ NULL
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = garry_daemons_set()) {
+  .garry_opt_check()
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.
