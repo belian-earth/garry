@@ -1476,9 +1476,19 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   writer_on <- (stream_write || (!is.null(path) && multi)) &&
     tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE)
   if (writer_on)
-    on.exit(try(mirai::everywhere(garry::.daemon_write_close(),
-                                  .compute = "garry_write"),
-                silent = TRUE), add = TRUE)
+    # Abort path: queued writer tasks still map store regions by name,
+    # so this handler must run BEFORE the earlier-registered
+    # .daemon_shm_clear handler unlinks them (`after = FALSE` prepends;
+    # on.exit otherwise runs in registration order). Await the queued
+    # writes with errors tolerated — the run has already failed; the
+    # writes either land or fail quietly — then close the writer's
+    # handles so the partial output is closed and deletable.
+    on.exit({
+      try(for (w in wr_inflight) mirai::call_mirai(w$h), silent = TRUE)
+      try(mirai::everywhere(garry::.daemon_write_close(),
+                            .compute = "garry_write"),
+          silent = TRUE)
+    }, add = TRUE, after = FALSE)
   sink_ds <- NULL
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
@@ -1749,7 +1759,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       if (mirai::unresolved(w$h)) next
       if (inherits(w$h$data, c("miraiError", "errorValue")))
         cli::cli_abort(
-          "sink write failed on the writer daemon: {as.character(w$h$data)}")
+          "sink write failed on the writer daemon: {as.character(w$h$data)}",
+          class = c("garry_write_error", "garry_error"),
+          region = w$rk)
       store_users[[w$rk]] <- store_users[[w$rk]] - 1L
       queue_drop(w$rk)
       wr_inflight[[wk]] <<- NULL
@@ -1888,7 +1900,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
               with_fn = TRUE)
             next
           }
-          cli::cli_abort("task {k} failed on daemon: {as.character(h$data)}")
+          cli::cli_abort(
+            "task {k} failed on daemon: {as.character(h$data)}",
+            class = c("garry_task_error", "garry_error"),
+            task = k, stage = task_stage_of[[k]],
+            pool = tasks[[k]]$pool)
         }
         chunk_vals[[k]] <- h$data
         tasks[[k]]$state <- "done"
