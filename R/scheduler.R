@@ -28,6 +28,58 @@ NULL
 # pass's cost mode.
 .garry_state <- new.env(parent = emptyenv())
 
+# Store layout ABI version: bump on any incompatible change to the raw
+# payload byte layout, region naming, or shared-value envelope.
+.garry_store_abi <- 1L
+
+#' Daemon-facing ABI token: a hash of every `.daemon_*` entry point's
+#' formals plus the store layout version.
+#'
+#' Daemons resolve `garry::.daemon_*` from their INSTALLED library while
+#' a development host frequently runs a `load_all()` tree; a namespace
+#' skew yields "unused argument" mirai errors at best and silent
+#' semantic drift at worst (positional renames, new masking arguments).
+#' `packageVersion()` cannot guard this (constant through development);
+#' the formals can. Internal (exported so daemons can evaluate their
+#' own token via `::`).
+#'
+#' @return A single hash string.
+#' @keywords internal
+#' @export
+.garry_abi_token <- function() {
+  ns <- asNamespace("garry")
+  nms <- sort(ls(ns, all.names = TRUE, pattern = "^\\.daemon_"))
+  nms <- nms[vapply(nms, function(n) is.function(get(n, envir = ns)),
+                    logical(1))]
+  rlang::hash(list(
+    store = .garry_store_abi,
+    formals = stats::setNames(
+      lapply(nms, function(n) formals(get(n, envir = ns))), nms)))
+}
+
+# Compare the host ABI token against each pool's, once per pool
+# generation (garry_daemons() clears the cache). A daemon running last
+# week's installed scheduler against today's host tree is otherwise
+# undefined behavior mid-drain.
+.garry_abi_check <- function(profiles) {
+  if (isTRUE(.garry_state$abi_ok)) return(invisible(NULL))
+  host <- .garry_abi_token()
+  for (p in profiles) {
+    d <- tryCatch(mirai::mirai(garry::.garry_abi_token(), .compute = p)[],
+                  error = function(e) NA_character_)
+    if (inherits(d, "miraiError") || !is.character(d)) d <- NA_character_
+    if (!identical(d, host))
+      .garry_error(paste0(
+        "host/daemon ABI skew on pool '", p, "' (host ", host,
+        ", daemon ", if (is.na(d)) "unknown/pre-token" else d, "): ",
+        "the daemons run the installed garry, the host a different tree. ",
+        "Run devtools::install() and restart the pools (garry_daemons())."),
+        "garry_version_skew_error")
+  }
+  .garry_state$abi_ok <- TRUE
+  invisible(NULL)
+}
+
 # Daemon-side registry pinning mori shared-memory regions. A region
 # lives only while its creator holds a reference (mori unlinks on GC),
 # and task locals die with the task, so every share() lands here until
@@ -693,6 +745,7 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # creation, BEFORE any kernel jits an XLA client anywhere. The
   # compute pool is skipped on a CUDA device (its daemons drive the
   # GPU; pinning their host threads buys nothing and can starve H2D).
+  .garry_state$abi_ok <- NULL       # fresh pools: re-check the ABI token
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L)
     .pool_affinity_apply("garry_read", read)
@@ -741,6 +794,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   read_prof <- "garry_read"
   comp_prof <- "garry_compute"
   profiles <- unique(c(read_prof, comp_prof))
+  .garry_abi_check(unique(c(profiles,
+    if (tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE))
+      "garry_write")))
   # Back-pressure. Single pool: one shared bucket (unchanged
   # behavior). Pooled: reads as before; compute launches are gated
   # by a BYTE budget (below) — per-task resident estimates against

@@ -383,6 +383,7 @@ NULL
 # vsicurl/MEM config in the fetch daemons (set_config_option in the host does
 # not propagate to mirai daemons).
 .gd_daemon_prep <- function(prof) {
+  .garry_abi_check(prof)
   mirai::everywhere({
     suppressMessages(library(garry))
     garry::garry_gdal_config()
