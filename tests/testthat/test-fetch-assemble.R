@@ -88,7 +88,7 @@ test_that("failed fetch degrades to a nodata hole under read_fail",
   garry_daemons(2, 1)
   on.exit(garry_daemons(0, 0), add = TRUE)
   old <- options(garry.fetch = "force", garry.read_fail = "nodata",
-                 garry.chunk_target_px = 1e6)
+                 garry.read_retry = 0L, garry.chunk_target_px = 1e6)
   on.exit(options(old), add = TRUE)
 
   layers <- lapply(fx$entries$slice, function(sl) {

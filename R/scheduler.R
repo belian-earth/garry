@@ -234,8 +234,10 @@ NULL
                                  nodata = numeric(0), margin = 8L,
                                  target_res = NULL) {
   ok <- tryCatch(
-    gdal_fetch_window(location, out_file, ext, crs, margin = margin,
-                      out_res = target_res),
+    .gdal_with_retry(function()
+      gdal_fetch_window(location, out_file, ext, crs, margin = margin,
+                        out_res = target_res),
+      what = "fetch"),
     error = function(e) e)
   if (!isTRUE(ok)) {
     if (!identical(garry_opt("read_fail"), "nodata"))
@@ -773,8 +775,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   for (p in profiles)
     mirai::everywhere({
       suppressMessages(library(garry))
-      options(garry.read_fail = rf)
-    }, rf = garry_opt("read_fail"), .compute = p)
+      options(garry.read_fail = rf, garry.read_retry = rr)
+    }, rf = garry_opt("read_fail"), rr = garry_opt("read_retry"),
+    .compute = p)
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))

@@ -73,6 +73,17 @@
   # whole run (odc-stac's fail_on_error=FALSE, stackstac's
   # errors_as_nodata).
   read_fail = "error",
+  # Task-scoped retries for read/fetch/warp operations, on top of
+  # GDAL's per-request HTTP retry. GDAL retries individual range
+  # requests inside one operation; a whole-operation failure (curl
+  # timeout after 60 s, TLS reset, transient DNS, a failed open) is
+  # otherwise terminal for the task — under read_fail = "nodata" that
+  # is the difference between a transient blip and a silent hole in a
+  # composite. Reads are idempotent, so each failed operation is
+  # re-attempted up to this many times with jittered exponential
+  # backoff (0.5 * 2^k s) before the read_fail contract fires.
+  # 0 disables.
+  read_retry = 2L,
   # Pooled scheduler (garry_daemons): optional hard cap on in-flight
   # compute chunks, on top of the byte budget (per-task resident
   # estimates gated against ram_budget_mb x pool size — small chunks

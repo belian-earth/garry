@@ -34,9 +34,11 @@ NULL
   w <- chunk_window_with_halo(cg, core$x_off, core$y_off,
                               core$x_size, core$y_size)
   sub <- tryCatch(
-    gdal_read_window(path, band, w$x_off, w$y_off,
-                     w$x_size, w$y_size, nodata = nodata,
-                     open_options = open_options, out = out),
+    .gdal_with_retry(function()
+      gdal_read_window(path, band, w$x_off, w$y_off,
+                       w$x_size, w$y_size, nodata = nodata,
+                       open_options = open_options, out = out),
+      what = "read"),
     error = function(e) {
       if (!identical(garry_opt("read_fail"), "nodata")) stop(e)
       cli::cli_warn(

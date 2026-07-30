@@ -452,7 +452,7 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
 #' odc-stac retry cadence and timeouts, a capped block cache (GDAL
 #' defaults to 5% of RAM *per process*, which many daemons would
 #' multiply), single-range COG-header ingest, a skipped directory scan
-#' and `.tif`-only vsicurl probing for fast remote opens, and the MEM
+#' and a raster-extension vsicurl allowlist for fast remote opens, and the MEM
 #' driver open gate the direct warp needs. `garry_daemons()` calls this
 #' on every read daemon automatically; call it yourself for host-side
 #' discovery reads or when you drive `mirai::daemons()` directly. Each
@@ -465,6 +465,27 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
 #' the same session; pass `gdal_config = FALSE` to `garry_daemons()` to
 #' skip it.
 #'
+# Run an idempotent read/fetch/warp thunk with task-scoped retries.
+# GDAL's HTTP retry covers per-request failures inside one operation; a
+# whole-operation failure (curl timeout, TLS reset, transient DNS, a
+# failed open) is terminal without this. Attempts after the first back
+# off exponentially (0.5 * 2^k s), jittered so a fleet tripping a
+# provider limiter does not retry in lockstep. The final attempt's
+# error propagates to the caller's read_fail contract.
+.gdal_with_retry <- function(thunk, what) {
+  retries <- max(0L, as.integer(garry_opt("read_retry")))
+  for (k in seq_len(retries)) {
+    res <- tryCatch(thunk(), error = function(e) e)
+    if (!inherits(res, "error")) return(res)
+    delay <- 0.5 * 2^(k - 1L) * stats::runif(1L, 0.75, 1.25)
+    cli::cli_warn(paste0(
+      "{what} failed (attempt {k} of {retries + 1L}), retrying in ",
+      "{round(delay, 2)} s: {conditionMessage(res)}"))
+    Sys.sleep(delay)
+  }
+  thunk()
+}
+
 #' @return Invisibly `NULL`.
 #' @export
 garry_gdal_config <- function() {
@@ -473,13 +494,13 @@ garry_gdal_config <- function() {
   sc("GDAL_HTTP_VERSION", "2")
   sc("GDAL_HTTP_MAX_RETRY", "10")
   sc("GDAL_HTTP_RETRY_DELAY", "0.5")
-  sc("GDAL_HTTP_RETRY_CODES", "429,500,502,503")
+  sc("GDAL_HTTP_RETRY_CODES", "429,500,502,503,504")
   sc("GDAL_HTTP_TIMEOUT", "60")
   sc("GDAL_HTTP_CONNECTTIMEOUT", "10")
   sc("GDAL_CACHEMAX", as.character(as.integer(garry_opt("gdal_cachemax_mb"))))
   sc("GDAL_INGESTED_BYTES_AT_OPEN", "32768")       # one range grabs the COG header
   sc("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-  sc("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif")
+  sc("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.tiff,.TIF,.TIFF,.vrt,.jp2")
   sc("GDAL_MEM_ENABLE_OPEN", "YES")                # >=3.10 gate for the direct warp
   invisible(NULL)
 }

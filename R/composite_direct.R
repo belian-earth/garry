@@ -298,9 +298,11 @@ NULL
     # per-slice local index. Ordered by datetime so overlap resolution (last
     # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
     tw <- system.time(
-      buf <- gdal_warp_to_buffer(buf, nx, ny, k$gtstr, k$wkt,
-                                 j$locs[order(j$dt)], j$nodata,
-                                 resampling = j$resampling %||% "near")
+      buf <- .gdal_with_retry(function()
+        gdal_warp_to_buffer(buf, nx, ny, k$gtstr, k$wkt,
+                            j$locs[order(j$dt)], j$nodata,
+                            resampling = j$resampling %||% "near"),
+        what = "slice warp")
     )[["elapsed"]]
     NA_character_
   }, error = function(e) conditionMessage(e))
@@ -384,7 +386,8 @@ NULL
   mirai::everywhere({
     suppressMessages(library(garry))
     garry::garry_gdal_config()
-  }, .compute = prof)
+    options(garry.read_retry = rr)
+  }, rr = garry_opt("read_retry"), .compute = prof)
 }
 
 # Launch the parallel warp-on-read WITHOUT blocking (raw mirai() per
