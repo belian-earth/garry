@@ -146,18 +146,22 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   }
 }
 
-#' Download an AnvlArray as a raw f32 store payload.
+#' Download an AnvlArray as a raw store payload.
 #'
-#' Row-major byte payload tagged with `gdim`/`gdt` (D20); no double
-#' materialisation.
+#' Row-major byte payload tagged with `gdim`/`gdt` (D20, extended to
+#' f64 by design/f64-store.md); no double materialisation. Raw f64 is
+#' bit-identical to the doubles path.
 #'
-#' @param x `AnvlArray` (f32).
+#' @param x `AnvlArray` (f32 or f64).
 #' @return Raw vector with `gdim` and `gdt` attributes.
 #' @export
 g_download_raw <- function(x) {
   .require_anvl()
+  dt <- .g_dtype(x)
+  if (!dt %in% c("f32", "f64"))
+    cli::cli_abort("raw store payloads are f32/f64; got {.val {dt}}")
   structure(anvl::as_raw(x, row_major = TRUE),
-            gdim = .g_shape(x), gdt = "f32")
+            gdim = .g_shape(x), gdt = dt)
 }
 
 # Shape of an AnvlArray (bridge; the executor must not touch anvl).

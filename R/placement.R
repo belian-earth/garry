@@ -203,6 +203,7 @@ NULL
         out_key = .key(C@exports[[1L]]),
         out_pad = C@out_pad,
         out_nb = .node_outer_nb(graph, C@exports[[1L]]),
+        out_dtype = graph_get(graph, C@exports[[1L]])@grid@dtype,
         ws_mb = ws_mb)
       fused[[.key(C@id)]] <- TRUE
     }

@@ -83,9 +83,10 @@ NULL
         else g_upload(m, fuse$dtype)
   res <- jf(list(up))
   out_dev <- res[[1L]]
-  # f32 kernel outputs become raw store payloads directly off the
-  # device (D19): no double materialisation on the download either.
-  out <- if (store_raw && identical(.g_dtype(out_dev), "f32")) {
+  # f32/f64 kernel outputs become raw store payloads directly off the
+  # device (D19; f64 per design/f64-store.md): no double
+  # materialisation on the download either.
+  out <- if (store_raw && .g_dtype(out_dev) %in% c("f32", "f64")) {
     g_download_raw(out_dev)
   } else {
     g_download(out_dev)
@@ -474,15 +475,25 @@ NULL
 }
 
 # Store-resident bytes (MB) one region pins: core window clipped to the
-# grid, padded by `pad` per side, times the outer-dim plane count, in
-# raw f32 or R doubles. Shared by read windows (pad = halo), fused
-# outputs (pad = out_pad, nb = the EXPORT's planes -- pricing a fused
-# region from its source window over-charged a fused multi-band read by
-# the band count and would serialise the fleet) and compute outputs.
-.store_region_mb <- function(chunk_dim, grid_dims, pad, nb, use_raw) {
+# grid, padded by `pad` per side, times the outer-dim plane count, at
+# the region's true element size. Shared by read windows (pad = halo),
+# fused outputs (pad = out_pad, nb = the EXPORT's planes -- pricing a
+# fused region from its source window over-charged a fused multi-band
+# read by the band count and would serialise the fleet) and compute
+# outputs. `bytes` comes from .store_bytes_of: 4 only for raw f32; f64
+# is 8 whether raw or doubles (the old use_raw flag booked f64 regions
+# at half their size).
+.store_region_mb <- function(chunk_dim, grid_dims, pad, nb, bytes) {
   prod(pmin(as.numeric(chunk_dim),
             as.numeric(grid_dims[c("x", "y")])) + 2 * pad) *
-    max(1, nb) * (if (use_raw) 4 else 8) / 2^20
+    max(1, nb) * bytes / 2^20
+}
+
+# Element bytes a stored region of `dtype` costs under the run's store
+# mode: the raw store keeps f32 at 4 B; everything else (f64 raw or
+# any doubles fallback) is 8 B.
+.store_bytes_of <- function(dtype, use_raw) {
+  if (use_raw && identical(dtype, "f32")) 4 else 8
 }
 
 # Outer-dim plane count of a node's grid (bands, time slices).
@@ -1031,11 +1042,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # by the band count and the budget serialises the fleet.
       store_mb_read <- if (is.null(fspec)) {
         .store_region_mb(s@chunks@chunk_dim, s@grid@dims, s@chunks@halo,
-                         .node_outer_nb(graph, s@members[[1L]]), use_raw)
+                         .node_outer_nb(graph, s@members[[1L]]),
+                         .store_bytes_of(
+                           graph_get(graph, s@members[[1L]])@grid@dtype,
+                           use_raw))
       } else {
         .store_region_mb(s@chunks@chunk_dim, s@grid@dims,
                          fspec$out_pad %||% 0L, fspec$out_nb %||% 1,
-                         use_raw)
+                         .store_bytes_of(fspec$out_dtype %||% "f32",
+                                         use_raw))
       }
       stage_store_mb[[.key(oid)]] <- store_mb_read
       split_cg <- .exec_split_cg(plan, s, consumers_of[[s@id]])
@@ -1170,8 +1185,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       epads_all <- if (length(s@export_pads)) as.integer(s@export_pads)
                    else integer(length(s@exports))
       store_mb_comp <- sum(vapply(seq_along(s@exports), function(ei) {
+        e <- s@exports[[ei]]
         .store_region_mb(cd, s@grid@dims, epads_all[[ei]],
-                         .node_outer_nb(graph, s@exports[[ei]]), use_raw)
+                         .node_outer_nb(graph, e),
+                         .store_bytes_of(graph_get(graph, e)@grid@dtype,
+                                         use_raw))
       }, numeric(1)))
       stage_store_mb[[.key(s@id)]] <- store_mb_comp
       for (j in seq_len(nrow(it))) {

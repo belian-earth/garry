@@ -98,9 +98,17 @@ NULL
 .sv_dim <- function(v) attr(v, "gdim")
 
 # Wrap a ROW-major numeric vector (GDAL read order) as an f32 payload.
-.sv_from_vec <- function(v, nr, nc) {
-  structure(writeBin(as.numeric(v), raw(), size = 4L),
-            gdim = c(nr, nc), gdt = "f32")
+# Element size of a payload (or dtype string): the store carries f32
+# and f64 (design/f64-store.md); everything below keys its byte
+# arithmetic on this instead of a hard-coded 4.
+.sv_es <- function(v) {
+  gdt <- if (is.character(v)) v else attr(v, "gdt")
+  if (identical(gdt, "f64")) 8L else 4L
+}
+
+.sv_from_vec <- function(v, nr, nc, gdt = "f32") {
+  structure(writeBin(as.numeric(v), raw(), size = .sv_es(gdt)),
+            gdim = c(nr, nc), gdt = gdt)
 }
 
 # Producer-side window slice. `v` is private (fresh read output), so
@@ -110,24 +118,26 @@ NULL
 # (multi-band coalesced reads).
 .sv_slicer <- function(v) {
   d <- .sv_dim(v)
+  es <- .sv_es(v)
+  gdt <- attr(v, "gdt")
   bm <- unclass(v)
   attributes(bm) <- NULL
   if (length(d) == 3L) {
-    dim(bm) <- c(4L * d[[3L]], d[[2L]], d[[1L]])
+    dim(bm) <- c(es * d[[3L]], d[[2L]], d[[1L]])
     nb <- d[[1L]]
     return(function(r0, c0, nr, nc) {
-      out <- bm[(4L * c0 + 1L):(4L * (c0 + nc)), (r0 + 1L):(r0 + nr), ,
+      out <- bm[(es * c0 + 1L):(es * (c0 + nc)), (r0 + 1L):(r0 + nr), ,
                 drop = FALSE]
       attributes(out) <- NULL
-      structure(out, gdim = c(nb, nr, nc), gdt = "f32")
+      structure(out, gdim = c(nb, nr, nc), gdt = gdt)
     })
   }
-  dim(bm) <- c(4L * d[[2L]], d[[1L]])
+  dim(bm) <- c(es * d[[2L]], d[[1L]])
   function(r0, c0, nr, nc) {
-    out <- bm[(4L * c0 + 1L):(4L * (c0 + nc)), (r0 + 1L):(r0 + nr),
+    out <- bm[(es * c0 + 1L):(es * (c0 + nc)), (r0 + 1L):(r0 + nr),
               drop = FALSE]
     attributes(out) <- NULL
-    structure(out, gdim = c(nr, nc), gdt = "f32")
+    structure(out, gdim = c(nr, nc), gdt = gdt)
   }
 }
 
@@ -140,37 +150,39 @@ NULL
   k <- as.integer(k)
   if (k == 0L) return(v)
   d <- .sv_dim(v)
+  es <- .sv_es(v)
+  gdt <- attr(v, "gdt")
   if (length(d) == 2L) {
     nr <- d[[1L]] - 2L * k
     nc <- d[[2L]] - 2L * k
-    ncb <- 4L * d[[2L]]
+    ncb <- es * d[[2L]]
     rows0 <- (k + seq_len(nr) - 1L) * ncb
-    cols <- 4L * k + seq_len(4L * nc)
+    cols <- es * k + seq_len(es * nc)
     out <- v[rep(rows0, each = length(cols)) + cols]
     attributes(out) <- NULL
-    return(structure(out, gdim = c(nr, nc), gdt = "f32"))
+    return(structure(out, gdim = c(nr, nc), gdt = gdt))
   }
   # rank-3 (outer, y, x) row-major payload: per-plane 2D trim (D22
   # padded stack exports written as sinks).
   stopifnot(length(d) == 3L)
   nr <- d[[2L]] - 2L * k
   nc <- d[[3L]] - 2L * k
-  ncb <- 4L * d[[3L]]
+  ncb <- es * d[[3L]]
   plane <- d[[2L]] * ncb
   rows0 <- (k + seq_len(nr) - 1L) * ncb
-  cols <- 4L * k + seq_len(4L * nc)
+  cols <- es * k + seq_len(es * nc)
   base2 <- rep(rows0, each = length(cols)) + cols
   idx <- rep((seq_len(d[[1L]]) - 1L) * plane, each = length(base2)) + base2
   out <- v[idx]
   attributes(out) <- NULL
-  structure(out, gdim = c(d[[1L]], nr, nc), gdt = "f32")
+  structure(out, gdim = c(d[[1L]], nr, nc), gdt = gdt)
 }
 
 # Raw payload -> `[y, x]` matrix (sink writes, collect assembly,
 # oracle comparisons).
 .sv_to_matrix <- function(v) {
   d <- .sv_dim(v)
-  matrix(readBin(v, numeric(), n = prod(d), size = 4L),
+  matrix(readBin(v, numeric(), n = prod(d), size = .sv_es(v)),
          nrow = d[[1L]], byrow = TRUE)
 }
 
@@ -182,13 +194,13 @@ NULL
   if (!.sv_is(v)) return(v)
   d <- .sv_dim(v)
   if (length(d) == 2L) return(.sv_to_matrix(v))
-  x <- readBin(v, numeric(), n = prod(d), size = 4L)
+  x <- readBin(v, numeric(), n = prod(d), size = .sv_es(v))
   aperm(array(x, dim = rev(d)), rev(seq_along(d)))
 }
 
 # Raw payload -> ROW-major numeric vector (GDAL write order).
 .sv_to_vec <- function(v) {
-  readBin(v, numeric(), n = prod(.sv_dim(v)), size = 4L)
+  readBin(v, numeric(), n = prod(.sv_dim(v)), size = .sv_es(v))
 }
 
 # Upload a store value (raw or matrix) after trimming `k`.
@@ -200,21 +212,22 @@ NULL
   stopifnot(k >= 0L)
   if (.sv_is(v)) {
     v <- .exec_trim(v, k)
-    g_upload_raw(v, "f32", .sv_dim(v), device = dev)
+    g_upload_raw(v, attr(v, "gdt"), .sv_dim(v), device = dev)
   } else {
     g_upload(.exec_trim(v, k), dtype, device = dev)
   }
 }
 
-# Download a stage's exports as store values: f32 exports of rank >= 2
-# become raw payloads (no double materialisation); scalars and
-# non-float exports stay R arrays. Recurses into nested exports
-# (reduce_partial wraps its pieces in a list).
+# Download a stage's exports as store values: f32/f64 exports of rank
+# >= 2 become raw payloads (no double materialisation; raw f64 is
+# bit-identical to the doubles path); scalars and non-float exports
+# stay R arrays. Recurses into nested exports (reduce_partial wraps
+# its pieces in a list).
 .sv_download_exports <- function(res, store_raw) {
   if (!store_raw) return(g_download(res))
   conv <- function(o) {
     if (.g_traced(o)) {
-      if (identical(.g_dtype(o), "f32") && length(.g_shape(o)) >= 2L) {
+      if (.g_dtype(o) %in% c("f32", "f64") && length(.g_shape(o)) >= 2L) {
         g_download_raw(o)
       } else {
         g_download(o)
@@ -401,11 +414,13 @@ NULL
       # Row-major (band, y, x) payload: each band's plane is one
       # contiguous byte range.
       stopifnot(length(d) == 3L)
-      plane <- 4L * prod(d[2:3])
+      es <- .sv_es(ch)
+      plane <- es * prod(d[2:3])
       for (b in seq_len(d[[1L]])) {
         bytes <- ch[((b - 1L) * plane + 1L):(b * plane)]
         gdal_write_window(ds, x_off, y_off,
-                          structure(bytes, gdim = d[2:3], gdt = "f32"),
+                          structure(bytes, gdim = d[2:3],
+                                    gdt = attr(ch, "gdt")),
                           dtype = dtype, nodata = nodata, band = b)
       }
     }
