@@ -546,13 +546,17 @@ NULL
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses logical
 #'   cores. `0` tears the pool down.
-#' @param compute Compute-pool daemon count; `NULL` (default) sizes to
-#'   the machine: enough affinity-capped ~2-CPU daemons to cover the
-#'   logical cores (capped at 10), or TWO wherever affinity is
-#'   unavailable (non-Linux, no taskset, `pool_affinity = "off"`, or a
-#'   CUDA device) — an unpinned client spawns an all-cores thread pool
-#'   and past two of those both wall time and memory rise (measured
-#'   2 -> 4 fat: slower AND +14 GB peak; 8 OOMs). `0` tears down.
+#' @param compute Compute-pool daemon count; `NULL` (default) uses TWO
+#'   with half-machine affinity masks. After the placement pass fuses
+#'   kernel fleets onto the readers, the compute pool's residual
+#'   workloads (scans, big fused reductions) are compile-bound: every
+#'   daemon that runs a scan task pays its multi-GB kernel compile, so
+#'   width multiplies compiles without adding admitted concurrency.
+#'   Larger pools are SAFE at any width (per-daemon masks, byte
+#'   admission, cold-kernel slow start, scan-compile surcharge) and pay
+#'   off for non-fusable fleet workloads (~2x measured for matmul
+#'   fleets at 10 x 2-CPU daemons); they are an explicit choice, not
+#'   the default. `0` tears down.
 #' @param read_handles Open-handle cache depth on read daemons.
 #'   `NULL` (default) uses `garry_opt("read_handles")`. Depth 1 suits
 #'   per-slice mosaics that are rarely revisited (every open warped
@@ -572,23 +576,20 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
-    # Pool width is SLOTS, not concurrency. With per-daemon CPU
-    # affinity (pool_affinity = "auto") every XLA client is narrow,
-    # the in-flight byte budget bounds how many tasks actually run,
-    # and excess daemons idle lean — so the default compute pool
-    # covers the machine with ~2-CPU daemons (spike B: 10 x 2-CPU
-    # clients ~2x the matmul throughput of 2 unpinned fat ones).
-    # Where affinity cannot apply (non-Linux, no taskset, "off",
-    # CUDA), every client is an all-cores thread pool and the
-    # measured cliff stands (2 -> 4 fat: slower AND +14 GB; 8 OOMs):
-    # stay at the pre-affinity optimum of TWO.
-    if (is.null(compute)) {
-      can_cap <- identical(garry_opt("pool_affinity"), "auto") &&
-        identical(Sys.info()[["sysname"]], "Linux") &&
-        nzchar(Sys.which("taskset")) &&
-        !identical(garry_opt("device"), "cuda")
-      compute <- if (can_cap) max(2L, min(10L, cr$logical %/% 2L)) else 2L
-    }
+    # TWO compute daemons by default, with half-machine affinity masks
+    # (.comp_pool_shape). The pool's residual workloads — after the
+    # placement pass fuses kernel fleets onto the readers — are scans
+    # and big fused reductions, and those are COMPILE-bound: every
+    # daemon that ever runs a scan task pays its multi-GB unrolled-HLO
+    # compile (mirai cannot route tasks to warmed daemons), so a wide
+    # pool multiplies compiles without adding admitted concurrency
+    # (measured: crop=2048 scan tail, compute=10 OOM'd on exactly
+    # this; compute=2 completes). Fleet workloads that would benefit
+    # from width either fuse onto the read pool (cost placement) or
+    # justify an explicit larger `compute` — which is now SAFE at any
+    # width (per-daemon masks, working-set admission, cold-kernel slow
+    # start, scan-compile surcharge), just not the default.
+    if (is.null(compute)) compute <- 2L
     if (is.null(read))    read    <- cr$logical
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))

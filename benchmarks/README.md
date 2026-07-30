@@ -192,6 +192,43 @@ in-flight compute byte budget, or a cold fleet ramps N XLA working
 sets on top of the lazy_cog staging (~11 GB tmpfs at crop=0).
 `garry.placement` default flipped to "cost" after this sweep.
 
+**Pool-topology levers (2026-07-30, after the flip).** Per-PID tracing
+of the crop=2048 tail attributed its memory to three co-resident
+parts: the host's streamed-write machinery (oscillating 4-8 GB at
+1 Mpx, 15-19 GB at 4.2 Mpx — transient, scales with pixels), each
+compute daemon's scan working set (~6.5 GB warmed), and the scan
+kernel's cold XLA compile (~10 GB extra on whichever daemon compiles;
+one daemon measured 16.5 GB total during compile+first-chunk).
+Topology sweep at crop=2048 cost mode, MEMMAX=32G:
+
+| compute pool | outcome |
+|---|---|
+| 2 (fat masks, scan warm-up pre-drain) | completes, 586.5 s, peak 25.5 GB |
+| 10 (narrow masks, lazy compiles) | OOM: every daemon that runs a scan task pays the compile; mirai cannot route to warmed daemons, so width multiplies compiles |
+
+Rules this encoded in the engine (all general, none SI-specific):
+- `garry.pool_affinity`: every daemon of BOTH pools gets a disjoint
+  CPU slice at creation; any XLA client anywhere is narrow.
+- Per-plan pool shaping: scan-bearing plans re-mask the compute pool
+  to half-machine slices (scans are long sequential-in-t kernels whose
+  plane parallelism narrow masks starve); kernel-fleet plans keep
+  narrow disjoint masks. Re-masking is sched_setaffinity, ~ms.
+- Cold-kernel slow start + `garry.scan_compile_mb` admission
+  surcharge: compiles are staggered AND priced against the live byte
+  budget, so any pool width is safe.
+- Scan warm-up only on pools of <= 2 daemons (pre-drain, host quiet);
+  wider pools compile lazily under admission.
+- Default compute pool stays 2: after cost placement fuses kernel
+  fleets onto the readers, the pool's residual work (scans, big fused
+  reductions) is compile-bound. Width is a safe, explicit choice for
+  non-fusable fleets (~2x measured, spike B).
+
+Remaining catalogued item (general): the host-side streamed-write
+spike — sink chunks materialise to doubles on the dispatch thread
+(f64 scan outputs cannot ride the raw f32 store). Fix = writes off
+the host thread and/or direct-dtype write path; scales with pixels
+and is the crop>=2048 tail's single biggest resident.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with

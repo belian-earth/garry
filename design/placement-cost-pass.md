@@ -27,9 +27,23 @@ Results: crop=2048 predict 551 -> 175 s (3.1x), total 948.6 -> 571.3 s;
 crop=1024 total 325.6 -> 286.2 s; crop=0 completes at 721.8 s
 (predict 229 s) in a 42 G scope. All four validation targets met;
 **`garry.placement` default flipped to "cost"**, `"rules"` remains the
-escape hatch. The remaining gap to hutan's 362 s total at crop=2048 is
-the tail phase (Kalman/ensemble on the 2-daemon pool + host-side
-fits), where spike B's narrow-pool topology is the standing lever.
+escape hatch.
+
+The pool-topology levers were then worked through (2026-07-30
+afternoon; benchmarks/README.md "Pool-topology levers"): affinity
+generalised to both pools (`garry.pool_affinity`), per-plan compute
+pool shaping (fat masks for scan plans, narrow for fleets),
+cold-kernel slow start, and a scan-compile admission surcharge
+(`garry.scan_compile_mb`) make ANY pool width safe; the measured
+answer for the default is 2 fat-masked daemons, because cost placement
+moves kernel fleets to the readers and the pool's residual scan work
+is compile-bound (every daemon that touches a scan pays its ~10 GB
+compile; mirai cannot route to warmed daemons). The remaining gap to
+hutan's 362 s total at crop=2048 (garry 586.5 s) is now dominated by
+the host-side streamed-write spike (15-19 GB transient at 4.2 Mpx,
+f64 scan sinks materialise on the dispatch thread) plus hutan-side
+point fits/validation — "sink writes off the host thread" is the
+catalogued next engine item.
 
 ## Amendments from the 2026-07-29 review
 
