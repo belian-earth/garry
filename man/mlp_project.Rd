@@ -9,7 +9,9 @@ mlp_project(
   biases,
   center = NULL,
   scale = NULL,
-  output_activation = c("identity", "sigmoid")
+  output_activation = c("identity", "sigmoid"),
+  qa_plane = NULL,
+  qa_floor = NULL
 )
 }
 \arguments{
@@ -24,6 +26,16 @@ applied in order; \code{n_in} of the first layer = number of bands.}
 
 \item{output_activation}{\code{"identity"} or \code{"sigmoid"} on the final
 layer (hidden layers are ReLU).}
+
+\item{qa_plane}{Optional 1-based index of a QA plane riding as the
+LAST plane of the input cube (must equal \code{n_in + 1}). Predictions
+where the QA value is nodata (or below \code{qa_floor}) are NaN.
+Carrying QA inside the cube keeps the whole predict a single
+coalesced read, which is what makes the chain fusable onto the
+read daemons.}
+
+\item{qa_floor}{Optional minimum QA value; below it the prediction
+is NaN. Only used with \code{qa_plane}.}
 }
 \value{
 A function \code{fn(x, dims)} suitable for \code{\link[=reduce_over]{reduce_over()}}

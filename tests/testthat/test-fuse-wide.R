@@ -99,3 +99,40 @@ test_that("a SINK-shaped MLP predict fuses and streams (the SI shape)", {
     expect_equal(got, single[[nm]], tolerance = 1e-6, label = nm)
   }
 })
+
+test_that("a QA-gated predict (QA as last plane) fuses and matches (the ESD shape)", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  # hutan predict_mlp_lazy's new shape: features + QA in ONE cube, the
+  # gate inside mlp_project — single-input, so the big arm can fuse.
+  fx <- fixture_multiband()
+  g <- graph_new()
+  nfe <- fx$nb - 1L
+  feats <- lapply(seq_len(nfe), function(b)
+    lazy_source(fx$path, band = b, graph = g))
+  qa <- lazy_source(fx$path, band = fx$nb, graph = g)
+  cube <- lazy_stack(c(feats, list(qa)), along = "band")
+  w1 <- matrix(runif(8L * nfe), 8L)
+  w2 <- matrix(runif(8L), 1L)
+  pred <- reduce_over(cube,
+                      mlp_project(list(w1, w2), list(rep(0, 8L), 0),
+                                  qa_plane = nfe + 1L, qa_floor = 500),
+                      over = "band")
+  p <- plan_lazy(list(pred = pred))
+
+  single <- execute_plan(p)
+  expect_true(any(is.na(single)))       # the floor gates something
+  expect_false(all(is.na(single)))
+
+  garry_daemons(4, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+
+  tab <- garry_explain_placement(p)
+  expect_identical(tab$decision, "fuse")
+  expect_identical(tab$bands, as.integer(fx$nb))
+
+  dist <- execute_plan_mirai(p)
+  expect_equal(dist, single, tolerance = 1e-12)
+})

@@ -135,3 +135,36 @@ test_that("mlp_project validates its arguments", {
   expect_error(fn(cube, 2L), "margin 1")
   expect_error(fn(array(0, c(4, 2, 2)), 1L), "chunk")
 })
+
+test_that("qa_plane gates predictions inside the kernel (untraced + traced)", {
+  set.seed(7)
+  n_in <- 4L
+  w <- .mk_weights(n_in)
+  cube <- array(rnorm(n_in * 5 * 3), c(n_in, 5, 3))
+  qa <- matrix(runif(15), 5, 3)
+  qa[1, 1] <- NaN                      # nodata QA
+  qa[2, 2] <- 0.1                      # below floor
+  full <- array(0, c(n_in + 1L, 5, 3))
+  full[seq_len(n_in), , ] <- cube
+  full[n_in + 1L, , ] <- qa
+
+  fn <- mlp_project(w$weights, w$biases, qa_plane = n_in + 1L,
+                    qa_floor = 0.5)
+  got <- fn(full, 1L)
+  ref <- .ref_plane(cube, w)
+  ref[is.nan(qa) | qa < 0.5] <- NaN
+  expect_equal(got, ref, tolerance = 1e-12)
+
+  # traced kernel matches the oracle
+  skip_if_not_installed("anvl")
+  jf <- g_jit(function(x) fn(x, 1L))
+  traced <- g_download(jf(g_upload(full, "f32")))
+  expect_identical(is.na(traced), is.na(ref))
+  expect_equal(traced, ref, tolerance = 1e-5)
+})
+
+test_that("qa_plane must be the last plane", {
+  w <- .mk_weights(3L)
+  expect_error(mlp_project(w$weights, w$biases, qa_plane = 2L),
+               "last plane")
+})

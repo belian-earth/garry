@@ -44,12 +44,21 @@
 #'   `(x - center) / scale`. Length = number of bands.
 #' @param output_activation `"identity"` or `"sigmoid"` on the final
 #'   layer (hidden layers are ReLU).
+#' @param qa_plane Optional 1-based index of a QA plane riding as the
+#'   LAST plane of the input cube (must equal `n_in + 1`). Predictions
+#'   where the QA value is nodata (or below `qa_floor`) are NaN.
+#'   Carrying QA inside the cube keeps the whole predict a single
+#'   coalesced read, which is what makes the chain fusable onto the
+#'   read daemons.
+#' @param qa_floor Optional minimum QA value; below it the prediction
+#'   is NaN. Only used with `qa_plane`.
 #' @return A function `fn(x, dims)` suitable for [reduce_over()]
 #'   `over = "band"`.
 #' @seealso [band_project()] for the linear case, [reduce_over()]
 #' @export
 mlp_project <- function(weights, biases, center = NULL, scale = NULL,
-                        output_activation = c("identity", "sigmoid")) {
+                        output_activation = c("identity", "sigmoid"),
+                        qa_plane = NULL, qa_floor = NULL) {
   output_activation <- match.arg(output_activation)
   if (!is.list(weights) || !is.list(biases) ||
       length(weights) != length(biases) || length(weights) < 1L)
@@ -75,15 +84,34 @@ mlp_project <- function(weights, biases, center = NULL, scale = NULL,
     cli::cli_abort("{.arg center} must have one value per input band ({n_in})")
   if (!is.null(scl) && length(scl) != n_in)
     cli::cli_abort("{.arg scale} must have one value per input band ({n_in})")
+  # QA gating inside the kernel (rather than a separate gate chain):
+  # the QA plane rides as the LAST plane of the input cube, so the
+  # whole predict consumes ONE coalesced multi-band read — the shape
+  # that keeps the chain single-input and therefore fusable onto the
+  # read daemons (design/placement-cost-pass.md). Gating the OUTPUT is
+  # equivalent to the upstream feature gate: the gate depends only on
+  # the QA value, and NaN features already yield NaN predictions.
+  if (!is.null(qa_plane)) {
+    qa_plane <- as.integer(qa_plane)
+    if (qa_plane != n_in + 1L)
+      cli::cli_abort("qa_plane must be the last plane ({n_in + 1L}); got {qa_plane}")
+  }
+  qf <- if (!is.null(qa_floor)) as.numeric(qa_floor)
   force(output_activation)
 
   function(x, dims) {
     if (!identical(as.integer(dims), 1L))
       cli::cli_abort("mlp_project() reduces the leading band axis (margin 1); got {dims}")
     sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
-    if (length(sh) != 3L || sh[[1L]] != n_in)
-      cli::cli_abort("expected a ({n_in}, y, x) chunk; got dims {paste(sh, collapse = 'x')}")
+    n_exp <- n_in + !is.null(qa_plane)
+    if (length(sh) != 3L || sh[[1L]] != n_exp)
+      cli::cli_abort("expected a ({n_exp}, y, x) chunk; got dims {paste(sh, collapse = 'x')}")
     ny <- sh[[2L]]; nx <- sh[[3L]]
+    qa_v <- NULL
+    if (!is.null(qa_plane)) {
+      qa_v <- .g_flatten_yx(g_slice_t(x, n_in + 1L, n_in + 1L))  # (1, npix)
+      x <- g_slice_t(x, 1L, n_in)
+    }
     h <- .g_flatten_yx(x)                               # (band, npix)
     if (!is.null(ctr)) {
       b <- g_broadcast_arrays(h, matrix(ctr, n_in, 1L))
@@ -105,6 +133,11 @@ mlp_project <- function(weights, biases, center = NULL, scale = NULL,
       } else {
         h
       }
+    }
+    if (!is.null(qa_v)) {
+      bad <- g_is_nodata(qa_v)
+      if (!is.null(qf)) bad <- bad | (qa_v < qf)
+      h <- g_ifelse(bad, NaN, h)                         # (1, npix)
     }
     .g_unflatten_yx(h, ny, nx)                           # (y, x)
   }

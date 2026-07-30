@@ -134,3 +134,41 @@ test_that("garry_explain_placement returns the table without daemons", {
   expect_s3_class(tab, "data.frame")
   expect_true(all(c("decision", "reason", "cost_fuse_s") %in% names(tab)))
 })
+
+test_that("cost mode caps read windows to the fused working set at plan time", {
+  fx <- fixture_multiband()
+  build <- function() {
+    g <- graph_new()
+    bands <- lapply(seq_len(fx$nb), function(b)
+      lazy_source(fx$path, band = b, graph = g))
+    st <- lazy_stack(bands, along = "band")
+    w1 <- matrix(runif(64L * fx$nb), 64L)
+    w2 <- matrix(runif(64L), 1L)
+    pred <- reduce_over(st, mlp_project(list(w1, w2), list(rep(0, 64L), 0)),
+                        over = "band")
+    reduce_over(pred * 2, "mean", c("x", "y"), nan_rm = TRUE)
+  }
+  src_chunk <- function(p) {
+    s <- Find(function(s) s@kind == "source_read", p@stages)
+    prod(as.numeric(s@chunks@chunk_dim))
+  }
+  act <- 4 * (fx$nb + 2 * 64)                # .stage_fuse_act_bytes_px
+  old <- options(garry.chunk_target_px = 100)
+  on.exit(options(old), add = TRUE)
+
+  old_r <- options(garry.placement = "rules")
+  big <- src_chunk(plan_lazy(build()))
+  options(old_r)
+
+  # budget sized for a ~400 px window: reads come out capped, floored
+  # at one compute chunk (coarse windows are integer multiples of it)
+  old_c <- options(garry.placement = "cost",
+                   garry.fuse_reader_mb = 400 * act / 2^20)
+  p_cost <- plan_lazy(build())
+  small <- src_chunk(p_cost)
+  options(old_c)
+
+  # floored at one full-width row band (strip source): 60 x 10 px
+  expect_lt(small, big)
+  expect_lte(small, fx$nx * 10)
+})

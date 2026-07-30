@@ -750,6 +750,29 @@ plan_lazy <- function(x) {
 
   chunk_dim <- .plan_chunk_dim(graph, protos)
   read_px <- .plan_read_px(graph, protos)
+  # Fusion-aware read window cap (design/placement-cost-pass.md): a
+  # fused kernel executes at READ granularity, so the window must fit
+  # one reader's fused working set (input planes + activation cubes)
+  # or the placement pass refuses fusion at execute time regardless of
+  # its merit. For a source whose sole consumer is a fusable-shaped
+  # chain, cap the window at fuse_reader_mb / act bytes-per-px. Only
+  # under placement = "cost" and cpu device: rules mode never fuses
+  # wide kernels, and shrinking its windows would only add read tasks.
+  fuse_px_cap <- function(i) {
+    if (!identical(garry_opt("placement"), "cost")) return(Inf)
+    if (!identical(garry_opt("device"), "cpu")) return(Inf)
+    s <- protos[[i]]
+    if (s$kind != "source_read") return(Inf)
+    cons <- unique(cons_idx[[i]])
+    if (length(cons) != 1L) return(Inf)
+    C <- protos[[cons]]
+    if (C$kind != "compute" || length(C$inputs) != 1L ||
+        length(C$exports %||% integer(0)) != 1L) return(Inf)
+    nb <- length(graph_get(graph, s$members[[1L]])@band)
+    act <- .stage_fuse_act_bytes_px(graph, C$members, nb)
+    max(garry_opt("chunk_target_px"),
+        floor(garry_opt("fuse_reader_mb") * 2^20 / act))
+  }
   # Per-stage read window target: a source/warp stage is budgeted by
   # ITS consumers' co-resident input sets, not the plan-wide widest
   # stage (a 145-input arm would otherwise shrink an unrelated
@@ -759,7 +782,8 @@ plan_lazy <- function(x) {
     cons <- cons_idx[[i]]
     if (length(cons) == 0L) return(read_px)
     min(vapply(cons, function(j)
-      .plan_read_px(graph, protos[j]), numeric(1)))
+      .plan_read_px(graph, protos[j]), numeric(1)),
+        fuse_px_cap(i))
   }, numeric(1))
   stage_objs <- lapply(protos, function(s) {
     Stage(
