@@ -223,11 +223,16 @@ Rules this encoded in the engine (all general, none SI-specific):
   reductions) is compile-bound. Width is a safe, explicit choice for
   non-fusable fleets (~2x measured, spike B).
 
-Remaining catalogued item (general): the host-side streamed-write
-spike — sink chunks materialise to doubles on the dispatch thread
-(f64 scan outputs cannot ride the raw f32 store). Fix = writes off
-the host thread and/or direct-dtype write path; scales with pixels
-and is the crop>=2048 tail's single biggest resident.
+The host streamed-write spike was then fixed the same day: streamed
+sink chunks write on a dedicated WRITER daemon (one per session; GTiff
+is single-writer), shipped as mori region names and reaped per task.
+Measured at crop=2048 cost: 600.2 s (noise band vs 586.5 host-write),
+with NO process above 7.7 GB where the host previously oscillated at
+15-19 GB — the tail's memory is now structurally bounded instead of
+depending on the host spike missing the scan compiles. Host-side
+inline writes remain the fallback without the pool. Remaining general
+items: a direct-dtype (f64) store/write path to skip the double
+conversion entirely, and hutan-side point fits/validation time.
 
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
