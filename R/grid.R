@@ -141,9 +141,17 @@ GridSpec <- S7::new_class(
     transform = S7::class_numeric,   # length 6 (GDAL geotransform)
     extent    = S7::class_numeric,   # xmin, ymin, xmax, ymax
     dims       = S7::class_integer,   # nx, ny [, nt, nb]
-    dtype     = S7::class_character  # anvl-aligned: "f32", "i16", ...
+    dtype     = S7::class_character, # anvl-aligned: "f32", "i16", ...
+    # Optional per-axis labels for the NON-SPATIAL dims (slice dates on
+    # t, band names on band): a named list of character vectors, each
+    # length-matched to its dim. Labels are METADATA, not data: no
+    # planner pass reads them (grid_equal ignores them), so planning
+    # stays grid-identity-trivial while label selection, labelled
+    # output and dt-aware scans become expressible.
+    labels    = S7::class_list
   ),
-  constructor = function(crs, transform, extent, dims, dtype) {
+  constructor = function(crs, transform, extent, dims, dtype,
+                         labels = list()) {
     if (!is.character(crs) || length(crs) != 1L || !nzchar(crs))
       cli::cli_abort("{.arg crs} must be a single non-empty string")
     nm <- names(dims)              # as.integer() strips names; keep them
@@ -155,10 +163,25 @@ GridSpec <- S7::new_class(
       transform = as.numeric(transform),
       extent    = as.numeric(extent),
       dims      = dims,
-      dtype     = dtype
+      dtype     = dtype,
+      labels    = labels
     )
   },
   validator = function(self) {
+    if (length(self@labels)) {
+      lnm <- names(self@labels)
+      if (is.null(lnm) || anyDuplicated(lnm) ||
+          !all(lnm %in% setdiff(names(self@dims), c("x", "y"))))
+        return(paste0("`labels` must be named by non-spatial dims ",
+                      "present in `dims`"))
+      for (nm2 in lnm) {
+        v <- self@labels[[nm2]]
+        if (!is.character(v) || length(v) != self@dims[[nm2]])
+          return(sprintf(
+            "`labels$%s` must be a character vector of length %d",
+            nm2, self@dims[[nm2]]))
+      }
+    }
     if (length(self@transform) != 6L)
       return("`transform` must be length 6 (GDAL geotransform)")
     if (length(self@extent) != 4L)
@@ -325,5 +348,30 @@ grid_equal <- function(a, b, tol = 1e-9) {
 .grid_retype <- function(grid, dtype) {
   if (identical(grid@dtype, dtype)) return(grid)
   GridSpec(crs = grid@crs, transform = grid@transform,
-           extent = grid@extent, dims = grid@dims, dtype = dtype)
+           extent = grid@extent, dims = grid@dims, dtype = dtype,
+           labels = grid@labels)
+}
+
+# Internal: same grid with one non-spatial axis (re)labelled. NULL
+# labels (or a length mismatch, e.g. unnamed layers) leave the grid
+# unchanged rather than erroring: labels are best-effort metadata.
+.grid_relabel <- function(grid, dim, labels) {
+  if (is.null(labels) || !dim %in% names(grid@dims) ||
+      length(labels) != grid@dims[[dim]] ||
+      !all(nzchar(labels)))
+    return(grid)
+  lb <- grid@labels
+  lb[[dim]] <- as.character(labels)
+  GridSpec(crs = grid@crs, transform = grid@transform,
+           extent = grid@extent, dims = grid@dims, dtype = grid@dtype,
+           labels = lb)
+}
+
+# Internal: the labels of a single-layer-axis grid, for labelled output
+# ((t,y,x) or (band,y,x) results): the one non-spatial dim's labels, or
+# NULL when absent/ambiguous.
+.grid_layer_labels <- function(grid) {
+  nsd <- setdiff(names(grid@dims), c("x", "y"))
+  if (length(nsd) != 1L) return(NULL)
+  grid@labels[[nsd]]
 }

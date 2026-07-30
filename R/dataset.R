@@ -215,7 +215,7 @@ as_dataset <- function(bands, mask_asset = NULL) {
 S7::method(`[[`, LazyDataset) <- function(x, i) {
   b <- x@bands[[i]]
   if (is.null(b)) cli::cli_abort("no such band: {.val {i}}")
-  if (length(b) == 1L) b[[1L]] else lazy_stack(unname(b), along = "t")
+  if (length(b) == 1L) b[[1L]] else lazy_stack(b, along = "t")
 }
 
 # A subset of bands -> a sub-dataset.
@@ -295,7 +295,7 @@ S7::method(`[[<-`, LazyDataset) <- function(x, i, value) {
   for (a in sel) {
     # Always stack along t (length-1 gives a t dim of 1) so reducing over "t"
     # is well-defined for every op, including a single-slice band.
-    lr <- lazy_stack(unname(x@bands[[a]]), along = "t")
+    lr <- lazy_stack(x@bands[[a]], along = "t")
     newbands[[a]] <- list(reduce_over(lr, op, over, nan_rm = nan_rm))
   }
   LazyDataset(graph = x@graph, bands = newbands,
@@ -314,7 +314,7 @@ S7::method(`[[<-`, LazyDataset) <- function(x, i, value) {
   sel <- bands %||% names(x@bands)
   newbands <- x@bands
   for (a in sel) {
-    lr <- lazy_stack(unname(x@bands[[a]]), along = "t")
+    lr <- lazy_stack(x@bands[[a]], along = "t")
     newbands[[a]] <- list(scan_over(lr, fn, over = over,
                                     direction = direction, dtype = dtype))
   }
@@ -346,6 +346,25 @@ LazyDatasetGroups <- S7::new_class(
     NULL
   }
 )
+
+# A labelled t-stack LazyRaster as a one-band ("value") LazyDataset:
+# per-slice layers rebuilt from its StackNode parents, named by the t
+# labels. This is what lifts the dataset-only time verbs
+# (group_by_time) onto bare cubes.
+.lr_as_dataset <- function(x) {
+  labs <- x@grid@labels[["t"]]
+  node <- graph_get(x@graph, x@node_id)
+  if (is.null(labs) || !S7::S7_inherits(node, StackNode) ||
+      !identical(node@along, "t"))
+    cli::cli_abort(c(
+      "grouping a bare raster needs a {.fn lazy_stack} along {.val t} ",
+      "with labelled (named) layers.",
+      "i" = "name the layers by date, or use a {.cls LazyDataset}"))
+  slices <- stats::setNames(lapply(node@parents, function(pid)
+    LazyRaster(graph = x@graph, node_id = pid,
+               grid = graph_get(x@graph, pid)@grid)), labs)
+  as_dataset(list(value = slices))
+}
 
 # Slice name -> group label. Presets truncate the (date) name; a function maps
 # the slice name to a label verbatim.
@@ -391,6 +410,10 @@ LazyDatasetGroups <- S7::new_class(
 #'   placeholder, e.g. `"ndvi_{group}.tif"`).
 #' @export
 group_by_time <- function(x, by = "month") {
+  # A bare labelled (t,y,x) cube groups too: rebuild the per-slice
+  # layers from its StackNode (labels carry the dates) as a one-band
+  # dataset, then group as usual.
+  if (S7::S7_inherits(x, LazyRaster)) x <- .lr_as_dataset(x)
   .assert_class(x, LazyDataset, "LazyDataset")
   if (!is.function(by))
     by <- rlang::arg_match(by, c("year", "quarter", "month", "week", "day"))
@@ -446,7 +469,7 @@ stack_bands <- function(x) {
                   "supported (design/ir-extensions-todo.md #3).")))
   layers <- lapply(x@bands, function(b) b[[1L]])
   if (length(layers) == 1L) return(layers[[1L]])
-  lazy_stack(unname(layers), along = "band")
+  lazy_stack(layers, along = "band")
 }
 
 # ---------------------------------------------------------------------------
@@ -476,9 +499,14 @@ stack_bands <- function(x) {
 #' @param dilate Dilation radius (buffer): grows the surviving bad regions
 #'   outward, a safety margin around clouds. `0` skips it. Applied after `open`.
 #' @param drop Drop the QA band from the returned dataset? (default `TRUE`.)
+#' @param join How value and mask slices pair when both carry slice
+#'   names that do not fully align: `"exact"` (default) aborts;
+#'   `"inner"` pairs on the shared slice names and reports what
+#'   dropped.
 #' @return A `LazyDataset` with masked value bands.
 #' @export
-mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
+mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE,
+                 join = "exact") {
   .assert_class(x, LazyDataset, "LazyDataset")
   if (is.null(from)) {
     if (length(x@mask_asset) == 0L)
@@ -503,9 +531,12 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
   newbands <- list()
   for (a in setdiff(names(x@bands), from)) {
     layers <- x@bands[[a]]
-    pair   <- .ds_align_slices(layers, masks, a, from)
+    pair   <- .ds_align_slices(layers, masks, a, from, join = join)
+    # names ride on the pairs: an inner join may drop slices, so
+    # names(layers) can no longer be assumed to match.
+    nm <- names(pair) %||% names(layers)
     newbands[[a]] <- stats::setNames(
-      lapply(pair, function(p) apply_mask(p$v, p$m)), names(layers))
+      lapply(pair, function(p) apply_mask(p$v, p$m)), nm)
   }
   if (!drop) newbands[[from]] <- x@bands[[from]]
 
@@ -522,10 +553,37 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE) {
 
 # Pair each value-band layer with the mask for its slice, by slice name when
 # both are named, else by position (requires equal counts).
-.ds_align_slices <- function(layers, masks, band, from) {
+.ds_align_slices <- function(layers, masks, band, from, join = "exact") {
+  join <- rlang::arg_match0(join, c("exact", "inner"))
   sl <- names(layers)
-  if (!is.null(sl) && !is.null(names(masks)) && all(sl %in% names(masks)))
-    return(lapply(sl, function(s) list(v = layers[[s]], m = masks[[s]])))
+  named <- !is.null(sl) && all(nzchar(sl)) &&
+    !is.null(names(masks)) && all(nzchar(names(masks)))
+  if (named && all(sl %in% names(masks)))
+    return(stats::setNames(
+      lapply(sl, function(s) list(v = layers[[s]], m = masks[[s]])), sl))
+  if (named) {
+    # Both sides carry slice names but neither covers the other. The
+    # old fall-through paired POSITIONALLY when the counts happened to
+    # match — silently mispairing dates. Named mismatches now
+    # inner-join on the name intersection (join = "inner", reporting
+    # what dropped) or abort prescriptively (join = "exact").
+    common <- intersect(sl, names(masks))
+    if (join == "inner" && length(common)) {
+      dropped <- c(setdiff(sl, common), setdiff(names(masks), common))
+      if (length(dropped))
+        cli::cli_inform(paste0(
+          "aligning {.val {band}} with {.val {from}} on ",
+          "{length(common)} shared slice{?s}; dropped: ",
+          "{.val {unique(dropped)}}"))
+      return(stats::setNames(
+        lapply(common, function(s) list(v = layers[[s]], m = masks[[s]])),
+        common))
+    }
+    cli::cli_abort(c(
+      paste0("band {.val {band}} and {.val {from}} carry different ",
+             "slice names; slices do not align"),
+      "i" = "pass {.code join = \"inner\"} to pair on the shared dates"))
+  }
   if (length(layers) != length(masks))
     cli::cli_abort(paste0(
       "band {.val {band}} has {length(layers)} slices but mask band ",

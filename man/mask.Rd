@@ -4,7 +4,15 @@
 \alias{mask}
 \title{Mask a dataset from a QA band.}
 \usage{
-mask(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE)
+mask(
+  x,
+  from = NULL,
+  where,
+  open = 0L,
+  dilate = 0L,
+  drop = TRUE,
+  join = "exact"
+)
 }
 \arguments{
 \item{x}{A \code{LazyDataset}.}
@@ -30,6 +38,11 @@ removing isolated flagged pixels up to the radius. \code{0} skips it.}
 outward, a safety margin around clouds. \code{0} skips it. Applied after \code{open}.}
 
 \item{drop}{Drop the QA band from the returned dataset? (default \code{TRUE}.)}
+
+\item{join}{How value and mask slices pair when both carry slice
+names that do not fully align: \code{"exact"} (default) aborts;
+\code{"inner"} pairs on the shared slice names and reports what
+dropped.}
 }
 \value{
 A \code{LazyDataset} with masked value bands.

@@ -187,6 +187,11 @@ lazy_stack <- function(xs, along = "t") {
   node_tmp <- StackNode(id = 0L, parents = ids, grid = grids[[1L]],
                         along = along)
   grid <- output_grid(node_tmp, grids)
+  # Layer names become the stacked axis's labels (slice dates on t,
+  # band names on band): metadata the planner never reads, carried so
+  # label selection / labelled output / dt-aware scans stay possible
+  # downstream. Unnamed lists leave the grid unlabelled, as before.
+  grid <- .grid_relabel(grid, along, names(xs))
   id <- graph_add(
     graph,
     StackNode,
@@ -196,6 +201,70 @@ lazy_stack <- function(xs, along = "t") {
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
+
+# Label selection on a stacked axis. The raster must be a lazy_stack
+# along `axis` with labels (layer names) on it; selection rebuilds the
+# stack from the matching parents, so downstream planning sees an
+# ordinary (smaller) StackNode.
+.axis_sel <- function(x, axis, sel) {
+  .assert_class(x, LazyRaster, "LazyRaster")
+  labs <- x@grid@labels[[axis]]
+  if (is.null(labs))
+    cli::cli_abort(c(
+      "no {.val {axis}} labels on this raster.",
+      "i" = paste0("labels come from the layer NAMES given to ",
+                   "{.fn lazy_stack} (or a dataset's slice dates)")))
+  node <- graph_get(x@graph, x@node_id)
+  if (!S7::S7_inherits(node, StackNode) || !identical(node@along, axis))
+    cli::cli_abort(paste0(
+      "label selection needs the raster to be a {.fn lazy_stack} ",
+      "along {.val {axis}} (got {.cls {class(node)[[1L]]}})"))
+  keep <- if (is.character(sel)) {
+    m <- labs %in% sel                       # exact labels first
+    if (!any(m))                             # else prefix ("2023-06")
+      m <- Reduce(`|`, lapply(sel, function(s) startsWith(labs, s)))
+    which(m)
+  } else if (is.logical(sel)) {
+    which(rep_len(sel, length(labs)))
+  } else {
+    as.integer(sel)
+  }
+  if (!length(keep) || any(keep < 1L) || any(keep > length(labs)))
+    cli::cli_abort("no {.val {axis}} slices match {.val {sel}}")
+  if (length(keep) == 1L) {
+    pid <- node@parents[[keep]]
+    return(LazyRaster(graph = x@graph, node_id = pid,
+                      grid = graph_get(x@graph, pid)@grid))
+  }
+  layers <- lapply(node@parents[keep], function(pid)
+    LazyRaster(graph = x@graph, node_id = pid,
+               grid = graph_get(x@graph, pid)@grid))
+  lazy_stack(stats::setNames(layers, labs[keep]), along = axis)
+}
+
+#' Select time slices of a stacked raster by label.
+#'
+#' Label selection on the `t` axis (the `.sel(time = ...)` analog):
+#' exact label matches, or prefix matches for partial datetime strings
+#' (`"2023-06"` selects every June slice), or integer/logical positions.
+#' The raster must be a `lazy_stack` along `t` whose layers were named
+#' (slice dates); a single match returns the bare layer.
+#'
+#' @param x A `LazyRaster` stacked along `t` with labels.
+#' @param sel Character labels/prefixes, or integer/logical positions.
+#' @return A `LazyRaster` (the sub-stack, or the single matching layer).
+#' @export
+time_sel <- function(x, sel) .axis_sel(x, "t", sel)
+
+#' Select bands of a stacked raster by label.
+#'
+#' As [time_sel()], on the `band` axis.
+#'
+#' @param x A `LazyRaster` stacked along `band` with labels.
+#' @param sel Character labels/prefixes, or integer/logical positions.
+#' @return A `LazyRaster`.
+#' @export
+band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 
 # ---------------------------------------------------------------------------
 # Operators

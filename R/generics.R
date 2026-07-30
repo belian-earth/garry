@@ -119,5 +119,6 @@ S7::method(output_grid, ScanNode) <- function(node, parent_grids) {
   dims <- dims[!names(dims) %in% drop_dims]
 
   GridSpec(crs = pg@crs, transform = gt, extent = pg@extent,
-           dims = dims, dtype = .reduce_dtype(op, pg@dtype))
+           dims = dims, dtype = .reduce_dtype(op, pg@dtype),
+           labels = pg@labels[names(pg@labels) %in% names(dims)])
 }

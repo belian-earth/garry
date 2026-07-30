@@ -71,6 +71,11 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
       out
     }))
   }
+  # Labelled output: a bare (t,y,x) / (band,y,x) result inherits its
+  # axis labels (GridSpec labels, carried from lazy_stack layer names)
+  # as output band descriptions unless the dataset already supplied
+  # band names.
+  band_names <- band_names %||% .grid_layer_labels(p@stages[[p@sink]]@grid)
   # lazy_cog sources ("CK:") fetch nothing until here: resolve each source set to
   # a staged grid-aligned raster once (single-band sets through one concurrent
   # ck_batch pool), then the executors read it as an ordinary GDAL source.

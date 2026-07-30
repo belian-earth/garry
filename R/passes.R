@@ -83,8 +83,15 @@ NULL
     else .apply_reduce(node@op, pv[[1L]], margins, node@nan_rm)
   } else if (S7::S7_inherits(node, ScanNode)) {
     # Body contract: fn(xs, margin) over the LIST of parent values; the
-    # scanned axis survives, so the output keeps the parent's shape.
-    node@fn[[1L]](pv, .dim_margins(parent_dim_names, node@over))
+    # scanned axis survives, so the output keeps the parent's shape. A
+    # body with a third formal additionally receives the scanned axis's
+    # labels (GridSpec labels; NULL when unlabelled), so irregular-dt
+    # smoothers can derive their spacing instead of closing over it.
+    body <- node@fn[[1L]]
+    m <- .dim_margins(parent_dim_names, node@over)
+    if (length(formals(body)) >= 3L)
+      body(pv, m, node@grid@labels[[node@over]])
+    else body(pv, m)
   } else {
     .garry_error(paste0("node class not executable in a compute stage: ",
                         class(node)[[1L]]), "garry_plan_error")

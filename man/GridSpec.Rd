@@ -4,7 +4,7 @@
 \alias{GridSpec}
 \title{Spatial grid specification.}
 \usage{
-GridSpec(crs, transform, extent, dims, dtype)
+GridSpec(crs, transform, extent, dims, dtype, labels = list())
 }
 \arguments{
 \item{crs}{CRS string in any GDAL-interpretable form.}
