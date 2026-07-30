@@ -446,63 +446,71 @@ NULL
   if (length(unset)) do.call(Sys.setenv, as.list(unset))
 }
 
-# Cap each read daemon's schedulable CPUs with a disjoint interleaved
-# affinity mask, so a fused XLA client created there sizes its thread
-# pool to k CPUs instead of all cores. XLA sizes its eigen pool via
-# tsl::port::MaxParallelism() = NumSchedulableCPUs, which respects
-# sched_setaffinity, and the client inits lazily on the first g_jit —
-# so affinity applied at pool creation bounds every later client
-# (spike A, benchmarks/README.md 2026-07-29: uncapped 93
-# threads/daemon on 0-19; k=2 -> 39 threads on disjoint pairs; the
-# pool scales with the mask). k has a HARD floor of 2: a 1-CPU XLA
-# client segfaults (measured). Linux + taskset only; anywhere else the
-# readers stay uncapped and the placement pass's fuse_flops_max gate
-# keeps wide kernels off them. Records the cap in
-# .garry_state$reader_threads for the placement pass's cost mode.
-.read_affinity_apply <- function(n_read) {
-  .garry_state$reader_threads <- NULL
-  if (!identical(Sys.info()[["sysname"]], "Linux")) return(invisible(NULL))
-  if (!nzchar(Sys.which("taskset"))) return(invisible(NULL))
+# Cap each daemon of a pool to a disjoint interleaved CPU-affinity
+# mask, so an XLA client created there sizes its thread pool to k CPUs
+# instead of all cores. This is a GENERAL rule, not a reader special
+# case: every process that may run an XLA client — readers via fused
+# kernels, compute daemons always — gets a bounded, mostly-disjoint
+# slice of the machine, which is what makes pool width a free
+# parameter (slots) while admission controls concurrency. XLA sizes
+# its eigen pool via tsl::port::MaxParallelism() = NumSchedulableCPUs,
+# which respects sched_setaffinity, and the client inits lazily on the
+# first g_jit — so affinity applied at pool creation bounds every
+# later client (spike A, benchmarks/README.md 2026-07-29: uncapped 93
+# threads/daemon; k=2 -> 39 on disjoint pairs; k=1 SEGFAULTS the
+# client, hence the hard floor of 2; spike B: 10 narrow clients ~2x
+# the throughput of 2 uncapped fat ones on matmul kernels). Linux +
+# taskset only; anywhere else the pool stays uncapped and the
+# placement pass's fuse_flops_max gate keeps wide kernels off the
+# readers. Returns the cap (NULL when uncapped) for .garry_state.
+.pool_affinity_apply <- function(profile, n) {
+  if (!identical(Sys.info()[["sysname"]], "Linux")) return(NULL)
+  if (!nzchar(Sys.which("taskset"))) return(NULL)
   cores <- .garry_cores()$logical
-  k <- as.integer(max(2L, cores %/% max(1L, as.integer(n_read))))
-  if (k >= cores) return(invisible(NULL))     # cap would be a no-op
+  k <- as.integer(max(2L, cores %/% max(1L, as.integer(n))))
+  if (k >= cores) return(NULL)                # cap would be a no-op
   pids <- tryCatch(
-    vapply(mirai::everywhere(Sys.getpid(), .compute = "garry_read"),
+    vapply(mirai::everywhere(Sys.getpid(), .compute = profile),
            function(m) m[], integer(1)),
     error = function(e) integer(0))
-  if (length(pids) == 0L) return(invisible(NULL))
-  ok <- TRUE
+  if (length(pids) == 0L) return(NULL)
   for (i in seq_along(pids)) {
     lo <- ((i - 1L) * k) %% cores
     cpus <- paste(seq(lo, lo + k - 1L) %% cores, collapse = ",")
     st <- suppressWarnings(
       system2("taskset", c("-a", "-cp", cpus, pids[[i]]),
               stdout = FALSE, stderr = FALSE))
-    if (!identical(st, 0L)) ok <- FALSE
+    if (!identical(st, 0L)) return(NULL)
   }
-  if (ok) .garry_state$reader_threads <- k
-  invisible(NULL)
+  k
 }
 
 #' Set up split mirai daemon pools for distributed execution.
 #'
 #' Two pools instead of one: `read` daemons execute source/warp read
-#' tasks and never load anvl/PJRT (a reader stays at ~60 MB), while
-#' `compute` daemons run the fused XLA stages. Called with no arguments,
-#' it sizes the pools to the machine: `compute` = physical cores (each
-#' XLA median is ~one core, so hyperthreads would only thrash) and
-#' `read` = logical cores (reads are ~74% network wait, so more streams
-#' saturate the link without fighting for CPU). `collect(distributed =
-#' TRUE)` detects the pools automatically and pre-compiles stage kernels
-#' on the compute pool at run start (`garry_opt("jit_warmup")`).
+#' tasks (and any kernels the placement pass fuses onto them), while
+#' `compute` daemons run the materialised XLA stages. The resource
+#' model is: **pool width is slots, admission is concurrency**. Every
+#' daemon is pinned to a disjoint slice of the machine at creation
+#' (`garry_opt("pool_affinity")`), so an XLA client created anywhere is
+#' narrow rather than all-cores; the scheduler's live-RAM byte budgets
+#' decide how many tasks are actually in flight; excess daemons idle
+#' lean. Called with no arguments it sizes the pools to the machine:
+#' `read` = logical cores (reads are mostly network/decompress wait)
+#' and `compute` = enough narrow daemons to cover the machine at ~2
+#' CPUs each (measured ~2x the matmul throughput of two unpinned
+#' all-cores clients), falling back to TWO wherever affinity is
+#' unavailable and clients come up all-cores. `collect(distributed =
+#' TRUE)` detects the pools automatically and pre-compiles stage
+#' kernels on the compute pool at run start (`garry_opt("jit_warmup")`;
+#' scan kernels compile lazily under admission instead — their unrolled
+#' HLO compile is too heavy to broadcast unbudgeted).
 #'
-#' You should not need to tune these: the fetch-ordered composite
-#' pipeline bounds concurrent compute working sets by
-#' `garry_opt("compute_ram_fraction")` of available RAM, so a generous
-#' compute pool cannot OOM (excess daemons stay idle at base RSS, and
-#' a many-band job drains in memory-bounded waves). The one case for
-#' overriding is a source API that throttles concurrent reads: pass a
-#' smaller `read` to stay under its limit.
+#' You should not need to tune these. The cases for overriding: a
+#' source API that throttles concurrent reads (smaller `read`); one
+#' daemon per device on multi-GPU, or one per socket on NUMA
+#' (`compute`); a memory-tight box (smaller `compute`, each daemon's
+#' base XLA client is ~300 MB once warmed).
 #'
 #' It also applies the sensible defaults so a workload script needs no
 #' preamble: the glibc `MALLOC_*` thresholds are exported BEFORE the
@@ -515,16 +523,13 @@ NULL
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses logical
 #'   cores. `0` tears the pool down.
-#' @param compute Compute-pool daemon count; `NULL` (default) uses TWO.
-#'   Each compute daemon is a full XLA client that spawns an all-cores CPU
-#'   thread pool (~63 threads measured on a 20-core box). One daemon cannot
-#'   overlap two chunks or overlap compute with the host harvest, so a
-#'   second buys real concurrency; but a third oversubscribes the machine
-#'   (and adds another multi-GB compile for large fused kernels), so past
-#'   two both wall time and memory rise. Two is the smallest count that
-#'   unlocks concurrency below that thread cliff. Raise only for multiple
-#'   GPUs (one daemon per device) or a NUMA server (one client per
-#'   socket); drop to 1 on a memory-tight box. `0` tears down.
+#' @param compute Compute-pool daemon count; `NULL` (default) sizes to
+#'   the machine: enough affinity-capped ~2-CPU daemons to cover the
+#'   logical cores (capped at 10), or TWO wherever affinity is
+#'   unavailable (non-Linux, no taskset, `pool_affinity = "off"`, or a
+#'   CUDA device) — an unpinned client spawns an all-cores thread pool
+#'   and past two of those both wall time and memory rise (measured
+#'   2 -> 4 fat: slower AND +14 GB peak; 8 OOMs). `0` tears down.
 #' @param read_handles Open-handle cache depth on read daemons.
 #'   `NULL` (default) uses `garry_opt("read_handles")`. Depth 1 suits
 #'   per-slice mosaics that are rarely revisited (every open warped
@@ -544,18 +549,23 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
-    # TWO compute daemons by default. Two forces set the optimum. A single
-    # daemon is one worker and cannot overlap two chunks nor compute with
-    # the host's harvest/stage, so a second daemon captures real
-    # concurrency (measured ~12% on the SI tail). But each daemon is a full
-    # XLA client with an all-cores CPU thread pool (~63 threads/client on a
-    # 20-core box), so a third oversubscribes the machine and, for large
-    # fused kernels, adds another multi-GB compile: past two, wall time and
-    # memory both rise (measured 2->4: slower AND +14 GB peak; 8 OOMs).
-    # Two is the smallest count that unlocks concurrency below the thread
-    # cliff. Raise only for multiple GPUs (one daemon per device) or a NUMA
-    # server (one client per socket); drop to 1 on a memory-tight box.
-    if (is.null(compute)) compute <- 2L
+    # Pool width is SLOTS, not concurrency. With per-daemon CPU
+    # affinity (pool_affinity = "auto") every XLA client is narrow,
+    # the in-flight byte budget bounds how many tasks actually run,
+    # and excess daemons idle lean — so the default compute pool
+    # covers the machine with ~2-CPU daemons (spike B: 10 x 2-CPU
+    # clients ~2x the matmul throughput of 2 unpinned fat ones).
+    # Where affinity cannot apply (non-Linux, no taskset, "off",
+    # CUDA), every client is an all-cores thread pool and the
+    # measured cliff stands (2 -> 4 fat: slower AND +14 GB; 8 OOMs):
+    # stay at the pre-affinity optimum of TWO.
+    if (is.null(compute)) {
+      can_cap <- identical(garry_opt("pool_affinity"), "auto") &&
+        identical(Sys.info()[["sysname"]], "Linux") &&
+        nzchar(Sys.which("taskset")) &&
+        !identical(garry_opt("device"), "cuda")
+      compute <- if (can_cap) max(2L, min(10L, cr$logical %/% 2L)) else 2L
+    }
     if (is.null(read))    read    <- cr$logical
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
@@ -578,14 +588,17 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
     cfg = isTRUE(gdal_config),
     .compute = "garry_read")
     invisible(lapply(w, function(m) m[]))
-    # Reader CPU affinity (see .read_affinity_apply): applied at pool
-    # creation, BEFORE any fused kernel jits an XLA client there.
-    if (identical(garry_opt("read_affinity"), "auto"))
-      .read_affinity_apply(read)
-    else .garry_state$reader_threads <- NULL
-  } else {
-    .garry_state$reader_threads <- NULL
   }
+  # Pool CPU affinity (see .pool_affinity_apply): applied at pool
+  # creation, BEFORE any kernel jits an XLA client anywhere. The
+  # compute pool is skipped on a CUDA device (its daemons drive the
+  # GPU; pinning their host threads buys nothing and can starve H2D).
+  aff <- identical(garry_opt("pool_affinity"), "auto")
+  .garry_state$reader_threads <- if (aff && read > 0L)
+    .pool_affinity_apply("garry_read", read)
+  .garry_state$comp_threads <- if (aff && compute > 0L &&
+                                   !identical(garry_opt("device"), "cuda"))
+    .pool_affinity_apply("garry_compute", compute)
   invisible(list(read = read, compute = compute))
 }
 
@@ -837,6 +850,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   placement <- .plan_placement(plan, consumers_of, warp_only,
                                n_read = n_read, n_comp = n_comp,
                                reader_threads = .garry_state$reader_threads,
+                               comp_threads = .garry_state$comp_threads,
                                avail_mb = .garry_ram_avail_mb(),
                                mode = garry_opt("placement"))
   fuse_of <- placement$by_source     # source sid -> fuse spec
@@ -1030,6 +1044,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       has_scan <- any(vapply(s@members, function(id)
         S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1)))
       if (!has_scan) task_mb <- task_mb / 2
+      # SCAN kernels never pre-warm: a (bidirectional) scan unrolls
+      # into a huge HLO whose XLA compile holds multi-GB per process,
+      # and the warm-up everywhere() broadcast would run that on EVERY
+      # compute daemon at once, unbudgeted — the wider the pool, the
+      # bigger the simultaneous spike. Left cold, each daemon compiles
+      # on its FIRST scan task, inside a byte-admitted slot, so the
+      # in-flight budget bounds concurrent compiles on wide pools.
+      if (!has_scan)
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         fn = s@fn,

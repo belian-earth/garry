@@ -44,10 +44,10 @@ test_that("read daemons get disjoint bounded CPU sets and the cap is recorded", 
   expect_false(lists[[1L]] == lists[[2L]])
 })
 
-test_that("read_affinity = 'off' leaves readers uncapped", {
+test_that("pool_affinity = 'off' leaves readers uncapped", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  old <- options(garry.read_affinity = "off")
+  old <- options(garry.pool_affinity = "off")
   on.exit(options(old), add = TRUE)
   garry_daemons(2, 1)
   on.exit(garry_daemons(0, 0), add = TRUE)
@@ -55,4 +55,24 @@ test_that("read_affinity = 'off' leaves readers uncapped", {
   lists <- .reader_cpu_lists()
   cores <- parallel::detectCores()
   expect_true(all(vapply(lists, .cpu_list_len, integer(1)) == cores))
+})
+
+test_that("the compute pool is capped too and recorded for the cost model", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  cores <- parallel::detectCores()
+  skip_if(cores < 5L, "cap is a no-op below 5 cores")
+  garry_daemons(2, 2)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  k <- max(2L, cores %/% 2L)
+  expect_identical(garry:::.garry_state$comp_threads, k)
+  h <- mirai::everywhere({
+    sub("Cpus_allowed_list:\\s*", "",
+        grep("^Cpus_allowed_list:",
+             readLines(sprintf("/proc/%d/status", Sys.getpid())),
+             value = TRUE))
+  }, .compute = "garry_compute")
+  lists <- vapply(h, function(m) m[], character(1))
+  expect_length(lists, 2L)
+  expect_false(lists[[1L]] == lists[[2L]])
 })

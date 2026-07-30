@@ -84,7 +84,8 @@ NULL
 # in rules mode; they are the seam the cost mode (PR3) prices against.
 .plan_placement <- function(plan, consumers_of, warp_only,
                             n_read = NULL, n_comp = NULL,
-                            reader_threads = NULL, avail_mb = NULL,
+                            reader_threads = NULL, comp_threads = NULL,
+                            avail_mb = NULL,
                             mode = "rules") {
   if (!mode %in% c("rules", "cost"))
     .garry_error(sprintf("unknown placement mode: %s", mode),
@@ -95,6 +96,15 @@ NULL
   fused <- new.env(parent = emptyenv())
   cores <- .garry_cores()$logical
   k <- reader_threads %||% NA_real_
+  kc <- comp_threads %||% NA_real_
+  # Materialise-route compute width: an affinity-capped pool delivers
+  # close to its nominal machine-bounded width (0.9 x, conservative
+  # from spike B where 10 x 2-CPU clients ~doubled the fat pool); an
+  # UNCAPPED pool of all-cores clients delivers only
+  # cost_comp_efficiency of the machine (0.55, spike B calibrated).
+  width_mat <- if (is.finite(kc))
+    min(cores, max(1, n_comp %||% 1) * kc) * 0.9
+  else cores * garry_opt("cost_comp_efficiency")
   rows <- list()
   for (cc in cands) {
     S <- plan@stages[[cc$sid]]
@@ -129,11 +139,8 @@ NULL
       eff_fuse <- if (is.finite(k))
         min(cores, max(1, n_read %||% 1) * k) else cores
       cost_fuse <- fl / (gf * eff_fuse)
-      # The fat pool's contended thread pools deliver a measured
-      # fraction of machine-wide throughput (spike B); credit it
-      # honestly or wide kernels stay materialised by a false margin.
       cost_mat <- 2 * move_mb / garry_opt("cost_shm_bw_mbs") +
-        fl / (gf * cores * garry_opt("cost_comp_efficiency"))
+        fl / (gf * width_mat)
       mem_need <- (n_read %||% 1) * garry_opt("cost_xla_client_mb")
       mem_free <- if (is.null(avail_mb) || is.na(avail_mb)) Inf else
         avail_mb * (1 - garry_opt("exec_ram_fraction"))
@@ -245,6 +252,7 @@ garry_explain_placement <- function(x, read = NULL, compute = NULL,
   .plan_placement(p, sc$consumers_of, sc$warp_only,
                   n_read = n_read, n_comp = n_comp,
                   reader_threads = .garry_state$reader_threads,
+                  comp_threads = .garry_state$comp_threads,
                   avail_mb = .garry_ram_avail_mb(),
                   mode = mode)$table
 }

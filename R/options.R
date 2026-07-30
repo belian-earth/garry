@@ -185,21 +185,26 @@
   # warm pool with machine-wide throughput it does not deliver and
   # keeps wide kernels off the readers by a false margin.
   cost_comp_efficiency = 0.55,
-  # Cost mode: without a reader thread cap (garry.read_affinity), a
+  # Cost mode: without a reader thread cap (garry.pool_affinity), a
   # kernel above this flops/px never fuses. Fusing wide compute onto N
   # uncapped readers spawns N all-cores XLA clients — a bigger thread
   # cliff than the 2-daemon pool it escapes (scheduling review
   # 2026-07-29). Mask cleanup (~10 flops/px) fuses either way; a
   # 145-band MLP (~2e4) needs the cap.
   fuse_flops_max = 128,
-  # Reader CPU affinity: "auto" pins each read daemon to a disjoint
-  # interleaved set of k = max(2, cores %/% n_read) CPUs at pool
-  # creation (Linux + taskset only; silently off elsewhere). A fused
-  # XLA client created on a reader then sizes its thread pool to k
-  # instead of all cores — the enabler for fusing wide kernels
-  # (placement cost mode) without N all-cores clients. k floors at 2:
-  # a 1-CPU XLA client segfaults (spike A). "off" disables.
-  read_affinity = "auto",
+  # Pool CPU affinity: "auto" pins each daemon of BOTH pools to a
+  # disjoint interleaved set of k = max(2, cores %/% pool_size) CPUs at
+  # pool creation (Linux + taskset only; silently off elsewhere). Any
+  # XLA client created there then sizes its thread pool to k instead of
+  # all cores. This is the general rule that makes pool width a free
+  # parameter: threads are bounded per daemon, byte admission bounds
+  # concurrency, so extra daemons cost idle RSS, not thread storms.
+  # Enables fusing wide kernels onto readers (placement cost mode) and
+  # wide narrow compute pools (spike B: 10 x 2-CPU clients ~2x the
+  # matmul throughput of 2 uncapped fat ones). k floors at 2: a 1-CPU
+  # XLA client segfaults (spike A). The compute pool is not pinned on
+  # device = "cuda". "off" disables.
+  pool_affinity = "auto",
   # Cost mode: per-reader budget (MB) for a FUSED kernel's live working
   # set — the read window plus its activation cubes at READ granularity
   # (fused kernels are unchunked; see .stage_fuse_act_bytes_px). Fusion
