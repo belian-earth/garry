@@ -269,6 +269,35 @@ correction, task-log schema + report, labels, MPC re-sign, L-fixes):
   crop=2048. The report's stage table isolates the tail scans
   (p95 322-409 s) without ad-hoc parsing for the first time.
 
+**Tail-squeeze experiments (2026-08-01, crop=2048 cost, same box).**
+Three probes after the surcharge recalibration
+(`scan_compile_mb` 10000 -> 1500, measured from task-log RSS: nv_scan
+compiles cost ~0.7-1.0 GB, not the unrolled era's 10 GB):
+
+| arm | predict | tail phase | total | outcome |
+|---|---|---|---|---|
+| compute=2 CPU (new surcharge) | 185 s | 405 s | 623.7 s | sitting-band parity; surcharge neutral at width 2 |
+| compute=4 CPU, MEMMAX=42G | 221 s | - | - | OOM-killed at ~38.5 GB scope |
+| compute=1 CUDA (A1000 4 GB) | 696 s | 1054 s | 1774.1 s | completes; card thrashes |
+| compute=2 CUDA | - | - | - | RESOURCE_EXHAUSTED (two clients share 4 GB) |
+
+Findings:
+- The tail's width wall is the RETAINED per-daemon scan working set
+  (~6.5 GB of reusable XLA pool per daemon that has run a scan chunk),
+  not compile cost: width 4 = ~26 GB standing state + transients, dead
+  at 42G. Compiles are now ~20-25 s / ~1 GB (loop-lowered), so the
+  width-1 routing follow-up fixes compile MULTIPLICATION but not this
+  wall — wide scan pools need either a smaller per-daemon scan
+  footprint or more RAM.
+- CUDA on the 4 GB laptop card is a net 2.8x LOSS on the full SI
+  workload (the 7.8x Kalman result was a small synthetic stack that
+  fit comfortably); shelved until a per-phase device knob can put only
+  the tail scans on a bigger card.
+- The tail-phase decomposition (task report): ~126 s host-side hutan
+  point fits (Kalman hyperparameter MLE at GEDI shots — identical in
+  the default hutan engine; cache/parallelise on the hutan ledger) +
+  ~288 s garry drain of ~800-900 s compute over 2 daemons.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with
