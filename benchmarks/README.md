@@ -140,6 +140,36 @@ pool once the placement pass can price thread width; the real SI-tail
 benchmark rerun happens at PR5 validation. Scripts:
 `benchmarks/spike_a_affinity.R` / `benchmarks/spike_b_topology.R`.
 
+**SI bench sweep (2026-07-30, bc-cohort box 1, rules vs cost mode,
+readers=4 compute=2, MEMMAX=32G).** First real-pipeline validation of
+the cost pass (`pipelines/bc-cohort-si-bench.sh placement=`):
+
+| crop | placement | tasks | predict phase | total | note |
+|---|---|---|---|---|---|
+| 1024 | rules | 426 | 98 s | 371.0 s | completes |
+| 1024 | cost | 345 | 80 s | **349.4 s** | AEF predicts FUSED onto readers |
+| 2048 | rules | 565 | 531-576 s | - | tail OOM (host anon ~31 GB, pre-existing) |
+| 2048 | cost | 565 | ~548 s | - | fusion refused by working-set guard; tail OOM as rules |
+
+Findings the sweep forced into the engine:
+- Store-bearing compute launches need their OWN escape hatch: sharing
+  read_ok's starved the drain and pinned the 24G scope (fixed).
+- The shm backstop must take CGROUP headroom (tmpfs pages charge the
+  scope while host df shows free space).
+- The ESD arm (the big half: 145 bands x 12 yr) cannot fuse yet: QA
+  gating makes its predict stage TWO-input
+  (hutan `predict_mlp_lazy(qa_col=)`), failing the single-input
+  precondition. Fusing it needs same-file QA-band absorption into the
+  coalesced read (planner work, not placement).
+- Fused kernels execute at READ granularity: the AEF MLP holds ~2 KB/px
+  of activations, fine at a 1 Mpx window (~2.4 GB/reader), fatal at
+  4.2 Mpx (~9 GB/reader, three readers OOM-killed). Bounded by
+  `garry.fuse_reader_mb`; the long-term fix is fusion-aware read
+  window sizing at plan time.
+- The crop=2048 tail OOM is `hutan::si_tail` host-side anon (~31 GB,
+  deterministic, scales with pixels) — a pipeline scaling wall
+  upstream of the engine, present in both modes.
+
 ## Historical results (phases 9-11)
 
 2026-07-08 ~00:30, ODC baseline added (same-sitting triple; cgroup

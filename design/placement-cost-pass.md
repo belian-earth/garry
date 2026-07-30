@@ -5,16 +5,28 @@ Status: **implemented through PR4 on branch `placement-pass`
 benchmark validation.** Amended after the scheduling review
 (`scheduling-review-2026-07-29.md`). Self-contained.
 
-Landed: residency fixes (compute-output store bytes, /dev/shm
-backstop, fused-region pricing), the placement pass with rules and
-cost modes plus `garry_explain_placement()`, `.stage_flops_per_px`
-with MLP closure introspection, reader CPU affinity
-(`garry.read_affinity`), and an end-to-end gate (`test-fuse-wide.R`)
-proving a multi-band MLP chain fuses onto capped readers under cost
-mode with oracle-identical results. Also fixed en route: a phase 12b
-defect where a fused chain that was itself a multi-export sink wrote
-all-zero output. PR5 remains: the SI predict / HLS morphology /
-ndvi-composite / crop=0 benchmark validation, then the default flip.
+Landed: residency fixes (compute-output store bytes, cgroup-aware
+/dev/shm backstop, fused-region pricing, a dedicated escape hatch for
+store-bearing compute), the placement pass with rules and cost modes
+plus `garry_explain_placement()`, `.stage_flops_per_px` and
+`.stage_fuse_act_bytes_px` with MLP closure introspection, reader CPU
+affinity (`garry.read_affinity`), FUSED SINK streaming (chunk_of /
+sink_task_map), the fat-pool efficiency term (spike B calibrated), and
+the fused window working-set bound (`garry.fuse_reader_mb`). Also
+fixed en route: a phase 12b defect where a fused multi-export sink
+wrote all-zero output.
+
+First real-pipeline validation (SI bench, 2026-07-30): at crop=1024
+cost mode fuses the AEF predicts (426 -> 345 tasks) for predict 98 ->
+80 s and total 371 -> 349.4 s, oracle-identical. Two structural limits
+found: (1) the ESD arm cannot fuse — QA gating makes its predict stage
+two-input; fusing the big half of the workload needs same-file QA-band
+absorption into the coalesced read (planner work); (2) fused kernels
+run at read granularity, so wide-hidden MLPs exceed per-reader memory
+on large windows — bounded for now, properly fixed by fusion-aware
+read window sizing at plan time. PR5 default flip remains gated on the
+full benchmark set; the crop=2048+ tail is blocked by a pre-existing
+hutan::si_tail host-memory wall, not by the engine.
 
 ## Amendments from the 2026-07-29 review
 
