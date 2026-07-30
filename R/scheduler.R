@@ -1697,7 +1697,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # throttled to genuine growth so a persistently tight run does not
     # spam every 5 s refresh.
     anon <- .garry_fleet_anon_mb(.garry_state$pool_pids)
-    if (is.finite(anon)) {
+    if (is.finite(anon) && isTRUE(garry_opt("rss_correction"))) {
       infl <- if (exists("mb_inflight")) mb_inflight else 0
       allow <- length(.garry_state$pool_pids) *
         garry_opt("cost_xla_client_mb")

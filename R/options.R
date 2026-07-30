@@ -177,6 +177,13 @@
   # store budget against ACTUAL free /dev/shm minus this headroom and
   # force-flushes queued drops when free space falls below it.
   shm_headroom_mb = 512,
+  # Per-daemon measured-memory correction (refresh_mem_budgets): when
+  # the fleet's anon RSS grows beyond the run-start baseline + the
+  # trailing tolerated window + in-flight work, the compute budget
+  # shrinks by the excess (estimate defects become throughput dips, not
+  # OOMs). FALSE disables the correction (measurement samples still log
+  # to the task log) — the A/B switch for attributing wall-time to it.
+  rss_correction = TRUE,
   # Placement decision mode for source->compute chains in the pooled
   # scheduler (design/placement-cost-pass.md): "cost" (default)
   # compares modelled fuse-vs-materialise wall time per chain, with
@@ -348,6 +355,8 @@ garry_opt <- function(name) {
     desc = "/dev/shm headroom (MB) the store must leave free"),
   placement        = list(tier = "user", check = .opt_choice("cost", "rules"),
     desc = "fuse-vs-materialise decision mode for source->compute chains"),
+  rss_correction   = list(tier = "user", check = .opt_flag(),
+    desc = "tighten the compute budget on measured fleet-RSS growth"),
   cost_gflops_core = list(tier = "calibration", check = .opt_num(min = 1e-9),
     desc = "sustained per-core kernel throughput (GFLOP/s)"),
   cost_shm_bw_mbs  = list(tier = "calibration", check = .opt_num(min = 1e-9),
