@@ -87,6 +87,18 @@ test_that("with a thread cap the MLP chain fuses; narrow pools do not", {
   mlp2 <- tab2[tab2$bands > 1L, ]
   expect_identical(mlp2$decision, "comp")
   expect_match(mlp2$reason, "does not fit")
+
+  # fused window working set: kernels run at READ granularity, so a
+  # window whose activation cubes exceed the per-reader budget must
+  # materialise (the crop=2048 AEF OOM)
+  old_ws <- options(garry.fuse_reader_mb = 1e-4)
+  on.exit(options(old_ws), add = TRUE)
+  tab3 <- .plc(p, n_read = 8L, n_comp = 2L, reader_threads = 2,
+               avail_mb = 64000)$table
+  mlp3 <- tab3[tab3$bands > 1L, ]
+  expect_identical(mlp3$decision, "comp")
+  expect_match(mlp3$reason, "working set")
+  options(old_ws)
 })
 
 test_that("mask cleanup fuses in both modes; scans never fuse in cost mode", {

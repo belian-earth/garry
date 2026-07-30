@@ -137,6 +137,15 @@ NULL
       mem_need <- (n_read %||% 1) * garry_opt("cost_xla_client_mb")
       mem_free <- if (is.null(avail_mb) || is.na(avail_mb)) Inf else
         avail_mb * (1 - garry_opt("exec_ram_fraction"))
+      # Fused kernels run at READ granularity — no chunking — so one
+      # reader holds the whole window's input planes AND activation
+      # cubes live. Price that against the per-reader budget; a chain
+      # whose window working set does not fit materialises (the
+      # chunked compute pool handles any size).
+      win_px <- prod(pmin(as.numeric(S@chunks@chunk_dim),
+                          as.numeric(S@grid@dims[c("x", "y")])))
+      fuse_ws_mb <- win_px *
+        .stage_fuse_act_bytes_px(graph, C@members, nb_src) / 2^20
       if (is.na(flops_px)) {
         decision <- "comp"
         reason <- "cost: unknown compute cost (scan / opaque custom body)"
@@ -146,6 +155,11 @@ NULL
         reason <- sprintf(
           "cost: no reader thread cap and %.0f flops/px > fuse_flops_max %.0f (N uncapped XLA clients)",
           flops_px, garry_opt("fuse_flops_max"))
+      } else if (fuse_ws_mb > garry_opt("fuse_reader_mb")) {
+        decision <- "comp"
+        reason <- sprintf(
+          "cost: fused window working set %.0f MB exceeds fuse_reader_mb %.0f (window %.1f Mpx at read granularity)",
+          fuse_ws_mb, garry_opt("fuse_reader_mb"), win_px / 1e6)
       } else if (mem_need > mem_free) {
         decision <- "comp"
         reason <- sprintf(

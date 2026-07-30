@@ -923,6 +923,32 @@ plan_lazy <- function(x) {
   }, numeric(1)))
 }
 
+# Per-pixel ACTIVATION footprint of a stage's kernel when it runs
+# fused on a whole read window, in bytes: the input planes plus the
+# widest pair of adjacent live layers of an introspected matmul chain
+# (for elementwise/focal kernels just the input and output planes).
+# A fused kernel executes at READ granularity — no chunking — so this
+# times the window pixel count is what one reader's XLA client holds
+# live; the placement pass refuses fusion when that does not fit
+# (measured: the 64->256->256->1 AEF MLP at ~2 KB/px ran a 4.2 Mpx
+# window to ~9 GB per reader and OOM-killed the fleet at crop=2048,
+# while the same kernel fit at crop=1024).
+.stage_fuse_act_bytes_px <- function(graph, members, nb_in) {
+  maxw <- 0
+  for (id in members) {
+    n <- graph_get(graph, id)
+    if (S7::S7_inherits(n, ReduceNode) && identical(n@op, "custom") &&
+        length(n@fn)) {
+      w <- tryCatch(get("weights", envir = environment(n@fn[[1L]]),
+                        inherits = FALSE),
+                    error = function(e) NULL)
+      if (is.list(w) && length(w) && all(vapply(w, is.matrix, logical(1))))
+        maxw <- max(maxw, 2 * max(vapply(w, nrow, numeric(1))))
+    }
+  }
+  4 * (max(1, nb_in) + max(2, maxw))
+}
+
 .gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
 .lcm2 <- function(a, b) as.integer(a / .gcd2(a, b) * b)
 

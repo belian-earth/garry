@@ -197,6 +197,13 @@
   # (placement cost mode) without N all-cores clients. k floors at 2:
   # a 1-CPU XLA client segfaults (spike A). "off" disables.
   read_affinity = "auto",
+  # Cost mode: per-reader budget (MB) for a FUSED kernel's live working
+  # set — the read window plus its activation cubes at READ granularity
+  # (fused kernels are unchunked; see .stage_fuse_act_bytes_px). Fusion
+  # is refused for chains whose window working set exceeds this: the
+  # AEF MLP fits a ~1 Mpx window (~2.4 GB) and OOM-killed readers at
+  # ~4.2 Mpx (~9 GB).
+  fuse_reader_mb = 2500,
   # Cost-mode memory admission: estimated resident cost of one XLA CPU
   # client on a read daemon (client + jitted kernel state; spike A
   # measured ~277 MB after one trivial jit). Fusion is refused when
