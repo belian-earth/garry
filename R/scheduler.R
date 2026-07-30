@@ -556,19 +556,20 @@ NULL
 # measurement: the budgets are estimates corrected by aggregate free
 # RAM, and every recent memory defect was an estimate diverging from
 # reality with nothing attributing the divergence to the fleet.
+.garry_anon_mb_of <- function(pid) {
+  s <- tryCatch(readLines(sprintf("/proc/%d/status", pid), warn = FALSE),
+                error = function(e) character(0))
+  ln <- grep("^RssAnon:", s, value = TRUE)
+  if (length(ln) != 1L) return(NA_real_)
+  kb <- suppressWarnings(as.numeric(
+    strsplit(trimws(sub("^RssAnon:", "", ln)), "\\s+")[[1L]][[1L]]))
+  if (is.finite(kb)) kb / 1024 else NA_real_
+}
+
 .garry_fleet_anon_mb <- function(pids) {
   if (length(pids) == 0L) return(NA_real_)
-  tot <- 0; any_ok <- FALSE
-  for (p in pids) {
-    s <- tryCatch(readLines(sprintf("/proc/%d/status", p), warn = FALSE),
-                  error = function(e) character(0))
-    ln <- grep("^RssAnon:", s, value = TRUE)
-    if (length(ln) != 1L) next
-    kb <- suppressWarnings(as.numeric(
-      strsplit(trimws(sub("^RssAnon:", "", ln)), "\\s+")[[1L]][[1L]]))
-    if (is.finite(kb)) { tot <- tot + kb / 1024; any_ok <- TRUE }
-  }
-  if (any_ok) tot else NA_real_
+  v <- vapply(pids, .garry_anon_mb_of, numeric(1))
+  if (all(is.na(v))) NA_real_ else sum(v, na.rm = TRUE)
 }
 
 # Store-resident bytes (MB) one region pins: core window clipped to the
@@ -1869,11 +1870,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   remaining <- function() n_done < n_total
   progress <- isTRUE(garry_opt("progress"))
   task_log <- garry_opt("task_log")
+  # Task-log schema (locked; garry_task_report() is the reader):
+  #   time,event,key,pool,slot,mb,store_mb,ready
+  # launch rows carry pool/slot, the admission-priced working set and
+  # store bytes, and the READY timestamp (deps satisfied) so queue-wait
+  # separates from run time; rss rows sample one daemon's anon MB
+  # (key = pid); model rows sample the modelled in-flight/resident MB.
   log_line <- if (is.null(task_log)) function(...) NULL else {
-    function(event, key) cat(sprintf("%.3f,%s,%s\n", unclass(Sys.time()),
-                                     event, key),
-                             file = task_log, append = TRUE)
+    if (!file.exists(task_log) || file.size(task_log) == 0)
+      cat("time,event,key,pool,slot,mb,store_mb,ready\n",
+          file = task_log, append = TRUE)
+    function(event, key, pool = "", slot = "", mb = "", store_mb = "",
+             ready = "")
+      cat(sprintf("%.3f,%s,%s,%s,%s,%s,%s,%s\n", unclass(Sys.time()),
+                  event, key, pool, slot, mb, store_mb, ready),
+          file = task_log, append = TRUE)
   }
+  t_drain0 <- unclass(Sys.time())   # zero-dep tasks are ready at drain start
   n_total <- length(tasks)
   last_report <- Sys.time()
   # Launch cursor: window-major ordering makes launches near-sequential,
@@ -1946,7 +1959,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # pin store bytes just the same).
       mb_store_resident <- mb_store_resident + t$store_mb
       tasks[[k]]$state <- "running"
-      log_line("launch", k)
+      log_line("launch", k, pool = t$pool, slot = slot,
+               mb = round(tasks[[k]]$mb_live, 1),
+               store_mb = round(t$store_mb %||% 0, 1),
+               ready = sprintf("%.3f", tasks[[k]]$t_ready %||% t_drain0))
     }
     }
     if (length(inflight) == 0L)
@@ -1986,8 +2002,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         chunk_vals[[k]] <- h$data
         tasks[[k]]$state <- "done"
         n_done <- n_done + 1L
-        for (k2 in dependents[[k]])
+        for (k2 in dependents[[k]]) {
           dep_left[[k2]] <- dep_left[[k2]] - 1L
+          if (dep_left[[k2]] == 0L)
+            tasks[[k2]]$t_ready <- unclass(Sys.time())
+        }
         if (!is.null(tasks[[k]]$ck)) {
           ckk <- tasks[[k]]$ck
           ck_inflight[[ckk]] <- (ck_inflight[[ckk]] %||% 1L) - 1L
@@ -2057,12 +2076,25 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       if (difftime(Sys.time(), mem_last_check, units = "secs") >= 5) {
         refresh_mem_budgets()
         mem_last_check <- Sys.time()
+        # Sample measurement vs model on the same clock: per-daemon
+        # anon RSS and the modelled in-flight/resident bytes. This is
+        # the diverging-lines plot every memory postmortem rebuilt by
+        # hand (crop=0 flood, scan-compile OOM).
+        if (!is.null(task_log)) {
+          for (p in .garry_state$pool_pids) {
+            a <- .garry_anon_mb_of(p)
+            if (is.finite(a)) log_line("rss", as.character(p),
+                                       mb = round(a, 1))
+          }
+          log_line("model", "-", mb = round(mb_inflight, 1),
+                   store_mb = round(mb_store_resident, 1))
+        }
       }
     }
     if (progress &&
         difftime(Sys.time(), last_report, units = "secs") > 5) {
-      cat(sprintf("  garry: %d/%d tasks done, %d in flight\n",
-                  n_done, n_total, length(inflight)))
+      n_inf <- length(inflight)
+      cli::cli_inform("garry: {n_done}/{n_total} tasks done, {n_inf} in flight")
       last_report <- Sys.time()
     }
     if (!harvested) Sys.sleep(0.002)

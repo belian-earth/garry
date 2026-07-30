@@ -71,4 +71,5 @@ Collate:
     'placement.R'
     'preview.R'
     'scan_kalman.R'
+    'task_report.R'
     'zzz.R'

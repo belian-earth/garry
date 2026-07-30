@@ -63,9 +63,14 @@
   # the task count scales as bands^2 once the read budget shrinks the
   # windows. FALSE restores the per-band plan shape (debugging).
   read_coalesce = TRUE,
-  # Path to a CSV the distributed scheduler appends per-task
-  # launch/done timestamps to (plus drain_end/host_end marks), for
-  # profiling where a plan's wall time goes. NULL disables.
+  # Path to a CSV the distributed scheduler appends task events to.
+  # Schema (header written on a fresh file):
+  #   time,event,key,pool,slot,mb,store_mb,ready
+  # Events: launch (with pool/slot, admission-priced MB, store MB and
+  # the ready timestamp, so queue-wait separates from run time), done,
+  # write, rss (per-daemon anon-RSS sample, key = pid), model (modelled
+  # in-flight + resident MB), drain_end, host_end. garry_task_report()
+  # summarises a log. NULL disables.
   task_log = NULL,
   # What a failed source read does: "error" aborts the plan; "nodata"
   # logs a warning and yields an all-NaN window, so one bad object /

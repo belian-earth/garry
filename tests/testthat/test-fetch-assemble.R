@@ -60,8 +60,7 @@ test_that("fetch-backed distributed reads match direct reads", {
   expect_equal(got, direct, tolerance = 1e-12)
 
   # fetch tasks actually ran (one per tile), before their assembles
-  tl <- read.csv(tlog, header = FALSE,
-                 col.names = c("ts", "event", "key"))
+  tl <- read.csv(tlog)
   fkeys <- unique(tl$key[grepl("^f\\d+_", tl$key)])
   expect_identical(length(fkeys), nrow(fx$entries))
   # cache cleaned up (fetch root removed on exit)
@@ -73,8 +72,7 @@ test_that("fetch-backed distributed reads match direct reads", {
   options(garry.fetch = "auto", garry.task_log = tlog2)
   got2 <- execute_plan_mirai(p)
   expect_equal(got2, direct, tolerance = 1e-12)
-  tl2 <- read.csv(tlog2, header = FALSE,
-                  col.names = c("ts", "event", "key"))
+  tl2 <- read.csv(tlog2)
   expect_false(any(grepl("^f\\d+_", tl2$key)))
 })
 

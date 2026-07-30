@@ -51,7 +51,7 @@ test_that("cost mode fuses a multi-band MLP chain onto capped readers", {
   expect_equal(dist, single, tolerance = 1e-12)
 
   # fused: the MLP stage ran on its read tasks, no chunk tasks of its own
-  tl <- read.csv(tlog, header = FALSE, col.names = c("ts", "e", "key"))
+  tl <- read.csv(tlog)
   expect_false(any(grepl(sprintf("^s%d_c", mlp$compute), tl$key)))
 })
 

@@ -55,7 +55,7 @@ test_that("source-fed kernel chains execute on their read tasks", {
   }
 
   # the fused stage never got chunk tasks of its own
-  tl <- read.csv(tlog, header = FALSE, col.names = c("ts", "e", "key"))
+  tl <- read.csv(tlog)
   expect_false(any(grepl(sprintf("^s%d_", mask_sid), tl$key)))
 })
 
