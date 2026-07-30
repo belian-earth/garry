@@ -233,8 +233,14 @@ depending on the host spike missing the scan compiles. Host-side
 inline writes remain the fallback without the pool. crop=0 still wants
 MEMMAX=42G on this box: its extra resident is the ~11 GB lazy_cog
 whole-AOI staging (activates only on raw tiled sources), not the write
-path. Remaining general items: a direct-dtype (f64) store/write path to skip the double
-conversion entirely, and hutan-side point fits/validation time.
+path. The f64 store followed (design/f64-store.md): raw f64 payloads
+ride the store bit-identically to the doubles path (one as_raw memcpy
+per hop instead of double conversions on the whole Kalman state path),
+with dtype-aware store estimates (f64 regions were booked at half
+size). crop=2048 cost: **576.2 s** (best yet vs the 586.5-600.2 band),
+tail 363 s, peak 25.6 GB. Remaining: hutan-side point fits/validation
+time, and the tail scan compute itself (the CUDA scan measured 7.8x if
+the tail ever wants the GPU).
 
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
