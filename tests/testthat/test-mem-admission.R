@@ -18,7 +18,10 @@ test_that("available RAM accounts for a cgroup limit when one applies", {
     succeed()
   } else {
     # Under a limit, the reported figure can never exceed the headroom.
-    expect_lte(host, cg + 1e-6)
+    # The two reads are not atomic (cgroup usage moves between them), so
+    # allow real drift — the invariant under test is "cgroup-bounded",
+    # not "instantaneously equal".
+    expect_lte(host, cg + 128)
   }
 })
 

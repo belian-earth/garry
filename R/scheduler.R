@@ -528,6 +528,49 @@ NULL
   avail_kb / 1024
 }
 
+# Human-readable size from MB: MB below 1 GiB (rounding small budgets
+# to "0 GiB" erased both numbers from the oversized-chunk warning).
+.garry_fmt_mb <- function(mb) {
+  if (!is.finite(mb)) return(as.character(mb))
+  if (mb >= 1024) paste0(round(mb / 1024, 1), " GiB")
+  else if (mb >= 10) paste0(round(mb), " MB")
+  else paste0(signif(mb, 2), " MB")
+}
+
+# Every daemon pid of a mirai profile (empty when unavailable).
+.garry_pool_pids <- function(profile) {
+  tryCatch(
+    vapply(mirai::everywhere(Sys.getpid(), .compute = profile),
+           function(m) m[], integer(1)),
+    error = function(e) integer(0))
+}
+
+# Measured ANONYMOUS resident memory (MB) summed over the daemon
+# fleet, from /proc/<pid>/status RssAnon. Anon only, deliberately: the
+# mori store regions are tmpfs mappings that appear in the RSS of every
+# daemon that maps them (double counted fleet-wide) and are already
+# clamped against physical /dev/shm free space; RssAnon is the part the
+# byte-admission model prices as working sets (R heap, XLA buffers,
+# compile arenas). NA off Linux, when no pid is readable, or when the
+# pid set is empty. This is the scheduler's only PER-DAEMON
+# measurement: the budgets are estimates corrected by aggregate free
+# RAM, and every recent memory defect was an estimate diverging from
+# reality with nothing attributing the divergence to the fleet.
+.garry_fleet_anon_mb <- function(pids) {
+  if (length(pids) == 0L) return(NA_real_)
+  tot <- 0; any_ok <- FALSE
+  for (p in pids) {
+    s <- tryCatch(readLines(sprintf("/proc/%d/status", p), warn = FALSE),
+                  error = function(e) character(0))
+    ln <- grep("^RssAnon:", s, value = TRUE)
+    if (length(ln) != 1L) next
+    kb <- suppressWarnings(as.numeric(
+      strsplit(trimws(sub("^RssAnon:", "", ln)), "\\s+")[[1L]][[1L]]))
+    if (is.finite(kb)) { tot <- tot + kb / 1024; any_ok <- TRUE }
+  }
+  if (any_ok) tot else NA_real_
+}
+
 # Store-resident bytes (MB) one region pins: core window clipped to the
 # grid, padded by `pad` per side, times the outer-dim plane count, at
 # the region's true element size. Shared by read windows (pad = halo),
@@ -590,10 +633,7 @@ NULL
   cores <- .garry_cores()$logical
   k <- as.integer(k %||% max(2L, cores %/% max(1L, as.integer(n))))
   if (k >= cores) return(NULL)                # cap would be a no-op
-  pids <- tryCatch(
-    vapply(mirai::everywhere(Sys.getpid(), .compute = profile),
-           function(m) m[], integer(1)),
-    error = function(e) integer(0))
+  pids <- .garry_pool_pids(profile)
   if (length(pids) == 0L) return(NULL)
   for (i in seq_along(pids)) {
     lo <- ((i - 1L) * k) %% cores
@@ -746,6 +786,12 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # compute pool is skipped on a CUDA device (its daemons drive the
   # GPU; pinning their host threads buys nothing and can starve H2D).
   .garry_state$abi_ok <- NULL       # fresh pools: re-check the ABI token
+  # Fleet pids, recorded once per pool generation: the per-daemon RSS
+  # poll (refresh_mem_budgets) reads /proc/<pid>/status against them.
+  .garry_state$pool_pids <- c(
+    if (read > 0L) .garry_pool_pids("garry_read"),
+    if (compute > 0L) .garry_pool_pids("garry_compute"),
+    if (read > 0L || compute > 0L) .garry_pool_pids("garry_write"))
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L)
     .pool_affinity_apply("garry_read", read)
@@ -1578,6 +1624,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   store_mb_max <- max(c(0, vapply(ls(stage_store_mb), function(k)
     stage_store_mb[[k]] %||% 0, numeric(1))))
   mem_last_check <- Sys.time()
+  rss_excess_seen <- 0
   refresh_mem_budgets <- function(announce = FALSE) {
     avail <- .garry_ram_avail_mb()
     if (is.na(avail) || !is.finite(mem_frac) || mem_frac <= 0) return(invisible(NULL))
@@ -1608,6 +1655,33 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                         mb_store_resident + shm_free - headroom))
       if (shm_free < headroom) flush_drops(force = TRUE)
     }
+    # Measured per-daemon memory correction (dask's managed-vs-process
+    # distinction, transplanted into the admission model): when the
+    # fleet's measured anonymous RSS exceeds the modelled in-flight
+    # working sets plus a per-daemon client allowance, some estimate is
+    # drifting low — shrink the compute budget by the excess, so the
+    # next estimate defect becomes a throughput dip and a log line
+    # instead of an OOM. mb_inflight is initialised after the first
+    # (announce) refresh, hence the exists() guard; the inform is
+    # throttled to genuine growth so a persistently tight run does not
+    # spam every 5 s refresh.
+    anon <- .garry_fleet_anon_mb(.garry_state$pool_pids)
+    if (is.finite(anon)) {
+      infl <- if (exists("mb_inflight")) mb_inflight else 0
+      allow <- length(.garry_state$pool_pids) *
+        garry_opt("cost_xla_client_mb")
+      excess <- anon - (infl + allow)
+      if (excess > 0) {
+        cb <- max(task_mb_max, cb - excess)
+        if (excess > 1.2 * rss_excess_seen) {
+          rss_excess_seen <<- excess
+          cli::cli_inform(paste0(
+            "garry: fleet anon RSS {round(anon)} MB exceeds modelled ",
+            "{round(infl + allow)} MB; compute budget tightened to ",
+            "{round(cb)} MB"))
+        }
+      }
+    }
     # Announce only on a genuine squeeze: reads capped below their
     # configured budget, or the pool cannot hold even two compute chunks.
     # (comp_budget_cfg is Inf by default -- compute is RAM-pool-driven --
@@ -1628,12 +1702,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # but say so rather than let it look like a mysterious stall or kill.
   local({
     avail <- .garry_ram_avail_mb()
-    if (!is.na(avail) && task_mb_max > avail * mem_frac)
+    if (!is.na(avail) && task_mb_max > avail * mem_frac) {
+      chunk_sz <- .garry_fmt_mb(task_mb_max)
+      budget_sz <- .garry_fmt_mb(avail * mem_frac)
       cli::cli_warn(paste0(
-        "a single compute chunk is estimated at {round(task_mb_max/1024, 1)} GiB, ",
-        "above the {round(avail * mem_frac / 1024, 1)} GiB execution budget; ",
+        "a single compute chunk is estimated at {chunk_sz}, above the ",
+        "{budget_sz} execution budget; ",
         "it will run one at a time. Lower {.code garry.chunk_target_px} or ",
         "{.code garry.ram_budget_mb} to chunk finer."))
+    }
   })
 
   # Scan order: priority first (stable within a priority level), then
