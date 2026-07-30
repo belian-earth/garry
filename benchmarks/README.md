@@ -170,6 +170,28 @@ Findings the sweep forced into the engine:
   deterministic, scales with pixels) — a pipeline scaling wall
   upstream of the engine, present in both modes.
 
+**SI bench, second sweep (2026-07-30, after QA-in-cube + fusion-aware
+windows + working-set admission; both arms fuse under cost).**
+
+| crop | placement | predict phase | total | note |
+|---|---|---|---|---|
+| 1024 | rules | 88 s | 325.6 s | |
+| 1024 | cost | **47 s** | **286.2 s** | ESD + AEF fused |
+| 2048 | rules | 551 s | 948.6 s | completes (30.9 GB peak / 32G) |
+| 2048 | cost | **175 s** | **571.3 s** | predict 3.1x vs rules |
+| 0 (full box) | cost | 229 s | 721.8 s | completes; 32.8 GB peak / 42G |
+
+The predict phase — the design doc's target — went 1261 s (pre-layout
+fix) -> 551 s (rules) -> **175 s** (cost, fused) at crop=2048. The
+residual gap to hutan's 362 s total is the tail phase (Kalman scan +
+ensemble on the 2-daemon pool) plus host-side fits/validation — a
+different workload from the predict, and the next candidate for the
+narrow-pool topology spike B measured. crop=0 needed one more
+mechanism: fused reads carry their kernel working set into the
+in-flight compute byte budget, or a cold fleet ramps N XLA working
+sets on top of the lazy_cog staging (~11 GB tmpfs at crop=0).
+`garry.placement` default flipped to "cost" after this sweep.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with

@@ -16,17 +16,20 @@ the fused window working-set bound (`garry.fuse_reader_mb`). Also
 fixed en route: a phase 12b defect where a fused multi-export sink
 wrote all-zero output.
 
-First real-pipeline validation (SI bench, 2026-07-30): at crop=1024
-cost mode fuses the AEF predicts (426 -> 345 tasks) for predict 98 ->
-80 s and total 371 -> 349.4 s, oracle-identical. Two structural limits
-found: (1) the ESD arm cannot fuse — QA gating makes its predict stage
-two-input; fusing the big half of the workload needs same-file QA-band
-absorption into the coalesced read (planner work); (2) fused kernels
-run at read granularity, so wide-hidden MLPs exceed per-reader memory
-on large windows — bounded for now, properly fixed by fusion-aware
-read window sizing at plan time. PR5 default flip remains gated on the
-full benchmark set; the crop=2048+ tail is blocked by a pre-existing
-hutan::si_tail host-memory wall, not by the engine.
+Validation complete (SI bench, 2026-07-30). Both structural limits
+from the first sweep were closed the same day: (1) QA now rides inside
+the predict cube and gates inside `mlp_project(qa_plane=)` (hutan
+`predict_mlp_lazy` reshaped in step), making the ESD arm single-input
+and fusable; (2) read windows are fusion-aware at plan time (capped at
+`fuse_reader_mb` / introspected activation bytes), and fused reads
+carry their kernel working set into the in-flight compute byte budget.
+Results: crop=2048 predict 551 -> 175 s (3.1x), total 948.6 -> 571.3 s;
+crop=1024 total 325.6 -> 286.2 s; crop=0 completes at 721.8 s
+(predict 229 s) in a 42 G scope. All four validation targets met;
+**`garry.placement` default flipped to "cost"**, `"rules"` remains the
+escape hatch. The remaining gap to hutan's 362 s total at crop=2048 is
+the tail phase (Kalman/ensemble on the 2-daemon pool + host-side
+fits), where spike B's narrow-pool topology is the standing lever.
 
 ## Amendments from the 2026-07-29 review
 

@@ -162,12 +162,15 @@
   # force-flushes queued drops when free space falls below it.
   shm_headroom_mb = 512,
   # Placement decision mode for source->compute chains in the pooled
-  # scheduler (design/placement-cost-pass.md): "rules" reproduces the
-  # phase 12b structural predicate (single-band chains fuse, coalesced
-  # multi-band sources stay on the warm pool); "cost" compares modelled
-  # fuse-vs-materialise wall time per chain. Stays "rules" until the
-  # cost mode validates on the SI predict benchmarks (PR5).
-  placement = "rules",
+  # scheduler (design/placement-cost-pass.md): "cost" (default)
+  # compares modelled fuse-vs-materialise wall time per chain, with
+  # thread, memory and window-working-set admission; "rules" restores
+  # the phase 12b structural predicate (single-band non-sink chains
+  # fuse, everything else materialises) as the escape hatch. Flipped
+  # 2026-07-30 after the SI sweep validation: crop=2048 predict
+  # 551 -> 175 s with both arms fused, crop=0 completes, morphology
+  # and ndvi/composite unregressed (benchmarks/README.md).
+  placement = "cost",
   # Cost-mode calibration: sustained per-core throughput (GFLOP/s) of
   # jitted kernels, and effective /dev/shm copy bandwidth (MB/s).
   # Order-of-magnitude constants; tune from garry.task_log traces of
