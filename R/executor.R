@@ -152,6 +152,15 @@ NULL
   d <- .sv_dim(v)
   es <- .sv_es(v)
   gdt <- attr(v, "gdt")
+  # The gather below indexes in R integers: past 2^31-1 bytes the
+  # arithmetic overflows to NA and raw subsetting would silently
+  # zero-fill the tail (defect hunt M1). Payloads this large mean the
+  # planner mis-sized a window; fail loudly.
+  if (prod(as.numeric(d)) * es > .Machine$integer.max)
+    .garry_error(paste0(
+      "raw store payload too large to trim (> 2 GiB); ",
+      "lower garry.read_target_px or garry.chunk_target_px"),
+      "garry_plan_error")
   if (length(d) == 2L) {
     nr <- d[[1L]] - 2L * k
     nc <- d[[2L]] - 2L * k

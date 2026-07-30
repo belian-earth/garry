@@ -1358,17 +1358,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     for (sp in warm_specs) warmed_ck[[sp$ck]] <- TRUE
   }
 
-  # Fused-aware stage chunk lookup. A FUSED stage's chunks live under
-  # its SOURCE's read task keys: whole-window reads store one region
-  # per chunk keyed by the export; split coarse reads store one region
-  # per read task with an element per compute chunk. Everything that
+  # Region-aware stage chunk lookup. A stage's chunks live under its
+  # own task keys UNLESS source_deps says otherwise: a FUSED stage's
+  # chunks ride its source's read tasks, and an UNFUSED coarse-split
+  # source's chunks are elements of its read-window regions — both
+  # store per-chunk data under READ task keys. Everything that
   # retrieves stage chunks by (stage, j) — the streaming writers, the
   # post-drain assembly, in-memory multi-export — goes through here.
-  # (source_deps is also populated for UNFUSED split sources, so gate
-  # on the placement table, not on the env.)
+  # (Gating this on the placement table lost SPLIT source sinks:
+  # defect hunt H1, 2026-07-30.)
   chunk_of <- function(sid, j) {
-    deps <- if (isTRUE(fused_cid[[.key(sid)]]))
-      source_deps[[.key(sid)]]
+    deps <- source_deps[[.key(sid)]]
     if (is.null(deps)) return(chunk_vals[[sprintf("s%d_c%d", sid, j)]])
     v <- chunk_vals[[deps[[j]]]]
     el <- source_elts[[.key(sid)]]
@@ -1379,8 +1379,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # ~30-byte region name over the wire), the element to extract on the
   # daemon, and the store region key the write consumes.
   chunk_ref <- function(sid, j) {
-    deps <- if (isTRUE(fused_cid[[.key(sid)]]))
-      source_deps[[.key(sid)]]
+    deps <- source_deps[[.key(sid)]]
     if (is.null(deps)) {
       rk <- sprintf("s%d_c%d", sid, j)
       return(list(v = chunk_vals[[rk]], el = NULL, rk = rk))
@@ -1394,8 +1393,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # for ordinary stages; a fused stage under a coarse read lands ALL of
   # a read window's chunks at once.
   sink_task_map <- function(st_id, n_chunks) {
-    deps <- if (isTRUE(fused_cid[[.key(st_id)]]))
-      source_deps[[.key(st_id)]]
+    deps <- source_deps[[.key(st_id)]]
     keys <- if (is.null(deps))
       sprintf("s%d_c%d", st_id, seq_len(n_chunks)) else deps
     split(seq_len(n_chunks), keys)
@@ -1817,6 +1815,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           if (grepl("garry_jit_miss", as.character(h$data),
                     fixed = TRUE) && !isTRUE(tasks[[k]]$resent)) {
             tasks[[k]]$resent <- TRUE
+            # The daemon's cache was cold: the warm-up failed there or
+            # was evicted, so this kernel is NOT warm — clear the mark
+            # or the resend (and every later task of the kernel)
+            # bypasses the cold-kernel slow start and the scan-compile
+            # surcharge exactly when memory is tightest (defect hunt
+            # M2, 2026-07-30).
+            if (!is.null(tasks[[k]]$ck))
+              rm(list = intersect(tasks[[k]]$ck, ls(warmed_ck)),
+                 envir = warmed_ck)
             inflight[[k]] <- tasks[[k]]$launch(
               if (tasks[[k]]$slot == "read") read_prof else comp_prof,
               with_fn = TRUE)

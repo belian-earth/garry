@@ -62,6 +62,12 @@ NULL
     S <- plan@stages[[C@inputs[[1L]]]]
     if (S@kind != "source_read" || warp_only[[S@id]]) next
     if (length(unique(consumers_of[[S@id]])) != 1L) next
+    # A SOURCE that is itself a requested sink must keep its stored
+    # window: fusing its only consumer replaces the stored region with
+    # the kernel's export and the raw band silently vanishes (defect
+    # hunt H1, 2026-07-30).
+    if (any(plan@sinks %in% S@members) ||
+        (length(plan@sinks) == 0L && plan@sink == S@id)) next
     out[[length(out) + 1L]] <- list(
       sid = S@id, cid = C@id,
       sinkful = C@id == plan@sink || any(plan@sinks %in% C@members))

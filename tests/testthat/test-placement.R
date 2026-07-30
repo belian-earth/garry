@@ -137,3 +137,40 @@ test_that("unknown placement mode errors", {
                              nan_rm = TRUE))
   expect_error(.pl(p, mode = "bogus"), class = "garry_placement_error")
 })
+
+test_that("a source that is itself a sink keeps its window (defect H1)", {
+  skip_if_not_installed("mirai")
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  f <- fixture_gradient_f32()
+  # Requesting a raw band ALONGSIDE its derived product: the source's
+  # only compute consumer must NOT fuse (the stored region would
+  # become the kernel export and the raw band would silently vanish),
+  # and split-source retrieval must resolve read-window elements.
+  a <- lazy_source(f)
+  p <- plan_lazy(list(raw = a,
+                      doubled = lazy_map(a, dtype = "f32",
+                                         fn = function(v) v * 2)))
+  expect_true(all(.pl(p, mode = "cost")$table$decision == "comp"))
+
+  single <- execute_plan(p)
+  expect_false(is.null(single$raw))
+
+  garry_daemons(2, 1)
+  on.exit(garry_daemons(0, 0), add = TRUE)
+  old <- options(garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+  for (m in c("rules", "cost")) {
+    old_m <- options(garry.placement = m)
+    dist <- execute_plan_mirai(p)
+    expect_equal(dist$raw, single$raw, tolerance = 1e-12, label = m)
+    expect_equal(dist$doubled, single$doubled, tolerance = 1e-12,
+                 label = m)
+    d <- withr::local_tempdir()
+    execute_plan_mirai(p, path = d)
+    got <- gdal_read_window(file.path(d, "raw.tif"), 1L, 0, 0,
+                            ncol(single$raw), nrow(single$raw))
+    expect_equal(got, single$raw, tolerance = 1e-6, label = m)
+    options(old_m)
+  }
+})

@@ -1,0 +1,25 @@
+3033623 benchmarks: record the f64-store result (crop=2048 cost 576.2s)
+e452807 store: f64 as a first-class raw payload dtype (design/f64-store.md)
+082d7cc benchmarks: crop=0 headroom note (staging-dominated, unchanged by the writer)
+4173a78 benchmarks: record the writer-daemon result
+31357c4 scheduler: streamed sink writes move to a writer daemon
+9e5cdc0 scheduler: compute default stays 2 (measured); document the topology rules
+7b2467c scheduler: cold-scan compile surcharge in the in-flight byte budget
+e03b9bc scheduler: per-plan compute pool shape; scan warm-up policy by pool width
+6f6e121 scheduler: cold-kernel slow start
+53394a4 scheduler: pool width is slots, admission is concurrency
+681d534 placement: flip the default to cost mode
+ea040b7 scheduler/placement: fused reads ride the in-flight compute byte budget
+ecbda10 band_mlp/passes: QA gating inside mlp_project + fusion-aware read windows
+540f012 benchmarks: record scheduler-route composite A/B (no attributable regression)
+afd6da2 docs: record the SI bench sweep and its findings
+d172c9b placement: bound fused kernels by their window working set
+c09c21e placement: credit the fat compute pool its measured efficiency
+312a0e4 scheduler/placement: fused SINK stages — stream and retrieve from read tasks
+fb9c9f1 scheduler: give store-bearing compute launches their own escape hatch
+83af50e placement: end-to-end gate for cost-mode fusion of a wide MLP chain
+e474c61 scheduler: cap reader CPU affinity so fused XLA clients stay narrow
+c48b9c0 placement: cost mode + garry_explain_placement() (inert behind garry.placement)
+4c730f0 placement: extract the fusion decision into a placement pass (rules mode)
+c2eb5d7 scheduler: account compute-output store bytes, /dev/shm backstop, fused region pricing
+bb8dbef design: scheduling review, placement-pass amendments, thread-topology spikes
