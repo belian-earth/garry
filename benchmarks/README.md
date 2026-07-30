@@ -242,6 +242,33 @@ tail 363 s, peak 25.6 GB. Remaining: hutan-side point fits/validation
 time, and the tail scan compute itself (the CUDA scan measured 7.8x if
 the tail ever wants the GPU).
 
+**Deep-review pass validation (2026-07-31, degraded-link sitting).**
+After the review roadmap landed (read retry, ABI guard, RSS
+correction, task-log schema + report, labels, MPC re-sign, L-fixes):
+
+- Composite A/B best-of-3: garry 47.60 s vs ODC 43.68 s. The WHOLE
+  sitting ran ~3x the 2026-07-14 times (link), and gdal-direct's few
+  whole-slice reads degrade more than ODC's fine windows on a bad link
+  — the documented variance note / io-review R6 case, not the pass.
+- SI crop=2048 cost, three same-sitting runs: 622.2 s (correction v1,
+  budget floored 602 MB mid-tail), 657.9 s (unmanaged-old fix,
+  tightens 1.5-2.3 GB during the scan ramp), 673.6 s (CONTROL,
+  `rss_correction = FALSE`). Tails 414 / 411 / 425 s — the correction
+  costs nothing measurable (the control was slowest); the +50 s tail
+  vs the f64-store baseline (363 s) and the predict drift
+  (185/222/225 vs 175 s) are sitting noise on a loaded box + link.
+  Peak host RSS 4.9 GB all runs (writer-daemon profile holds), scope
+  peak 27.0 GB / 32G.
+- First production run of the correction caught it over-tightening on
+  RETAINED warmed-scan memory; fixed same day with dask's
+  unmanaged-old semantics (run-start baseline + trailing ~30 s
+  tolerance; only RECENT growth beyond in-flight work tightens) and an
+  off-switch (`garry.rss_correction`).
+- `garry_task_report()` on the run: peak modelled 13952 MB vs measured
+  fleet anon 14122 MB — the admission model is honest to ~1% at
+  crop=2048. The report's stage table isolates the tail scans
+  (p95 322-409 s) without ad-hoc parsing for the first time.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with
