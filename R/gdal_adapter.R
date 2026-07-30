@@ -214,6 +214,13 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
   res
 }
 
+# Open an existing output for update (the writer daemon re-opens
+# host-created files; GTiff is single-writer, so exactly one process
+# holds this handle at a time).
+gdal_open_update <- function(path) {
+  methods::new(gdalraster::GDALRaster, path, read_only = FALSE)
+}
+
 # Reverse dtype map for writing.
 .gdal_dtype_rev <- c(
   u8 = "Byte", i8 = "Int8",

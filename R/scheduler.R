@@ -183,7 +183,7 @@ NULL
                                 pad, dtype, nodata, n_chunks) {
   ds <- .daemon_ds[[path]]
   if (is.null(ds)) {
-    ds <- methods::new(gdalraster::GDALRaster, path, read_only = FALSE)
+    ds <- gdal_open_update(path)
     .daemon_ds[[path]] <- ds
   }
   ch <- if (is.null(el)) val[[skey]] else val[[el]]
