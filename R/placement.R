@@ -129,8 +129,11 @@ NULL
       eff_fuse <- if (is.finite(k))
         min(cores, max(1, n_read %||% 1) * k) else cores
       cost_fuse <- fl / (gf * eff_fuse)
+      # The fat pool's contended thread pools deliver a measured
+      # fraction of machine-wide throughput (spike B); credit it
+      # honestly or wide kernels stay materialised by a false margin.
       cost_mat <- 2 * move_mb / garry_opt("cost_shm_bw_mbs") +
-        fl / (gf * cores)
+        fl / (gf * cores * garry_opt("cost_comp_efficiency"))
       mem_need <- (n_read %||% 1) * garry_opt("cost_xla_client_mb")
       mem_free <- if (is.null(avail_mb) || is.na(avail_mb)) Inf else
         avail_mb * (1 - garry_opt("exec_ram_fraction"))

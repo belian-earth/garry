@@ -174,6 +174,14 @@
   # both routes rather than a priori.
   cost_gflops_core = 4,
   cost_shm_bw_mbs = 2000,
+  # Effective parallel efficiency of the FAT compute pool relative to
+  # spread-out narrow clients: 2 all-cores XLA daemons measured 81.4
+  # win/s vs 159.8 for 10 x 2-CPU clients on the MLP kernel shape
+  # (spike B, benchmarks/README.md 2026-07-29) = 0.51. Applied to the
+  # materialise route's compute term; without it the model credits the
+  # warm pool with machine-wide throughput it does not deliver and
+  # keeps wide kernels off the readers by a false margin.
+  cost_comp_efficiency = 0.55,
   # Cost mode: without a reader thread cap (garry.read_affinity), a
   # kernel above this flops/px never fuses. Fusing wide compute onto N
   # uncapped readers spawns N all-cores XLA clients — a bigger thread
