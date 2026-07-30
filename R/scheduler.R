@@ -151,6 +151,62 @@ NULL
   sh
 }
 
+# Writer-daemon open-output cache: path -> GDALRaster (update mode).
+# Lives for the run; the host closes it with .daemon_write_close.
+.daemon_ds <- new.env(parent = emptyenv())
+
+#' Daemon task body: write one sink chunk window to an output file.
+#'
+#' The streamed-sink write, moved OFF the host dispatch thread: the
+#' host creates the output (geometry, bands, nodata) and ships only
+#' the mori region NAME plus window coordinates; this body maps the
+#' region, extracts the chunk, materialises/converts it and runs the
+#' GDAL write — so the multi-GB conversion transients (f64 scan sinks
+#' cannot ride the raw f32 store) live in one lean process that is
+#' reaped per task, not on the thread that launches and harvests every
+#' other task. One writer daemon per session: GTiff is single-writer,
+#' and daemon-persistent open handles amortise the opens.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
+#' @param path Output file (already created by the host).
+#' @param x_off,y_off Window offsets.
+#' @param val Shared store value; `el` names the element for split
+#'   coarse-read parts, else `skey` (the export node key) extracts.
+#' @param skey,el Extraction keys.
+#' @param pad,dtype,nodata,n_chunks As the host-side write path.
+#' @return `TRUE`.
+#' @keywords internal
+#' @export
+.daemon_write_chunk <- function(path, x_off, y_off, val, skey, el,
+                                pad, dtype, nodata, n_chunks) {
+  ds <- .daemon_ds[[path]]
+  if (is.null(ds)) {
+    ds <- methods::new(gdalraster::GDALRaster, path, read_only = FALSE)
+    .daemon_ds[[path]] <- ds
+  }
+  ch <- if (is.null(el)) val[[skey]] else val[[el]]
+  .exec_check_writable(ch, n_chunks)
+  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
+  rm(ch, val)
+  gc(FALSE)
+  TRUE
+}
+
+#' Daemon task body: close every output the writer holds open.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
+#' @return `NULL`, invisibly.
+#' @keywords internal
+#' @export
+.daemon_write_close <- function() {
+  for (p in ls(.daemon_ds)) try(.daemon_ds[[p]]$close(), silent = TRUE)
+  rm(list = ls(.daemon_ds), envir = .daemon_ds)
+  gc(FALSE)
+  invisible(NULL)
+}
+
 #' Daemon task body: fetch one item-asset's target-window bytes to a
 #' local file.
 #'
@@ -601,6 +657,13 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   if (isTRUE(gdal_config)) .garry_env_defaults()
   mirai::daemons(read, .compute = "garry_read", ...)
   mirai::daemons(compute, .compute = "garry_compute", ...)
+  # ONE writer daemon rides along with the pools: streamed sink chunks
+  # write there instead of on the host dispatch thread (GTiff is
+  # single-writer, so one daemon serialises file access safely while
+  # isolating the write-path conversion transients away from the
+  # host). Lean: no anvl, no GDAL session config needed.
+  mirai::daemons(if (read > 0L || compute > 0L) 1L else 0L,
+                 .compute = "garry_write", ...)
   if (read > 0L) {
     # Read daemons: set the handle-cache depth, and (once) the GDAL config so it
     # is live from pool creation (the pipeline also re-applies it per run).
@@ -1294,6 +1357,20 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     if (is.null(el)) v
     else stats::setNames(list(v[[el[[j]]]]), sub("\x1f.*$", "", el[[j]]))
   }
+  # Un-extracted form for writer-daemon dispatch: the SHARED value (a
+  # ~30-byte region name over the wire), the element to extract on the
+  # daemon, and the store region key the write consumes.
+  chunk_ref <- function(sid, j) {
+    deps <- if (isTRUE(fused_cid[[.key(sid)]]))
+      source_deps[[.key(sid)]]
+    if (is.null(deps)) {
+      rk <- sprintf("s%d_c%d", sid, j)
+      return(list(v = chunk_vals[[rk]], el = NULL, rk = rk))
+    }
+    el <- source_elts[[.key(sid)]]
+    list(v = chunk_vals[[deps[[j]]]],
+         el = if (!is.null(el)) el[[j]], rk = deps[[j]])
+  }
   # Task -> sink chunk map for a streaming writer: which chunks of
   # stage `st_id` land when task `key` completes. One chunk per task
   # for ordinary stages; a fused stage under a coarse read lands ALL of
@@ -1315,6 +1392,18 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   wnodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
   multi <- length(plan@sinks) > 1L
   stream_write <- !is.null(path) && sink@kind != "reduce_combine" && !multi
+  # Streamed writes go to the writer daemon when the pool has one: the
+  # host creates the outputs (geometry, bands, nodata), closes its
+  # handles, and ships each landed chunk's REGION NAME to the writer —
+  # the f64->file conversion transients then live in one reapable
+  # process instead of on the dispatch thread (measured 15-19 GB of
+  # oscillating host anon on a 4.2 Mpx multi-export scan tail).
+  writer_on <- (stream_write || (!is.null(path) && multi)) &&
+    tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE)
+  if (writer_on)
+    on.exit(try(mirai::everywhere(garry::.daemon_write_close(),
+                                  .compute = "garry_write"),
+                silent = TRUE), add = TRUE)
   sink_ds <- NULL
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
@@ -1322,6 +1411,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     sink_spad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
     sink_task_j <- sink_task_map(sink@id, nrow(sink_it))
     sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata, band_names = band_names)
+    if (writer_on) { sink_ds$close(); sink_ds <- NULL }
     on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
             add = TRUE)
   }
@@ -1343,14 +1433,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       it <- chunk_iter(st@chunks)
       ds <- gdal_create_output(p, ngrid, nodata = wnodata,
                                band_names = band_names)
+      if (writer_on) { ds$close(); ds <- NULL }
       stream_sinks[[nm]] <- list(
         sid = st@id,
         key = .key(nid), it = it, pad = .exec_export_pad(st, nid), ds = ds,
         dtype = ngrid@dtype, path = p,
         task_j = sink_task_map(st@id, nrow(it)))
     }
-    on.exit(for (sp in stream_sinks) try(sp$ds$close(), silent = TRUE),
-            add = TRUE)
+    on.exit(for (sp in stream_sinks)
+      if (!is.null(sp$ds)) try(sp$ds$close(), silent = TRUE),
+      add = TRUE)
   }
 
   # Post-drain needs: combine closures run host-side on their partial
@@ -1554,6 +1646,43 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # the done set for every pending task every sweep — O(tasks^2 x deps)
   # over the drain, which at ~10^4 tasks (a 22-year multi-band predict)
   # costs the host more than the tasks themselves.
+  # Writer-daemon bookkeeping. Each dispatched write holds a consumer
+  # reference on the producing store region (the writer maps it by
+  # name), released when the write task resolves — so regions free on
+  # exactly the same refcount discipline as compute consumers.
+  wr_inflight <- list()
+  wr_seq <- 0L
+  dispatch_write <- function(sid, j, wpath, it, skey, pad, dtype) {
+    ref <- chunk_ref(sid, j)
+    store_users[[ref$rk]] <- (store_users[[ref$rk]] %||% 0L) + 1L
+    wr_seq <<- wr_seq + 1L
+    wr_inflight[[as.character(wr_seq)]] <<- list(
+      rk = ref$rk,
+      h = mirai::mirai(
+        garry::.daemon_write_chunk(wpath, xo, yo, val, skey, el, pad,
+                                   dtype, nodata = nd, n_chunks = nc),
+        wpath = wpath, xo = it$x_off[[j]], yo = it$y_off[[j]],
+        val = ref$v, skey = skey, el = ref$el, pad = pad,
+        dtype = dtype, nd = wnodata, nc = nrow(it),
+        .compute = "garry_write"))
+    invisible(NULL)
+  }
+  harvest_writes <- function() {
+    any_done <- FALSE
+    for (wk in names(wr_inflight)) {
+      w <- wr_inflight[[wk]]
+      if (mirai::unresolved(w$h)) next
+      if (inherits(w$h$data, c("miraiError", "errorValue")))
+        cli::cli_abort(
+          "sink write failed on the writer daemon: {as.character(w$h$data)}")
+      store_users[[w$rk]] <- store_users[[w$rk]] - 1L
+      queue_drop(w$rk)
+      wr_inflight[[wk]] <<- NULL
+      any_done <- TRUE
+    }
+    any_done
+  }
+
   # Cold-kernel slow start. A kernel the warm-up did not cover
   # compiles on each daemon's first task of it, and an XLA compile can
   # hold multi-GB privately (an unrolled scan measured 6-12 GB).
@@ -1696,20 +1825,30 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         log_line("done", k)
         if (stream_write && !is.null(sink_task_j[[k]])) {
           for (j in sink_task_j[[k]]) {
-            ch <- chunk_of(sink@id, j)[[sink_skey]]
-            .exec_check_writable(ch, nrow(sink_it))
-            .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
-                              ch, sink_spad, sink@grid@dtype, wnodata)
+            if (writer_on) {
+              dispatch_write(sink@id, j, path, sink_it, sink_skey,
+                             sink_spad, sink@grid@dtype)
+            } else {
+              ch <- chunk_of(sink@id, j)[[sink_skey]]
+              .exec_check_writable(ch, nrow(sink_it))
+              .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
+                                ch, sink_spad, sink@grid@dtype, wnodata)
+            }
           }
           log_line("write", k)
         }
         for (sp in stream_sinks) {
           if (is.null(sp$task_j[[k]])) next
           for (j in sp$task_j[[k]]) {
-            ch <- chunk_of(sp$sid, j)[[sp$key]]
-            .exec_check_writable(ch, nrow(sp$it))
-            .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
-                              ch, sp$pad, sp$dtype, wnodata)
+            if (writer_on) {
+              dispatch_write(sp$sid, j, sp$path, sp$it, sp$key,
+                             sp$pad, sp$dtype)
+            } else {
+              ch <- chunk_of(sp$sid, j)[[sp$key]]
+              .exec_check_writable(ch, nrow(sp$it))
+              .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
+                                ch, sp$pad, sp$dtype, wnodata)
+            }
           }
           log_line("write", k)
         }
@@ -1730,6 +1869,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         }
       }
     }
+    if (writer_on && length(wr_inflight) > 0L && harvest_writes())
+      harvested <- TRUE
     if (harvested) {
       flush_drops()
       scan_needed <- TRUE
@@ -1756,6 +1897,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   flush_drops(force = TRUE)
   log_line("drain_end", "-")
   on.exit(log_line("host_end", "-"), add = TRUE)
+  # Outstanding writer-daemon writes must land before outputs close or
+  # host-side retrieval begins; then the writer releases its handles.
+  if (writer_on) {
+    while (length(wr_inflight) > 0L) {
+      if (!harvest_writes()) Sys.sleep(0.002) else flush_drops()
+    }
+    wcl <- mirai::everywhere(garry::.daemon_write_close(),
+                             .compute = "garry_write")
+    invisible(lapply(wcl, function(m) m[]))
+    flush_drops(force = TRUE)
+  }
   read_chunk <- chunk_of   # fused-aware (see chunk_of above)
   out_of <- function(s) {
     it <- chunk_iter(s@chunks)
@@ -1764,8 +1916,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
 
   # Streaming write already put every sink chunk on disk as it landed.
   if (stream_write) {
-    sink_ds$close()
-    sink_ds <- NULL
+    if (!is.null(sink_ds)) {
+      sink_ds$close()
+      sink_ds <- NULL
+    }
     return(invisible(path))
   }
 
@@ -1788,8 +1942,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       nm <- names(plan@sinks)[[kk]]
       if (!is.null(path) && !is.null(stream_sinks[[nm]])) {
         sp <- stream_sinks[[nm]]
-        sp$ds$close()
-        stream_sinks[[nm]]$ds <<- NULL
+        if (!is.null(sp$ds)) {
+          sp$ds$close()
+          stream_sinks[[nm]]$ds <<- NULL
+        }
         return(sp$path)                     # streamed as chunks landed
       }
       st <- plan@stages[[max(which(vapply(plan@stages, function(s)

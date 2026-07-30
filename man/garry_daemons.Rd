@@ -16,16 +16,17 @@ garry_daemons(
 \item{read}{Read-pool daemon count; \code{NULL} (default) uses logical
 cores. \code{0} tears the pool down.}
 
-\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses TWO.
-Each compute daemon is a full XLA client that spawns an all-cores CPU
-thread pool (~63 threads measured on a 20-core box). One daemon cannot
-overlap two chunks or overlap compute with the host harvest, so a
-second buys real concurrency; but a third oversubscribes the machine
-(and adds another multi-GB compile for large fused kernels), so past
-two both wall time and memory rise. Two is the smallest count that
-unlocks concurrency below that thread cliff. Raise only for multiple
-GPUs (one daemon per device) or a NUMA server (one client per
-socket); drop to 1 on a memory-tight box. \code{0} tears down.}
+\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses TWO
+with half-machine affinity masks. After the placement pass fuses
+kernel fleets onto the readers, the compute pool's residual
+workloads (scans, big fused reductions) are compile-bound: every
+daemon that runs a scan task pays its multi-GB kernel compile, so
+width multiplies compiles without adding admitted concurrency.
+Larger pools are SAFE at any width (per-daemon masks, byte
+admission, cold-kernel slow start, scan-compile surcharge) and pay
+off for non-fusable fleet workloads (~2x measured for matmul
+fleets at 10 x 2-CPU daemons); they are an explicit choice, not
+the default. \code{0} tears down.}
 
 \item{read_handles}{Open-handle cache depth on read daemons.
 \code{NULL} (default) uses \code{garry_opt("read_handles")}. Depth 1 suits
@@ -47,22 +48,29 @@ Invisibly, \code{list(read =, compute =)}.
 }
 \description{
 Two pools instead of one: \code{read} daemons execute source/warp read
-tasks and never load anvl/PJRT (a reader stays at ~60 MB), while
-\code{compute} daemons run the fused XLA stages. Called with no arguments,
-it sizes the pools to the machine: \code{compute} = physical cores (each
-XLA median is ~one core, so hyperthreads would only thrash) and
-\code{read} = logical cores (reads are ~74\% network wait, so more streams
-saturate the link without fighting for CPU). \code{collect(distributed = TRUE)} detects the pools automatically and pre-compiles stage kernels
-on the compute pool at run start (\code{garry_opt("jit_warmup")}).
+tasks (and any kernels the placement pass fuses onto them), while
+\code{compute} daemons run the materialised XLA stages. The resource
+model is: \strong{pool width is slots, admission is concurrency}. Every
+daemon is pinned to a disjoint slice of the machine at creation
+(\code{garry_opt("pool_affinity")}), so an XLA client created anywhere is
+narrow rather than all-cores; the scheduler's live-RAM byte budgets
+decide how many tasks are actually in flight; excess daemons idle
+lean. Called with no arguments it sizes the pools to the machine:
+\code{read} = logical cores (reads are mostly network/decompress wait)
+and \code{compute} = enough narrow daemons to cover the machine at ~2
+CPUs each (measured ~2x the matmul throughput of two unpinned
+all-cores clients), falling back to TWO wherever affinity is
+unavailable and clients come up all-cores. \code{collect(distributed = TRUE)} detects the pools automatically and pre-compiles stage
+kernels on the compute pool at run start (\code{garry_opt("jit_warmup")};
+scan kernels compile lazily under admission instead — their unrolled
+HLO compile is too heavy to broadcast unbudgeted).
 }
 \details{
-You should not need to tune these: the fetch-ordered composite
-pipeline bounds concurrent compute working sets by
-\code{garry_opt("compute_ram_fraction")} of available RAM, so a generous
-compute pool cannot OOM (excess daemons stay idle at base RSS, and
-a many-band job drains in memory-bounded waves). The one case for
-overriding is a source API that throttles concurrent reads: pass a
-smaller \code{read} to stay under its limit.
+You should not need to tune these. The cases for overriding: a
+source API that throttles concurrent reads (smaller \code{read}); one
+daemon per device on multi-GPU, or one per socket on NUMA
+(\code{compute}); a memory-tight box (smaller \code{compute}, each daemon's
+base XLA client is ~300 MB once warmed).
 
 It also applies the sensible defaults so a workload script needs no
 preamble: the glibc \verb{MALLOC_*} thresholds are exported BEFORE the
