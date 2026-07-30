@@ -170,6 +170,15 @@ Findings the sweep forced into the engine:
   deterministic, scales with pixels) — a pipeline scaling wall
   upstream of the engine, present in both modes.
 
+**Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
+3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
+placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with
+`read_affinity = "off"` lands at 42.32 s, so the ~2 s mean drift is
+not the affinity cap. Within this benchmark's documented run-to-run
+variance; re-run interleaved on a quiet link if the 5% matters. The
+default composite route (gdal-direct) bypasses the scheduler and ran
+38.46 s in the same sitting.
+
 ## Historical results (phases 9-11)
 
 2026-07-08 ~00:30, ODC baseline added (same-sitting triple; cgroup
