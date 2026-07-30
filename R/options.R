@@ -212,6 +212,14 @@
   # AEF MLP fits a ~1 Mpx window (~2.4 GB) and OOM-killed readers at
   # ~4.2 Mpx (~9 GB).
   fuse_reader_mb = 2500,
+  # Admission surcharge (MB) for a COLD scan kernel: an unrolled
+  # (bidirectional) scan's XLA compile holds this much privately on the
+  # daemon compiling it, on top of the task's working set (measured
+  # 6-12 GB for the robust Kalman smoother). Charged against the
+  # in-flight byte budget until every compute daemon has plausibly
+  # compiled the kernel, so the LIVE budget — not just the slow-start
+  # ramp — bounds concurrent cold compiles on wide pools.
+  scan_compile_mb = 6000,
   # Cost-mode memory admission: estimated resident cost of one XLA CPU
   # client on a read daemon (client + jitted kernel state; spike A
   # measured ~277 MB after one trivial jit). Fusion is refused when

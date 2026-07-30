@@ -834,11 +834,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   tasks <- new.env(parent = emptyenv())
   n_task <- 0L
   add_task <- function(key, deps, pool, launch, mb = 0, prio = 2L,
-                       dev = "cpu", store_mb = 0, ck = NULL) {
+                       dev = "cpu", store_mb = 0, ck = NULL,
+                       cold_mb = 0) {
     n_task <<- n_task + 1L
     tasks[[key]] <- list(deps = deps, pool = pool, launch = launch,
                          mb = mb, prio = prio, dev = dev,
                          store_mb = store_mb, seq = n_task, ck = ck,
+                         cold_mb = cold_mb,
                          state = "pending")
   }
   # For coarse-reading (split) source stages: task key per compute chunk,
@@ -1138,6 +1140,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           sr <- use_raw
           add_task(key, unique(in_deps), "comp", mb = task_mb,
                    store_mb = store_mb_comp,
+                   cold_mb = if (has_scan)
+                     as.numeric(garry_opt("scan_compile_mb")) else 0,
                    dev = sdev, ck = sig,
                    launch = function(prof, with_fn = TRUE) {
             # Handles resolve at launch time: dependencies are done, so
@@ -1527,11 +1531,22 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # ramps on whatever else holds the machine — measured at crop=0 with
   # the lazy_cog staging resident). The escape is accordingly "nothing
   # byte-accounted in flight", so one over-budget task always runs.
+  # Effective in-flight bytes: the working set plus the cold-compile
+  # surcharge while the task's kernel may still be cold on whichever
+  # daemon picks it up (tasks cannot be routed, so "may be cold" is
+  # conservative: until as many tasks of that kernel have completed as
+  # there are daemons). This is what lets the LIVE budget — which sees
+  # the host and staging grow — bound concurrent cold scan compiles on
+  # any pool width.
+  mb_eff <- function(t) {
+    t$mb + if ((t$cold_mb %||% 0) > 0 && !isTRUE(warmed_ck[[t$ck]]) &&
+                 (ck_done[[t$ck]] %||% 0L) < n_comp) t$cold_mb else 0
+  }
   comp_ok <- function(t) {
     if (!is.null(cap_comp_opt) &&
         n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
     mb_inflight == 0 ||
-      mb_inflight + t$mb <= comp_budget_mb
+      mb_inflight + mb_eff(t) <= comp_budget_mb
   }
   # O(1) readiness: per-task unmet-dep counters decremented through a
   # reverse index on completion. The old `all(deps %in% done)` re-hashed
@@ -1630,7 +1645,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       tasks[[k]]$slot <- slot
       n_slot[[slot]] <- n_slot[[slot]] + 1L
       n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
-      mb_inflight <- mb_inflight + t$mb
+      tasks[[k]]$mb_live <- mb_eff(t)
+      mb_inflight <- mb_inflight + tasks[[k]]$mb_live
       # Read-producing tasks pin their region from launch, not from
       # completion (fetch-backed assembles run on the compute pool but
       # pin store bytes just the same).
@@ -1674,7 +1690,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
         n_slot[[tasks[[k]]$slot]] <- n_slot[[tasks[[k]]$slot]] - 1L
-        mb_inflight <- mb_inflight - tasks[[k]]$mb
+        mb_inflight <- mb_inflight - (tasks[[k]]$mb_live %||% tasks[[k]]$mb)
         harvested <- TRUE
         log_line("done", k)
         if (stream_write && !is.null(sink_task_j[[k]])) {
