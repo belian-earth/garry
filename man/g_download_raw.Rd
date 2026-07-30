@@ -2,17 +2,18 @@
 % Please edit documentation in R/ops.R
 \name{g_download_raw}
 \alias{g_download_raw}
-\title{Download an AnvlArray as a raw f32 store payload.}
+\title{Download an AnvlArray as a raw store payload.}
 \usage{
 g_download_raw(x)
 }
 \arguments{
-\item{x}{\code{AnvlArray} (f32).}
+\item{x}{\code{AnvlArray} (f32 or f64).}
 }
 \value{
 Raw vector with \code{gdim} and \code{gdt} attributes.
 }
 \description{
-Row-major byte payload tagged with \code{gdim}/\code{gdt} (D20); no double
-materialisation.
+Row-major byte payload tagged with \code{gdim}/\code{gdt} (D20, extended to
+f64 by design/f64-store.md); no double materialisation. Raw f64 is
+bit-identical to the doubles path.
 }

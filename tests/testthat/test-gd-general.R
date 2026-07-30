@@ -8,33 +8,9 @@
 skip_if_not_installed("anvl")
 skip_if_not_installed("mirai")
 
-.gg_grid <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400),
-                      dims = c(60L, 40L), dtype = "f32")
-
-# A local, sliced GTI over per-slice tiles (with the .meta.rds sidecar the
-# warp-on-read path reads), so it is exercisable offline.
-.gg_gti <- function(slices) {
-  ent <- do.call(rbind, lapply(names(slices), function(sl) {
-    f <- tempfile(fileext = ".tif")
-    d <- gdalraster::create("GTiff", f, 60, 40, 1, "Float32", return_obj = TRUE)
-    d$setGeoTransform(c(0, 10, 0, 400, 0, -10))
-    d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
-    d$write(1, 0, 0, 60, 40, as.numeric(t(slices[[sl]]))); d$close()
-    data.frame(location = f, slice = sl, datetime = sl,
-               xmin = 0, ymin = 0, xmax = 600, ymax = 400)
-  }))
-  gti <- tempfile(fileext = ".gti.fgb")
-  gti_index_create(ent, gti, crs = "EPSG:3857")
-  gti
-}
-
-.gg_slice <- function(gti, s, graph) lazy_source(
-  paste0("GTI:", gti), graph = graph,
-  open_options = gti_open_options(.gg_grid, filter = sprintf("slice = '%s'", s),
-                                  sort_field = "datetime"),
-  grid = .gg_grid, block_dim = c(60L, 40L))
-
-.gg_val <- function(base) outer(1:40, 1:60, function(r, c) r + c) + base
+# GTI fixtures (.gg_grid / .gg_gti / .gg_slice / .gg_val) and the strict
+# comparator live in helper-gti.R, shared with the composite-direct and
+# route-matrix gates.
 
 # Two two-slice composites (bands A, B) on one shared graph.
 .gg_composites <- function() {
@@ -45,20 +21,6 @@ skip_if_not_installed("mirai")
                                        .gg_slice(gA, "s2", g))), "median", "t"),
        B = reduce_over(lazy_stack(list(.gg_slice(gB, "s1", g),
                                        .gg_slice(gB, "s2", g))), "median", "t"))
-}
-
-# Strict comparator: identical NaN pattern AND exact (tolerance 0) values on the
-# finite cells -- the row-block pipeline must be byte-identical to the whole-grid
-# kernel, not merely close.
-.gg_identical <- function(a, b) {
-  a <- if (is.list(a)) a else list(a)
-  b <- if (is.list(b)) b else list(b)
-  expect_equal(length(a), length(b))
-  for (i in seq_along(a)) {
-    av <- as.numeric(a[[i]]); bv <- as.numeric(b[[i]])
-    expect_identical(is.nan(av), is.nan(bv))
-    expect_equal(av[!is.nan(av)], bv[!is.nan(bv)], tolerance = 0)
-  }
 }
 
 .gg_equal <- function(x) {

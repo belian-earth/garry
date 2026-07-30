@@ -52,6 +52,7 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     ck <- .ck_resolve(p)
     p <- ck$plan
     if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
+    .garry_state$route <- if (distributed) "scheduler" else "single"
     res <- if (distributed) {
       execute_plan_mirai(p, path = path, nodata = nodata)
     } else {
@@ -82,6 +83,12 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
     spec <- .cd_spec(p)               # pure composite fast path (fetch-ordered pipeline)
     decomp <- if (is.null(spec)) .gd_decompose(p) else NULL   # reduce-decomposition
+    # Record which route ran (garry_last_route()): the selection is
+    # silent, and a plan silently changing route is exactly the
+    # regression class the equivalence suite must be able to observe.
+    .garry_state$route <- if (!is.null(spec)) "composite_direct"
+      else if (!is.null(decomp)) "gd_reduce"
+      else "scheduler"
     if (!is.null(spec))
       .execute_composite_direct(p, spec, path = path, nodata = nodata,
                                 band_names = band_names)
@@ -93,6 +100,7 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     else
       execute_plan_mirai(p, path = path, nodata = nodata, band_names = band_names)
   } else {
+    .garry_state$route <- "single"
     execute_plan(p, path = path, nodata = nodata, band_names = band_names)
   }
   if (!is.null(path)) return(invisible(res))
@@ -107,6 +115,20 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   }
   out
 }
+
+#' Which execution route did the last `collect()` take?
+#'
+#' The distributed `collect()` silently picks between the
+#' composite-direct fast path, the reduce-decomposition path and the
+#' staged scheduler (in that order); single-threaded runs use the
+#' in-process executor. The chosen route is recorded per `collect()`
+#' call so equivalence tests and pipelines can assert a plan did not
+#' silently change route.
+#'
+#' @return `"composite_direct"`, `"gd_reduce"`, `"scheduler"` or
+#'   `"single"`; `NULL` before any `collect()` in the session.
+#' @export
+garry_last_route <- function() .garry_state$route
 
 # Materialise each time group of a LazyDatasetGroups. With `path`, writes one
 # file per group (a `{group}` placeholder is substituted, else the group label
