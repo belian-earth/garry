@@ -230,8 +230,10 @@ Measured at crop=2048 cost: 600.2 s (noise band vs 586.5 host-write),
 with NO process above 7.7 GB where the host previously oscillated at
 15-19 GB — the tail's memory is now structurally bounded instead of
 depending on the host spike missing the scan compiles. Host-side
-inline writes remain the fallback without the pool. Remaining general
-items: a direct-dtype (f64) store/write path to skip the double
+inline writes remain the fallback without the pool. crop=0 still wants
+MEMMAX=42G on this box: its extra resident is the ~11 GB lazy_cog
+whole-AOI staging (activates only on raw tiled sources), not the write
+path. Remaining general items: a direct-dtype (f64) store/write path to skip the double
 conversion entirely, and hutan-side point fits/validation time.
 
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
