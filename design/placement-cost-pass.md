@@ -10,7 +10,7 @@ Landed: residency fixes (compute-output store bytes, cgroup-aware
 store-bearing compute), the placement pass with rules and cost modes
 plus `garry_explain_placement()`, `.stage_flops_per_px` and
 `.stage_fuse_act_bytes_px` with MLP closure introspection, reader CPU
-affinity (`garry.read_affinity`), FUSED SINK streaming (chunk_of /
+affinity (`garry.pool_affinity`), FUSED SINK streaming (chunk_of /
 sink_task_map), the fat-pool efficiency term (spike B calibrated), and
 the fused window working-set bound (`garry.fuse_reader_mb`). Also
 fixed en route: a phase 12b defect where a fused multi-export sink

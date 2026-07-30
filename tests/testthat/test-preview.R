@@ -2,6 +2,11 @@
 # (array / file path / lazy object). Rendering gates draw to a throwaway PDF
 # device and assert no error; the colour/stretch helpers are checked exactly.
 
+# File-wide null graphics device: without it the render gates leave an
+# Rplots.pdf in the test directory.
+pdf(NULL)
+withr::defer(grDevices::dev.off(), teardown_env())
+
 test_that("stretch range: NULL is min/max, percentile clips inward", {
   v <- c(1, 2, 3, NA, 100)
   expect_equal(.pv_range(v, NULL), c(1, 100))
