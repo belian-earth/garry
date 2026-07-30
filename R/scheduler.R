@@ -1639,6 +1639,23 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     stage_store_mb[[k]] %||% 0, numeric(1))))
   mem_last_check <- Sys.time()
   rss_excess_seen <- 0
+  # Fleet anon at RUN START, plus a trailing window of unmanaged samples
+  # (dask's managed / unmanaged-old / unmanaged-recent distinction).
+  # Daemons legitimately RETAIN memory between tasks — XLA buffer pools;
+  # a warmed scan daemon holds ~6.5 GB — and that retained pool is
+  # REUSED by the next task, not additive to it. The first SI run of the
+  # correction compared measured anon against in-flight bytes alone, so
+  # warmed standing state read as drift, the budget floored mid-tail and
+  # the scans serialised (2026-07-31). The correction therefore
+  # tolerates the run-start baseline AND anything sustained across the
+  # trailing window (~30 s at the 5 s refresh cadence): only RECENT
+  # growth beyond what in-flight work explains tightens the budget —
+  # which is exactly the estimate-defect class (a burst of
+  # underestimated working sets) it exists to catch. The shm clamp and
+  # the avail-RAM pool remain the hard backstops for slow leaks.
+  rss_baseline <- .garry_fleet_anon_mb(.garry_state$pool_pids)
+  if (!is.finite(rss_baseline)) rss_baseline <- 0
+  rss_hist <- rep(NA_real_, 6L)   # trailing (anon - inflight) samples
   refresh_mem_budgets <- function(announce = FALSE) {
     avail <- .garry_ram_avail_mb()
     if (is.na(avail) || !is.finite(mem_frac) || mem_frac <= 0) return(invisible(NULL))
@@ -1684,14 +1701,20 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       infl <- if (exists("mb_inflight")) mb_inflight else 0
       allow <- length(.garry_state$pool_pids) *
         garry_opt("cost_xla_client_mb")
-      excess <- anon - (infl + allow)
+      unman <- anon - infl
+      old_unman <- suppressWarnings(min(rss_hist, na.rm = TRUE))
+      if (!is.finite(old_unman)) old_unman <- rss_baseline
+      tolerated <- max(rss_baseline, old_unman)
+      excess <- unman - (tolerated + allow)
+      rss_hist <<- c(rss_hist[-1L], unman)
       if (excess > 0) {
         cb <- max(task_mb_max, cb - excess)
         if (excess > 1.2 * rss_excess_seen) {
           rss_excess_seen <<- excess
           cli::cli_inform(paste0(
             "garry: fleet anon RSS {round(anon)} MB exceeds modelled ",
-            "{round(infl + allow)} MB; compute budget tightened to ",
+            "{round(infl + tolerated + allow)} MB (recent growth ",
+            "{round(excess)} MB); compute budget tightened to ",
             "{round(cb)} MB"))
         }
       }

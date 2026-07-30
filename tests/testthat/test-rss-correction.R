@@ -26,12 +26,20 @@ test_that("pool pids are recorded at creation and cleared on teardown", {
   expect_length(garry:::.garry_state$pool_pids, 0L)
 })
 
-test_that("a huge measured RSS tightens the budget; the run still completes", {
+test_that("a measured RSS spike tightens the budget; the run still completes", {
   skip_on_os(c("windows", "mac"))
   garry_daemons(2, 1, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  # First sample (the run-start baseline) is modest; every later sample
+  # is a 10 TB spike — RECENT growth, which must tighten. A constant
+  # huge reading would instead be absorbed by the baseline/trailing
+  # window (sustained retained memory is tolerated by design).
+  n <- 0L
   testthat::local_mocked_bindings(
-    .garry_fleet_anon_mb = function(pids) 1e7,   # 10 TB: model must yield
+    .garry_fleet_anon_mb = function(pids) {
+      n <<- n + 1L
+      if (n == 1L) 1000 else 1e7
+    },
     .package = "garry")
   f <- fixture_gradient_f32()
   expect_message(
