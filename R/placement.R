@@ -177,6 +177,17 @@ NULL
       }
     }
     if (decision == "fuse") {
+      # Per-task working-set estimate for the fused execution: the
+      # window's activation cubes plus the raw read buffer and its
+      # device copy. Rides the scheduler's compute in-flight byte
+      # budget — a fused read IS compute, and admitting a fleet of
+      # them by store bytes alone (fused outputs are tiny) stacked
+      # N cold XLA ramps on top of whatever else holds the machine
+      # (measured: crop=0 with the lazy_cog staging resident).
+      wpx <- prod(pmin(as.numeric(S@chunks@chunk_dim),
+                       as.numeric(S@grid@dims[c("x", "y")])))
+      ws_mb <- wpx * (.stage_fuse_act_bytes_px(graph, C@members, nb_src) +
+                        8 * nb_src) / 2^20
       by_source[[.key(S@id)]] <- list(
         cid = C@id,
         ck = paste0(.stage_kernel_sig(graph, C), "@", C@device),
@@ -184,7 +195,8 @@ NULL
         dtype = graph_get(graph, C@input_nodes[[1L]])@grid@dtype,
         out_key = .key(C@exports[[1L]]),
         out_pad = C@out_pad,
-        out_nb = .node_outer_nb(graph, C@exports[[1L]]))
+        out_nb = .node_outer_nb(graph, C@exports[[1L]]),
+        ws_mb = ws_mb)
       fused[[.key(C@id)]] <- TRUE
     }
     rows[[length(rows) + 1L]] <- data.frame(

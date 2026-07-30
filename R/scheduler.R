@@ -889,7 +889,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         }, "f32")
       fetch_deps <- character(0)
       read_pool <- "read"
-      task_mb_read <- 0
+      # A FUSED read's kernel working set rides the in-flight compute
+      # byte budget (see comp_ok): the placement pass estimated it.
+      task_mb_read <- if (!is.null(fspec)) fspec$ws_mb %||% 0 else 0
       if (s@kind == "source_read") {
         fp <- prepare_fetch(rpath, roo, rnodata, s@grid)
         if (!is.null(fp)) {
@@ -902,9 +904,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           # per-chunk mask tasks — band 1 assembles DURING band 2's
           # fetches and the read pool never stops downloading.
           read_pool <- "comp"
-          task_mb_read <-
+          task_mb_read <- max(
+            task_mb_read,
             prod(pmin(as.numeric(s@chunks@chunk_dim),
-                      as.numeric(s@grid@dims[c("x", "y")]))) * 24 / 2^20
+                      as.numeric(s@grid@dims[c("x", "y")]))) * 24 / 2^20)
         }
       }
       # Bytes this read pins in the store from launch until its last
@@ -1465,10 +1468,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     n_inflight[["comp"]] == 0L ||
       mb_store_resident + t$store_mb <= read_budget_mb
   }
+  # The in-flight BYTE budget covers every byte-accounted task, not
+  # just comp-pool ones: a FUSED read runs its kernel's whole working
+  # set on the reader, so it is compute in disguise and must ride the
+  # same budget (a fleet of cold fused reads otherwise stacks N XLA
+  # ramps on whatever else holds the machine — measured at crop=0 with
+  # the lazy_cog staging resident). The escape is accordingly "nothing
+  # byte-accounted in flight", so one over-budget task always runs.
   comp_ok <- function(t) {
     if (!is.null(cap_comp_opt) &&
         n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
-    n_inflight[["comp"]] == 0L ||
+    mb_inflight == 0 ||
       mb_inflight + t$mb <= comp_budget_mb
   }
   # O(1) readiness: per-task unmet-dep counters decremented through a
@@ -1525,6 +1535,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         if (t$pool == "read") {
           if (n_slot[["read"]] >= cap_read) next
           if (!read_ok(t)) next
+          # Fused reads carry a kernel working set: ride the compute
+          # byte budget too, or a cold fleet ramps N XLA working sets
+          # at once regardless of what else holds the machine.
+          if (t$mb > 0 && !comp_ok(t)) next
         } else {
           if (!comp_ok(t)) next
           # Compute tasks pin their OUTPUT region from launch, and
@@ -1548,7 +1562,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       tasks[[k]]$slot <- slot
       n_slot[[slot]] <- n_slot[[slot]] + 1L
       n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
-      if (t$pool == "comp") mb_inflight <- mb_inflight + t$mb
+      mb_inflight <- mb_inflight + t$mb
       # Read-producing tasks pin their region from launch, not from
       # completion (fetch-backed assembles run on the compute pool but
       # pin store bytes just the same).
@@ -1587,7 +1601,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
         n_slot[[tasks[[k]]$slot]] <- n_slot[[tasks[[k]]$slot]] - 1L
-        if (pool_k == "comp") mb_inflight <- mb_inflight - tasks[[k]]$mb
+        mb_inflight <- mb_inflight - tasks[[k]]$mb
         harvested <- TRUE
         log_line("done", k)
         if (stream_write && !is.null(sink_task_j[[k]])) {

@@ -42,7 +42,7 @@ test_that("single-band source-fed chain fuses with a full spec", {
   spec <- pl$by_source[[garry:::.key(sid)]]
   expect_identical(sort(names(spec)),
                    sort(c("cid", "ck", "fn", "dtype", "out_key",
-                          "out_pad", "out_nb")))
+                          "out_pad", "out_nb", "ws_mb")))
   expect_identical(spec$cid, tab$compute[[1L]])
   expect_true(isTRUE(pl$fused[[garry:::.key(spec$cid)]]))
   expect_identical(spec$out_nb, 1)
