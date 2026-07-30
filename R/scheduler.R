@@ -463,11 +463,11 @@ NULL
 # taskset only; anywhere else the pool stays uncapped and the
 # placement pass's fuse_flops_max gate keeps wide kernels off the
 # readers. Returns the cap (NULL when uncapped) for .garry_state.
-.pool_affinity_apply <- function(profile, n) {
+.pool_affinity_apply <- function(profile, n, k = NULL) {
   if (!identical(Sys.info()[["sysname"]], "Linux")) return(NULL)
   if (!nzchar(Sys.which("taskset"))) return(NULL)
   cores <- .garry_cores()$logical
-  k <- as.integer(max(2L, cores %/% max(1L, as.integer(n))))
+  k <- as.integer(k %||% max(2L, cores %/% max(1L, as.integer(n))))
   if (k >= cores) return(NULL)                # cap would be a no-op
   pids <- tryCatch(
     vapply(mirai::everywhere(Sys.getpid(), .compute = profile),
@@ -483,6 +483,29 @@ NULL
     if (!identical(st, 0L)) return(NULL)
   }
   k
+}
+
+# Re-shape the compute pool's affinity for THIS plan. The optimal pool
+# shape is workload-dependent: fleets of moderate kernels (medians,
+# matmuls) want many narrow daemons (spike B: 10 x 2-CPU ~2x two fat
+# ones), while scan stages want few fat ones — each scan chunk is one
+# long sequential-in-t kernel whose XLA program parallelises across
+# the y/x plane, and a 2-CPU mask just makes both its compile and its
+# execution slow while the byte budget keeps most of a wide pool idle
+# anyway. Affinity is only sched_setaffinity, so it is re-appliable
+# per execution in milliseconds: scan-bearing plans get half-machine
+# masks (alternating halves; admission keeps ~2 active), everything
+# else keeps the creation-time disjoint narrow masks.
+.comp_pool_shape <- function(n_comp, plan_has_scan) {
+  if (is.null(.garry_state$comp_threads)) return(invisible(NULL))
+  cores <- .garry_cores()$logical
+  k_want <- if (plan_has_scan) max(2L, cores %/% 2L)
+            else max(2L, cores %/% max(1L, n_comp))
+  if (identical(.garry_state$comp_threads, k_want))
+    return(invisible(NULL))
+  got <- .pool_affinity_apply("garry_compute", n_comp, k = k_want)
+  if (!is.null(got)) .garry_state$comp_threads <- got
+  invisible(NULL)
 }
 
 #' Set up split mirai daemon pools for distributed execution.
@@ -847,6 +870,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # dispatch, extract, upload and store round-trips. WHICH eligible
   # chains fuse is the placement pass's decision (R/placement.R),
   # returned as a side table the task build consumes.
+  # Shape the compute pool for THIS plan before costing placement
+  # against it (scan plans get fat masks, kernel fleets narrow ones).
+  plan_has_scan <- any(vapply(plan@stages, function(s)
+    any(vapply(s@members, function(id)
+      S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1))),
+    logical(1)))
+  .comp_pool_shape(n_comp, plan_has_scan)
   placement <- .plan_placement(plan, consumers_of, warp_only,
                                n_read = n_read, n_comp = n_comp,
                                reader_threads = .garry_state$reader_threads,
@@ -1044,14 +1074,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       has_scan <- any(vapply(s@members, function(id)
         S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1)))
       if (!has_scan) task_mb <- task_mb / 2
-      # SCAN kernels never pre-warm: a (bidirectional) scan unrolls
-      # into a huge HLO whose XLA compile holds multi-GB per process,
-      # and the warm-up everywhere() broadcast would run that on EVERY
-      # compute daemon at once, unbudgeted — the wider the pool, the
-      # bigger the simultaneous spike. Left cold, each daemon compiles
-      # on its FIRST scan task, inside a byte-admitted slot, so the
-      # in-flight budget bounds concurrent compiles on wide pools.
-      if (!has_scan)
+      # SCAN kernels pre-warm only on a pool of <= 2 daemons (the
+      # validated shape: two concurrent compiles land pre-drain while
+      # the host is quiet). On a wider pool the warm-up everywhere()
+      # broadcast would run the scan's multi-GB unrolled-HLO compile
+      # on EVERY daemon at once, unbudgeted — left cold instead, each
+      # daemon compiles on its first scan task under the cold-kernel
+      # slow start, which staggers the compiles.
+      if (!has_scan || n_comp <= 2L)
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         fn = s@fn,
