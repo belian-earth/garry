@@ -22,6 +22,39 @@ NULL
 # Per-process cache used on daemons (jitted stage closures by stage id).
 .daemon_cache <- new.env(parent = emptyenv())
 
+# Return freed heap pages to the OS (glibc malloc_trim(0); no-op
+# elsewhere). The scan-retention spike (benchmarks/scan-retention-
+# spike.R, 2026-08-01) measured a scan daemon standing at 904 MB of
+# which 475 MB was trimmable glibc arena and 72 MB evictable jit
+# handles — the "retained scan working set" that walls off wide scan
+# pools is mostly memory nobody holds. Called after every compute/write
+# task (µs-cheap) and by .daemon_hygiene.
+.garry_malloc_trim <- function() {
+  .Call("garry_malloc_trim", PACKAGE = "garry")
+}
+
+#' Daemon task body: memory hygiene — trim arenas, optionally evict the
+#' jit cache.
+#'
+#' `deep = TRUE` additionally clears the jit cache (forces recompiles:
+#' ~1 s for map kernels, ~20 s for scans) — reserve it for memory
+#' pressure; the default trim-only pass costs microseconds and gives
+#' back what glibc is hoarding.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#' @param deep Also evict the jit cache?
+#' @return `TRUE` if the trim ran (glibc), invisibly.
+#' @keywords internal
+#' @export
+.daemon_hygiene <- function(deep = FALSE) {
+  if (isTRUE(deep)) {
+    e <- .daemon_cache
+    rm(list = ls(e), envir = e)
+  }
+  gc(FALSE)
+  invisible(.garry_malloc_trim())
+}
+
 # Package-local runtime state shared across scheduler calls: daemon
 # topology recorded by garry_daemons() (reader_threads = the per-reader
 # CPU-affinity width, NA/NULL when uncapped), read by the placement
@@ -243,6 +276,7 @@ NULL
   .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
   rm(ch, val)
   gc(FALSE)
+  .garry_malloc_trim()
   TRUE
 }
 
@@ -356,9 +390,13 @@ NULL
   # 10b: compute daemons measured at 1.2-1.7 GB anon vs a ~300 MB
   # working set). Pair with MALLOC_MMAP_THRESHOLD_/
   # MALLOC_TRIM_THRESHOLD_ in the daemon env so freed pages actually
-  # return to the OS (see benchmarks/hls-median-composite.R).
+  # return to the OS (see benchmarks/hls-median-composite.R). The env
+  # thresholds only cover the top-of-heap path; malloc_trim(0) walks
+  # every arena, and the scan-retention spike measured the difference
+  # at ~475 MB of standing arena per scan daemon.
   rm(inputs, res)
   gc(FALSE)
+  .garry_malloc_trim()
   sh
 }
 
@@ -812,6 +850,30 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   invisible(list(read = read, compute = compute))
 }
 
+#' Reclaim daemon memory across the pools.
+#'
+#' Broadcasts [.daemon_hygiene()] to every pool: return freed heap
+#' pages to the OS (glibc `malloc_trim`), and with `deep = TRUE` also
+#' evict the daemons' jit caches (forces recompiles on next use — ~1 s
+#' per map kernel, ~20 s per scan kernel; reserve for memory
+#' pressure). The scheduler already trims after every compute/write
+#' task and at run start; call this between pipeline phases when the
+#' fleet should idle lean.
+#'
+#' @param deep Also evict the jit caches?
+#' @return Invisibly `NULL`.
+#' @export
+garry_pool_hygiene <- function(deep = FALSE) {
+  for (p in c("garry_read", "garry_compute", "garry_write")) {
+    h <- tryCatch(
+      mirai::everywhere(garry::.daemon_hygiene(deep = d), d = deep,
+                        .compute = p),
+      error = function(e) NULL)
+    if (!is.null(h)) invisible(lapply(h, function(m) m[]))
+  }
+  invisible(NULL)
+}
+
 #' Are the garry daemon pools running?
 #'
 #' `TRUE` when both mirai pools created by [garry_daemons()] (`garry_read` and
@@ -890,6 +952,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     mirai::everywhere({
       suppressMessages(library(garry))
       options(garry.read_fail = rf, garry.read_retry = rr)
+      # run-start trim: give back what the previous plan's arenas are
+      # hoarding (a tail plan otherwise starts with the fleet standing
+      # at the predict plan's high-water)
+      garry::.daemon_hygiene()
     }, rf = garry_opt("read_fail"), rr = garry_opt("read_retry"),
     .compute = p)
 
