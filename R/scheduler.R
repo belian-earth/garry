@@ -557,8 +557,13 @@ NULL
 # RAM, and every recent memory defect was an estimate diverging from
 # reality with nothing attributing the divergence to the fleet.
 .garry_anon_mb_of <- function(pid) {
-  s <- tryCatch(readLines(sprintf("/proc/%d/status", pid), warn = FALSE),
-                error = function(e) character(0))
+  # a pid may have died since the pool snapshot (e.g. a torn-down
+  # writer): the error is caught, and the connection warning that
+  # precedes it must not leak either
+  s <- tryCatch(
+    suppressWarnings(readLines(sprintf("/proc/%d/status", pid),
+                               warn = FALSE)),
+    error = function(e) character(0))
   ln <- grep("^RssAnon:", s, value = TRUE)
   if (length(ln) != 1L) return(NA_real_)
   kb <- suppressWarnings(as.numeric(
