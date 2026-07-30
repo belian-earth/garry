@@ -90,9 +90,52 @@ stac_sign_mpc <- function(items,
   items
 }
 
+# Signed-expiry epoch (numeric, UTC) of a SAS query string, NA when
+# absent/unparseable.
+.sas_expiry <- function(q) {
+  m <- regmatches(q, regexec("(?:^|&)se=([^&]+)", q))[[1L]]
+  if (length(m) < 2L) return(NA_real_)
+  v <- utils::URLdecode(m[[2L]])
+  for (fmt in c("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ")) {
+    t <- as.POSIXct(v, format = fmt, tz = "UTC")
+    if (!is.na(t)) return(as.numeric(t))
+  }
+  NA_real_
+}
+
+# Dispatch-time re-signing hook (io review R4). Hrefs are signed once at
+# discovery, so a run outliving its SAS token collects 403s — which are
+# not retriable — as aborts or holes. When a stored MPC blob URL's
+# embedded token is within `margin` seconds of expiry, swap the query
+# string for a fresh cached account/container token (the MPC sas
+# endpoint accepts token/<account>/<container> as well as
+# token/<collection>; `.mpc_token`'s memory+disk cache and expiry logic
+# apply unchanged, so this is one request per container per token
+# lifetime, not a signing storm). Non-MPC, unsigned or unparseable URLs
+# pass through untouched; so do failures (the read retry / read_fail
+# contract still applies downstream).
+.mpc_resign <- function(url, margin = 600) {
+  if (!is.character(url) || !length(url)) return(url)
+  vapply(url, function(u) {
+    parts <- regmatches(u, regexec(
+      "^(/vsicurl/)?https://([^./]+)\\.blob\\.core\\.windows\\.net/([^/?]+)/",
+      u))[[1L]]
+    if (length(parts) < 4L) return(u)
+    if (!grepl("?", u, fixed = TRUE)) return(u)   # never signed: leave it
+    q <- sub("^[^?]*\\?", "", u)
+    se <- .sas_expiry(q)
+    if (is.na(se) || se - margin > as.numeric(Sys.time())) return(u)
+    tok <- tryCatch(.mpc_token(paste0(parts[[3L]], "/", parts[[4L]])),
+                    error = function(e) NULL)
+    if (is.null(tok)) return(u)
+    paste0(sub("\\?.*$", "", u), "?", tok)
+  }, character(1), USE.NAMES = FALSE)
+}
+
 # The collection SAS token: memory cache, then disk cache, then a fresh request
 # (saved to both). Reused until msft:expiry.
-.mpc_token <- function(collection, subscription_key) {
+.mpc_token <- function(collection,
+                       subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)) {
   hit <- .mpc_token_lookup(collection)
   if (!is.null(hit)) return(hit)
   url <- paste0("https://planetarycomputer.microsoft.com/api/sas/v1/token/",

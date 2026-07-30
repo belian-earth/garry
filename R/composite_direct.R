@@ -374,8 +374,8 @@ NULL
             gtstr = paste(sprintf("%.10g", grid@transform), collapse = "/"),
             wkt = gdalraster::srs_to_wkt(cr))
   jobs <- lapply(info, function(x)
-    list(locs = x$locs, dt = x$dt, nodata = x$nodata, resampling = x$resampling,
-         bin = x$bin))
+    list(locs = .mpc_resign(x$locs), dt = x$dt, nodata = x$nodata,
+         resampling = x$resampling, bin = x$bin))
   list(info = info, K = K, jobs = jobs)
 }
 

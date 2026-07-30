@@ -978,8 +978,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           mirai::mirai(
             garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd,
                                         target_res = tr),
-            src = src, dst = dst, ex = ex, cr = cr, nd = nd, tr = tr,
-            .compute = prof)
+            # dispatch-time hook: a fetch launched deep into a long
+            # drain re-signs a near-expiry MPC token (io R4)
+            src = .mpc_resign(src), dst = dst, ex = ex, cr = cr, nd = nd,
+            tr = tr, .compute = prof)
         })
       })
     }
