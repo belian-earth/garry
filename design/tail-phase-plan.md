@@ -114,7 +114,9 @@ its cold scan window) against 1.3 GB modelled. Three conclusions:
 
 ## Workstream C — width-1 routed dispatch (spike is GO)
 
-Design sketch (scheduler-scoped; option-gated):
+Full scoping now in `design/routed-dispatch.md` (seam inventory,
+routing policy, staged C1-C5 build, test plan). Sketch below kept for
+history:
 
 - `garry_daemons(read, compute)` with `garry.routed_dispatch = TRUE`
   creates the compute pool as N width-1 profiles `garry_comp_<i>`
