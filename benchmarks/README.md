@@ -325,6 +325,19 @@ fit a 62 GB box; scan-memory confinement via routed dispatch
 (workstream C) is the required lever, with wide sweeps on the
 bc-cohort box.
 
+**Routed dispatch validation (2026-08-02, C1-C3 landed).**
+`garry.routed_dispatch = TRUE`, SI crop=2048 cost, compute=6 routed
+(scans confined to profiles 1-2, mixed per-role masks), MEMMAX=32G on
+the 62 GB box where anonymous width 4 died twice at ~39 GB:
+**total 399.8 s, tail phase 148 s, peak scope anon 25.75 GB.** The
+tail is 2.2x the cached width-2 best (332 s), the total beats every
+recorded crop=2048 number (552.2 cached / 576.2 f64-era / 948.6
+pre-placement), and peak memory came in BELOW the width-2 runs —
+scan confinement holds scan memory at K=2 working sets while six
+narrow profiles carry the map/ensemble fleets. Predict ran 227 s on
+this sitting's slow link; on a July-30 link (~175 s predict) the
+total projects to ~350 s, under hutan's 362 s for the first time.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with

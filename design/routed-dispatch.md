@@ -127,3 +127,15 @@ Per execution, from the plan:
 Estimated size: C1 ~250 lines net (mostly mechanical loops), C2
 ~150, C3 ~120, C4 ~80, plus ~400 of tests. One focused session per
 stage.
+
+## Validation (2026-08-02)
+
+C1-C3 landed (commits 60cc1ae, 0c2ccff; full suite green in both
+modes). SI crop=2048 cost, compute=6 routed, MEMMAX=32G, this box:
+total **399.8 s** (tail phase 148 s, peak scope anon 25.75 GB) vs the
+cached anonymous width-2 best 552.2 s (tail 332 s) and two anonymous
+width-4 OOM deaths at ~39 GB. Confinement verified from the task log
+(scan launches only on garry_comp_1/2) and /proc masks (fat scan
+profiles, narrow map profiles). C3's expected-effect estimate
+(~180-200 s tail) was beaten. Remaining: C4 is already covered by the
+C1 round-robin; C5 (bc-cohort validation + default flip) stays open.
