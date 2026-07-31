@@ -11,8 +11,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
 test_that("composite_direct matches the oracle on a masked multi-band composite", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   x <- .gg_masked_composite()
   p <- collect(x, plan_only = TRUE)
   expect_false(is.null(.cd_spec(p)))          # the fast path matches this shape
@@ -28,8 +27,7 @@ test_that("composite_direct matches the oracle on a masked multi-band composite"
 })
 
 test_that("composite_direct matches the oracle with morphology (halo) cleanup", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   x <- .gg_masked_composite(open = 1L, dilate = 1L)
   p <- collect(x, plan_only = TRUE)
   spec <- .cd_spec(p)
@@ -42,8 +40,7 @@ test_that("composite_direct matches the oracle with morphology (halo) cleanup", 
 })
 
 test_that("gd_compute_budget forces the fall-through route, identically", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   x <- .gg_masked_composite()
   want <- collect(x, distributed = FALSE)
   # Above the budget (with gd_parallel off), .cd_spec refuses and the
@@ -58,8 +55,7 @@ test_that("gd_compute_budget forces the fall-through route, identically", {
 })
 
 test_that("composite_direct writes to path identically to in-memory", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   x <- .gg_masked_composite()
   mem <- collect(x, distributed = TRUE)
   expect_identical(garry_last_route(), "composite_direct")

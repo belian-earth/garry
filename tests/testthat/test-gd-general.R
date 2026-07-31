@@ -41,15 +41,13 @@ skip_if_not_installed("mirai")
 }
 
 test_that("a derived band (map over reduces) runs warp-on-read == scheduler", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   cs <- .gg_composites()
   .gg_equal((cs$A - cs$B) / (cs$A + cs$B))            # ndvi shape
 })
 
 test_that("nested reduce -> map -> reduce runs warp-on-read == scheduler", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   cs <- .gg_composites()
   ndvi <- (cs$A - cs$B) / (cs$A + cs$B)
   # a second derived band, then reduce over the band axis of the two
@@ -59,15 +57,13 @@ test_that("nested reduce -> map -> reduce runs warp-on-read == scheduler", {
 })
 
 test_that("a focal on a composite runs warp-on-read == scheduler", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   cs <- .gg_composites()
   .gg_equal(focal(cs$A, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)))
 })
 
 test_that("collect() routes a derived band through the general path", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   cs <- .gg_composites()
   ndvi <- (cs$A - cs$B) / (cs$A + cs$B)
   got  <- collect(ndvi, distributed = TRUE)

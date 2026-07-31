@@ -174,8 +174,7 @@ test_that("distributed == single-threaded for compute-fed focals", {
   nodes <- .hp_graph(f)
   ref <- .hp_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
                              distributed = FALSE))
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   got <- .hp_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
                              distributed = TRUE))
   expect_equal(unclass(got$raw), unclass(ref$raw), tolerance = 1e-6,

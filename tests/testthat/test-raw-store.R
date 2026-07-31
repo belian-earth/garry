@@ -40,8 +40,7 @@ test_that("distributed raw f32 store == single-threaded oracle", {
   skip_if(!garry::.g_has_raw_upload(),
           "installed anvl lacks raw payload support")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force many chunks
   on.exit(options(old), add = TRUE)
 
@@ -80,8 +79,7 @@ test_that("distributed multiband sink streams to GTiff like the oracle", {
   skip_if(!garry::.g_has_raw_upload(),
           "installed anvl lacks raw payload support")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 
@@ -148,8 +146,7 @@ test_that("an f64 chain runs distributed bit-identically to the oracle", {
   p <- plan_lazy(list(y = y, z = z))
   single <- execute_plan(p)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
   for (m in c("rules", "cost")) {

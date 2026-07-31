@@ -139,8 +139,7 @@ test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3
   f <- .lc_cog(dir)
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
                     dims = c(128L, 128L), dtype = "f32")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   got <- collect(lazy_map(lazy_cog(f, grid), fn = dequantize_aef, dtype = "f32"),
                  distributed = TRUE)
   ref <- function(x) ((x / 127.5)^2) * sign(x)

@@ -1,5 +1,12 @@
 # Cleanup phase plan: the deep-review consolidation backlog
 
+STATUS 2026-08-02: ALL FIVE STAGES LANDED (D1 3381fbb, D2 with D4/D3
+following, D5 last), each gated green; the ABI token hashed
+identically across the D1 split and the D4 merge was gated on
+byte-identical defaults. D5 converted 68 pool-boilerplate sites and
+unified the chunk-px wrapper; the ~9 fixture recipe families remain
+as incremental follow-up.
+
 Date: 2026-08-02. Successor to `design/deep-review-2026-08-02/`
 (waves 1-2a landed: routing-only dispatch, decisive defaults, dead-arm
 excision, ABI enrollment, stale-doc sweep). This phase is the

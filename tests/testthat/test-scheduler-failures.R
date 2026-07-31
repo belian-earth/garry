@@ -25,8 +25,7 @@ skip_on_os(c("windows", "mac"))   # /dev/shm scan
 }
 
 test_that("a failing kernel aborts classed and leaves a clean store", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   withr::local_options(garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()
   before <- .sf_shm()
@@ -44,8 +43,7 @@ test_that("a failing kernel aborts classed and leaves a clean store", {
 })
 
 test_that("a daemon dying mid-drain aborts classed; pools are rebuildable", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   withr::local_options(garry.placement = "rules",   # sink tasks stay on comp pool
                        garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()

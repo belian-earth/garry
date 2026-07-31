@@ -11,8 +11,7 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   old <- options(garry.chunk_target_px = 400)   # force many chunks
   on.exit(options(old), add = TRUE)
@@ -56,8 +55,7 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
 test_that("streaming distributed writes match single-threaded writes", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

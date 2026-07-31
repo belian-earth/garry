@@ -10,8 +10,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
 test_that("garry_task_report summarises a distributed run's log", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   tlog <- withr::local_tempfile(fileext = ".csv")
   withr::local_options(garry.task_log = tlog,
                        garry.chunk_target_px = 600)

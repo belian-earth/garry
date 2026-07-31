@@ -11,8 +11,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
 test_that("matching tokens pass and the check caches per pool generation", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   expect_null(garry:::.garry_state$abi_ok)      # fresh pools: unchecked
   f <- fixture_gradient_f32()
   got <- collect(lazy_source(f) + 1, distributed = TRUE)
@@ -21,8 +20,7 @@ test_that("matching tokens pass and the check caches per pool generation", {
 })
 
 test_that("a skewed token aborts classed, naming both hashes", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   # Skew the HOST side; the daemons answer with the real installed token.
   testthat::local_mocked_bindings(
     .garry_abi_token = function() "deadbeef-host-token",

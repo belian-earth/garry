@@ -32,8 +32,7 @@ test_that("read daemons get disjoint bounded CPU sets and the cap is recorded", 
   cores <- parallel::detectCores()
   skip_if(cores < 5L, "cap is a no-op below 5 cores")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   k <- max(2L, cores %/% 2L)
   expect_identical(garry:::.garry_state$reader_threads, k)
@@ -49,8 +48,7 @@ test_that("pool_affinity = 'off' leaves readers uncapped", {
           "garry not installed for daemons")
   old <- options(garry.pool_affinity = "off")
   on.exit(options(old), add = TRUE)
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   expect_null(garry:::.garry_state$reader_threads)
   lists <- .reader_cpu_lists()
   cores <- parallel::detectCores()
@@ -62,8 +60,7 @@ test_that("the compute pool is capped too and recorded for the cost model", {
           "garry not installed for daemons")
   cores <- parallel::detectCores()
   skip_if(cores < 5L, "cap is a no-op below 5 cores")
-  garry_daemons(2, 2)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 2, gdal_config = TRUE)
   k <- max(2L, cores %/% 2L)
   expect_identical(garry:::.garry_state$comp_threads, k)
   lists <- unlist(lapply(garry:::.comp_profiles(), function(p) {

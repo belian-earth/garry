@@ -37,8 +37,7 @@ test_that("coarse read window shrinks with the widest stage's inputs", {
 test_that("eager release: cross-stage intermediates drop, results identical", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   # A stage-crossing pipeline (map -> t-reduce -> map) whose
   # intermediate compute outputs must be droppable mid-run without
@@ -63,8 +62,7 @@ test_that("eager release: cross-stage intermediates drop, results identical", {
 test_that("a read budget below one stage's input set still completes", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   f <- fixture_gradient_f32()
   g <- graph_new()

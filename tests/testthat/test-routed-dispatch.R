@@ -13,8 +13,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
 test_that("routed pools create N width-1 profiles and tear down clean", {
-  garry_daemons(2, 3, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 3)
   expect_identical(garry:::.comp_profiles(),
                    c("garry_comp_1", "garry_comp_2", "garry_comp_3"))
   expect_identical(garry:::.comp_n(), 3L)
@@ -34,8 +33,7 @@ test_that("routed distributed == single, and tasks spread across profiles", {
   # fuses this whole chain onto the coalesced read — nothing to spread)
   withr::local_options(garry.placement = "rules",
                        garry.chunk_target_px = 600)
-  garry_daemons(2, 3, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 3)
   tlog <- withr::local_tempfile(fileext = ".csv")
   withr::local_options(garry.task_log = tlog)
   f <- fixture_gradient_f32()
@@ -52,8 +50,7 @@ test_that("routed distributed == single, and tasks spread across profiles", {
 
 test_that("a scan plan runs routed == single", {
   withr::local_options(garry.chunk_target_px = 600)
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   f <- fixture_gradient_f32()
   g <- graph_new()
   a <- lazy_source(f, graph = g)
@@ -72,8 +69,7 @@ test_that("a scan plan runs routed == single", {
 
 test_that("streamed writes work under routed dispatch", {
   withr::local_options(garry.chunk_target_px = 600)
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   f <- fixture_gradient_f32()
   path <- withr::local_tempfile(fileext = ".tif")
   collect(lazy_source(f) + 1, path = path, distributed = TRUE)
@@ -83,8 +79,7 @@ test_that("streamed writes work under routed dispatch", {
 })
 
 test_that("composite_direct round-robins through routed profiles", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   x <- .gg_masked_composite()
   want <- collect(x, distributed = FALSE)
   got <- collect(x, distributed = TRUE)
@@ -94,8 +89,7 @@ test_that("composite_direct round-robins through routed profiles", {
 
 test_that("scan tasks are CONFINED to the designated profiles (C3)", {
   withr::local_options(garry.chunk_target_px = 600)
-  garry_daemons(2, 4, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 4)
   tlog <- withr::local_tempfile(fileext = ".csv")
   withr::local_options(garry.task_log = tlog)
   f <- fixture_gradient_f32()
@@ -132,8 +126,7 @@ test_that("scan plans get mixed per-role masks on routed pools (C3)", {
   skip_if(!nzchar(Sys.which("taskset")), "taskset absent")
   skip_if(garry:::.garry_cores()$logical < 8L, "needs >= 8 cores")
   withr::local_options(garry.chunk_target_px = 600)
-  garry_daemons(2, 4, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 4)
   f <- fixture_gradient_f32()
   g <- graph_new()
   a <- lazy_source(f, graph = g)

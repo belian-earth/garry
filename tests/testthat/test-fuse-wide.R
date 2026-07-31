@@ -34,8 +34,7 @@ test_that("cost mode fuses a multi-band MLP chain onto capped readers", {
 
   single <- execute_plan(p)
 
-  garry_daemons(4, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(4, 1, gdal_config = TRUE)
   tlog <- tempfile(fileext = ".csv")
   old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
                  garry.task_log = tlog)
@@ -77,8 +76,7 @@ test_that("a SINK-shaped MLP predict fuses and streams (the SI shape)", {
 
   single <- execute_plan(p)
 
-  garry_daemons(4, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(4, 1, gdal_config = TRUE)
   old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 
@@ -124,8 +122,7 @@ test_that("a QA-gated predict (QA as last plane) fuses and matches (the ESD shap
   expect_true(any(is.na(single)))       # the floor gates something
   expect_false(all(is.na(single)))
 
-  garry_daemons(4, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(4, 1, gdal_config = TRUE)
   old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

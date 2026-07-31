@@ -17,8 +17,7 @@ test_that(".garry_fleet_anon_mb measures live pids and NAs otherwise", {
 })
 
 test_that("pool pids are recorded at creation and cleared on teardown", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   pids <- garry:::.garry_state$pool_pids
   expect_gte(length(pids), 3L)          # 2 readers + 1 compute + writer
   expect_true(all(pids != Sys.getpid()))
@@ -28,8 +27,7 @@ test_that("pool pids are recorded at creation and cleared on teardown", {
 
 test_that("a measured RSS spike tightens the budget; the run still completes", {
   skip_on_os(c("windows", "mac"))
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   # First sample (the run-start baseline) is modest; every later sample
   # is a 10 TB spike — RECENT growth, which must tighten. A constant
   # huge reading would instead be absorbed by the baseline/trailing

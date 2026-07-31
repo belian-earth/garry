@@ -22,8 +22,7 @@ test_that("garry_pool_hygiene runs and the pools stay serviceable", {
   skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   f <- fixture_gradient_f32()
   want <- collect(lazy_source(f) + 1, distributed = FALSE)
   got1 <- collect(lazy_source(f) + 1, distributed = TRUE)

@@ -48,8 +48,7 @@ test_that("fetch-backed distributed reads match direct reads", {
   p <- plan_lazy(expr)
   direct <- execute_plan(p)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   tlog <- tempfile(fileext = ".csv")
   old <- options(garry.fetch = "force", garry.task_log = tlog,
@@ -83,8 +82,7 @@ test_that("failed fetch degrades to a nodata hole under read_fail",
   dir <- withr::local_tempdir("fa2")
   fx <- .fa_fixture(dir, n_slices = 2L)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.fetch = "force", garry.read_fail = "nodata",
                  garry.read_retry = 0L, garry.chunk_target_px = 1e6)
   on.exit(options(old), add = TRUE)

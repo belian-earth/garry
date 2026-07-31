@@ -46,8 +46,7 @@ test_that("a starved store budget serialises but completes correctly", {
           "garry not installed for daemons")
   f <- fixture_gradient_f32()
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   # Force many chunks AND a store budget below any single region: every
   # launch goes through the no-inflight escape hatch. With compute
   # outputs now feeding the same gate, this exercises the read/compute
@@ -68,8 +67,7 @@ test_that("the /dev/shm backstop clamps the budget without stalling", {
           "garry not installed for daemons")
   f <- fixture_gradient_f32()
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

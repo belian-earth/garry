@@ -41,8 +41,7 @@ test_that("source-fed kernel chains execute on their read tasks", {
 
   single <- execute_plan(p)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   tlog <- tempfile(fileext = ".csv")
   old <- options(garry.chunk_target_px = 400, garry.task_log = tlog)
   on.exit(options(old), add = TRUE)
@@ -64,8 +63,7 @@ test_that("guards: sinks and multi-consumer sources stay unfused", {
           "garry not installed for daemons")
   f <- fixture_gradient_f32()
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

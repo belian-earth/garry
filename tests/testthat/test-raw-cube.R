@@ -95,8 +95,7 @@ test_that("streamed distributed writes land in a raw cube via the writer", {
   skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   withr::local_options(garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()
   vrt <- file.path(withr::local_tempdir("rcd"), "out.vrt")

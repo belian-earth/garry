@@ -36,8 +36,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
 }
 
 test_that("a failed sink write aborts classed, does not hang, closes the output", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   withr::local_options(garry.chunk_target_px = 600)   # several sink chunks
   f <- fixture_gradient_f32()
   x <- lazy_source(f) + 1
@@ -66,8 +65,7 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
 })
 
 test_that("the writer_on = FALSE host-inline fallback still matches the oracle", {
-  garry_daemons(2, 1, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 1)
   # Tear down ONLY the writer: streamed writes fall back to host-inline.
   mirai::daemons(0, .compute = "garry_write")
   f <- fixture_gradient_f32()

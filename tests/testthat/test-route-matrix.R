@@ -53,14 +53,12 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
 }
 
 test_that("a masked composite is identical on every route", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   .rm_sweep(.gg_masked_composite(), fast_route = "composite_direct")
 })
 
 test_that("a derived band (map over reduces) is identical on every route", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)))
   gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
   g <- graph_new()
@@ -72,8 +70,7 @@ test_that("a derived band (map over reduces) is identical on every route", {
 })
 
 test_that("a scan plan is identical on every route (fast path = scheduler)", {
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
   gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
   g <- graph_new()
   body <- function(xs, margin) {

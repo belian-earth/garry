@@ -38,8 +38,7 @@ test_that("custom reducer: distributed == single-threaded oracle", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force many spatial chunks
   on.exit(options(old), add = TRUE)
 
@@ -54,8 +53,7 @@ test_that("custom reducer: distributed == single-threaded oracle", {
 test_that("a custom reducer cannot be distributed over spatial dims", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("mirai")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

@@ -110,8 +110,7 @@ test_that("multi-export sink chains round-trip in both placement modes", {
   expect_true(all(tab$decision == "comp"))   # rules: sinks stay put
 
   single <- execute_plan(p)
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
   for (m in c("rules", "cost")) {
@@ -156,8 +155,7 @@ test_that("a source that is itself a sink keeps its window (defect H1)", {
   single <- execute_plan(p)
   expect_false(is.null(single$raw))
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
   for (m in c("rules", "cost")) {

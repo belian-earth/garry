@@ -82,8 +82,7 @@ test_that("multi-export: distributed == single-process", {
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   f <- fixture_gradient_f32()
   a <- lazy_source(f); b <- lazy_source(f)
   stk <- lazy_stack(list(a + 1, b * 2, a - b))
@@ -105,8 +104,7 @@ test_that("multi-export: distributed streamed writes match memory results", {
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   f <- fixture_gradient_f32()
   a <- lazy_source(f); b <- lazy_source(f)
   stk <- lazy_stack(list(a + 1, b * 2))

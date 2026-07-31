@@ -52,8 +52,7 @@ test_that("a distributed run still completes with a tiny memory fraction", {
     lazy_source(f, graph = g) * i), along = "t"), "sum", "t", nan_rm = TRUE)
   mem <- collect(out, distributed = FALSE)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.exec_ram_fraction = 1e-6,
                  garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
