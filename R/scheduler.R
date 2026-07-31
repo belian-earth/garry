@@ -1525,70 +1525,24 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     combine_vals[[.key(s@id)]] <- s@fn(partials)
   }
 
-  # Multi-export: assemble/write every requested sink from the ONE run
-  # (mirrors execute_plan's multi-sink tail; raw store values
-  # materialise in .exec_assemble / write via .exec_write_sink).
-  if (length(plan@sinks) > 1L) {
-    res <- lapply(seq_along(plan@sinks), function(kk) {
-      nid <- plan@sinks[[kk]]
-      nm <- names(plan@sinks)[[kk]]
-      if (!is.null(path) && !is.null(stream_sinks[[nm]])) {
-        sp <- stream_sinks[[nm]]
-        if (!is.null(sp$ds)) {
-          sp$ds$close()
-          stream_sinks[[nm]]$ds <<- NULL
-        }
-        return(sp$path)                     # streamed as chunks landed
-      }
-      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
-        nid %in% s@members, logical(1))))]]
-      skey <- .key(nid)
-      chunks <- if (st@kind == "reduce_combine") {
-        list(combine_vals[[.key(st@id)]][[skey]])
-      } else {
-        lapply(out_of(st), `[[`, skey)
-      }
-      it <- chunk_iter(st@chunks)
-      pad <- .exec_export_pad(st, nid)
-      ngrid <- graph_get(plan@graph, nid)@grid
-      if (!is.null(path)) {
-        p <- if (length(path) == 1L && dir.exists(path))
-          file.path(path, paste0(nm, ".tif"))
-        else path[[nm]]
-        sk <- st
-        S7::prop(sk, "grid") <- ngrid
-        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names,
-                                sink_pad = pad))
-      }
-      if (nrow(it) == 1L) {
-        v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
-        if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
-      } else {
-        .exec_assemble(chunks, it, ngrid, pad)
-      }
-    })
-    names(res) <- names(plan@sinks)
-    return(if (is.null(path)) res else invisible(path))
+  # Sink assembly/write is the SHARED tail (.exec_sink_tail,
+  # executor.R): the scheduler contributes its fused-aware chunk
+  # lookup and the streamed-sink short-circuit; the shape of the tail
+  # itself is one implementation for both executors.
+  chunks_of <- function(st) {
+    if (st@kind == "reduce_combine") list(combine_vals[[.key(st@id)]])
+    else out_of(st)
   }
-
-  key <- .key(sink@members[[length(sink@members)]])
-  chunks <- if (sink@kind == "reduce_combine") {
-    list(combine_vals[[.key(sink@id)]][[key]])
-  } else {
-    lapply(out_of(sink), `[[`, key)
+  streamed_path <- function(nm) {
+    sp <- stream_sinks[[nm]]
+    if (is.null(sp)) return(NULL)
+    if (!is.null(sp$ds)) {
+      sp$ds$close()
+      stream_sinks[[nm]]$ds <<- NULL
+    }
+    sp$path
   }
-  it <- chunk_iter(sink@chunks)
-  sink_pad <- if (sink@kind == "reduce_combine") 0L else
-    .exec_export_pad(sink, sink@members[[length(sink@members)]])
-
-  if (!is.null(path))
-    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names,
-                            sink_pad = sink_pad))
-
-  if (nrow(it) == 1L) {
-    v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
-    if (is.matrix(v) && all(dim(v) == c(1L, 1L))) return(v[1L, 1L])
-    return(v)
-  }
-  .exec_assemble(chunks, it, sink@grid, sink_pad)
+  .exec_sink_tail(plan, graph, chunks_of = chunks_of, path = path,
+                  nodata = nodata, band_names = band_names,
+                  streamed_path = streamed_path)
 }

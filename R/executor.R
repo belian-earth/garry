@@ -517,6 +517,69 @@ NULL
   full
 }
 
+
+# Shared host-side sink tail: multi-export and single-sink assembly /
+# write, used by BOTH executors (the single-threaded oracle and the
+# scheduler's post-drain host phase). Two near-verbatim copies had
+# begun to diverge silently — and this is the seam the H1 defect
+# (silently lost raw sink) lived in — one implementation means one
+# place to guard it. `chunks_of(stage)` returns the stage's list of
+# per-chunk EXPORT lists (reduce_combine: a one-element list holding
+# the combined exports). `streamed_path(nm)`, when given, returns the
+# on-disk path for a sink that already streamed chunk-by-chunk
+# (closing any open handle as a side effect), else NULL.
+.exec_sink_tail <- function(plan, graph, chunks_of, path, nodata,
+                            band_names, streamed_path = NULL) {
+  if (length(plan@sinks) > 1L) {
+    res <- lapply(seq_along(plan@sinks), function(k) {
+      nid <- plan@sinks[[k]]
+      nm <- names(plan@sinks)[[k]]
+      if (!is.null(path) && !is.null(streamed_path)) {
+        sp <- streamed_path(nm)
+        if (!is.null(sp)) return(sp)
+      }
+      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
+        nid %in% s@members, logical(1))))]]
+      chunks <- lapply(chunks_of(st), `[[`, .key(nid))
+      it <- chunk_iter(st@chunks)
+      pad <- .exec_export_pad(st, nid)
+      # the exported node's grid, not the stage tail's
+      ngrid <- graph_get(graph, nid)@grid
+      if (!is.null(path)) {
+        p <- if (length(path) == 1L && dir.exists(path))
+          file.path(path, paste0(nm, ".tif"))
+        else path[[nm]]
+        sk <- st
+        S7::prop(sk, "grid") <- ngrid
+        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names,
+                                sink_pad = pad))
+      }
+      if (nrow(it) == 1L) {
+        v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
+        if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
+      } else {
+        .exec_assemble(chunks, it, ngrid, pad)
+      }
+    })
+    names(res) <- names(plan@sinks)
+    return(if (is.null(path)) res else invisible(path))
+  }
+  sink <- plan@stages[[plan@sink]]
+  key <- .key(sink@members[[length(sink@members)]])
+  chunks <- lapply(chunks_of(sink), `[[`, key)
+  it <- chunk_iter(sink@chunks)
+  sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
+  if (!is.null(path))
+    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names,
+                            sink_pad = sink_pad))
+  if (nrow(it) == 1L) {
+    v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
+    if (is.matrix(v) && all(dim(v) == c(1L, 1L))) return(v[1L, 1L])
+    return(v)
+  }
+  .exec_assemble(chunks, it, sink@grid, sink_pad)
+}
+
 #' Execute a Plan on the anvl backend (single-threaded).
 #'
 #' @param plan A `Plan`.
@@ -541,12 +604,9 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
 
   # A source stage consumed only by warp stages never needs reading:
   # the warper pulls pixels from the file itself.
-  warp_only <- vapply(plan@stages, function(s) {
-    consumers <- Filter(function(t2) s@id %in% t2@inputs, plan@stages)
-    s@kind == "source_read" && length(consumers) > 0L &&
-      all(vapply(consumers, function(t2) t2@kind == "warp", logical(1))) &&
-      plan@sink != s@id && !any(plan@sinks %in% s@members)
-  }, logical(1))
+  # One-pass consumer index (the scheduler's replacement for the old
+  # O(stages^2) Filter scan), shared via .placement_scan.
+  warp_only <- .placement_scan(plan)$warp_only
 
   for (s in plan@stages[.stage_launch_order(plan)]) {
     it <- chunk_iter(s@chunks)
@@ -642,56 +702,13 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
     }
   }
 
-  # Multi-export: several sinks share the ONE execution above; each is
-  # assembled/written from its own stage's per-chunk exports.
-  if (length(plan@sinks) > 1L) {
-    res <- lapply(seq_along(plan@sinks), function(k) {
-      nid <- plan@sinks[[k]]
-      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
-        nid %in% s@members, logical(1))))]]
-      chunks <- lapply(out[[st@id]], `[[`, .key(nid))
-      it <- chunk_iter(st@chunks)
-      pad <- .exec_export_pad(st, nid)
-      # the exported node's grid, not the stage tail's
-      ngrid <- graph_get(graph, nid)@grid
-      if (!is.null(path)) {
-        p <- if (length(path) == 1L && dir.exists(path))
-          file.path(path, paste0(names(plan@sinks)[[k]], ".tif"))
-        else path[[names(plan@sinks)[[k]]]]
-        sk <- st; S7::prop(sk, "grid") <- ngrid
-        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names,
-                                sink_pad = pad))
-      }
-      if (nrow(it) == 1L) {
-        v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
-        if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
-      } else {
-        .exec_assemble(chunks, it, ngrid, pad)
-      }
-    })
-    names(res) <- names(plan@sinks)
-    return(if (is.null(path)) res else invisible(path))
-  }
+  result <- .exec_sink_tail(plan, graph,
+                            chunks_of = function(st) out[[st@id]],
+                            path = path, nodata = nodata,
+                            band_names = band_names)
 
-  sink <- plan@stages[[plan@sink]]
-  key <- .key(sink@members[[length(sink@members)]])
-  chunks <- lapply(out[[sink@id]], `[[`, key)
-  it <- chunk_iter(sink@chunks)
-  # Sink chunks may carry source/warp or D22 export padding.
-  sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
-
-  if (!is.null(path))
-    return(.exec_write_sink(chunks, it, sink, path, nodata, band_names,
-                            sink_pad = sink_pad))
-
-  result <- if (nrow(it) == 1L) {
-    v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
-    if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
-  } else {
-    .exec_assemble(chunks, it, sink@grid, sink_pad)
-  }
-
-  if (isTRUE(getOption("garry.exec_stats", FALSE)))
+  if (is.null(path) && length(plan@sinks) <= 1L &&
+      isTRUE(getOption("garry.exec_stats", FALSE)))
     attr(result, "garry_exec_stats") <- stats
   result
 }
