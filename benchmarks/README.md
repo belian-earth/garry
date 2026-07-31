@@ -340,6 +340,15 @@ concurrent box load (test suites) and page-cache state, not network;
 on a quiet box (the July-30 175 s predict, same machine) the total
 projects to ~350 s, under hutan's 362 s for the first time.
 
+**Routed width/K sweep (2026-08-02, same box, quiet).** crop=2048:
+c6/c8/c10 at K=2 = 399.8 / 401.2 / 412.5 s (tails 148/149/149 s,
+peaks 25.8/27.1/27.5 GB) — width saturates at 6; the tail is bounded
+by K=2 scan throughput + host point work, and c10 (July's anonymous
+OOM width) just works routed. c8 K=3 and crop=0 die contained at 32G
+(K=3 costs the ~6 GB it says; crop=0 keeps its 42G-class need).
+Sweet spot here: compute=6, scan_profiles=2. Details in
+design/routed-dispatch.md.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with

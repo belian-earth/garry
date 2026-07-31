@@ -156,3 +156,30 @@ bc-cohort widths.
 Remaining before the default flip: the bc-cohort box sweep
 (crop=2048/0, compute=6-10, scan_profiles=2-4) — different hardware,
 user-driven.
+
+## C5 width/K sweep (2026-08-02, this box, quiet, MEMMAX=32G)
+
+| config (crop=2048) | tail | total | peak anon |
+|---|---|---|---|
+| c6 K=2 | 148 s | 399.8 s | 25.8 GB |
+| c8 K=2 | 149 s | 401.2 s | 27.1 GB |
+| c10 K=2 | 149 s | 412.5 s | 27.5 GB |
+| c8 K=3 | killed (contained) at 31.0 GB | | |
+| crop=0 c8 K=2 | killed (contained) at 29.2 GB | | |
+
+Findings: width SATURATES at 6 for this workload — the tail is flat
+at 148-149 s from c6 to c10, i.e. bounded by K=2 scan throughput plus
+the host-side point work, not by map width; extra profiles only add
+idle RSS and dispatch noise (c10 was the width that OOM'd the
+anonymous pool in July — routed, it just works). K=3 needs the ~6 GB
+it costs and dies contained at 32G (the knob behaves as documented;
+pricing K working sets into admission for a REFUSAL instead of a
+scope kill remains the workstream-B follow-up). crop=0 keeps its
+historical 42G-class requirement (lazy_cog staging + full-box
+transients) — on a 62 GB desktop box that budget conflicts with the
+session; run crop=0 with the desktop quiet or on bigger RAM.
+
+Sweet spot on this box: compute=6, scan_profiles=2. Further tail
+cuts need K > 2 (more RAM), smaller per-daemon scan working sets
+(anvl buffer donation), or hutan-side conformal/validation
+parallelism — the drain itself is done.
