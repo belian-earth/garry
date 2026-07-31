@@ -139,3 +139,20 @@ width-4 OOM deaths at ~39 GB. Confinement verified from the task log
 profiles, narrow map profiles). C3's expected-effect estimate
 (~180-200 s tail) was beaten. Remaining: C4 is already covered by the
 C1 round-robin; C5 (bc-cohort validation + default flip) stays open.
+
+## C5 local validation (2026-08-02)
+
+The FULL suite runs green in both modes (legacy defaults and
+`routed_dispatch = TRUE` flipped session-wide, every pool the suite
+creates routed). The flipped sweep surfaced exactly three tests with
+hard-coded `garry_compute` references (mirai-pools cache count,
+pool-affinity mask collection, scheduler-failures daemon-kill mock) —
+all now loop `.comp_profiles()` and pass in both modes. Added
+`garry.scan_profiles` (default 2) as the K knob for big-RAM sweeps.
+Width-16 probe: 16 routed profiles create, run a distributed collect,
+and tear down in 3.6 s — profile-count scaling is a non-issue at
+bc-cohort widths.
+
+Remaining before the default flip: the bc-cohort box sweep
+(crop=2048/0, compute=6-10, scan_profiles=2-4) — different hardware,
+user-driven.

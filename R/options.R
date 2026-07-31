@@ -194,6 +194,14 @@
   # pool; both modes run the same code paths via .comp_profiles().
   # Takes effect at garry_daemons() creation time.
   routed_dispatch = FALSE,
+  # Routed mode: how many profiles are DESIGNATED for cold-kernel
+  # (scan) tasks per scan-bearing plan (clamped to the pool width).
+  # Scan live/retained memory is confined to this many working sets by
+  # construction (~6-12 GB each for the SI smoother), so it is the
+  # scan-memory knob: raise it on big-RAM boxes to widen scan
+  # throughput, never past what `K x working set + map profiles + host`
+  # leaves room for. Ignored in legacy mode.
+  scan_profiles = 2L,
   # Placement decision mode for source->compute chains in the pooled
   # scheduler (design/placement-cost-pass.md): "cost" (default)
   # compares modelled fuse-vs-materialise wall time per chain, with
@@ -374,6 +382,8 @@ garry_opt <- function(name) {
     desc = "tighten the compute budget on measured fleet-RSS growth"),
   routed_dispatch  = list(tier = "user", check = .opt_flag(),
     desc = "compute pool as width-1 profiles (daemon-identity routing)"),
+  scan_profiles    = list(tier = "tuning", check = .opt_num(min = 1, int = TRUE),
+    desc = "routed mode: profiles designated for scan (cold) kernels"),
   cost_gflops_core = list(tier = "calibration", check = .opt_num(min = 1e-9),
     desc = "sustained per-core kernel throughput (GFLOP/s)"),
   cost_shm_bw_mbs  = list(tier = "calibration", check = .opt_num(min = 1e-9),

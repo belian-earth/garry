@@ -1253,7 +1253,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # designated for cold-kernel (scan) tasks; pick_comp_prof routes
   # them nowhere else.
   scan_profs <- if (routed && plan_has_scan)
-    comp_profs[seq_len(min(2L, length(comp_profs)))] else character(0)
+    comp_profs[seq_len(min(as.integer(garry_opt("scan_profiles")),
+                           length(comp_profs)))] else character(0)
   .comp_pool_shape(n_comp, plan_has_scan, n_scan = length(scan_profs))
   placement <- .plan_placement(plan, consumers_of, warp_only,
                                n_read = n_read, n_comp = n_comp,

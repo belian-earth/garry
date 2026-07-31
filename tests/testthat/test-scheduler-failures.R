@@ -53,14 +53,15 @@ test_that("a daemon dying mid-drain aborts classed; pools are rebuildable", {
   # daemon-side formals, which the skew guard would rightly refuse).
   invisible(collect(lazy_source(f) + 1, distributed = TRUE))
   # Deterministic death: the compute task body kills its own daemon.
-  mirai::everywhere({
-    ns <- asNamespace("garry")
-    unlockBinding(".daemon_run_compute_shm", ns)
-    assign(".daemon_run_compute_shm", function(...) {
-      tools::pskill(Sys.getpid(), 9L)
-      Sys.sleep(5)
-    }, envir = ns)
-  }, .compute = "garry_compute")
+  for (p in garry:::.comp_profiles())
+    mirai::everywhere({
+      ns <- asNamespace("garry")
+      unlockBinding(".daemon_run_compute_shm", ns)
+      assign(".daemon_run_compute_shm", function(...) {
+        tools::pskill(Sys.getpid(), 9L)
+        Sys.sleep(5)
+      }, envir = ns)
+    }, .compute = p)
   before <- .sf_shm()
   err <- expect_error(
     suppressWarnings(collect(lazy_source(f) + 1, distributed = TRUE)),

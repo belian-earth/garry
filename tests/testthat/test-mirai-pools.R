@@ -47,8 +47,9 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
 
   # Warm-up populated the compute pool's jit cache (per-run keys, so
   # >= one entry per run that had compute stages).
-  cache_n <- mirai::mirai(length(ls(garry:::.daemon_cache)),
-                          .compute = "garry_compute")[]
+  cache_n <- sum(vapply(garry:::.comp_profiles(), function(p)
+    mirai::mirai(length(ls(garry:::.daemon_cache)), .compute = p)[],
+    integer(1)))
   expect_gt(cache_n, 0L)
 })
 

@@ -66,13 +66,15 @@ test_that("the compute pool is capped too and recorded for the cost model", {
   on.exit(garry_daemons(0, 0), add = TRUE)
   k <- max(2L, cores %/% 2L)
   expect_identical(garry:::.garry_state$comp_threads, k)
-  h <- mirai::everywhere({
-    sub("Cpus_allowed_list:\\s*", "",
-        grep("^Cpus_allowed_list:",
-             readLines(sprintf("/proc/%d/status", Sys.getpid())),
-             value = TRUE))
-  }, .compute = "garry_compute")
-  lists <- vapply(h, function(m) m[], character(1))
+  lists <- unlist(lapply(garry:::.comp_profiles(), function(p) {
+    h <- mirai::everywhere({
+      sub("Cpus_allowed_list:\\s*", "",
+          grep("^Cpus_allowed_list:",
+               readLines(sprintf("/proc/%d/status", Sys.getpid())),
+               value = TRUE))
+    }, .compute = p)
+    vapply(h, function(m) m[], character(1))
+  }))
   expect_length(lists, 2L)
   expect_false(lists[[1L]] == lists[[2L]])
 })
