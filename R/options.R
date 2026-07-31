@@ -236,18 +236,19 @@
   # ~4.2 Mpx (~9 GB).
   fuse_reader_mb = 2500,
   # Admission surcharge (MB) for a COLD scan kernel: the private extra
-  # a daemon holds during the scan's XLA compile, on top of the task's
-  # working set. Charged against the in-flight byte budget until every
-  # compute daemon has plausibly compiled the kernel, so the LIVE
-  # budget — not just the slow-start ramp — bounds concurrent cold
-  # compiles on wide pools. Recalibrated 2026-08-01 from the SI
-  # crop=2048 task-log RSS samples: with nv_scan's loop lowering the
-  # compute daemons traverse the whole scan tail between 6.0 and
-  # 7.1 GB, i.e. ~0.7-1.0 GB of compile growth — the old 10 GB value
-  # was measured on the UNROLLED bidirectional smoother (one daemon at
-  # ~16.5 GB during compile) and throttled cold-scan admission on wide
-  # pools for a cost that no longer exists.
-  scan_compile_mb = 1500,
+  # a daemon holds through the scan's compile AND first chunk, on top
+  # of the task's modelled working set. Charged against the in-flight
+  # byte budget until every compute daemon has plausibly compiled the
+  # kernel, so the LIVE budget — not just the slow-start ramp — bounds
+  # concurrent cold scans on wide pools. STRONGLY workload-dependent:
+  # a simple LLT mean scan measured ~1 GB (scan-retention spike,
+  # 2026-08-01), while the SI robust smoother measured one daemon at
+  # 11.8 GB live during its cold window (width-4 task-log attribution,
+  # same day — a briefly-shipped 1500 default let three ~6-12 GB cold
+  # scans launch inside one refresh window and killed a 42G scope).
+  # The default stays at the conservative measurement; lower it per
+  # session for light scan bodies.
+  scan_compile_mb = 10000,
   # Cost-mode memory admission: estimated resident cost of one XLA CPU
   # client on a read daemon (client + jitted kernel state; spike A
   # measured ~277 MB after one trivial jit). Fusion is refused when
