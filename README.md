@@ -33,6 +33,25 @@ R.
   is [vaster](https://github.com/hypertidy/vaster). Results track what
   GDAL would give you.
 
+## Scope
+
+garry is a raster-algebra compiler, not a GIS. It provides a small,
+closed set of array primitives (elementwise map, focal, reduce, scan;
+fixed-point iteration is planned) over grid-pinned labelled cubes.
+Expressions are written in [anvl](https://github.com/r-xla/anvl)’s
+vocabulary, planned as one graph, and executed distributed and
+memory-bounded. Generality comes from composing those primitives, not
+from a catalogue of named algorithms: garry will never ship every
+geomorphometric function, but the primitive set is chosen so that, in
+principle, any raster-in, raster-out computation can be expressed and
+compiled. This closed world is what makes whole-graph fusion, cost
+placement and byte-identical distributed execution possible.
+
+GDAL is the only boundary. The warper is the universal ingest and
+reshape mechanism (reprojection, resolution change, mosaicking);
+materialisation is the exit. Vector interop, dynamic-shape outputs and
+format conversion belong to GDAL at that boundary, not to the engine.
+
 ## Installation
 
 You can install the development version of garry from
