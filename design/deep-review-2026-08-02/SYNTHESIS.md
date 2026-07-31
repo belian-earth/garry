@@ -69,3 +69,12 @@ entangled, weakest memory-behavior coverage); lazy_cog raw fast-path
 extension to Int8/mosaic staging (feature, not cleanup); `read`
 default A/B on a fast link before enforcing min(cores, 8) for the
 composite fetch path.
+
+CORRECTION 2026-08-02: item 2's reader default was enforced WITHOUT
+the deferred A/B, and the A/B (run post-merge after a composite
+regression report) reversed it: min(cores, 8) cost the HLS composite
+23.2 -> 30.8 s (band drain 18.2 -> 26.0 s) — remote fetch is
+latency-bound and wants width = cores; the r8-wins evidence was the
+LOCAL raw-cube regime, where pipelines pin their own width
+(build_si(readers = 8)). Default restored to all logical cores
+(benchmarks/README.md).

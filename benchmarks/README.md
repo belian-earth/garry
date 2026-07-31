@@ -386,6 +386,21 @@ variance; re-run interleaved on a quiet link if the 5% matters. The
 default composite route (gdal-direct) bypasses the scheduler and ran
 38.46 s in the same sitting.
 
+**Reader-default regression + reversal (2026-08-02, fast link).** The
+wave-1 `read = min(cores, 8)` default (adopted from the r8-wins SI
+sweep WITHOUT the deferred fast-link A/B) regressed the HLS composite
+to 0.70x ODC (33.85 vs 23.66 s reported; reproduced 30.81 s). The A/B
+isolates it cleanly: auto (8 readers) band drain 26.0 s / 30.8 s wall
+vs 20 readers 18.2 s / 23.2 s wall — ODC parity. The two read regimes
+want opposite widths: remote COG fetch is latency-bound (width =
+cores wins; k=2 reader masks were identical in both eras, only the
+count changed), local raw-cube reads are CPU-bound against compute
+(r8 wins; build_si pins readers = 8 explicitly). Default restored to
+all logical cores; auto re-run confirms 24.1 s. The output-check
+deltas in the report (mean |Δ| 6.5-8.7) are the historical
+nearest-vs-bilinear resampling difference (~14 units recorded, phase
+9-11 section), not part of the regression.
+
 ## Historical results (phases 9-11)
 
 2026-07-08 ~00:30, ODC baseline added (same-sitting triple; cgroup

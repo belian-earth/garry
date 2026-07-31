@@ -344,14 +344,19 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
     #   at 6 on a 20-core box, with width beyond it flat. CUDA keeps
     #   2: concurrent clients share one card (compute=2 already
     #   RESOURCE_EXHAUSTED a 4 GB card on the SI predict).
-    # - read: cores capped at 8. The reader-width sweep measured r8
-    #   fastest at scale — the k=2 affinity floor OVERSUBSCRIBES the
-    #   machine past cores/2 readers (spike B's loss shape), and 8
-    #   streams already saturate the measured fast-link ceiling.
+    # - read: all logical cores. Remote fetch is LATENCY-bound: the
+    #   HLS composite regressed 23.2 -> 30.8 s (band drain 18.2 ->
+    #   26.0 s) when this default was briefly cut to min(cores, 8)
+    #   (benchmarks/README.md 2026-08-02) — the 8 came from the SI
+    #   reader-width sweep, but that regime is LOCAL raw-cube reads
+    #   competing with compute for cores; pipelines in that regime
+    #   pin their own width (build_si(readers = 8)). The default
+    #   serves the remote-fetch case, where width = cores restores
+    #   ODC parity.
     if (is.null(compute))
       compute <- if (identical(garry_opt("device"), "cuda")) 2L
                  else max(2L, min(cr$logical %/% 3L, 8L))
-    if (is.null(read)) read <- min(cr$logical, 8L)
+    if (is.null(read)) read <- cr$logical
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
   # MALLOC_* must be exported BEFORE the daemons spawn (read at exec). The GDAL
