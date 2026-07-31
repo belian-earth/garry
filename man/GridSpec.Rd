@@ -16,6 +16,10 @@ GridSpec(crs, transform, extent, dims, dtype, labels = list())
 \item{dims}{Integer dimensions: nx, ny (optionally nt, nb).}
 
 \item{dtype}{dtype string from the garry vocabulary.}
+
+\item{labels}{Optional named list of character vectors labelling the
+non-spatial dims (slice dates on \code{t}, band names on \code{band}); each
+length-matched to its dim. Metadata only: planning ignores labels.}
 }
 \value{
 A \code{GridSpec}.

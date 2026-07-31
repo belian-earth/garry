@@ -696,26 +696,6 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
   buf
 }
 
-#' Apply garry's default GDAL configuration for remote COG reads.
-#'
-#' Sets the GDAL config options the composite / warp-on-read path and
-#' cloud-optimised remote reads want: HTTP multiplexing over HTTP/2, the
-#' odc-stac retry cadence and timeouts, a capped block cache (GDAL
-#' defaults to 5% of RAM *per process*, which many daemons would
-#' multiply), single-range COG-header ingest, a skipped directory scan
-#' and a raster-extension vsicurl allowlist for fast remote opens, and the MEM
-#' driver open gate the direct warp needs. `garry_daemons()` calls this
-#' on every read daemon automatically; call it yourself for host-side
-#' discovery reads or when you drive `mirai::daemons()` directly. Each
-#' option is set via `set_config_option`, so a value you set afterwards
-#' wins.
-#'
-#' These are session-global GDAL settings. In particular
-#' `GDAL_DISABLE_READDIR_ON_OPEN = EMPTY_DIR` speeds remote opens but can
-#' hide sidecars (overviews, world files) for *local* multi-file reads in
-#' the same session; pass `gdal_config = FALSE` to `garry_daemons()` to
-#' skip it.
-#'
 # Run an idempotent read/fetch/warp thunk with task-scoped retries.
 # GDAL's HTTP retry covers per-request failures inside one operation; a
 # whole-operation failure (curl timeout, TLS reset, transient DNS, a
@@ -737,6 +717,26 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
   thunk()
 }
 
+#' Apply garry's default GDAL configuration for remote COG reads.
+#'
+#' Sets the GDAL config options the composite / warp-on-read path and
+#' cloud-optimised remote reads want: HTTP multiplexing over HTTP/2, the
+#' odc-stac retry cadence and timeouts, a capped block cache (GDAL
+#' defaults to 5% of RAM *per process*, which many daemons would
+#' multiply), single-range COG-header ingest, a skipped directory scan
+#' and a raster-extension vsicurl allowlist for fast remote opens, and the MEM
+#' driver open gate the direct warp needs. `garry_daemons()` calls this
+#' on every read daemon automatically; call it yourself for host-side
+#' discovery reads or when you drive `mirai::daemons()` directly. Each
+#' option is set via `set_config_option`, so a value you set afterwards
+#' wins.
+#'
+#' These are session-global GDAL settings. In particular
+#' `GDAL_DISABLE_READDIR_ON_OPEN = EMPTY_DIR` speeds remote opens but can
+#' hide sidecars (overviews, world files) for *local* multi-file reads in
+#' the same session; pass `gdal_config = FALSE` to `garry_daemons()` to
+#' skip it.
+#'
 #' @return Invisibly `NULL`.
 #' @export
 garry_gdal_config <- function() {

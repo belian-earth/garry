@@ -36,6 +36,7 @@ Suggests:
     mirai,
     mori,
     rmarkdown,
+    torch,
     rstac,
     terra,
     testthat (>= 3.0.0),

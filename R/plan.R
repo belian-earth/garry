@@ -85,6 +85,8 @@ Stage <- S7::new_class(
 #'
 #' @param stages List of `Stage`, indexed by stage id.
 #' @param sink Id of the terminal stage.
+#' @param sinks Named integer vector of requested sink NODE ids for
+#'   multi-export plans (empty for single-sink plans).
 #' @param graph The IR `Graph` the plan was built from.
 #' @return A `Plan`.
 #' @export

@@ -131,6 +131,9 @@ crs_equal <- function(a, b) {
 #' @param transform GDAL geotransform, length 6, north-up.
 #' @param extent Numeric length 4: xmin, ymin, xmax, ymax.
 #' @param dims Integer dimensions: nx, ny (optionally nt, nb).
+#' @param labels Optional named list of character vectors labelling the
+#'   non-spatial dims (slice dates on `t`, band names on `band`); each
+#'   length-matched to its dim. Metadata only: planning ignores labels.
 #' @param dtype dtype string from the garry vocabulary.
 #' @return A `GridSpec`.
 #' @export
