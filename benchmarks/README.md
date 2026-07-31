@@ -313,6 +313,18 @@ smoother shape); routed dispatch is now the memory-confinement lever,
 and MEMMAX on this 62 GB box stays <= 32G (a 42G scope at ceiling
 took the desktop session down).
 
+**Cache + width verdicts (2026-08-02, quiet box, MEMMAX=32G).**
+Width-2 crop=2048 cost with the A1 smoother cache: cold 649 s (tail
+phase 406 s, pays + saves the fit), cached **552.2 s** (tail phase
+332 s) — a NEW BEST at this crop (prior 576.2 s), ~74 s of Kalman
+MLE + tau_break gone from every warm sweep iteration (the conformal
+point fit still runs). Width-4 retry with all three defences active
+(restored surcharge, per-task trim, RSS correction): killed again
+inside its own 32G scope — width 4 at crop=2048 definitively does not
+fit a 62 GB box; scan-memory confinement via routed dispatch
+(workstream C) is the required lever, with wide sweeps on the
+bc-cohort box.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with
