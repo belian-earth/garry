@@ -58,6 +58,8 @@ Collate:
     'collect.R'
     'gdal_adapter.R'
     'executor.R'
+    'daemon.R'
+    'pools.R'
     'scheduler.R'
     'composite_direct.R'
     'lazy_raster.R'

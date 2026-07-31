@@ -61,62 +61,8 @@ NULL
   mc
 }
 
-# Warm a daemon's XLA/PJRT client (one trivial jit) so the first real compute
-# task doesn't pay the ~3s cold init on the critical path.
-#' @keywords internal
-#' @export
-.gd_warm <- function() {
-  .require_anvl()
-  a <- g_upload_raw(writeBin(as.numeric(1:4), raw(), size = 4L), "f32", c(2L, 2L))
-  g_download(g_jit(function(inp) inp[[1L]] + 1)(list(a)))
-  invisible(TRUE)
-}
 
-# Pipeline daemon task: replay the cleaned mask ONCE on the whole fmask cube
-# (morphology, cube-vectorised over time) and write the resulting f32 mask cube
-# to one .bin, so every band's median reads it instead of recomputing the
-# morphology. Runs on the compute pool while the bands are still fetching.
-#' @keywords internal
-#' @export
-.gd_compute_mask <- function(k) {
-  .require_anvl()
-  dev <- .exec_device(k$dev)
-  n <- length(k$fmask_bins)
-  fm <- g_upload_raw(
-    do.call(c, lapply(k$fmask_bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))),
-    "f32", c(n, k$ny, k$nx), device = dev)
-  cleaned <- g_jit(function(inp)
-    .gd_replay_mask(inp[[1L]], k$chain, k$halo, k$ny, k$nx), device = dev)(list(fm))
-  r <- g_download_raw(cleaned); attributes(r) <- NULL
-  writeBin(r, k$out_bin)                       # whole cube, row-major f32
-  invisible(TRUE)
-}
 
-# Pipeline daemon task: one band's median. Reads the band cube plus the shared
-# cleaned-mask cube (already morphology-processed by .gd_compute_mask), applies
-# the masked-apply fn F, and reduces over time -> (ny,nx) raw f32 payload. Runs
-# on the compute pool while later bands are still fetching.
-#' @keywords internal
-#' @export
-.gd_compute_masked_band <- function(job, k) {
-  .require_anvl()
-  dev <- .exec_device(k$dev)
-  n <- length(job$band_bins)
-  cube <- function(bins) g_upload_raw(
-    do.call(c, lapply(bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))),
-    "f32", c(length(bins), k$ny, k$nx), device = dev)
-  band <- cube(job$band_bins)
-  masked <- length(k$mask_bin) == 1L
-  if (masked) {
-    mask <- g_upload_raw(readBin(k$mask_bin, "raw", n = n * k$ny * k$nx * 4L),
-                         "f32", c(n, k$ny, k$nx), device = dev)
-    lean <- function(inp) .apply_reduce(k$op, k$F(inp[[1L]], inp[[2L]]), 1L, k$nan_rm)
-    g_download_raw(g_jit(lean, device = dev)(list(band, mask)))
-  } else {
-    lean <- function(inp) .apply_reduce(k$op, inp[[1L]], 1L, k$nan_rm)
-    g_download_raw(g_jit(lean, device = dev)(list(band)))
-  }
-}
 
 # Given a ReduceNode, lift one band's pieces: per-slice band + fmask sources,
 # the masked-apply fn F, and the mask CHAIN (Map/Focal nodes, replayed on the
@@ -244,51 +190,7 @@ NULL
        grid = sink@grid, device = sink@device)
 }
 
-# One source's warp-on-read, run in a daemon: warp this slice's REMOTE item
-# window(s) straight into a raw f32 buffer via MEM:::DATAPOINTER in one
-# gdalwarp -- GDAL reads (windowed vsicurl), reprojects and mosaics the sources
-# itself, writing f32 into memory we hold (no R double, no tmpfs GTiff, no
-# local index). Writes the payload to `bin`.
-# `j` carries only this slice's varying data (locs, dt, nodata, bin); `k` is
-# the grid-constant bundle passed once via mirai `.args` (embedding it in every
-# task instead throttles the dispatcher and starves the daemon pool).
-#' Daemon task body: warp one slice's remote items into an f32 buffer.
-#'
-#' Internal (exported only so mirai daemons can address it via `::`).
-#' @param j Per-slice job (locs/dt/nodata/resampling/bin).
-#' @param k Grid-constant bundle (nx/ny/gtstr/wkt).
-#' @return List with `err`, `tf`, `tw`.
-#' @keywords internal
-#' @export
-.cd_fetch_warp <- function(j, k) {
-  nx <- k$nx; ny <- k$ny
-  buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny)   # all-nodata default
-  tw <- 0
-  err <- tryCatch({
-    if (!length(j$locs)) cli::cli_abort("no items for this slice")
-    # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
-    # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
-    # reprojects and mosaics the sources itself. No tmpfs GTiff fetch, no
-    # per-slice local index. Ordered by datetime so overlap resolution (last
-    # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
-    tw <- system.time(
-      buf <- .gdal_with_retry(function()
-        gdal_warp_to_buffer(buf, nx, ny, k$gtstr, k$wkt,
-                            j$locs[order(j$dt)], j$nodata,
-                            resampling = j$resampling %||% "near"),
-        what = "slice warp")
-    )[["elapsed"]]
-    NA_character_
-  }, error = function(e) conditionMessage(e))
-  writeBin(buf, j$bin)   # always write a complete slice (real or all-NaN)
-  list(err = err, tf = 0, tw = tw)
-}
 
-# Number of connected daemons in a mirai profile (0 if none / unknown).
-.gd_n_compute <- function(prof) {
-  st <- tryCatch(mirai::status(.compute = prof), error = function(e) NULL)
-  if (is.null(st) || !is.numeric(st$connections)) 0L else as.integer(st$connections)
-}
 
 # Max concurrent band medians whose working sets fit the RAM budget. Each holds
 # ~3.5 cubes (band + shared mask + median scratch); cap so their combined
