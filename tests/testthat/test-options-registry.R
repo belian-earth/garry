@@ -5,7 +5,7 @@
 # silently mean "error").
 
 test_that("every option is registered and every default validates", {
-  expect_setequal(names(garry:::.garry_opt_info),
+  expect_setequal(names(garry:::.garry_options_table),
                   names(garry:::.garry_defaults))
   expect_no_error(garry:::.garry_opt_check())
   reg <- garry_options()
