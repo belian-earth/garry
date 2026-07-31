@@ -216,16 +216,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # the package is attached on every daemon (idempotent, once per call).
   # Read policy is resolved host-side and shipped: daemons don't
   # inherit host options.
-  for (p in profiles)
-    mirai::everywhere({
-      suppressMessages(library(garry))
-      options(garry.read_fail = rf, garry.read_retry = rr)
-      # run-start trim: give back what the previous plan's arenas are
-      # hoarding (a tail plan otherwise starts with the fleet standing
-      # at the predict plan's high-water)
-      garry::.daemon_hygiene()
-    }, rf = garry_opt("read_fail"), rr = garry_opt("read_retry"),
-    .compute = p)
+  # Ship read policy + run-start trim to every daemon (the trim gives
+  # back what the previous plan's arenas are hoarding — a tail plan
+  # otherwise starts with the fleet standing at the predict plan's
+  # high-water).
+  .pool_broadcast(quote({
+    suppressMessages(library(garry))
+    options(garry.read_fail = rf, garry.read_retry = rr)
+    garry::.daemon_hygiene()
+  }), profiles = profiles, rf = garry_opt("read_fail"),
+  rr = garry_opt("read_retry"))
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))

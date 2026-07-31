@@ -256,11 +256,11 @@ NULL
 # not propagate to mirai daemons).
 .gd_daemon_prep <- function(prof) {
   .garry_abi_check(prof)
-  mirai::everywhere({
+  .pool_broadcast(quote({
     suppressMessages(library(garry))
     garry::garry_gdal_config()
     options(garry.read_retry = rr)
-  }, rr = garry_opt("read_retry"), .compute = prof)
+  }), profiles = prof, rr = garry_opt("read_retry"))
 }
 
 # Launch the parallel warp-on-read WITHOUT blocking (raw mirai() per

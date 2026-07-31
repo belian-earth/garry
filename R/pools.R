@@ -112,6 +112,26 @@ NULL
   sum(vapply(.comp_profiles(), .gd_n_compute, integer(1)))
 }
 
+# Broadcast one QUOTED expression to every daemon of `profiles`,
+# shipping `...` as task args and awaiting completion. do.call defeats
+# everywhere()'s NSE so one language object serves the whole loop
+# (probed 2026-08-02; a substitute()-based first attempt relied on a
+# nonexistent .expr_quoted argument and was backed out). `quiet`
+# tolerates down profiles (teardown-adjacent broadcasts).
+.pool_broadcast <- function(expr, profiles = .comp_profiles(), ...,
+                            quiet = FALSE) {
+  args <- c(list(expr), list(...))
+  out <- list()
+  for (p in profiles) {
+    h <- if (quiet)
+      tryCatch(do.call(mirai::everywhere, c(args, list(.compute = p))),
+               error = function(e) NULL)
+    else do.call(mirai::everywhere, c(args, list(.compute = p)))
+    if (!is.null(h)) out <- c(out, lapply(h, function(m) m[]))
+  }
+  invisible(out)
+}
+
 # Every daemon pid of a mirai profile (empty when unavailable).
 .garry_pool_pids <- function(profile) {
   tryCatch(
@@ -416,13 +436,10 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
 #' @return Invisibly `NULL`.
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
-  for (p in c("garry_read", .comp_profiles(), "garry_write")) {
-    h <- tryCatch(
-      mirai::everywhere(garry::.daemon_hygiene(deep = d), d = deep,
-                        .compute = p),
-      error = function(e) NULL)
-    if (!is.null(h)) invisible(lapply(h, function(m) m[]))
-  }
+  .pool_broadcast(quote(garry::.daemon_hygiene(deep = d)),
+                  profiles = c("garry_read", .comp_profiles(),
+                               "garry_write"),
+                  d = deep, quiet = TRUE)
   invisible(NULL)
 }
 
