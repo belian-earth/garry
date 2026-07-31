@@ -363,6 +363,20 @@ is ~75% fused MLP COMPUTE, ~25% IO — the next predict lever is reader
 width (build_si hard-codes 8), not formats. Suite green incl.
 byte-identical fast-vs-GDAL equivalence gates (test-raw-cube.R).
 
+**Reader-width sweep (2026-08-02, routed c6 K=2, crop=2048).**
+2-year raw-input probes: r8 49 s predict, r20 42 s, granularity
+(readpx 8e6/4e6) WORSE (per-task overhead + halo duplication beat the
+admission win). Full 12-year tif-input runs: r8 227 s (the 399.8 s
+record), r10 237 s / 413.1 s, r20 244 s / 427.3 s — width beyond 8
+buys nothing at scale and r20's k=2 affinity floor OVERSUBSCRIBES the
+machine (20 x 2 masked CPUs on 20 cores, spike B's measured loss
+shape); afternoon predict drift is ~+10-20 s across all configs.
+Verdict: readers=8 stays the default (build_si now takes readers=);
+the predict phase is compute-saturated near machine width — the
+remaining predict levers are kernel efficiency and (once disk allows
+staging the full cache) raw inputs, whose 2-year probe suggests
+r-width may pay again when reads cost ~nothing.
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with
