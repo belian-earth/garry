@@ -81,9 +81,17 @@ NULL
 #' @export
 .garry_abi_token <- function() {
   ns <- asNamespace("garry")
-  nms <- sort(ls(ns, all.names = TRUE, pattern = "^\\.daemon_"))
-  nms <- nms[vapply(nms, function(n) is.function(get(n, envir = ns)),
-                    logical(1))]
+  # Every cross-process entry point must be enrolled: the .daemon_*
+  # family by pattern, plus composite_direct's task bodies, which are
+  # invoked via garry:: on daemons but named .cd_*/.gd_* (deep review
+  # 2026-08-02: they previously escaped the hash, so .gd_daemon_prep's
+  # skew check passed under skew).
+  nms <- sort(c(ls(ns, all.names = TRUE, pattern = "^\\.daemon_"),
+                ".cd_fetch_warp", ".gd_warm", ".gd_compute_mask",
+                ".gd_compute_masked_band"))
+  nms <- nms[vapply(nms, function(n)
+    exists(n, envir = ns) && is.function(get(n, envir = ns)),
+    logical(1))]
   rlang::hash(list(
     store = .garry_store_abi,
     formals = stats::setNames(
@@ -822,21 +830,23 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
-    # TWO compute daemons by default, with half-machine affinity masks
-    # (.comp_pool_shape). The pool's residual workloads — after the
-    # placement pass fuses kernel fleets onto the readers — are scans
-    # and big fused reductions, and those are COMPILE-bound: every
-    # daemon that ever runs a scan task pays its multi-GB unrolled-HLO
-    # compile (mirai cannot route tasks to warmed daemons), so a wide
-    # pool multiplies compiles without adding admitted concurrency
-    # (measured: crop=2048 scan tail, compute=10 OOM'd on exactly
-    # this; compute=2 completes). Fleet workloads that would benefit
-    # from width either fuse onto the read pool (cost placement) or
-    # justify an explicit larger `compute` — which is now SAFE at any
-    # width (per-daemon masks, working-set admission, cold-kernel slow
-    # start, scan-compile surcharge), just not the default.
-    if (is.null(compute)) compute <- 2L
-    if (is.null(read))    read    <- cr$logical
+    # Machine-derived defaults (deep review 2026-08-02, from the
+    # routed width/K sweep, benchmarks/README.md):
+    # - compute: cores/3 capped at 8 (floor 2). Routed dispatch made
+    #   width SAFE (scan tasks are confined to the scan_profiles
+    #   designated daemons, so width no longer multiplies scan
+    #   compiles or scan memory) and the sweep measured the sweet spot
+    #   at 6 on a 20-core box, with width beyond it flat. CUDA keeps
+    #   2: concurrent clients share one card (compute=2 already
+    #   RESOURCE_EXHAUSTED a 4 GB card on the SI predict).
+    # - read: cores capped at 8. The reader-width sweep measured r8
+    #   fastest at scale — the k=2 affinity floor OVERSUBSCRIBES the
+    #   machine past cores/2 readers (spike B's loss shape), and 8
+    #   streams already saturate the measured fast-link ceiling.
+    if (is.null(compute))
+      compute <- if (identical(garry_opt("device"), "cuda")) 2L
+                 else max(2L, min(cr$logical %/% 3L, 8L))
+    if (is.null(read)) read <- min(cr$logical, 8L)
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
   # MALLOC_* must be exported BEFORE the daemons spawn (read at exec). The GDAL
@@ -846,22 +856,23 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # to tune host-side discovery.
   if (isTRUE(gdal_config)) .garry_env_defaults()
   mirai::daemons(read, .compute = "garry_read", ...)
-  # Compute pool: legacy = one width-N anonymous profile; routed
-  # (garry.routed_dispatch) = N width-1 direct-connection profiles
-  # (no dispatcher processes — probed 2026-08-02: everywhere() state
-  # persists, width-1 queues serialise, teardown clean), giving the
-  # scheduler daemon identity. Any previous routed generation is torn
-  # down first so generations never mix.
-  for (p in .garry_state$comp_profiles %||% character(0))
+  # Compute pool: N width-1 direct-connection profiles (no dispatcher
+  # processes — probed 2026-08-02: everywhere() state persists,
+  # width-1 queues serialise, teardown clean), giving the scheduler
+  # daemon identity — exact per-profile kernel warmth and scan-memory
+  # confinement (design/routed-dispatch.md; the anonymous width-N pool
+  # was excised after the both-mode suite and the width sweep proved
+  # routing strictly dominant). Any previous generation is torn down
+  # first so generations never mix.
+  for (p in c(.garry_state$comp_profiles %||% character(0),
+              "garry_compute"))
     try(mirai::daemons(0L, .compute = p), silent = TRUE)
   .garry_state$comp_profiles <- NULL
-  if (compute > 0L && isTRUE(garry_opt("routed_dispatch"))) {
+  if (compute > 0L) {
     profs <- sprintf("garry_comp_%d", seq_len(compute))
     for (p in profs)
       mirai::daemons(1L, dispatcher = FALSE, .compute = p, ...)
     .garry_state$comp_profiles <- profs
-  } else {
-    mirai::daemons(compute, .compute = "garry_compute", ...)
   }
   # ONE writer daemon rides along with the pools: streamed sink chunks
   # write there instead of on the host dispatch thread (GTiff is
@@ -966,36 +977,29 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       "garry_scheduler_error")
   n_read <- .gd_n_compute("garry_read")
   n_comp <- .comp_n()
-  pooled <- TRUE
   read_prof <- "garry_read"
   comp_profs <- .comp_profiles()
   profiles <- unique(c(read_prof, comp_profs))
-  # Per-profile launch slots: routed profiles are width 1 (depth 2 =
-  # today's 2-slots-per-daemon); the legacy single profile keeps the
-  # whole pool's depth. pick_comp_prof is the C1 routing policy —
-  # least-loaded profile with a free slot, first-wins on ties (exact
-  # per-kernel warmth and scan confinement arrive in C2/C3).
-  routed <- !identical(comp_profs, "garry_compute")
-  prof_depth <- if (!routed) 2L * max(1L, n_comp) else 2L
+  # Per-profile launch slots (width-1 profiles, depth 2 each) and EXACT
+  # per-profile kernel warmth: key-only launches go only to a profile
+  # that provably holds the kernel. Scan tasks are CONFINED to
+  # `scan_profs` (set once the plan is known), at most one cold compile
+  # in flight per profile — the structural bound that replaced the
+  # probabilistic slow-start ramp and the scan-compile byte surcharge
+  # (both retired 2026-08-02; the surcharge was twice miscalibrated in
+  # the field, and workstream B measured anonymous rotation growing
+  # EVERY daemon to the scan working set).
+  prof_depth <- 2L
   prof_slots <- new.env(parent = emptyenv())
   for (p in comp_profs) prof_slots[[p]] <- 0L
-  # C2 (routed): EXACT per-profile kernel warmth — key-only launches go
-  # only to a profile that provably holds the kernel; C3: cold-kernel
-  # (scan) tasks are CONFINED to `scan_profs` (set once the plan is
-  # known), with at most one cold compile in flight per profile. The
-  # confinement replaces the probabilistic slow-start ramp and the
-  # scan_compile_mb byte surcharge in routed mode: cold-scan
-  # concurrency and scan MEMORY are bounded structurally by K
-  # designated daemons (workstream B: anonymous rotation grows every
-  # daemon to the scan working set).
   prof_warm <- new.env(parent = emptyenv())      # "prof\x1fck" -> TRUE
   prof_cold_busy <- new.env(parent = emptyenv()) # prof -> TRUE while compiling
   scan_profs <- character(0)                     # set after plan_has_scan
   .pw_key <- function(p, ck) paste0(p, "\x1f", ck)
   pick_comp_prof <- function(t) {
-    is_cold <- routed && !is.null(t$ck) && (t$cold_mb %||% 0) > 0
+    is_cold <- !is.null(t$ck) && isTRUE(t$scan)
     cands <- if (is_cold && length(scan_profs)) scan_profs
-             else if (routed && length(scan_profs) &&
+             else if (length(scan_profs) &&
                       length(comp_profs) > length(scan_profs) && !is_cold)
                # ordinary kernels prefer the non-scan profiles (keeps
                # them lean); scan profiles remain a fallback
@@ -1028,13 +1032,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   .garry_abi_check(unique(c(profiles,
     if (tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE))
       "garry_write")))
-  # Back-pressure. Single pool: one shared bucket (unchanged
-  # behavior). Pooled: reads as before; compute launches are gated
-  # by a BYTE budget (below) — per-task resident estimates against
-  # ram_budget_mb x pool size — so many small chunks (per-slice mask
-  # cleanup, ~10 MB each) flow at full pool width while big fused
-  # medians (~350 MB each) self-limit. compute_inflight remains an
-  # optional hard count cap on top.
+  # Back-pressure: reads throttle on slots + resident-store bytes;
+  # compute launches are gated by a BYTE budget (below) — per-task
+  # resident estimates against the live RAM pool — so many small
+  # chunks (per-slice mask cleanup, ~10 MB each) flow at full pool
+  # width while big fused medians (~350 MB each) self-limit.
+  # compute_inflight remains an optional hard count cap on top.
   cap_read <- max(2L * n_read, 4L)
   cap_comp <- 2L * n_comp                    # comp-pool slot depth
   cap_comp_opt <- garry_opt("compute_inflight")  # optional hard cap
@@ -1206,12 +1209,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   n_task <- 0L
   add_task <- function(key, deps, pool, launch, mb = 0, prio = 2L,
                        dev = "cpu", store_mb = 0, ck = NULL,
-                       cold_mb = 0) {
+                       scan = FALSE) {
     n_task <<- n_task + 1L
     tasks[[key]] <- list(deps = deps, pool = pool, launch = launch,
                          mb = mb, prio = prio, dev = dev,
                          store_mb = store_mb, seq = n_task, ck = ck,
-                         cold_mb = cold_mb,
+                         scan = scan,
                          state = "pending")
   }
   # For coarse-reading (split) source stages: task key per compute chunk,
@@ -1249,10 +1252,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     any(vapply(s@members, function(id)
       S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1))),
     logical(1)))
-  # C3 scan confinement (routed): the first K = min(2, N) profiles are
-  # designated for cold-kernel (scan) tasks; pick_comp_prof routes
-  # them nowhere else.
-  scan_profs <- if (routed && plan_has_scan)
+  # Scan confinement: the first K = garry.scan_profiles profiles are
+  # designated for scan tasks; pick_comp_prof routes them nowhere
+  # else, so scan live/retained memory is K x working set by
+  # construction (workstream B).
+  scan_profs <- if (plan_has_scan)
     comp_profs[seq_len(min(as.integer(garry_opt("scan_profiles")),
                            length(comp_profs)))] else character(0)
   .comp_pool_shape(n_comp, plan_has_scan, n_scan = length(scan_profs))
@@ -1265,7 +1269,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   fuse_of <- placement$by_source     # source sid -> fuse spec
   fused_cid <- placement$fused       # fused compute sid -> TRUE
 
-  # Jit warm-up specs, one per compute stage (pooled mode): the modal
+  # Jit warm-up specs, one per compute stage: the modal
   # (full) chunk shape, compiled on every compute daemon at run start.
   warm_specs <- list()
 
@@ -1457,16 +1461,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       has_scan <- any(vapply(s@members, function(id)
         S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1)))
       if (!has_scan) task_mb <- task_mb / 2
-      # SCAN kernels pre-warm only on a pool of <= 2 daemons (the
-      # validated shape: two concurrent compiles land pre-drain while
-      # the host is quiet). On a wider LEGACY pool the warm-up
-      # everywhere() broadcast would run the scan's multi-GB compile
-      # on EVERY daemon at once, unbudgeted — left cold instead, each
-      # daemon compiles on its first scan task under the cold-kernel
-      # slow start. ROUTED pools include scan specs at any width: the
-      # broadcast is targeted at the K <= 2 designated scan profiles
-      # only (same validated pre-drain shape, daemon-exact).
-      if (!has_scan || n_comp <= 2L || routed)
+      # Scan kernels pre-warm too: the broadcast is TARGETED at the
+      # K designated scan profiles only (the validated <= 2 concurrent
+      # pre-drain compiles, daemon-exact at any pool width).
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         scan = has_scan,
@@ -1527,8 +1524,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           sr <- use_raw
           add_task(key, unique(in_deps), "comp", mb = task_mb,
                    store_mb = store_mb_comp,
-                   cold_mb = if (has_scan)
-                     as.numeric(garry_opt("scan_compile_mb")) else 0,
+                   scan = has_scan,
                    dev = sdev, ck = sig,
                    launch = function(prof, with_fn = TRUE) {
             # Handles resolve at launch time: dependencies are done, so
@@ -1643,42 +1639,29 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # every compute-pool daemon while the read pool owns the drain
   # (measured: cold 1.45 s vs warmed 0.61 s per tail chunk). Fired
   # async — a daemon runs it before any compute task queued after it;
-  # the handle stays referenced until the run ends. Only in pooled
-  # mode: on a shared pool the warm task would displace a read (the
-  # phase 10 rejection).
+  # while the read pool owns the early drain; the handle stays
+  # referenced until the run ends.
   warm_handle <- NULL
-  # Cache keys the warm-up broadcast to every COMPUTE daemon: tasks
-  # launched onto that pool send fn = NULL (key only) — the daemon
-  # already holds the jitted closure. Kernels the warm-up missed (or a
-  # warm-up failure) fall back through the garry_jit_miss resend.
-  warmed_ck <- new.env(parent = emptyenv())
-  if (pooled && isTRUE(garry_opt("jit_warmup")) && length(warm_specs)) {
+  if (isTRUE(garry_opt("jit_warmup")) && length(warm_specs)) {
     # Content-addressed keys collapse structurally identical stages
-    # (e.g. per-slice mask cleanup) to ONE spec.
+    # (e.g. per-slice mask cleanup) to ONE spec. Targeted warm-up: map
+    # kernels on every profile, scan kernels only at the designated
+    # scan profiles. Warmth is recorded PER PROFILE — key-only
+    # launches are exact, not probabilistic (the resend covers a
+    # profile whose warm-up failed, clearing its mark).
     warm_specs <- warm_specs[!duplicated(
       vapply(warm_specs, `[[`, character(1), "ck"))]
-    if (routed) {
-      # Targeted warm-up: map kernels everywhere, scan kernels only at
-      # the designated scan profiles. Warmth is recorded PER PROFILE —
-      # key-only launches are exact, not probabilistic (the resend
-      # covers a profile whose warm-up failed, clearing its mark).
-      scan_sp <- Filter(function(sp) isTRUE(sp$scan), warm_specs)
-      map_sp <- Filter(function(sp) !isTRUE(sp$scan), warm_specs)
-      wh <- list()
-      for (p in comp_profs) {
-        sp_p <- c(map_sp, if (p %in% scan_profs) scan_sp)
-        if (!length(sp_p)) next
-        wh <- c(wh, mirai::everywhere(garry::.daemon_warm_jit(sp),
-                                      sp = sp_p, .compute = p))
-        for (sp in sp_p) prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
-      }
-      warm_handle <- wh
-    } else {
-      warm_handle <- mirai::everywhere(garry::.daemon_warm_jit(sp),
-                                       sp = warm_specs,
-                                       .compute = comp_profs)
-      for (sp in warm_specs) warmed_ck[[sp$ck]] <- TRUE
+    scan_sp <- Filter(function(sp) isTRUE(sp$scan), warm_specs)
+    map_sp <- Filter(function(sp) !isTRUE(sp$scan), warm_specs)
+    wh <- list()
+    for (p in comp_profs) {
+      sp_p <- c(map_sp, if (p %in% scan_profs) scan_sp)
+      if (!length(sp_p)) next
+      wh <- c(wh, mirai::everywhere(garry::.daemon_warm_jit(sp),
+                                    sp = sp_p, .compute = p))
+      for (sp in sp_p) prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
     }
+    warm_handle <- wh
   }
 
   # Region-aware stage chunk lookup. A stage's chunks live under its
@@ -2027,22 +2010,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # ramps on whatever else holds the machine — measured at crop=0 with
   # the lazy_cog staging resident). The escape is accordingly "nothing
   # byte-accounted in flight", so one over-budget task always runs.
-  # Effective in-flight bytes: the working set plus the cold-compile
-  # surcharge while the task's kernel may still be cold on whichever
-  # daemon picks it up (tasks cannot be routed, so "may be cold" is
-  # conservative: until as many tasks of that kernel have completed as
-  # there are daemons). This is what lets the LIVE budget — which sees
-  # the host and staging grow — bound concurrent cold scan compiles on
-  # any pool width.
-  mb_eff <- function(t) {
-    # Routed mode retires the cold surcharge: cold-scan concurrency is
-    # bounded STRUCTURALLY (K scan profiles, one cold compile per
-    # profile), which two miscalibrations proved stronger than the
-    # byte proxy (design/routed-dispatch.md).
-    if (routed) return(t$mb)
-    t$mb + if ((t$cold_mb %||% 0) > 0 && !isTRUE(warmed_ck[[t$ck]]) &&
-                 (ck_done[[t$ck]] %||% 0L) < n_comp) t$cold_mb else 0
-  }
+  # (The cold-scan byte surcharge that once rode in here was retired
+  # with the anonymous pool: cold-scan concurrency is bounded
+  # STRUCTURALLY — K scan profiles, one cold compile per profile —
+  # which two field miscalibrations proved stronger than a byte proxy;
+  # design/routed-dispatch.md.)
   comp_ok <- function(t) {
     # The optional hard count cap applies to COMPUTE-POOL tasks only:
     # fused reads ride comp_ok for the byte budget but never count
@@ -2051,7 +2023,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     if (!is.null(cap_comp_opt) && identical(t$pool, "comp") &&
         n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
     mb_inflight == 0 ||
-      mb_inflight + mb_eff(t) <= comp_budget_mb
+      mb_inflight + t$mb <= comp_budget_mb
   }
   # O(1) readiness: per-task unmet-dep counters decremented through a
   # reverse index on completion. The old `all(deps %in% done)` re-hashed
@@ -2105,8 +2077,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # stage becomes ready. Allow one more in-flight task of a cold
   # kernel than have ever COMPLETED: the ramp is 1, 2, 3, ... and by
   # mid-ramp the early daemons hold the kernel warm.
-  ck_inflight <- new.env(parent = emptyenv())  # kernel sig -> in flight
-  ck_done <- new.env(parent = emptyenv())      # kernel sig -> completed
   dep_left <- new.env(parent = emptyenv())    # task -> unmet dep count
   dependents <- new.env(parent = emptyenv())  # task -> tasks waiting on it
   for (k in task_keys) {
@@ -2157,65 +2127,49 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       first_pending <- first_pending + 1L
     for (k in task_order[seq.int(first_pending,
                                  length.out = max(0L, n_total - first_pending + 1L))]) {
-      # Single pool: one shared bucket (pre-pool behavior). Pooled:
-      # reads and computes throttle independently, so a saturated
-      # read queue never blocks compute launches or vice versa.
-      if (!pooled && length(inflight) >= cap_read) break
       t <- tasks[[k]]
       if (t$state != "pending") next
       slot <- t$pool
-      if (pooled) {
-        if (t$pool == "read") {
-          if (n_slot[["read"]] >= cap_read) next
-          if (!read_ok(t)) next
-          # Fused reads carry a kernel working set: ride the compute
-          # byte budget too, or a cold fleet ramps N XLA working sets
-          # at once regardless of what else holds the machine.
-          if (t$mb > 0 && !comp_ok(t)) next
-        } else {
-          if (!comp_ok(t)) next
-          # Compute tasks pin their OUTPUT region from launch, and
-          # fetch-backed assembles pin read-store bytes like any read:
-          # gate both by the store budget, with the comp-pool escape so
-          # a saturated store still drains (see store_ok_comp).
-          if (t$store_mb > 0 && !store_ok_comp(t)) next
-          # Cold-kernel slow start (see ck_inflight above).
-          # Cold-kernel slow start (legacy pools only; routed pools
-          # bound cold compiles exactly, per profile, in pick_comp_prof).
-          if (!routed && !is.null(t$ck) && !isTRUE(warmed_ck[[t$ck]]) &&
-              (ck_inflight[[t$ck]] %||% 0L) > (ck_done[[t$ck]] %||% 0L))
-            next
-          if (n_slot[["comp"]] >= cap_comp) next
-          cprof <- pick_comp_prof(t)
-          if (is.null(cprof)) next  # every eligible profile busy/at depth
-          slot <- "comp"
-        }
+      if (t$pool == "read") {
+        if (n_slot[["read"]] >= cap_read) next
+        if (!read_ok(t)) next
+        # Fused reads carry a kernel working set: ride the compute
+        # byte budget too, or a cold fleet ramps N XLA working sets
+        # at once regardless of what else holds the machine.
+        if (t$mb > 0 && !comp_ok(t)) next
+      } else {
+        if (!comp_ok(t)) next
+        # Compute tasks pin their OUTPUT region from launch, and
+        # fetch-backed assembles pin read-store bytes like any read:
+        # gate both by the store budget, with the comp-pool escape so
+        # a saturated store still drains (see store_ok_comp).
+        if (t$store_mb > 0 && !store_ok_comp(t)) next
+        if (n_slot[["comp"]] >= cap_comp) next
+        cprof <- pick_comp_prof(t)
+        if (is.null(cprof)) next  # every eligible profile busy/at depth
+        slot <- "comp"
       }
       if (!is_ready(k)) next
-      if (!is.null(t$ck))
-        ck_inflight[[t$ck]] <- (ck_inflight[[t$ck]] %||% 0L) + 1L
       prof <- if (slot == "read") read_prof else cprof
       inflight[[k]] <- if (is.null(t$ck)) t$launch(prof) else {
         # Compute-pool launches of warmed kernels ship the cache key
-        # only; a kernel the warm-up did not cover carries its closure so
-        # the daemon compiles it on first use. Routed: warmth is exact,
-        # per profile.
+        # only when the CHOSEN profile provably holds the kernel; a
+        # cold profile gets the closure and compiles on first use.
         warm_now <- slot == "comp" &&
-          (if (routed) isTRUE(prof_warm[[.pw_key(prof, t$ck)]])
-           else isTRUE(warmed_ck[[t$ck]]))
+          isTRUE(prof_warm[[.pw_key(prof, t$ck)]])
         t$launch(prof, with_fn = !warm_now)
       }
       tasks[[k]]$slot <- slot
       tasks[[k]]$prof <- prof
       if (slot == "comp") {
         prof_slots[[prof]] <- prof_slots[[prof]] + 1L
-        if (routed && !is.null(t$ck) && (t$cold_mb %||% 0) > 0 &&
+        if (!is.null(t$ck) && isTRUE(t$scan) &&
             !isTRUE(prof_warm[[.pw_key(prof, t$ck)]]))
           prof_cold_busy[[prof]] <- TRUE
       }
       n_slot[[slot]] <- n_slot[[slot]] + 1L
       n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
-      tasks[[k]]$mb_live <- mb_eff(t)
+      tasks[[k]]$mb_live <- t$mb
       mb_inflight <- mb_inflight + tasks[[k]]$mb_live
       # Read-producing tasks pin their region from launch, not from
       # completion (fetch-backed assembles run on the compute pool but
@@ -2253,12 +2207,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             # bypasses the cold-kernel slow start and the scan-compile
             # surcharge exactly when memory is tightest (defect hunt
             # M2, 2026-07-30).
-            if (!is.null(tasks[[k]]$ck)) {
-              rm(list = intersect(tasks[[k]]$ck, ls(warmed_ck)),
-                 envir = warmed_ck)
-              if (routed)
-                prof_warm[[.pw_key(tasks[[k]]$prof, tasks[[k]]$ck)]] <- FALSE
-            }
+            if (!is.null(tasks[[k]]$ck))
+              prof_warm[[.pw_key(tasks[[k]]$prof, tasks[[k]]$ck)]] <- FALSE
             # resend to the SAME profile: the miss identifies the one
             # daemon whose cache is cold, and with routed profiles the
             # closure must land exactly there
@@ -2280,11 +2230,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           if (dep_left[[k2]] == 0L)
             tasks[[k2]]$t_ready <- unclass(Sys.time())
         }
-        if (!is.null(tasks[[k]]$ck)) {
-          ckk <- tasks[[k]]$ck
-          ck_inflight[[ckk]] <- (ck_inflight[[ckk]] %||% 1L) - 1L
-          ck_done[[ckk]] <- (ck_done[[ckk]] %||% 0L) + 1L
-        }
         inflight[[k]] <- NULL
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
@@ -2292,13 +2237,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         if (identical(tasks[[k]]$slot, "comp")) {
           pk <- tasks[[k]]$prof
           prof_slots[[pk]] <- prof_slots[[pk]] - 1L
-          if (routed && !is.null(tasks[[k]]$ck)) {
+          if (!is.null(tasks[[k]]$ck)) {
             # completion proves the kernel lives on this profile: exact
             # warmth for later key-only launches, and the profile's
             # cold-compile slot frees
             prof_warm[[.pw_key(pk, tasks[[k]]$ck)]] <- TRUE
-            if ((tasks[[k]]$cold_mb %||% 0) > 0)
-              prof_cold_busy[[pk]] <- FALSE
+            if (isTRUE(tasks[[k]]$scan)) prof_cold_busy[[pk]] <- FALSE
           }
         }
         mb_inflight <- mb_inflight - (tasks[[k]]$mb_live %||% tasks[[k]]$mb)

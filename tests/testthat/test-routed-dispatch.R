@@ -1,10 +1,11 @@
-# Routed dispatch C1 substrate (design/routed-dispatch.md): the compute
-# pool as N width-1 direct-connection mirai profiles. Gates: profile
-# creation / teardown / generation replacement; distributed == single
-# through the routed scheduler (map/reduce/scan, streamed write);
-# tasks SPREAD across profiles (per-profile slots work); the
-# composite-direct route round-robins its jobs; task-log rows carry
-# the daemon identity in the slot column.
+# Routed dispatch (design/routed-dispatch.md) — since 2026-08-02 the
+# ONLY dispatch mode (the anonymous pool was excised after routing
+# proved strictly dominant). Gates: profile creation / teardown /
+# generation replacement; distributed == single (map/reduce/scan,
+# streamed write); tasks SPREAD across profiles; composite-direct
+# round-robins its jobs; task-log rows carry daemon identity; scan
+# tasks are CONFINED to the designated profiles with mixed per-role
+# masks.
 
 skip_if_not_installed("anvl")
 skip_if_not_installed("mirai")
@@ -12,7 +13,6 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
 test_that("routed pools create N width-1 profiles and tear down clean", {
-  withr::local_options(garry.routed_dispatch = TRUE)
   garry_daemons(2, 3, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   expect_identical(garry:::.comp_profiles(),
@@ -32,8 +32,7 @@ test_that("routed pools create N width-1 profiles and tear down clean", {
 test_that("routed distributed == single, and tasks spread across profiles", {
   # rules placement keeps the sink stage on the compute pool (cost mode
   # fuses this whole chain onto the coalesced read — nothing to spread)
-  withr::local_options(garry.routed_dispatch = TRUE,
-                       garry.placement = "rules",
+  withr::local_options(garry.placement = "rules",
                        garry.chunk_target_px = 600)
   garry_daemons(2, 3, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
@@ -52,8 +51,7 @@ test_that("routed distributed == single, and tasks spread across profiles", {
 })
 
 test_that("a scan plan runs routed == single", {
-  withr::local_options(garry.routed_dispatch = TRUE,
-                       garry.chunk_target_px = 600)
+  withr::local_options(garry.chunk_target_px = 600)
   garry_daemons(2, 2, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   f <- fixture_gradient_f32()
@@ -73,8 +71,7 @@ test_that("a scan plan runs routed == single", {
 })
 
 test_that("streamed writes work under routed dispatch", {
-  withr::local_options(garry.routed_dispatch = TRUE,
-                       garry.chunk_target_px = 600)
+  withr::local_options(garry.chunk_target_px = 600)
   garry_daemons(2, 2, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   f <- fixture_gradient_f32()
@@ -86,7 +83,6 @@ test_that("streamed writes work under routed dispatch", {
 })
 
 test_that("composite_direct round-robins through routed profiles", {
-  withr::local_options(garry.routed_dispatch = TRUE)
   garry_daemons(2, 2, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   x <- .gg_masked_composite()
@@ -97,8 +93,7 @@ test_that("composite_direct round-robins through routed profiles", {
 })
 
 test_that("scan tasks are CONFINED to the designated profiles (C3)", {
-  withr::local_options(garry.routed_dispatch = TRUE,
-                       garry.chunk_target_px = 600)
+  withr::local_options(garry.chunk_target_px = 600)
   garry_daemons(2, 4, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   tlog <- withr::local_tempfile(fileext = ".csv")
@@ -136,8 +131,7 @@ test_that("scan plans get mixed per-role masks on routed pools (C3)", {
   skip_on_os(c("windows", "mac"))
   skip_if(!nzchar(Sys.which("taskset")), "taskset absent")
   skip_if(garry:::.garry_cores()$logical < 8L, "needs >= 8 cores")
-  withr::local_options(garry.routed_dispatch = TRUE,
-                       garry.chunk_target_px = 600)
+  withr::local_options(garry.chunk_target_px = 600)
   garry_daemons(2, 4, gdal_config = FALSE)
   on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
   f <- fixture_gradient_f32()

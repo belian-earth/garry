@@ -184,23 +184,13 @@
   # OOMs). FALSE disables the correction (measurement samples still log
   # to the task log) — the A/B switch for attributing wall-time to it.
   rss_correction = TRUE,
-  # Routed dispatch (design/routed-dispatch.md): create the compute
-  # pool as N width-1 mirai profiles (garry_comp_1..N, direct
-  # connections, no dispatchers) instead of one width-N pool, giving
-  # the scheduler DAEMON IDENTITY: per-profile launch slots now; exact
-  # per-profile kernel warmth and scan-memory confinement in later
-  # stages. Read pool, writer, store and admission are unchanged.
-  # FALSE (the default until validated) keeps the legacy anonymous
-  # pool; both modes run the same code paths via .comp_profiles().
-  # Takes effect at garry_daemons() creation time.
-  routed_dispatch = FALSE,
-  # Routed mode: how many profiles are DESIGNATED for cold-kernel
-  # (scan) tasks per scan-bearing plan (clamped to the pool width).
+  # How many compute profiles are DESIGNATED for scan tasks per
+  # scan-bearing plan (clamped to the pool width).
   # Scan live/retained memory is confined to this many working sets by
   # construction (~6-12 GB each for the SI smoother), so it is the
   # scan-memory knob: raise it on big-RAM boxes to widen scan
   # throughput, never past what `K x working set + map profiles + host`
-  # leaves room for. Ignored in legacy mode.
+  # leaves room for.
   scan_profiles = 2L,
   # Placement decision mode for source->compute chains in the pooled
   # scheduler (design/placement-cost-pass.md): "cost" (default)
@@ -253,20 +243,6 @@
   # AEF MLP fits a ~1 Mpx window (~2.4 GB) and OOM-killed readers at
   # ~4.2 Mpx (~9 GB).
   fuse_reader_mb = 2500,
-  # Admission surcharge (MB) for a COLD scan kernel: the private extra
-  # a daemon holds through the scan's compile AND first chunk, on top
-  # of the task's modelled working set. Charged against the in-flight
-  # byte budget until every compute daemon has plausibly compiled the
-  # kernel, so the LIVE budget — not just the slow-start ramp — bounds
-  # concurrent cold scans on wide pools. STRONGLY workload-dependent:
-  # a simple LLT mean scan measured ~1 GB (scan-retention spike,
-  # 2026-08-01), while the SI robust smoother measured one daemon at
-  # 11.8 GB live during its cold window (width-4 task-log attribution,
-  # same day — a briefly-shipped 1500 default let three ~6-12 GB cold
-  # scans launch inside one refresh window and killed a 42G scope).
-  # The default stays at the conservative measurement; lower it per
-  # session for light scan bodies.
-  scan_compile_mb = 10000,
   # Cost-mode memory admission: estimated resident cost of one XLA CPU
   # client on a read daemon (client + jitted kernel state; spike A
   # measured ~277 MB after one trivial jit). Fusion is refused when
@@ -380,8 +356,6 @@ garry_opt <- function(name) {
     desc = "fuse-vs-materialise decision mode for source->compute chains"),
   rss_correction   = list(tier = "user", check = .opt_flag(),
     desc = "tighten the compute budget on measured fleet-RSS growth"),
-  routed_dispatch  = list(tier = "user", check = .opt_flag(),
-    desc = "compute pool as width-1 profiles (daemon-identity routing)"),
   scan_profiles    = list(tier = "tuning", check = .opt_num(min = 1, int = TRUE),
     desc = "routed mode: profiles designated for scan (cold) kernels"),
   cost_gflops_core = list(tier = "calibration", check = .opt_num(min = 1e-9),
@@ -396,8 +370,6 @@ garry_opt <- function(name) {
     desc = "disjoint per-daemon CPU pinning at pool creation"),
   fuse_reader_mb   = list(tier = "tuning", check = .opt_num(min = 1e-9),
     desc = "per-reader budget (MB) for a fused kernel's working set"),
-  scan_compile_mb  = list(tier = "calibration", check = .opt_num(min = 0),
-    desc = "admission surcharge (MB) for a cold scan-kernel compile"),
   cost_xla_client_mb = list(tier = "calibration", check = .opt_num(min = 0),
     desc = "estimated resident cost (MB) of one XLA CPU client")
 )

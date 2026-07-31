@@ -72,31 +72,6 @@ NULL
   invisible(TRUE)
 }
 
-# Daemon task body (parallel compute spike): read one band's per-slice .bin
-# cubes (and the shared fmask cube) from tmpfs, replay mask + masked-apply +
-# temporal reduce, return the (ny,nx) result as a raw f32 payload. `k` is the
-# grid-constant + slimmed-fn bundle passed once via mirai .args.
-#' @keywords internal
-#' @export
-.gd_compute_band <- function(job, k) {
-  .require_anvl()
-  dev <- .exec_device(k$dev)
-  cube <- function(bins) g_upload_raw(
-    do.call(c, lapply(bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))),
-    "f32", c(length(bins), k$ny, k$nx), device = dev)
-  masked <- length(k$fmask_bins) > 0L
-  lean1 <- function(inp) {
-    if (masked) {
-      mask <- .gd_replay_mask(inp[[2L]], k$chain, k$halo, k$ny, k$nx)
-      m <- k$F(inp[[1L]], mask)
-    } else m <- inp[[1L]]
-    .apply_reduce(k$op, m, 1L, k$nan_rm)
-  }
-  band <- cube(job$band_bins)
-  inputs <- if (masked) list(band, cube(k$fmask_bins)) else list(band)
-  g_download_raw(g_jit(lean1, device = dev)(inputs))
-}
-
 # Pipeline daemon task: replay the cleaned mask ONCE on the whole fmask cube
 # (morphology, cube-vectorised over time) and write the resulting f32 mask cube
 # to one .bin, so every band's median reads it instead of recomputing the
@@ -250,20 +225,19 @@ NULL
       (!masked || identical(s$fmask, s1$fmask)),   # one shared mask across bands
     logical(1))
   if (!all(ok)) return(NULL)
-  # Smart routing: the whole-grid compute runs single-process here (no overlap
-  # with the fetch drain). For heavy composites the scheduler's warm, parallel,
-  # overlapped compute pool wins -- but ONLY when it exists (a garry_daemons
-  # split pool). On a single pool composite_direct is best regardless, so only
-  # fall through when both heavy AND pooled.
+  # Smart routing (deep review 2026-08-02): the budget guards the arms
+  # that run the whole-grid compute SINGLE-PROCESS in the host (no
+  # overlap with the fetch drain) — the single-band kernel, and the
+  # multi-band whole-grid kernel when gd_parallel is off. The
+  # gd_parallel pipeline needs no guard: it fans the per-band medians
+  # across the compute pool RAM-capped, overlapped with the fetches.
+  # A heavy plan that falls through lands on the reduce-decomposition
+  # route (multi-band) or the scheduler (single-band).
   n_bands <- length(specs); n_slices <- length(s1$band)
   grid_px <- sink@grid@dims[["x"]] * sink@grid@dims[["y"]]
   weight <- (n_bands + (s1$halo > 0L)) * n_slices * grid_px
-  # Route heavy composites to the scheduler only when its warm parallel pool
-  # exists (a split) AND we are not running composite_direct's own parallel
-  # per-band path (gd_parallel), which warms the compute pool during the fetch
-  # and handles the heavy split-pool case itself.
-  if (weight > garry_opt("gd_compute_budget") && .gd_pooled() &&
-      !isTRUE(garry_opt("gd_parallel"))) return(NULL)
+  if (weight > garry_opt("gd_compute_budget") &&
+      (n_bands == 1L || !isTRUE(garry_opt("gd_parallel")))) return(NULL)
   list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F, mask_chain = s1$mask_chain,
        halo = s1$halo, band_srcs = lapply(specs, function(s) s$band),
        fmask_srcs = s1$fmask, n_bands = n_bands,
@@ -315,10 +289,6 @@ NULL
   st <- tryCatch(mirai::status(.compute = prof), error = function(e) NULL)
   if (is.null(st) || !is.numeric(st$connections)) 0L else as.integer(st$connections)
 }
-
-# Is a garry_daemons() split read/compute pool active? (Both named profiles
-# have daemons.) The scheduler's warm compute pool only exists when pooled.
-.gd_pooled <- function() garry_daemons_set()
 
 # Max concurrent band medians whose working sets fit the RAM budget. Each holds
 # ~3.5 cubes (band + shared mask + median scratch); cap so their combined
