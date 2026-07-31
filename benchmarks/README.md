@@ -349,6 +349,20 @@ OOM width) just works routed. c8 K=3 and crop=0 die contained at 32G
 Sweet spot here: compute=6, scan_profiles=2. Details in
 design/routed-dispatch.md.
 
+**Raw-BSQ cube format (2026-08-02).** Predict-phase read
+investigation: GDAL's tile walk costs ~2.2 s per 482 MB 73-band window
+REGARDLESS of codec (ZSTD == uncompressed == VRT-raw through the GDAL
+path) vs 0.24 s raw — so garry gained a raw cube format (.bin +
+sibling VRTRawRasterBand .vrt; reads bypass the tile walk incl.
+partial-width windows via byte-index subsetting; .vrt sinks write
+through the existing paths incl. the writer daemon;
+stage_raw_cube() converts, carrying band descriptions). Pipeline A/B
+(2 years, routed c6): predict 54 -> 49 s (-9%), read-task median
+5 -> 3.9 s. The bounded win is the honest headline: the predict phase
+is ~75% fused MLP COMPUTE, ~25% IO — the next predict lever is reader
+width (build_si hard-codes 8), not formats. Suite green incl.
+byte-identical fast-vs-GDAL equivalence gates (test-raw-cube.R).
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with

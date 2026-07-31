@@ -387,7 +387,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # of the VRT (or GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE is set), which this
 # satisfies rather than loosening the global config.
 .raw_bsq_vrt_xml <- function(src, nx, ny, gt_csv, wkt, dtype, nbands,
-                             nodata = NULL) {
+                             nodata = NULL, descriptions = NULL) {
   bytes <- .gdal_dtype_bytes(dtype)
   plane <- as.numeric(nx) * as.numeric(ny) * bytes
   ndxml <- if (!is.null(nodata))
@@ -395,12 +395,18 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
             format(nodata, scientific = FALSE)) else ""
   bands_xml <- vapply(seq_len(nbands), function(b) sprintf(paste0(
     '  <VRTRasterBand dataType="%s" band="%d" subClass="VRTRawRasterBand">',
+    '%s',
     '\n    <SourceFilename relativeToVRT="1">%s</SourceFilename>',
     '\n    <ImageOffset>%.0f</ImageOffset>',
     '\n    <PixelOffset>%d</PixelOffset>',
     '\n    <LineOffset>%d</LineOffset>%s',
     '\n  </VRTRasterBand>'),
-    dtype, b, src, (b - 1) * plane, bytes, as.integer(nx * bytes), ndxml), "")
+    dtype, b,
+    if (!is.null(descriptions) && b <= length(descriptions) &&
+        nzchar(descriptions[[b]]))
+      sprintf("\n    <Description>%s</Description>", descriptions[[b]])
+    else "",
+    src, (b - 1) * plane, bytes, as.integer(nx * bytes), ndxml), "")
   sprintf(paste0(
     '<VRTDataset rasterXSize="%d" rasterYSize="%d">',
     '\n  <SRS>%s</SRS>\n  <GeoTransform>%s</GeoTransform>\n%s\n</VRTDataset>'),
