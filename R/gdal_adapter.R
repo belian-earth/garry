@@ -558,10 +558,13 @@ gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
   dst
 }
 
-#' Create an output GTiff for a grid.
+#' Create an output raster for a grid.
 #'
-#' A single non-spatial dim ("t" or "band") maps to GTiff bands; more
-#' than one is an error.
+#' A single non-spatial dim ("t" or "band") maps to bands; more than
+#' one is an error. A `.tif` destination writes a tiled GTiff; a
+#' `.vrt` destination writes a raw-BSQ cube (`.bin` + sibling
+#' `VRTRawRasterBand` VRT — the intermediate format whose reads bypass
+#' GDAL's tile machinery; see [stage_raw_cube()]).
 #'
 #' @param path Destination path.
 #' @param grid Output `GridSpec`.

@@ -422,7 +422,8 @@ for (op_name in c("^", "%%")) {
 #' `function(sh) Reduce("+", sh)`.
 #'
 #' Cells beyond the raster edge are NaN (nodata) — v1 supports only this
-#' `boundary = "nodata"` policy; reflect/wrap arrive with Phase 9.
+#' `boundary = "nodata"` policy; reflect/wrap remain unimplemented
+#' (deliberately deferred, not scheduled).
 #'
 #' Over a `LazyDataset`, the stencil is applied to every value band per slice;
 #' `bands` restricts which bands.

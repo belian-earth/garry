@@ -36,7 +36,7 @@ Stage(
 
 \item{chunks}{\code{ChunkGrid} partitioning the stage's output.}
 
-\item{device}{Device tag ("cpu" until Phase 7).}
+\item{device}{Device tag ("cpu" or "cuda").}
 
 \item{inputs}{Stage ids feeding this stage.}
 

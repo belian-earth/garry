@@ -13,8 +13,9 @@ NULL
 # anvl's shape/dtype-keyed LRU jit cache IS the kernel cache: a regular
 # chunk grid yields at most 4 shapes per stage (D4), so each stage
 # compiles at most 4 executables. reduce_combine runs in plain R on the
-# small per-chunk partials. mirai distribution is Phase 7; GDAL write
-# sinks are Phase 4b.
+# small per-chunk partials. The distributed twin is execute_plan_mirai
+# (scheduler.R); this executor is the semantic oracle it is gated
+# against.
 # ---------------------------------------------------------------------------
 
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised

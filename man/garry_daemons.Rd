@@ -56,14 +56,14 @@ daemon is pinned to a disjoint slice of the machine at creation
 narrow rather than all-cores; the scheduler's live-RAM byte budgets
 decide how many tasks are actually in flight; excess daemons idle
 lean. Called with no arguments it sizes the pools to the machine:
-\code{read} = logical cores (reads are mostly network/decompress wait)
-and \code{compute} = enough narrow daemons to cover the machine at ~2
-CPUs each (measured ~2x the matmul throughput of two unpinned
-all-cores clients), falling back to TWO wherever affinity is
-unavailable and clients come up all-cores. \code{collect(distributed = TRUE)} detects the pools automatically and pre-compiles stage
-kernels on the compute pool at run start (\code{garry_opt("jit_warmup")};
-scan kernels compile lazily under admission instead — their unrolled
-HLO compile is too heavy to broadcast unbudgeted).
+\code{read} = logical cores capped at 8 (past cores/2 readers the k=2
+affinity floor oversubscribes the machine; 8 was measured fastest
+at scale) and \code{compute} = cores/3 capped at 8, floor 2 (the routed
+width sweep's sweet spot; CUDA keeps 2 — concurrent clients share
+one card). \code{collect(distributed = TRUE)} detects the pools
+automatically and pre-compiles stage kernels at run start
+(\code{garry_opt("jit_warmup")}) — scan kernels included, targeted at
+the \code{garry_opt("scan_profiles")} designated profiles only.
 }
 \details{
 You should not need to tune these. The cases for overriding: a

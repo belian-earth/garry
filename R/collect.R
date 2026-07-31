@@ -5,8 +5,7 @@ NULL
 #' Materialise a LazyRaster (or inspect its plan).
 #'
 #' `plan_only = TRUE` runs the planner passes and returns the `Plan`
-#' without executing: the permanent introspection path. Execution
-#' arrives in Phase 5.
+#' without executing: the permanent introspection path.
 #'
 #' @param x A `LazyRaster`, or a `LazyDataset` (its bands are assembled along the
 #'   band axis via `stack_bands()` first).

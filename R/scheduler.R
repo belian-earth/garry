@@ -10,13 +10,16 @@ NULL
 # each input stage (chunk tables are aligned in v1); reduce_combine and
 # final assembly run on the host once their inputs land.
 #
-# Inter-stage store: one RDS file per (stage, chunk) in a tempdir shared
-# by same-host daemons. No mid-graph halo store is needed (D11): halos
-# ride inside source/warp chunk files.
+# Inter-stage store: mori POSIX shared memory — daemons pin the regions
+# they create for a run and the host refcounts them per consuming task
+# (see `garry.store` below). No mid-graph halo store is needed (D11):
+# halos ride inside source/warp regions.
 #
-# Scheduler: polling ready-queue with an in-flight cap (back-pressure).
-# Workers jit stage closures on first use and keep them in a per-daemon
-# cache, so each daemon compiles each stage's <=4 shapes once (D14).
+# Scheduler: polling ready-queue over N width-1 compute profiles
+# (daemon-identity routing, design/routed-dispatch.md) with byte-budget
+# admission as back-pressure. Daemons jit stage closures on first use
+# and keep them in a per-process cache; per-profile warmth makes
+# key-only launches exact (D14).
 # ---------------------------------------------------------------------------
 
 # Per-process cache used on daemons (jitted stage closures by stage id).
@@ -773,15 +776,14 @@ NULL
 #' narrow rather than all-cores; the scheduler's live-RAM byte budgets
 #' decide how many tasks are actually in flight; excess daemons idle
 #' lean. Called with no arguments it sizes the pools to the machine:
-#' `read` = logical cores (reads are mostly network/decompress wait)
-#' and `compute` = enough narrow daemons to cover the machine at ~2
-#' CPUs each (measured ~2x the matmul throughput of two unpinned
-#' all-cores clients), falling back to TWO wherever affinity is
-#' unavailable and clients come up all-cores. `collect(distributed =
-#' TRUE)` detects the pools automatically and pre-compiles stage
-#' kernels on the compute pool at run start (`garry_opt("jit_warmup")`;
-#' scan kernels compile lazily under admission instead — their unrolled
-#' HLO compile is too heavy to broadcast unbudgeted).
+#' `read` = logical cores capped at 8 (past cores/2 readers the k=2
+#' affinity floor oversubscribes the machine; 8 was measured fastest
+#' at scale) and `compute` = cores/3 capped at 8, floor 2 (the routed
+#' width sweep's sweet spot; CUDA keeps 2 — concurrent clients share
+#' one card). `collect(distributed = TRUE)` detects the pools
+#' automatically and pre-compiles stage kernels at run start
+#' (`garry_opt("jit_warmup")`) — scan kernels included, targeted at
+#' the `garry_opt("scan_profiles")` designated profiles only.
 #'
 #' You should not need to tune these. The cases for overriding: a
 #' source API that throttles concurrent reads (smaller `read`); one

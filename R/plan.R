@@ -38,7 +38,7 @@ NULL
 #' @param halo Halo radius in pixels the stage requires on its inputs.
 #' @param grid Output `GridSpec` of the stage.
 #' @param chunks `ChunkGrid` partitioning the stage's output.
-#' @param device Device tag ("cpu" until Phase 7).
+#' @param device Device tag ("cpu" or "cuda").
 #' @param inputs Stage ids feeding this stage.
 #' @param input_nodes IR node ids whose values `fn` receives, in order.
 #' @param exports Member node ids `fn` returns, ascending (consumed by
