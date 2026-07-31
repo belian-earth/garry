@@ -724,15 +724,32 @@ NULL
 # per execution in milliseconds: scan-bearing plans get half-machine
 # masks (alternating halves; admission keeps ~2 active), everything
 # else keeps the creation-time disjoint narrow masks.
-.comp_pool_shape <- function(n_comp, plan_has_scan) {
+.comp_pool_shape <- function(n_comp, plan_has_scan, n_scan = 0L) {
   if (is.null(.garry_state$comp_threads)) return(invisible(NULL))
   cores <- .garry_cores()$logical
+  pids <- .garry_state$comp_pids
+  if (n_scan > 0L && length(pids) > n_scan) {
+    # Mixed per-role masks (routed scan plans): the designated scan
+    # profiles get half-machine masks (scans are long sequential-in-t
+    # kernels whose plane parallelism narrow masks starve), the map
+    # profiles keep narrow disjoint slices — the mixed topology spike
+    # B's data pointed at, expressible only with daemon identity.
+    k_fat <- max(2L, cores %/% 2L)
+    k_narrow <- max(2L, cores %/% max(1L, length(pids)))
+    .pool_affinity_apply(NULL, n_scan, k = k_fat,
+                         pids = pids[seq_len(n_scan)])
+    got <- .pool_affinity_apply(NULL, length(pids) - n_scan,
+                                k = k_narrow,
+                                pids = pids[-seq_len(n_scan)])
+    if (!is.null(got)) .garry_state$comp_threads <- got
+    return(invisible(NULL))
+  }
   k_want <- if (plan_has_scan) max(2L, cores %/% 2L)
             else max(2L, cores %/% max(1L, n_comp))
   if (identical(.garry_state$comp_threads, k_want))
     return(invisible(NULL))
   got <- .pool_affinity_apply(NULL, n_comp, k = k_want,
-                              pids = .garry_state$comp_pids)
+                              pids = pids)
   if (!is.null(got)) .garry_state$comp_threads <- got
   invisible(NULL)
 }
@@ -958,12 +975,51 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # whole pool's depth. pick_comp_prof is the C1 routing policy —
   # least-loaded profile with a free slot, first-wins on ties (exact
   # per-kernel warmth and scan confinement arrive in C2/C3).
-  prof_depth <- if (length(comp_profs) == 1L) 2L * max(1L, n_comp) else 2L
+  routed <- !identical(comp_profs, "garry_compute")
+  prof_depth <- if (!routed) 2L * max(1L, n_comp) else 2L
   prof_slots <- new.env(parent = emptyenv())
   for (p in comp_profs) prof_slots[[p]] <- 0L
-  pick_comp_prof <- function() {
+  # C2 (routed): EXACT per-profile kernel warmth — key-only launches go
+  # only to a profile that provably holds the kernel; C3: cold-kernel
+  # (scan) tasks are CONFINED to `scan_profs` (set once the plan is
+  # known), with at most one cold compile in flight per profile. The
+  # confinement replaces the probabilistic slow-start ramp and the
+  # scan_compile_mb byte surcharge in routed mode: cold-scan
+  # concurrency and scan MEMORY are bounded structurally by K
+  # designated daemons (workstream B: anonymous rotation grows every
+  # daemon to the scan working set).
+  prof_warm <- new.env(parent = emptyenv())      # "prof\x1fck" -> TRUE
+  prof_cold_busy <- new.env(parent = emptyenv()) # prof -> TRUE while compiling
+  scan_profs <- character(0)                     # set after plan_has_scan
+  .pw_key <- function(p, ck) paste0(p, "\x1f", ck)
+  pick_comp_prof <- function(t) {
+    is_cold <- routed && !is.null(t$ck) && (t$cold_mb %||% 0) > 0
+    cands <- if (is_cold && length(scan_profs)) scan_profs
+             else if (routed && length(scan_profs) &&
+                      length(comp_profs) > length(scan_profs) && !is_cold)
+               # ordinary kernels prefer the non-scan profiles (keeps
+               # them lean); scan profiles remain a fallback
+               c(setdiff(comp_profs, scan_profs), scan_profs)
+             else comp_profs
+    if (is_cold) {
+      # a warm profile first (exact key-only launch), least-loaded
+      best <- NULL; bn <- prof_depth
+      for (p in cands) {
+        v <- prof_slots[[p]]
+        if (v < bn && isTRUE(prof_warm[[.pw_key(p, t$ck)]])) {
+          bn <- v; best <- p
+        }
+      }
+      if (!is.null(best)) return(best)
+      # else a designated profile not currently compiling
+      for (p in cands) {
+        if (prof_slots[[p]] < prof_depth &&
+            !isTRUE(prof_cold_busy[[p]])) return(p)
+      }
+      return(NULL)
+    }
     best <- NULL; bn <- prof_depth
-    for (p in comp_profs) {
+    for (p in cands) {
       v <- prof_slots[[p]]
       if (v < bn) { bn <- v; best <- p }
     }
@@ -1193,7 +1249,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     any(vapply(s@members, function(id)
       S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1))),
     logical(1)))
-  .comp_pool_shape(n_comp, plan_has_scan)
+  # C3 scan confinement (routed): the first K = min(2, N) profiles are
+  # designated for cold-kernel (scan) tasks; pick_comp_prof routes
+  # them nowhere else.
+  scan_profs <- if (routed && plan_has_scan)
+    comp_profs[seq_len(min(2L, length(comp_profs)))] else character(0)
+  .comp_pool_shape(n_comp, plan_has_scan, n_scan = length(scan_profs))
   placement <- .plan_placement(plan, consumers_of, warp_only,
                                n_read = n_read, n_comp = n_comp,
                                reader_threads = .garry_state$reader_threads,
@@ -1397,14 +1458,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       if (!has_scan) task_mb <- task_mb / 2
       # SCAN kernels pre-warm only on a pool of <= 2 daemons (the
       # validated shape: two concurrent compiles land pre-drain while
-      # the host is quiet). On a wider pool the warm-up everywhere()
-      # broadcast would run the scan's multi-GB unrolled-HLO compile
+      # the host is quiet). On a wider LEGACY pool the warm-up
+      # everywhere() broadcast would run the scan's multi-GB compile
       # on EVERY daemon at once, unbudgeted — left cold instead, each
       # daemon compiles on its first scan task under the cold-kernel
-      # slow start, which staggers the compiles.
-      if (!has_scan || n_comp <= 2L)
+      # slow start. ROUTED pools include scan specs at any width: the
+      # broadcast is targeted at the K <= 2 designated scan profiles
+      # only (same validated pre-drain shape, daemon-exact).
+      if (!has_scan || n_comp <= 2L || routed)
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
+        scan = has_scan,
         fn = s@fn,
         device = s@device,
         dtypes = vapply(in_meta, function(m) m$dtype, character(1)),
@@ -1592,10 +1656,28 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # (e.g. per-slice mask cleanup) to ONE spec.
     warm_specs <- warm_specs[!duplicated(
       vapply(warm_specs, `[[`, character(1), "ck"))]
-    warm_handle <- unlist(lapply(comp_profs, function(p)
-      mirai::everywhere(garry::.daemon_warm_jit(sp), sp = warm_specs,
-                        .compute = p)), recursive = FALSE)
-    for (sp in warm_specs) warmed_ck[[sp$ck]] <- TRUE
+    if (routed) {
+      # Targeted warm-up: map kernels everywhere, scan kernels only at
+      # the designated scan profiles. Warmth is recorded PER PROFILE —
+      # key-only launches are exact, not probabilistic (the resend
+      # covers a profile whose warm-up failed, clearing its mark).
+      scan_sp <- Filter(function(sp) isTRUE(sp$scan), warm_specs)
+      map_sp <- Filter(function(sp) !isTRUE(sp$scan), warm_specs)
+      wh <- list()
+      for (p in comp_profs) {
+        sp_p <- c(map_sp, if (p %in% scan_profs) scan_sp)
+        if (!length(sp_p)) next
+        wh <- c(wh, mirai::everywhere(garry::.daemon_warm_jit(sp),
+                                      sp = sp_p, .compute = p))
+        for (sp in sp_p) prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
+      }
+      warm_handle <- wh
+    } else {
+      warm_handle <- mirai::everywhere(garry::.daemon_warm_jit(sp),
+                                       sp = warm_specs,
+                                       .compute = comp_profs)
+      for (sp in warm_specs) warmed_ck[[sp$ck]] <- TRUE
+    }
   }
 
   # Region-aware stage chunk lookup. A stage's chunks live under its
@@ -1952,6 +2034,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # the host and staging grow — bound concurrent cold scan compiles on
   # any pool width.
   mb_eff <- function(t) {
+    # Routed mode retires the cold surcharge: cold-scan concurrency is
+    # bounded STRUCTURALLY (K scan profiles, one cold compile per
+    # profile), which two miscalibrations proved stronger than the
+    # byte proxy (design/routed-dispatch.md).
+    if (routed) return(t$mb)
     t$mb + if ((t$cold_mb %||% 0) > 0 && !isTRUE(warmed_ck[[t$ck]]) &&
                  (ck_done[[t$ck]] %||% 0L) < n_comp) t$cold_mb else 0
   }
@@ -2092,12 +2179,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           # a saturated store still drains (see store_ok_comp).
           if (t$store_mb > 0 && !store_ok_comp(t)) next
           # Cold-kernel slow start (see ck_inflight above).
-          if (!is.null(t$ck) && !isTRUE(warmed_ck[[t$ck]]) &&
+          # Cold-kernel slow start (legacy pools only; routed pools
+          # bound cold compiles exactly, per profile, in pick_comp_prof).
+          if (!routed && !is.null(t$ck) && !isTRUE(warmed_ck[[t$ck]]) &&
               (ck_inflight[[t$ck]] %||% 0L) > (ck_done[[t$ck]] %||% 0L))
             next
           if (n_slot[["comp"]] >= cap_comp) next
-          cprof <- pick_comp_prof()
-          if (is.null(cprof)) next          # every profile at depth
+          cprof <- pick_comp_prof(t)
+          if (is.null(cprof)) next  # every eligible profile busy/at depth
           slot <- "comp"
         }
       }
@@ -2108,13 +2197,21 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       inflight[[k]] <- if (is.null(t$ck)) t$launch(prof) else {
         # Compute-pool launches of warmed kernels ship the cache key
         # only; a kernel the warm-up did not cover carries its closure so
-        # the daemon compiles it on first use.
-        t$launch(prof, with_fn = !(slot == "comp" &&
-                                     isTRUE(warmed_ck[[t$ck]])))
+        # the daemon compiles it on first use. Routed: warmth is exact,
+        # per profile.
+        warm_now <- slot == "comp" &&
+          (if (routed) isTRUE(prof_warm[[.pw_key(prof, t$ck)]])
+           else isTRUE(warmed_ck[[t$ck]]))
+        t$launch(prof, with_fn = !warm_now)
       }
       tasks[[k]]$slot <- slot
       tasks[[k]]$prof <- prof
-      if (slot == "comp") prof_slots[[prof]] <- prof_slots[[prof]] + 1L
+      if (slot == "comp") {
+        prof_slots[[prof]] <- prof_slots[[prof]] + 1L
+        if (routed && !is.null(t$ck) && (t$cold_mb %||% 0) > 0 &&
+            !isTRUE(prof_warm[[.pw_key(prof, t$ck)]]))
+          prof_cold_busy[[prof]] <- TRUE
+      }
       n_slot[[slot]] <- n_slot[[slot]] + 1L
       n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
       tasks[[k]]$mb_live <- mb_eff(t)
@@ -2155,9 +2252,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             # bypasses the cold-kernel slow start and the scan-compile
             # surcharge exactly when memory is tightest (defect hunt
             # M2, 2026-07-30).
-            if (!is.null(tasks[[k]]$ck))
+            if (!is.null(tasks[[k]]$ck)) {
               rm(list = intersect(tasks[[k]]$ck, ls(warmed_ck)),
                  envir = warmed_ck)
+              if (routed)
+                prof_warm[[.pw_key(tasks[[k]]$prof, tasks[[k]]$ck)]] <- FALSE
+            }
             # resend to the SAME profile: the miss identifies the one
             # daemon whose cache is cold, and with routed profiles the
             # closure must land exactly there
@@ -2191,6 +2291,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         if (identical(tasks[[k]]$slot, "comp")) {
           pk <- tasks[[k]]$prof
           prof_slots[[pk]] <- prof_slots[[pk]] - 1L
+          if (routed && !is.null(tasks[[k]]$ck)) {
+            # completion proves the kernel lives on this profile: exact
+            # warmth for later key-only launches, and the profile's
+            # cold-compile slot frees
+            prof_warm[[.pw_key(pk, tasks[[k]]$ck)]] <- TRUE
+            if ((tasks[[k]]$cold_mb %||% 0) > 0)
+              prof_cold_busy[[pk]] <- FALSE
+          }
         }
         mb_inflight <- mb_inflight - (tasks[[k]]$mb_live %||% tasks[[k]]$mb)
         harvested <- TRUE

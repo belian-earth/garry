@@ -95,3 +95,74 @@ test_that("composite_direct round-robins through routed profiles", {
   expect_identical(garry_last_route(), "composite_direct")
   .gg_close(got, want)
 })
+
+test_that("scan tasks are CONFINED to the designated profiles (C3)", {
+  withr::local_options(garry.routed_dispatch = TRUE,
+                       garry.chunk_target_px = 600)
+  garry_daemons(2, 4, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  tlog <- withr::local_tempfile(fileext = ".csv")
+  withr::local_options(garry.task_log = tlog)
+  f <- fixture_gradient_f32()
+  g <- graph_new()
+  a <- lazy_source(f, graph = g)
+  body <- function(xs, margin) {
+    g_scan(init = 0, body = function(carry, v) {
+      s <- carry + v
+      list(carry = s, out = s)
+    }, xs = xs[[1L]])$out
+  }
+  sc <- scan_over(lazy_stack(list(a + 1, a * 2), along = "t"), body,
+                  over = "t")
+  p <- collect(sc, plan_only = TRUE)
+  scan_sid <- Filter(function(s) any(vapply(s@members, function(id)
+    S7::S7_inherits(garry:::graph_get(p@graph, id), garry:::ScanNode),
+    logical(1))), p@stages)[[1L]]@id
+  got <- execute_plan_mirai(p)
+  want <- execute_plan(p)
+  expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
+  tl <- read.csv(tlog)
+  scan_slots <- unique(tl$slot[tl$event == "launch" &
+                                 grepl(sprintf("^s%d_", scan_sid), tl$key)])
+  expect_gte(length(scan_slots), 1L)
+  expect_true(all(scan_slots %in% c("garry_comp_1", "garry_comp_2")))
+  # exact per-profile warmth: an immediate rerun (fresh run id, warm
+  # daemons) stays correct through the key-only path
+  got2 <- execute_plan_mirai(p)
+  expect_equal(got2, want, tolerance = 1e-6, ignore_attr = TRUE)
+})
+
+test_that("scan plans get mixed per-role masks on routed pools (C3)", {
+  skip_on_os(c("windows", "mac"))
+  skip_if(!nzchar(Sys.which("taskset")), "taskset absent")
+  skip_if(garry:::.garry_cores()$logical < 8L, "needs >= 8 cores")
+  withr::local_options(garry.routed_dispatch = TRUE,
+                       garry.chunk_target_px = 600)
+  garry_daemons(2, 4, gdal_config = FALSE)
+  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  f <- fixture_gradient_f32()
+  g <- graph_new()
+  a <- lazy_source(f, graph = g)
+  body <- function(xs, margin) {
+    g_scan(init = 0, body = function(carry, v) {
+      s <- carry + v
+      list(carry = s, out = s)
+    }, xs = xs[[1L]])$out
+  }
+  sc <- scan_over(lazy_stack(list(a + 1, a * 2), along = "t"), body,
+                  over = "t")
+  invisible(collect(sc, distributed = TRUE))
+  cpus_of <- function(pid) {
+    s <- readLines(sprintf("/proc/%d/status", pid))
+    ln <- grep("^Cpus_allowed_list", s, value = TRUE)
+    parts <- strsplit(sub(".*:\\s*", "", ln), ",")[[1L]]
+    sum(vapply(parts, function(r) {
+      ab <- as.integer(strsplit(r, "-")[[1L]])
+      if (length(ab) == 1L) 1L else ab[[2L]] - ab[[1L]] + 1L
+    }, integer(1)))
+  }
+  pids <- garry:::.garry_state$comp_pids
+  expect_length(pids, 4L)
+  # scan profiles (1, 2) run fat; map profiles (3, 4) stay narrow
+  expect_gt(cpus_of(pids[[1L]]), cpus_of(pids[[3L]]))
+})
