@@ -6,6 +6,8 @@
 <!-- badges: start -->
 
 [![R-CMD-check](https://github.com/belian-earth/garry/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/belian-earth/garry/actions/workflows/R-CMD-check.yaml)
+[![Lifecycle:
+experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 <!-- badges: end -->
 
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
@@ -78,7 +80,8 @@ src <- stac_query(
   bbox        = aoi,
   stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
   collection  = "hls2-s30",
-  start_date  = "2023-01-01", end_date = "2023-12-31"
+  start_date  = "2023-01-01", 
+  end_date = "2023-12-31"
 ) |>
   stac_sign_mpc() |> 
   stac_filter_cloud(30) |> 
