@@ -4,7 +4,7 @@
 \alias{gdal_mosaic_vrt}
 \title{Mosaic already-grid-aligned rasters into a VRT (adapter).}
 \usage{
-gdal_mosaic_vrt(dst, files)
+gdal_mosaic_vrt(dst, files, te = NULL, ts = NULL, vrtnodata = NULL)
 }
 \arguments{
 \item{dst}{Output VRT path.}

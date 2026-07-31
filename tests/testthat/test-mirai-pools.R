@@ -11,8 +11,7 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   old <- options(garry.chunk_target_px = 400)   # force many chunks
   on.exit(options(old), add = TRUE)
@@ -43,21 +42,20 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
     }
   }
 
-  # (Read daemons MAY load anvl now: once all read-tagged work is
-  # done, comp-tagged tail tasks spill onto idle readers by design.)
+  # (Read daemons stay anvl-free: compute tasks never spill onto them.)
 
   # Warm-up populated the compute pool's jit cache (per-run keys, so
   # >= one entry per run that had compute stages).
-  cache_n <- mirai::mirai(length(ls(garry:::.daemon_cache)),
-                          .compute = "garry_compute")[]
+  cache_n <- sum(vapply(garry:::.comp_profiles(), function(p)
+    mirai::mirai(length(ls(garry:::.daemon_cache)), .compute = p)[],
+    integer(1)))
   expect_gt(cache_n, 0L)
 })
 
 test_that("streaming distributed writes match single-threaded writes", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 

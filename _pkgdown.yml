@@ -54,8 +54,11 @@ reference:
   - lazy_stack
   - focal
   - focal_kernel
+  - bilateral_focal
   - reduce_over
   - band_project
+  - mlp_project
+  - scan_over
   - align
 
 - title: Execution
@@ -96,6 +99,7 @@ reference:
   - g_shift_slice
   - g_stack
   - g_index_scalar
+  - g_scan
   - g_bitand
   - g_bitor
   - g_bitxor
@@ -145,6 +149,7 @@ reference:
   - MapNode
   - FocalNode
   - ReduceNode
+  - ScanNode
   - WarpNode
   - StackNode
   - FusedNode

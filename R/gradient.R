@@ -127,6 +127,9 @@ NULL
     if (S7::S7_inherits(node, ReduceNode))
       .garry_error("chunk-local reductions on the gradient tape are not supported in v1",
                    "garry_grad_unsupported_error")
+    if (S7::S7_inherits(node, ScanNode))
+      .garry_error("scans on the gradient tape are not supported (anvl's while loop has no reverse rule)",
+                   "garry_grad_unsupported_error")
   }
 
   if (!wrt@node_id %in% compute@members)

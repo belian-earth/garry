@@ -30,12 +30,12 @@ NULL
 # stac_query() + rstac::items_sign() produce).
 .ck_url <- function(p) sub("^/vsicurl/", "", as.character(p))
 
-.ck_register <- function(srcs, bands, resampling, nodata, grid) {
+.ck_register <- function(srcs, bands, resampling, nodata, grid, dtype = "f32") {
   spec <- list(srcs = .ck_url(srcs), bands = bands, resampling = resampling,
                nodata = if (length(nodata)) as.numeric(nodata) else numeric(0),
                te = as.numeric(grid@extent),
                ts = c(unname(grid@dims[["x"]]), unname(grid@dims[["y"]])),
-               crs = grid@crs)
+               crs = grid@crs, dtype = dtype)
   key <- rlang::hash(spec)                  # identical reads dedup to one fetch
   .ck_registry[[key]] <- spec
   paste0("CK:", key)
@@ -121,7 +121,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   m <- .ck_meta(path[[1L]])
   bands <- if (is.null(bands)) seq_len(m$n_bands) else as.integer(bands)
   if (length(bands) < 1L) cli::cli_abort("{.arg bands} selects no bands.")
-  ckpath <- .ck_register(path, bands, resampling, m$nodata, grid)
+  ckpath <- .ck_register(path, bands, resampling, m$nodata, grid, m$dtype)
   rgrid <- if (!identical(m$dtype, grid@dtype)) .grid_retype(grid, m$dtype) else grid
   ndv <- if (length(m$nodata)) m$nodata else NULL
   g   <- graph_new()
@@ -161,7 +161,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
     layers  <- lapply(slices, function(sl) {
       items  <- a_rows$location[a_rows$slice == sl][order(
         a_rows$datetime[a_rows$slice == sl])]
-      ckpath <- .ck_register(items, 1L, resampling, nd, grid)
+      ckpath <- .ck_register(items, 1L, resampling, nd, grid, m$dtype)
       lazy_source(ckpath, band = 1L, graph = g, grid = rgrid, nodata = ndv)
     })
     names(layers) <- slices
@@ -192,17 +192,21 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   }, graph_ids(g))
   if (!length(ids)) return(list(plan = p, root = NULL))
   keys <- vapply(ids, function(id) graph_get(g, id)@path, "")
-  # Stage on tmpfs (/dev/shm) when available: RAM-backed, so no disk round-trip,
-  # AND a real shared path the mirai daemons can read -- unlike /vsimem, which is
-  # per-process and invisible across the daemon boundary. Matches prepare_fetch.
-  base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
-  root <- file.path(base, paste0("garry-ck-", rlang::hash(sort(unique(keys)))))
-  dir.create(root, showWarnings = FALSE, recursive = TRUE)
-
   ukeys <- unique(keys)
   specs <- stats::setNames(lapply(ukeys, .ck_lookup), ukeys)
   if (any(vapply(specs, is.null, TRUE)))
     cli::cli_abort("Unresolved {.fn lazy_cog} source.")
+
+  # Stage on tmpfs (/dev/shm) when available: RAM-backed, so no disk round-trip,
+  # AND a real shared path the mirai daemons can read -- unlike /vsimem, which is
+  # per-process and invisible across the daemon boundary. Matches prepare_fetch.
+  # RAM guard (the lazy_cog twin of .gd_compute_cap): staging is whole-AOI
+  # before compute and tmpfs pages are unreclaimable, so when the estimated
+  # staged bytes exceed ck_stage_ram_fraction of available RAM, fall back to
+  # disk -- slower reads, no OOM.
+  base <- .ck_stage_base(.ck_stage_mb(specs))
+  root <- file.path(base, paste0("garry-ck-", rlang::hash(sort(unique(keys)))))
+  dir.create(root, showWarnings = FALSE, recursive = TRUE)
   staged <- new.env(parent = emptyenv())            # ukey -> staged path
 
   # Single-band source sets (one band per file, each a 1+ tile mosaic) go through
@@ -243,11 +247,11 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 .ck_batch_mosaic <- function(members, specs, root, staged) {
   s0  <- specs[[members[[1L]]]]
   src <- lapply(members, function(k) specs[[k]]$srcs)       # per set: its tiles
-  out <- cptkirk::ck_batch_to_buffer(
+  out <- .ck_quiet(cptkirk::ck_batch_to_buffer(
     src = src, stack = FALSE,
     t_srs = s0$crs, te = s0$te, ts = s0$ts,
     bands = if (length(s0$bands)) s0$bands else NULL,
-    r = s0$resampling, io_concurrency = 32L)
+    r = s0$resampling, io_concurrency = 32L))
   for (i in seq_along(members)) {
     key     <- sub("^CK:", "", members[[i]])
     want_nd <- length(specs[[members[[i]]]]$nodata) > 0L
@@ -260,18 +264,46 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
         d, file.path(root, sprintf("cb_%s_%02d", key, j)), want_nd))
     }
     if (!length(vrts)) next            # no overlap; .ck_resolve falls back to .ck_fetch
-    staged[[members[[i]]]] <- if (length(vrts) == 1L) vrts[[1L]]
-      else gdal_mosaic_vrt(file.path(root, paste0("mos_", key, ".vrt")), vrts)
+    staged[[members[[i]]]] <- .ck_mosaic_pinned(
+      file.path(root, paste0("mos_", key, ".vrt")), vrts,
+      specs[[members[[i]]]])
   }
 }
+
+# Pin a tile mosaic to the FULL target grid. Per-tile buffers cover only
+# their tiles' extents; garry's read windows are grid-relative, so an
+# unpinned (union-extent) VRT reads out of range on partially covered
+# slices ("Access window out of range"). Always built, even for a lone
+# tile. Uncovered area reads the set's nodata sentinel when it has one
+# (masked to NaN downstream, matching the GDAL/GTI engine's gaps); a
+# FLOAT set with no sentinel gets NaN, matching the GTI path's
+# `-dstnodata nan` (D8) — 0 would be indistinguishable from data
+# (decoded embeddings legitimately hold exact zeros).
+.ck_mosaic_pinned <- function(dst, files, spec) {
+  nd <- spec$nodata
+  if (!length(nd) && .dtype_family(spec$dtype %||% "f32") == "float")
+    nd <- NaN
+  gdal_mosaic_vrt(dst, files, te = spec$te, ts = spec$ts,
+                  vrtnodata = nd)
+}
+
+# cptkirk's warp runs GDAL worker threads; gdalraster's GLOBAL error
+# handler calls back into R, and an R callback on a non-main thread
+# aborts the whole process (Rcpp longjmp across a noexcept boundary ->
+# std::terminate). Any warp warning triggers it -- e.g. GDAL's "value 0
+# changed to 1.4e-45 to avoid being treated as NoData" when a
+# no-declared-nodata source holds exact zeros (decoded FSQ embeddings
+# do). CPL_LOG_ERRORS=OFF makes gdalraster's handler skip the R
+# callback for the duration of the fetch.
+.ck_quiet <- function(code) .gdal_log_errors_off(code)
 
 # The one cptkirk-dependent step: fetch+warp the source set's selected bands onto
 # the target grid into a native-dtype BSQ buffer, staged via .stage_buffer.
 .ck_fetch <- function(spec, root) {
-  res <- cptkirk::ck_warp_to_buffer(
+  res <- .ck_quiet(cptkirk::ck_warp_to_buffer(
     spec$srcs, t_srs = spec$crs, te = spec$te, ts = spec$ts,
     bands = spec$bands, r = spec$resampling,
-    fill = if (length(spec$nodata)) spec$nodata else NULL)
+    fill = if (length(spec$nodata)) spec$nodata else NULL))
   .stage_buffer(res, file.path(root, substr(rlang::hash(spec), 1L, 16L)),
                 length(spec$nodata) > 0L)
 }
@@ -316,6 +348,37 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
   b
 }
 
+# Estimated staging footprint (MB) of a set of CK specs: every source set
+# stages its whole AOI at the source's NATIVE dtype (AOI pixels x bands x
+# bytes). Tile mosaics stage per-tile buffers clipped to the AOI, so the
+# AOI product bounds them up to tile overlap.
+.ck_stage_mb <- function(specs) {
+  gbytes <- c(i8 = 1, u8 = 1, i16 = 2, u16 = 2, i32 = 4, u32 = 4,
+              i64 = 8, u64 = 8, f32 = 4, f64 = 8)
+  sum(vapply(specs, function(s) {
+    b <- unname(gbytes[s$dtype %||% "f32"])
+    if (is.na(b)) b <- 4
+    prod(as.numeric(s$ts)) * max(1L, length(s$bands)) * b
+  }, numeric(1))) / 2^20
+}
+
+# Staging base directory under the RAM guard: tmpfs while the estimated
+# footprint fits ck_stage_ram_fraction of available RAM, disk beyond it.
+# The lazy_cog twin of .gd_compute_cap -- tmpfs pages are unreclaimable,
+# so an oversized staging set OOMs exactly like an oversized compute set.
+.ck_stage_base <- function(est_mb, avail_mb = .garry_ram_avail_mb()) {
+  if (!dir.exists("/dev/shm")) return(tempdir())
+  if (is.na(avail_mb) || est_mb <= 0) return("/dev/shm")
+  budget <- garry_opt("ck_stage_ram_fraction") * avail_mb
+  if (est_mb <= budget) return("/dev/shm")
+  cli::cli_inform(c(
+    "!" = sprintf(
+      "lazy_cog staging (~%.0f MB) exceeds the RAM budget (%.0f MB available x %.0f%%): staging on disk instead of tmpfs.",
+      est_mb, avail_mb, 100 * garry_opt("ck_stage_ram_fraction")),
+    "i" = "Reads will be disk-backed. Shrink the AOI, select fewer bands, or collect in tiles for RAM-speed staging."))
+  tempdir()
+}
+
 # Build a VRTRawRasterBand dataset XML over a raw band-sequential (BSQ) buffer, so
 # GDAL reads it with zero decode. Band b's plane starts at (b-1) * nx * ny * bytes;
 # pixels are row-major within it. `src` is the .bin basename, referenced as a
@@ -324,7 +387,7 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 # of the VRT (or GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE is set), which this
 # satisfies rather than loosening the global config.
 .raw_bsq_vrt_xml <- function(src, nx, ny, gt_csv, wkt, dtype, nbands,
-                             nodata = NULL) {
+                             nodata = NULL, descriptions = NULL) {
   bytes <- .gdal_dtype_bytes(dtype)
   plane <- as.numeric(nx) * as.numeric(ny) * bytes
   ndxml <- if (!is.null(nodata))
@@ -332,12 +395,18 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
             format(nodata, scientific = FALSE)) else ""
   bands_xml <- vapply(seq_len(nbands), function(b) sprintf(paste0(
     '  <VRTRasterBand dataType="%s" band="%d" subClass="VRTRawRasterBand">',
+    '%s',
     '\n    <SourceFilename relativeToVRT="1">%s</SourceFilename>',
     '\n    <ImageOffset>%.0f</ImageOffset>',
     '\n    <PixelOffset>%d</PixelOffset>',
     '\n    <LineOffset>%d</LineOffset>%s',
     '\n  </VRTRasterBand>'),
-    dtype, b, src, (b - 1) * plane, bytes, as.integer(nx * bytes), ndxml), "")
+    dtype, b,
+    if (!is.null(descriptions) && b <= length(descriptions) &&
+        nzchar(descriptions[[b]]))
+      sprintf("\n    <Description>%s</Description>", descriptions[[b]])
+    else "",
+    src, (b - 1) * plane, bytes, as.integer(nx * bytes), ndxml), "")
   sprintf(paste0(
     '<VRTDataset rasterXSize="%d" rasterYSize="%d">',
     '\n  <SRS>%s</SRS>\n  <GeoTransform>%s</GeoTransform>\n%s\n</VRTDataset>'),

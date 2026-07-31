@@ -64,7 +64,7 @@ t_query <- system.time({
     start_date = "2023-01-01",
     end_date = "2023-12-31"
   )
-  its <- stac_sign_mpc(its)   # collection-level token cache (memory + disk)
+  its <- stac_sign_mpc(its) # collection-level token cache (memory + disk)
 
   src <- stac_sources(its, assets = c(bands, "Fmask")) |>
     stac_drop_duplicates() |>
@@ -106,6 +106,7 @@ t_all <- system.time({
     mask_asset = "Fmask",
     granularity = "day",
     sort_field = "datetime",
+    resampling = "bilinear",
     nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
   )
 

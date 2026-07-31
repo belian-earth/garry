@@ -256,6 +256,9 @@ NULL
   else if (S7::S7_inherits(n, ReduceNode))
     graph_add(ng, ReduceNode, parents = parents, grid = cg, op = n@op,
               over = n@over, nan_rm = n@nan_rm, fn = n@fn)
+  else if (S7::S7_inherits(n, ScanNode))
+    graph_add(ng, ScanNode, parents = parents, grid = cg, over = n@over,
+              direction = n@direction, fn = n@fn, dtype = n@dtype)
   else if (S7::S7_inherits(n, StackNode))
     graph_add(ng, StackNode, parents = parents, grid = cg, along = n@along)
   else if (S7::S7_inherits(n, WarpNode))

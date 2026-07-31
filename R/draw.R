@@ -12,16 +12,16 @@ NULL
 
 # kind -> colour / glyph. ASCII fallback when the terminal is not UTF-8.
 .kind_col <- c(source = "blue", map = "green", focal = "magenta",
-               reduce = "yellow", stack = "cyan", warp = "red",
-               fused = "grey", mask = "red", math = "green",
-               derive = "green", node = "grey")
+               reduce = "yellow", scan = "yellow", stack = "cyan",
+               warp = "red", fused = "grey", mask = "red",
+               math = "green", derive = "green", node = "grey")
 .kind_glyph_u <- c(source = "\u25c8", map = "\u0192", focal = "\u25eb",
-                   reduce = "\u25b8", stack = "\u2b1a", warp = "\u2192",
-                   fused = "\u25a3", mask = "\u2715", math = "\u00b1",
-                   derive = "\u2295", node = "\u2022")
+                   reduce = "\u25b8", scan = "\u21bb", stack = "\u2b1a",
+                   warp = "\u2192", fused = "\u25a3", mask = "\u2715",
+                   math = "\u00b1", derive = "\u2295", node = "\u2022")
 .kind_glyph_a <- c(source = "o", map = "f", focal = "#", reduce = ">",
-                   stack = "=", warp = "~", fused = "@", mask = "x",
-                   math = "+", derive = "+", node = "*")
+                   scan = "s", stack = "=", warp = "~", fused = "@",
+                   mask = "x", math = "+", derive = "+", node = "*")
 
 .style <- function(kind, text) cli::make_ansi_style(.kind_col[[kind]] %||% "grey")(text)
 .kind_glyph <- function(kind) {
@@ -43,6 +43,7 @@ NULL
   else if (S7::S7_inherits(node, FocalNode)) "focal"
   else if (S7::S7_inherits(node, MapNode)) "map"
   else if (S7::S7_inherits(node, ReduceNode)) "reduce"
+  else if (S7::S7_inherits(node, ScanNode)) "scan"
   else if (S7::S7_inherits(node, StackNode)) "stack"
   else if (S7::S7_inherits(node, WarpNode)) "warp"
   else if (S7::S7_inherits(node, FusedNode)) "fused"
@@ -64,6 +65,7 @@ NULL
     reduce = sprintf("%s  over %s",
                      if (length(node@fn)) "custom reduce" else node@op,
                      paste(node@over, collapse = ",")),
+    scan   = sprintf("scan %s  over %s", node@direction, node@over),
     stack  = sprintf("stack  along %s", node@along),
     warp   = "warp",
     fused  = "fused",

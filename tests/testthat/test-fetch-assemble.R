@@ -48,8 +48,7 @@ test_that("fetch-backed distributed reads match direct reads", {
   p <- plan_lazy(expr)
   direct <- execute_plan(p)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
 
   tlog <- tempfile(fileext = ".csv")
   old <- options(garry.fetch = "force", garry.task_log = tlog,
@@ -60,8 +59,7 @@ test_that("fetch-backed distributed reads match direct reads", {
   expect_equal(got, direct, tolerance = 1e-12)
 
   # fetch tasks actually ran (one per tile), before their assembles
-  tl <- read.csv(tlog, header = FALSE,
-                 col.names = c("ts", "event", "key"))
+  tl <- read.csv(tlog)
   fkeys <- unique(tl$key[grepl("^f\\d+_", tl$key)])
   expect_identical(length(fkeys), nrow(fx$entries))
   # cache cleaned up (fetch root removed on exit)
@@ -73,8 +71,7 @@ test_that("fetch-backed distributed reads match direct reads", {
   options(garry.fetch = "auto", garry.task_log = tlog2)
   got2 <- execute_plan_mirai(p)
   expect_equal(got2, direct, tolerance = 1e-12)
-  tl2 <- read.csv(tlog2, header = FALSE,
-                  col.names = c("ts", "event", "key"))
+  tl2 <- read.csv(tlog2)
   expect_false(any(grepl("^f\\d+_", tl2$key)))
 })
 
@@ -85,10 +82,9 @@ test_that("failed fetch degrades to a nodata hole under read_fail",
   dir <- withr::local_tempdir("fa2")
   fx <- .fa_fixture(dir, n_slices = 2L)
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.fetch = "force", garry.read_fail = "nodata",
-                 garry.chunk_target_px = 1e6)
+                 garry.read_retry = 0L, garry.chunk_target_px = 1e6)
   on.exit(options(old), add = TRUE)
 
   layers <- lapply(fx$entries$slice, function(sl) {

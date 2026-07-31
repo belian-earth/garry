@@ -69,7 +69,7 @@ test_that("read_fail = 'nodata' turns a dead source into NaN, not an abort", {
   meta <- gdal_grid_spec(f)
   ghost <- lazy_source(file.path(tempdir(), "garry-gone.tif"),
                        grid = meta$grid, block_dim = meta$block_dim)
-  old <- options(garry.read_fail = "nodata")
+  old <- options(garry.read_fail = "nodata", garry.read_retry = 0L)
   on.exit(options(old))
   got <- suppressWarnings(collect(ghost + 1))
   expect_true(all(is.nan(got)))

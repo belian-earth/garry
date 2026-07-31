@@ -4,12 +4,15 @@
 \alias{Plan}
 \title{A physical execution plan: stages in dependency order.}
 \usage{
-Plan(stages = list(), sink = integer(0), graph = Graph())
+Plan(stages = list(), sink = integer(0), sinks = integer(0), graph = Graph())
 }
 \arguments{
 \item{stages}{List of \code{Stage}, indexed by stage id.}
 
 \item{sink}{Id of the terminal stage.}
+
+\item{sinks}{Named integer vector of requested sink NODE ids for
+multi-export plans (empty for single-sink plans).}
 
 \item{graph}{The IR \code{Graph} the plan was built from.}
 }

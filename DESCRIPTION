@@ -18,6 +18,7 @@ Imports:
     cli,
     codetools,
     gdalraster,
+    memuse,
     methods,
     rlang
 Remotes:
@@ -30,10 +31,12 @@ Suggests:
     anvl,
     cptkirk,
     httr2,
+    KFAS,
     knitr,
     mirai,
     mori,
     rmarkdown,
+    torch,
     rstac,
     terra,
     testthat (>= 3.0.0),
@@ -43,6 +46,7 @@ VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/roxygen2/version: 8.0.0
 Collate: 
+    'band_mlp.R'
     'grid.R'
     'chunk_grid.R'
     'options.R'
@@ -55,6 +59,8 @@ Collate:
     'collect.R'
     'gdal_adapter.R'
     'executor.R'
+    'daemon.R'
+    'pools.R'
     'scheduler.R'
     'composite_direct.R'
     'lazy_raster.R'
@@ -65,5 +71,8 @@ Collate:
     'gradient.R'
     'grid_from.R'
     'lazy_cog.R'
+    'placement.R'
     'preview.R'
+    'scan_kalman.R'
+    'task_report.R'
     'zzz.R'

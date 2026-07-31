@@ -334,8 +334,7 @@ test_that("distributed collect writes band descriptions too", {
   skip_if_not_installed("anvl")
   skip_if_not_installed("mirai")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
-  garry_daemons(2, 2, gdal_config = FALSE)
-  on.exit(garry_daemons(0, 0, gdal_config = FALSE), add = TRUE)
+  local_pools(2, 2)
 
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
@@ -353,8 +352,7 @@ test_that("distributed masked composite equals the oracle", {
   skip_if_not_installed("mirai")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force multiple spatial chunks
   on.exit(options(old), add = TRUE)
 

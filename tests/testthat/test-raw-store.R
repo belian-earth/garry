@@ -40,8 +40,7 @@ test_that("distributed raw f32 store == single-threaded oracle", {
   skip_if(!garry::.g_has_raw_upload(),
           "installed anvl lacks raw payload support")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force many chunks
   on.exit(options(old), add = TRUE)
 
@@ -80,8 +79,7 @@ test_that("distributed multiband sink streams to GTiff like the oracle", {
   skip_if(!garry::.g_has_raw_upload(),
           "installed anvl lacks raw payload support")
 
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 
@@ -98,4 +96,70 @@ test_that("distributed multiband sink streams to GTiff like the oracle", {
   collect(bands, path = out_s)
   single <- lapply(1:2, function(b) gdal_read_window(out_s, b, 0L, 0L, 60L, 40L))
   expect_equal(dist, single, tolerance = 1e-5)
+})
+
+# --- f64 store payloads (design/f64-store.md) -------------------------
+
+test_that("f64 payloads round-trip the sv layer bit-exactly", {
+  m <- matrix(c(1.5, -2.25, pi, exp(1), 1e-300, -0.125), 2, 3)
+  v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 3L, gdt = "f64")
+  expect_identical(garry:::.sv_es(v), 8L)
+  expect_identical(attr(v, "gdt"), "f64")
+  expect_identical(garry:::.sv_to_matrix(v), m)
+  expect_identical(garry:::.sv_materialise(v), m)
+
+  # trim preserves dtype and bits
+  mp <- matrix(rnorm(36), 6, 6)
+  vp <- garry:::.sv_from_vec(as.numeric(t(mp)), 6L, 6L, gdt = "f64")
+  tr <- garry:::.sv_trim(vp, 1L)
+  expect_identical(attr(tr, "gdt"), "f64")
+  expect_identical(garry:::.sv_to_matrix(tr), mp[2:5, 2:5])
+
+  # producer-side slicing preserves dtype and bits
+  slc <- garry:::.sv_slicer(vp)
+  s1 <- slc(1L, 2L, 3L, 3L)
+  expect_identical(attr(s1, "gdt"), "f64")
+  expect_identical(garry:::.sv_to_matrix(s1), mp[2:4, 3:5])
+})
+
+test_that("f64 raw upload/download round-trips through anvl bit-exactly", {
+  skip_if_not_installed("anvl")
+  skip_if(!garry:::.g_has_raw_upload(), "no raw upload support")
+  m <- matrix(c(1.5, -2.25, pi, 1e-300), 2, 2)
+  v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
+  up <- g_upload_raw(unclass(v), "f64", garry:::.sv_dim(v))
+  down <- g_download_raw(up)
+  expect_identical(attr(down, "gdt"), "f64")
+  expect_identical(garry:::.sv_to_matrix(down), m)
+})
+
+test_that("an f64 chain runs distributed bit-identically to the oracle", {
+  skip_if_not_installed("anvl")
+  skip_if_not_installed("mirai")
+  f <- fixture_gradient_f32()
+  # an f64 map chain feeding an f64 sink: with the f64 raw store the
+  # distributed result must be BIT-identical to the all-doubles oracle
+  a <- lazy_source(f)
+  y <- lazy_map(a, dtype = "f64", fn = function(x) x * (1 / 3) + 1e-7)
+  z <- reduce_over(lazy_stack(list(y, y * 2), along = "t"), "mean", "t",
+                   nan_rm = TRUE)
+  p <- plan_lazy(list(y = y, z = z))
+  single <- execute_plan(p)
+
+  local_pools(2, 1, gdal_config = TRUE)
+  old <- options(garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+  for (m in c("rules", "cost")) {
+    old_m <- options(garry.placement = m)
+    dist <- execute_plan_mirai(p)
+    expect_identical(dist$y, single$y, label = paste("y", m))
+    expect_identical(dist$z, single$z, label = paste("z", m))
+
+    d <- withr::local_tempdir()
+    execute_plan_mirai(p, path = d)
+    got <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0,
+                            ncol(single$y), nrow(single$y))
+    expect_equal(got, single$y, tolerance = 0, label = paste("file", m))
+    options(old_m)
+  }
 })

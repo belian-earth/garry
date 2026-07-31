@@ -2,12 +2,6 @@
 # through the pure-R oracle equals whole-array computation. This is the
 # chunking-correctness proof independent of anvl.
 
-.with_chunk_px <- function(px, code) {
-  old <- options(garry.chunk_target_px = px)
-  on.exit(options(old))
-  force(code)
-}
-
 test_that("NDVI executes identically chunked and whole", {
   set.seed(10)
   nir <- matrix(runif(100 * 100, 0.2, 0.6), 100, 100)

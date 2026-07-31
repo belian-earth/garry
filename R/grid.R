@@ -131,6 +131,9 @@ crs_equal <- function(a, b) {
 #' @param transform GDAL geotransform, length 6, north-up.
 #' @param extent Numeric length 4: xmin, ymin, xmax, ymax.
 #' @param dims Integer dimensions: nx, ny (optionally nt, nb).
+#' @param labels Optional named list of character vectors labelling the
+#'   non-spatial dims (slice dates on `t`, band names on `band`); each
+#'   length-matched to its dim. Metadata only: planning ignores labels.
 #' @param dtype dtype string from the garry vocabulary.
 #' @return A `GridSpec`.
 #' @export
@@ -141,9 +144,17 @@ GridSpec <- S7::new_class(
     transform = S7::class_numeric,   # length 6 (GDAL geotransform)
     extent    = S7::class_numeric,   # xmin, ymin, xmax, ymax
     dims       = S7::class_integer,   # nx, ny [, nt, nb]
-    dtype     = S7::class_character  # anvl-aligned: "f32", "i16", ...
+    dtype     = S7::class_character, # anvl-aligned: "f32", "i16", ...
+    # Optional per-axis labels for the NON-SPATIAL dims (slice dates on
+    # t, band names on band): a named list of character vectors, each
+    # length-matched to its dim. Labels are METADATA, not data: no
+    # planner pass reads them (grid_equal ignores them), so planning
+    # stays grid-identity-trivial while label selection, labelled
+    # output and dt-aware scans become expressible.
+    labels    = S7::class_list
   ),
-  constructor = function(crs, transform, extent, dims, dtype) {
+  constructor = function(crs, transform, extent, dims, dtype,
+                         labels = list()) {
     if (!is.character(crs) || length(crs) != 1L || !nzchar(crs))
       cli::cli_abort("{.arg crs} must be a single non-empty string")
     nm <- names(dims)              # as.integer() strips names; keep them
@@ -155,10 +166,25 @@ GridSpec <- S7::new_class(
       transform = as.numeric(transform),
       extent    = as.numeric(extent),
       dims      = dims,
-      dtype     = dtype
+      dtype     = dtype,
+      labels    = labels
     )
   },
   validator = function(self) {
+    if (length(self@labels)) {
+      lnm <- names(self@labels)
+      if (is.null(lnm) || anyDuplicated(lnm) ||
+          !all(lnm %in% setdiff(names(self@dims), c("x", "y"))))
+        return(paste0("`labels` must be named by non-spatial dims ",
+                      "present in `dims`"))
+      for (nm2 in lnm) {
+        v <- self@labels[[nm2]]
+        if (!is.character(v) || length(v) != self@dims[[nm2]])
+          return(sprintf(
+            "`labels$%s` must be a character vector of length %d",
+            nm2, self@dims[[nm2]]))
+      }
+    }
     if (length(self@transform) != 6L)
       return("`transform` must be length 6 (GDAL geotransform)")
     if (length(self@extent) != 4L)
@@ -311,6 +337,38 @@ grid_equal <- function(a, b, tol = 1e-9) {
     all(a@dims == b@dims)
 }
 
+#' Describe how two grids differ.
+#'
+#' The diagnostic companion to [grid_equal()]: names the FIRST differing
+#' component (CRS, resolution, extent offset in pixels, dims) so a
+#' "grids differ" abort tells the user what to fix rather than only that
+#' something is wrong. Embedded in every alignment error.
+#'
+#' @param a,b `GridSpec` objects.
+#' @param tol Numeric tolerance, as in [grid_equal()].
+#' @return A single character description; `"grids are equal"` when
+#'   [grid_equal()] holds.
+#' @export
+grid_diff <- function(a, b, tol = 1e-9) {
+  if (!crs_equal(a@crs, b@crs))
+    return("CRS differs")
+  ra <- c(a@transform[[2L]], -a@transform[[6L]])
+  rb <- c(b@transform[[2L]], -b@transform[[6L]])
+  if (any(abs(ra - rb) > tol))
+    return(sprintf("resolution differs: %g x %g vs %g x %g",
+                   ra[[1L]], ra[[2L]], rb[[1L]], rb[[2L]]))
+  if (any(abs(a@extent - b@extent) > tol)) {
+    off <- (b@extent - a@extent) / c(ra[[1L]], ra[[2L]], ra[[1L]], ra[[2L]])
+    return(sprintf("extents differ by %.3g px in x, %.3g px in y",
+                   max(abs(off[c(1L, 3L)])), max(abs(off[c(2L, 4L)]))))
+  }
+  if (length(a@dims) != length(b@dims) || any(a@dims != b@dims))
+    return(sprintf("dims differ: (%s) vs (%s)",
+                   paste(a@dims, collapse = ","),
+                   paste(b@dims, collapse = ",")))
+  "grids are equal"
+}
+
 # Internal: same CRS, spatial dims and affine transform; non-spatial
 # dims and dtype ignored (a stack and its median share spatial
 # geometry). Used by the planner's stage-merge pass.
@@ -325,5 +383,30 @@ grid_equal <- function(a, b, tol = 1e-9) {
 .grid_retype <- function(grid, dtype) {
   if (identical(grid@dtype, dtype)) return(grid)
   GridSpec(crs = grid@crs, transform = grid@transform,
-           extent = grid@extent, dims = grid@dims, dtype = dtype)
+           extent = grid@extent, dims = grid@dims, dtype = dtype,
+           labels = grid@labels)
+}
+
+# Internal: same grid with one non-spatial axis (re)labelled. NULL
+# labels (or a length mismatch, e.g. unnamed layers) leave the grid
+# unchanged rather than erroring: labels are best-effort metadata.
+.grid_relabel <- function(grid, dim, labels) {
+  if (is.null(labels) || !dim %in% names(grid@dims) ||
+      length(labels) != grid@dims[[dim]] ||
+      !all(nzchar(labels)))
+    return(grid)
+  lb <- grid@labels
+  lb[[dim]] <- as.character(labels)
+  GridSpec(crs = grid@crs, transform = grid@transform,
+           extent = grid@extent, dims = grid@dims, dtype = grid@dtype,
+           labels = lb)
+}
+
+# Internal: the labels of a single-layer-axis grid, for labelled output
+# ((t,y,x) or (band,y,x) results): the one non-spatial dim's labels, or
+# NULL when absent/ambiguous.
+.grid_layer_labels <- function(grid) {
+  nsd <- setdiff(names(grid@dims), c("x", "y"))
+  if (length(nsd) != 1L) return(NULL)
+  grid@labels[[nsd]]
 }

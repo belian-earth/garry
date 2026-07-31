@@ -29,7 +29,8 @@ anvl's jit() (D10/D14). Example, a 3x3 sum:
 }
 \details{
 Cells beyond the raster edge are NaN (nodata) — v1 supports only this
-\code{boundary = "nodata"} policy; reflect/wrap arrive with Phase 9.
+\code{boundary = "nodata"} policy; reflect/wrap remain unimplemented
+(deliberately deferred, not scheduled).
 
 Over a \code{LazyDataset}, the stencil is applied to every value band per slice;
 \code{bands} restricts which bands.

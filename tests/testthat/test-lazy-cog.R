@@ -139,8 +139,7 @@ test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3
   f <- .lc_cog(dir)
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
                     dims = c(128L, 128L), dtype = "f32")
-  garry_daemons(2, 1)
-  on.exit(garry_daemons(0, 0), add = TRUE)
+  local_pools(2, 1, gdal_config = TRUE)
   got <- collect(lazy_map(lazy_cog(f, grid), fn = dequantize_aef, dtype = "f32"),
                  distributed = TRUE)
   ref <- function(x) ((x / 127.5)^2) * sign(x)
@@ -239,4 +238,101 @@ test_that("lazy_cog (dataframe form) carries a mask asset for mask()", {
                  from = "Q", where = qa_bits(0L)) |>
     reduce_over("median", "t", nan_rm = TRUE)
   expect_true(all(is.na(collect(masked, distributed = FALSE))))  # Q bit0 set -> masked
+})
+
+test_that(".ck_stage_mb estimates the native-dtype staging footprint", {
+  specs <- list(
+    a = list(ts = c(3660, 3660), bands = 1:64, dtype = "i8"),
+    b = list(ts = c(1000, 1000), bands = 1L, dtype = "f32")
+  )
+  # 3660^2 x 64 x 1 byte + 1000^2 x 1 x 4 bytes
+  want <- (3660^2 * 64 * 1 + 1000^2 * 4) / 2^20
+  expect_equal(garry:::.ck_stage_mb(specs), want)
+  # unknown/absent dtype falls back to 4 bytes, never errors
+  expect_equal(garry:::.ck_stage_mb(list(list(ts = c(10, 10), bands = 1L))),
+               10 * 10 * 4 / 2^20)
+})
+
+test_that(".ck_stage_base falls back to disk beyond the RAM budget", {
+  skip_if(!dir.exists("/dev/shm"), "no tmpfs on this platform")
+  frac <- garry_opt("ck_stage_ram_fraction")
+  # fits: tmpfs
+  expect_identical(garry:::.ck_stage_base(100, avail_mb = 1000), "/dev/shm")
+  # boundary: exactly the budget still fits
+  expect_identical(garry:::.ck_stage_base(frac * 1000, avail_mb = 1000),
+                   "/dev/shm")
+  # exceeds: disk, with a message saying so
+  expect_message(
+    got <- garry:::.ck_stage_base(frac * 1000 + 1, avail_mb = 1000),
+    "staging on disk")
+  expect_identical(got, tempdir())
+  # RAM unreadable: keep the historical tmpfs behaviour
+  expect_identical(garry:::.ck_stage_base(1e9, avail_mb = NA_real_), "/dev/shm")
+})
+
+test_that("lazy_cog stages on disk (and still reads right) under a tiny budget", {
+  skip_if_not_installed("cptkirk")
+  skip_if(!dir.exists("/dev/shm"), "no tmpfs on this platform")
+  dir <- withr::local_tempdir("lcbudget")
+  f <- .lc_cog(dir)
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
+                    dims = c(64L, 64L), dtype = "f32")
+  ds <- lazy_cog(f, grid)
+  withr::local_options(garry.ck_stage_ram_fraction = 1e-12)
+  expect_message(got <- collect(ds[["b2"]], distributed = FALSE),
+                 "staging on disk")
+  expect_equal(unname(got[1, 1]), 50)
+})
+
+test_that("lazy_cog survives no-nodata sources holding exact zeros", {
+  # Regression: GDAL's warp warning ("value 0 changed to 1.4e-45 to avoid
+  # being treated as NoData") fired on a worker thread reaches gdalraster's
+  # R-callback error handler and ABORTS the process unless the CK fetch
+  # runs under CPL_LOG_ERRORS=OFF (.ck_quiet). A failure here may crash
+  # the test runner outright -- that is the regression signal.
+  skip_if_not_installed("cptkirk")
+  dir <- withr::local_tempdir("lczero")
+  f <- file.path(dir, "zero.tif")
+  d <- gdalraster::create("GTiff", f, 512, 512, 2, "Float32",
+                          return_obj = TRUE,
+                          options = c("TILED=YES", "BLOCKXSIZE=256",
+                                      "BLOCKYSIZE=256"))
+  d$setGeoTransform(c(0, 10, 0, 5120, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  v <- rep(c(0, 1.5), each = 512 * 256)      # exact zeros, no declared nodata
+  for (b in 1:2) d$write(b, 0, 0, 512, 512, v)
+  d$close()
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
+                    dims = c(128L, 128L), dtype = "f32")
+  got <- collect(lazy_cog(f, grid)[["b1"]], distributed = FALSE)
+  expect_equal(unname(got[1, 1]), 0)
+  expect_equal(unname(got[128, 1]), 1.5)
+})
+
+test_that("tile mosaics pin to the full target grid (partial-coverage slices)", {
+  # A day slice whose tiles cover only part of the AOI must still stage
+  # a grid-sized buffer: read windows are grid-relative, and an
+  # unpinned union-extent VRT read "Access window out of range".
+  td <- withr::local_tempdir()
+  mk_tile <- function(p, x0, nx) {
+    ds <- gdalraster::create("GTiff", p, nx, 20, 1, "Int16",
+                             return_obj = TRUE)
+    ds$setGeoTransform(c(x0, 10, 0, 4600200, 0, -10))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+    ds$setNoDataValue(1, -9999)
+    ds$write(1, 0, 0, nx, 20, rep(7, nx * 20))
+    ds$close()
+    p
+  }
+  # grid: 60 cols x 20 rows from x=500000; tiles cover cols 1-25 only
+  tile <- mk_tile(file.path(td, "tile1.tif"), 500000, 25)
+  spec <- list(te = c(500000, 4600000, 500600, 4600200), ts = c(60L, 20L),
+               nodata = -9999)
+  vrt <- garry:::.ck_mosaic_pinned(file.path(td, "mos.vrt"), tile, spec)
+  d <- methods::new(gdalraster::GDALRaster, vrt)
+  on.exit(d$close())
+  expect_equal(c(d$getRasterXSize(), d$getRasterYSize()), c(60, 20))
+  row <- d$read(1, 0, 0, 60, 1, 60, 1)
+  expect_equal(row[1], 7)               # covered
+  expect_true(is.na(row[40]))           # uncovered -> sentinel (NA on read)
 })

@@ -15,7 +15,7 @@ cloud-optimised remote reads want: HTTP multiplexing over HTTP/2, the
 odc-stac retry cadence and timeouts, a capped block cache (GDAL
 defaults to 5\% of RAM \emph{per process}, which many daemons would
 multiply), single-range COG-header ingest, a skipped directory scan
-and \code{.tif}-only vsicurl probing for fast remote opens, and the MEM
+and a raster-extension vsicurl allowlist for fast remote opens, and the MEM
 driver open gate the direct warp needs. \code{garry_daemons()} calls this
 on every read daemon automatically; call it yourself for host-side
 discovery reads or when you drive \code{mirai::daemons()} directly. Each

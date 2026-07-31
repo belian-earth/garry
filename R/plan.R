@@ -21,10 +21,11 @@ NULL
 #                     the partial lists; returns the final array/scalar.
 # - "warp":           executed by GDAL (Phase 4b); fn is identity.
 #
-# Halo contract (D14): stage inputs arrive padded to exactly `halo` cells
-# per side; cells outside the raster are NaN (nodata semantics). Each
-# focal member consumes `radius` cells of padding via shifted slices, so
-# the closure output is exactly the unpadded chunk core.
+# Halo contract (D14, generalised by D22): stage inputs arrive padded to
+# exactly `halo + out_pad` cells per side; cells outside the raster are
+# NaN (nodata semantics). Each focal member consumes `radius` cells of
+# padding via shifted slices, so each export carries its `export_pads`
+# entry (0 when the stage has no downstream halo consumers).
 # ---------------------------------------------------------------------------
 
 #' One schedulable unit of a Plan.
@@ -37,11 +38,18 @@ NULL
 #' @param halo Halo radius in pixels the stage requires on its inputs.
 #' @param grid Output `GridSpec` of the stage.
 #' @param chunks `ChunkGrid` partitioning the stage's output.
-#' @param device Device tag ("cpu" until Phase 7).
+#' @param device Device tag ("cpu" or "cuda").
 #' @param inputs Stage ids feeding this stage.
 #' @param input_nodes IR node ids whose values `fn` receives, in order.
 #' @param exports Member node ids `fn` returns, ascending (consumed by
 #'   other stages, plus the stage tail).
+#' @param out_pad Spatial padding the stage's chunks are computed with
+#'   (D22): consumers needing a halo on this stage's exports receive it
+#'   as a recomputed ring instead of a materialise-first refusal.
+#'   Inputs arrive padded to `halo + out_pad`.
+#' @param export_pads Integer vector parallel to `exports`: the padding
+#'   each export value carries (post-focal exports carry less than
+#'   pre-focal ones). Empty means all zero.
 #' @return A `Stage`.
 #' @export
 Stage <- S7::new_class(
@@ -57,7 +65,10 @@ Stage <- S7::new_class(
     device      = S7::class_character,
     inputs      = S7::class_integer,
     input_nodes = S7::class_integer,
-    exports     = S7::class_integer
+    exports     = S7::class_integer,
+    out_pad     = S7::new_property(S7::class_integer, default = 0L),
+    export_pads = S7::new_property(S7::class_integer,
+                                   default = quote(integer(0)))
   ),
   validator = function(self) {
     kinds <- c("source_read", "compute", "reduce_partial",
@@ -74,6 +85,8 @@ Stage <- S7::new_class(
 #'
 #' @param stages List of `Stage`, indexed by stage id.
 #' @param sink Id of the terminal stage.
+#' @param sinks Named integer vector of requested sink NODE ids for
+#'   multi-export plans (empty for single-sink plans).
 #' @param graph The IR `Graph` the plan was built from.
 #' @return A `Plan`.
 #' @export
@@ -82,6 +95,9 @@ Plan <- S7::new_class(
   properties = list(
     stages = S7::class_list,
     sink   = S7::class_integer,
+    # Multi-export (design/multi-export-collect.md): named NODE ids, one
+    # per requested sink. Length <= 1 means the classic single-sink plan.
+    sinks  = S7::new_property(S7::class_integer, default = quote(integer(0))),
     graph  = Graph
   )
 )
@@ -90,8 +106,9 @@ S7::method(print, Plan) <- function(x, ...) {
   cat("<Plan>", length(x@stages), "stages, sink =", x@sink, "\n")
   for (s in x@stages) {
     cat(sprintf(
-      "  [%d] %-14s members=(%s) halo=%d chunks=%dx%d inputs=(%s)\n",
+      "  [%d] %-14s members=(%s) halo=%d%s chunks=%dx%d inputs=(%s)\n",
       s@id, s@kind, paste(s@members, collapse = ","), s@halo,
+      if (s@out_pad > 0L) sprintf(" pad=%d", s@out_pad) else "",
       s@chunks@chunk_dim[1L], s@chunks@chunk_dim[2L],
       paste(s@inputs, collapse = ",")))
   }

@@ -9,3 +9,5 @@ composite*.tif
 ndvi*.tif
 Rplots.pdf
 docs
+*.aux.xml
+tests/testthat/_problems/

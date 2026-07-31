@@ -81,6 +81,17 @@ oracle_exec <- function(plan, data) {
   if (nrow(it) == 1L) return(chunks[[1L]])
 
   dims <- sink@grid@dims
+  outer <- setdiff(names(dims), c("x", "y"))
+  if (length(outer)) {
+    # Length-preserving sinks (e.g. a scan) emit (outer, y, x) chunks.
+    n_out <- prod(dims[outer])
+    full <- array(NA_real_, c(n_out, dims[["y"]], dims[["x"]]))
+    for (j in seq_len(nrow(it))) {
+      full[, (it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
+           (it$x_off[j] + 1L):(it$x_off[j] + it$x_size[j])] <- chunks[[j]]
+    }
+    return(full)
+  }
   full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
   for (j in seq_len(nrow(it))) {
     full[(it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),

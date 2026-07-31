@@ -4,7 +4,7 @@
 \alias{GridSpec}
 \title{Spatial grid specification.}
 \usage{
-GridSpec(crs, transform, extent, dims, dtype)
+GridSpec(crs, transform, extent, dims, dtype, labels = list())
 }
 \arguments{
 \item{crs}{CRS string in any GDAL-interpretable form.}
@@ -16,6 +16,10 @@ GridSpec(crs, transform, extent, dims, dtype)
 \item{dims}{Integer dimensions: nx, ny (optionally nt, nb).}
 
 \item{dtype}{dtype string from the garry vocabulary.}
+
+\item{labels}{Optional named list of character vectors labelling the
+non-spatial dims (slice dates on \code{t}, band names on \code{band}); each
+length-matched to its dim. Metadata only: planning ignores labels.}
 }
 \value{
 A \code{GridSpec}.

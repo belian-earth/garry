@@ -42,6 +42,5 @@ self-describing and \code{\link[=preview]{preview()}} can set real-world axes wi
 }
 \description{
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}
-without executing: the permanent introspection path. Execution
-arrives in Phase 5.
+without executing: the permanent introspection path.
 }

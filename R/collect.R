@@ -5,8 +5,7 @@ NULL
 #' Materialise a LazyRaster (or inspect its plan).
 #'
 #' `plan_only = TRUE` runs the planner passes and returns the `Plan`
-#' without executing: the permanent introspection path. Execution
-#' arrives in Phase 5.
+#' without executing: the permanent introspection path.
 #'
 #' @param x A `LazyRaster`, or a `LazyDataset` (its bands are assembled along the
 #'   band axis via `stack_bands()` first).
@@ -31,6 +30,7 @@ NULL
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
                     distributed = garry_daemons_set()) {
+  .garry_opt_check()
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.
@@ -45,6 +45,36 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   }
   p <- plan_lazy(x)
   if (plan_only) return(p)
+  # Multi-export v1 (design/multi-export-collect.md): several sinks share
+  # ONE single-threaded execution; the distributed scheduler learns
+  # multi-sink next.
+  if (length(p@sinks) > 1L) {
+    ck <- .ck_resolve(p)
+    p <- ck$plan
+    if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
+    .garry_state$route <- if (distributed) "scheduler" else "single"
+    res <- if (distributed) {
+      execute_plan_mirai(p, path = path, nodata = nodata)
+    } else {
+      execute_plan(p, path = path, nodata = nodata)
+    }
+    if (!is.null(path)) return(invisible(res))
+    # per-sink: same layout + gis attribute as a single-sink collect
+    return(lapply(stats::setNames(seq_along(res), names(res)), function(k) {
+      out <- .collect_layout(res[[k]])
+      if (!is.null(dim(out))) {
+        grid <- graph_get(p@graph, p@sinks[[k]])@grid
+        nb <- if (length(dim(out)) == 3L) dim(out)[[3L]] else 1L
+        attr(out, "gis") <- .gis_attr(grid, nb)
+      }
+      out
+    }))
+  }
+  # Labelled output: a bare (t,y,x) / (band,y,x) result inherits its
+  # axis labels (GridSpec labels, carried from lazy_stack layer names)
+  # as output band descriptions unless the dataset already supplied
+  # band names.
+  band_names <- band_names %||% .grid_layer_labels(p@stages[[p@sink]]@grid)
   # lazy_cog sources ("CK:") fetch nothing until here: resolve each source set to
   # a staged grid-aligned raster once (single-band sets through one concurrent
   # ck_batch pool), then the executors read it as an ordinary GDAL source.
@@ -58,6 +88,12 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
     spec <- .cd_spec(p)               # pure composite fast path (fetch-ordered pipeline)
     decomp <- if (is.null(spec)) .gd_decompose(p) else NULL   # reduce-decomposition
+    # Record which route ran (garry_last_route()): the selection is
+    # silent, and a plan silently changing route is exactly the
+    # regression class the equivalence suite must be able to observe.
+    .garry_state$route <- if (!is.null(spec)) "composite_direct"
+      else if (!is.null(decomp)) "gd_reduce"
+      else "scheduler"
     if (!is.null(spec))
       .execute_composite_direct(p, spec, path = path, nodata = nodata,
                                 band_names = band_names)
@@ -69,6 +105,7 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     else
       execute_plan_mirai(p, path = path, nodata = nodata, band_names = band_names)
   } else {
+    .garry_state$route <- "single"
     execute_plan(p, path = path, nodata = nodata, band_names = band_names)
   }
   if (!is.null(path)) return(invisible(res))
@@ -83,6 +120,48 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
   }
   out
 }
+
+#' Convert a collected result to a terra SpatRaster.
+#'
+#' `collect()` results carry a `gis` attribute (bbox, CRS, dims); this
+#' wraps the array as a `terra::SpatRaster` for hand-off to the terra
+#' ecosystem (plotting, zonal statistics, vector ops). Band
+#' names/descriptions are preserved when present.
+#'
+#' @param x A matrix or `(y, x, band)` array from [collect()] (must
+#'   carry the `gis` attribute).
+#' @return A `terra::SpatRaster`.
+#' @export
+as_terra <- function(x) {
+  rlang::check_installed("terra", reason = "for as_terra().")
+  gis <- attr(x, "gis")
+  if (is.null(gis))
+    cli::cli_abort(paste0(
+      "{.arg x} has no {.code gis} attribute; pass an in-memory ",
+      "{.fn collect} result (matrix or (y, x, band) array)"))
+  a <- if (length(dim(x)) == 2L) array(x, c(dim(x), 1L)) else unclass(x)
+  attr(a, "gis") <- NULL
+  r <- terra::rast(a, crs = gis$srs,
+                   extent = terra::ext(gis$bbox[[1L]], gis$bbox[[3L]],
+                                       gis$bbox[[2L]], gis$bbox[[4L]]))
+  nms <- dimnames(x)[[3L]]
+  if (!is.null(nms)) names(r) <- nms
+  r
+}
+
+#' Which execution route did the last `collect()` take?
+#'
+#' The distributed `collect()` silently picks between the
+#' composite-direct fast path, the reduce-decomposition path and the
+#' staged scheduler (in that order); single-threaded runs use the
+#' in-process executor. The chosen route is recorded per `collect()`
+#' call so equivalence tests and pipelines can assert a plan did not
+#' silently change route.
+#'
+#' @return `"composite_direct"`, `"gd_reduce"`, `"scheduler"` or
+#'   `"single"`; `NULL` before any `collect()` in the session.
+#' @export
+garry_last_route <- function() .garry_state$route
 
 # Materialise each time group of a LazyDatasetGroups. With `path`, writes one
 # file per group (a `{group}` placeholder is substituted, else the group label

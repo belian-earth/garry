@@ -2,13 +2,13 @@
 % Please edit documentation in R/gdal_adapter.R
 \name{gdal_create_output}
 \alias{gdal_create_output}
-\title{Create an output GTiff for a grid.}
+\title{Create an output raster for a grid.}
 \usage{
 gdal_create_output(
   path,
   grid,
   nodata = numeric(0),
-  options = c("COMPRESS=DEFLATE"),
+  options = NULL,
   band_names = NULL
 )
 }
@@ -19,7 +19,12 @@ gdal_create_output(
 
 \item{nodata}{Optional sentinel to record in metadata (all bands).}
 
-\item{options}{GTiff creation options.}
+\item{options}{GTiff creation options. \code{NULL} (default) uses tiled DEFLATE
+(\code{TILED=YES}, 256x256 blocks, \code{BIGTIFF=IF_SAFER}) plus \code{INTERLEAVE=BAND}
+for multi-band grids. Band interleave matters: GDAL's GTiff defaults
+(pixel interleave, full-width 1-row strips) make every later per-band
+read decompress ALL bands of each strip, which amplifies read cost by
+the band count on files garry itself wrote.}
 
 \item{band_names}{Optional character vector of band descriptions, in band
 order; written as each band's GDAL description (shows in \code{gdalinfo}).}
@@ -28,6 +33,9 @@ order; written as each band's GDAL description (shows in \code{gdalinfo}).}
 An open dataset object; caller must \verb{$close()}.
 }
 \description{
-A single non-spatial dim ("t" or "band") maps to GTiff bands; more
-than one is an error.
+A single non-spatial dim ("t" or "band") maps to bands; more than
+one is an error. A \code{.tif} destination writes a tiled GTiff; a
+\code{.vrt} destination writes a raw-BSQ cube (\code{.bin} + sibling
+\code{VRTRawRasterBand} VRT — the intermediate format whose reads bypass
+GDAL's tile machinery; see \code{\link[=stage_raw_cube]{stage_raw_cube()}}).
 }
