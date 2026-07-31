@@ -334,9 +334,11 @@ tail is 2.2x the cached width-2 best (332 s), the total beats every
 recorded crop=2048 number (552.2 cached / 576.2 f64-era / 948.6
 pre-placement), and peak memory came in BELOW the width-2 runs —
 scan confinement holds scan memory at K=2 working sets while six
-narrow profiles carry the map/ensemble fleets. Predict ran 227 s on
-this sitting's slow link; on a July-30 link (~175 s predict) the
-total projects to ~350 s, under hutan's 362 s for the first time.
+narrow profiles carry the map/ensemble fleets. Predict reads are LOCAL
+(engine-cmp cache) — its 185-227 s spread across the day's runs was
+concurrent box load (test suites) and page-cache state, not network;
+on a quiet box (the July-30 175 s predict, same machine) the total
+projects to ~350 s, under hutan's 362 s for the first time.
 
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
