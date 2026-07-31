@@ -256,7 +256,7 @@ garry_explain_placement <- function(x, read = NULL, compute = NULL,
   n_read <- as.integer(read %||%
     tryCatch(.gd_n_compute("garry_read"), error = function(e) 0L))
   n_comp <- as.integer(compute %||%
-    tryCatch(.gd_n_compute("garry_compute"), error = function(e) 0L))
+    tryCatch(.comp_n(), error = function(e) 0L))
   .plan_placement(p, sc$consumers_of, sc$warp_only,
                   n_read = n_read, n_comp = n_comp,
                   reader_threads = .garry_state$reader_threads,

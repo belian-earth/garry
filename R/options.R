@@ -184,6 +184,16 @@
   # OOMs). FALSE disables the correction (measurement samples still log
   # to the task log) — the A/B switch for attributing wall-time to it.
   rss_correction = TRUE,
+  # Routed dispatch (design/routed-dispatch.md): create the compute
+  # pool as N width-1 mirai profiles (garry_comp_1..N, direct
+  # connections, no dispatchers) instead of one width-N pool, giving
+  # the scheduler DAEMON IDENTITY: per-profile launch slots now; exact
+  # per-profile kernel warmth and scan-memory confinement in later
+  # stages. Read pool, writer, store and admission are unchanged.
+  # FALSE (the default until validated) keeps the legacy anonymous
+  # pool; both modes run the same code paths via .comp_profiles().
+  # Takes effect at garry_daemons() creation time.
+  routed_dispatch = FALSE,
   # Placement decision mode for source->compute chains in the pooled
   # scheduler (design/placement-cost-pass.md): "cost" (default)
   # compares modelled fuse-vs-materialise wall time per chain, with
@@ -362,6 +372,8 @@ garry_opt <- function(name) {
     desc = "fuse-vs-materialise decision mode for source->compute chains"),
   rss_correction   = list(tier = "user", check = .opt_flag(),
     desc = "tighten the compute budget on measured fleet-RSS growth"),
+  routed_dispatch  = list(tier = "user", check = .opt_flag(),
+    desc = "compute pool as width-1 profiles (daemon-identity routing)"),
   cost_gflops_core = list(tier = "calibration", check = .opt_num(min = 1e-9),
     desc = "sustained per-core kernel throughput (GFLOP/s)"),
   cost_shm_bw_mbs  = list(tier = "calibration", check = .opt_num(min = 1e-9),

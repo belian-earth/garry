@@ -575,6 +575,21 @@ NULL
   else paste0(signif(mb, 2), " MB")
 }
 
+# Active compute-pool profile names. Routed dispatch
+# (garry.routed_dispatch at pool creation; design/routed-dispatch.md)
+# records the N width-1 profiles garry_daemons() created; legacy mode
+# is the single anonymous pool. Every compute-facing seam (creation,
+# teardown, affinity, pids, hygiene, ABI, warm-up, dispatch) loops
+# this, so legacy mode runs byte-identical through the same code paths.
+.comp_profiles <- function() {
+  .garry_state$comp_profiles %||% "garry_compute"
+}
+
+# Total connected compute daemons across the profile set.
+.comp_n <- function() {
+  sum(vapply(.comp_profiles(), .gd_n_compute, integer(1)))
+}
+
 # Every daemon pid of a mirai profile (empty when unavailable).
 .garry_pool_pids <- function(profile) {
   tryCatch(
@@ -671,13 +686,16 @@ NULL
 # taskset only; anywhere else the pool stays uncapped and the
 # placement pass's fuse_flops_max gate keeps wide kernels off the
 # readers. Returns the cap (NULL when uncapped) for .garry_state.
-.pool_affinity_apply <- function(profile, n, k = NULL) {
+.pool_affinity_apply <- function(profile, n, k = NULL, pids = NULL) {
   if (!identical(Sys.info()[["sysname"]], "Linux")) return(NULL)
   if (!nzchar(Sys.which("taskset"))) return(NULL)
   cores <- .garry_cores()$logical
   k <- as.integer(k %||% max(2L, cores %/% max(1L, as.integer(n))))
   if (k >= cores) return(NULL)                # cap would be a no-op
-  pids <- .garry_pool_pids(profile)
+  # `pids` overrides the profile lookup: routed compute pools span N
+  # width-1 profiles whose daemons must take DISJOINT global slices,
+  # so the caller passes the combined pid vector in profile order.
+  pids <- pids %||% .garry_pool_pids(profile)
   if (length(pids) == 0L) return(NULL)
   # Apply EVERY mask before judging success: returning early on one
   # failed taskset left the pool half re-masked while the recorded
@@ -713,7 +731,8 @@ NULL
             else max(2L, cores %/% max(1L, n_comp))
   if (identical(.garry_state$comp_threads, k_want))
     return(invisible(NULL))
-  got <- .pool_affinity_apply("garry_compute", n_comp, k = k_want)
+  got <- .pool_affinity_apply(NULL, n_comp, k = k_want,
+                              pids = .garry_state$comp_pids)
   if (!is.null(got)) .garry_state$comp_threads <- got
   invisible(NULL)
 }
@@ -810,7 +829,23 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # to tune host-side discovery.
   if (isTRUE(gdal_config)) .garry_env_defaults()
   mirai::daemons(read, .compute = "garry_read", ...)
-  mirai::daemons(compute, .compute = "garry_compute", ...)
+  # Compute pool: legacy = one width-N anonymous profile; routed
+  # (garry.routed_dispatch) = N width-1 direct-connection profiles
+  # (no dispatcher processes — probed 2026-08-02: everywhere() state
+  # persists, width-1 queues serialise, teardown clean), giving the
+  # scheduler daemon identity. Any previous routed generation is torn
+  # down first so generations never mix.
+  for (p in .garry_state$comp_profiles %||% character(0))
+    try(mirai::daemons(0L, .compute = p), silent = TRUE)
+  .garry_state$comp_profiles <- NULL
+  if (compute > 0L && isTRUE(garry_opt("routed_dispatch"))) {
+    profs <- sprintf("garry_comp_%d", seq_len(compute))
+    for (p in profs)
+      mirai::daemons(1L, dispatcher = FALSE, .compute = p, ...)
+    .garry_state$comp_profiles <- profs
+  } else {
+    mirai::daemons(compute, .compute = "garry_compute", ...)
+  }
   # ONE writer daemon rides along with the pools: streamed sink chunks
   # write there instead of on the host dispatch thread (GTiff is
   # single-writer, so one daemon serialises file access safely while
@@ -836,17 +871,21 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # GPU; pinning their host threads buys nothing and can starve H2D).
   .garry_state$abi_ok <- NULL       # fresh pools: re-check the ABI token
   # Fleet pids, recorded once per pool generation: the per-daemon RSS
-  # poll (refresh_mem_budgets) reads /proc/<pid>/status against them.
+  # poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
+  # and the affinity/shaping calls mask them by global index (one pid
+  # collection round trip per generation, shared by both).
+  .garry_state$comp_pids <- if (compute > 0L)
+    unlist(lapply(.comp_profiles(), .garry_pool_pids)) else integer(0)
   .garry_state$pool_pids <- c(
     if (read > 0L) .garry_pool_pids("garry_read"),
-    if (compute > 0L) .garry_pool_pids("garry_compute"),
+    .garry_state$comp_pids,
     if (read > 0L || compute > 0L) .garry_pool_pids("garry_write"))
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L)
     .pool_affinity_apply("garry_read", read)
   .garry_state$comp_threads <- if (aff && compute > 0L &&
                                    !identical(garry_opt("device"), "cuda"))
-    .pool_affinity_apply("garry_compute", compute)
+    .pool_affinity_apply(NULL, compute, pids = .garry_state$comp_pids)
   invisible(list(read = read, compute = compute))
 }
 
@@ -864,7 +903,7 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
 #' @return Invisibly `NULL`.
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
-  for (p in c("garry_read", "garry_compute", "garry_write")) {
+  for (p in c("garry_read", .comp_profiles(), "garry_write")) {
     h <- tryCatch(
       mirai::everywhere(garry::.daemon_hygiene(deep = d), d = deep,
                         .compute = p),
@@ -884,7 +923,7 @@ garry_pool_hygiene <- function(deep = FALSE) {
 #' @return A single logical.
 #' @export
 garry_daemons_set <- function() {
-  .gd_n_compute("garry_read") > 0L && .gd_n_compute("garry_compute") > 0L
+  .gd_n_compute("garry_read") > 0L && .comp_n() > 0L
 }
 
 #' Execute a Plan across mirai daemons.
@@ -909,11 +948,27 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       "no garry daemon pools are running; call garry_daemons() first"),
       "garry_scheduler_error")
   n_read <- .gd_n_compute("garry_read")
-  n_comp <- .gd_n_compute("garry_compute")
+  n_comp <- .comp_n()
   pooled <- TRUE
   read_prof <- "garry_read"
-  comp_prof <- "garry_compute"
-  profiles <- unique(c(read_prof, comp_prof))
+  comp_profs <- .comp_profiles()
+  profiles <- unique(c(read_prof, comp_profs))
+  # Per-profile launch slots: routed profiles are width 1 (depth 2 =
+  # today's 2-slots-per-daemon); the legacy single profile keeps the
+  # whole pool's depth. pick_comp_prof is the C1 routing policy —
+  # least-loaded profile with a free slot, first-wins on ties (exact
+  # per-kernel warmth and scan confinement arrive in C2/C3).
+  prof_depth <- if (length(comp_profs) == 1L) 2L * max(1L, n_comp) else 2L
+  prof_slots <- new.env(parent = emptyenv())
+  for (p in comp_profs) prof_slots[[p]] <- 0L
+  pick_comp_prof <- function() {
+    best <- NULL; bn <- prof_depth
+    for (p in comp_profs) {
+      v <- prof_slots[[p]]
+      if (v < bn) { bn <- v; best <- p }
+    }
+    best
+  }
   .garry_abi_check(unique(c(profiles,
     if (tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE))
       "garry_write")))
@@ -1537,9 +1592,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # (e.g. per-slice mask cleanup) to ONE spec.
     warm_specs <- warm_specs[!duplicated(
       vapply(warm_specs, `[[`, character(1), "ck"))]
-    warm_handle <- mirai::everywhere(garry::.daemon_warm_jit(sp),
-                                     sp = warm_specs,
-                                     .compute = comp_prof)
+    warm_handle <- unlist(lapply(comp_profs, function(p)
+      mirai::everywhere(garry::.daemon_warm_jit(sp), sp = warm_specs,
+                        .compute = p)), recursive = FALSE)
     for (sp in warm_specs) warmed_ck[[sp$ck]] <- TRUE
   }
 
@@ -2040,14 +2095,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           if (!is.null(t$ck) && !isTRUE(warmed_ck[[t$ck]]) &&
               (ck_inflight[[t$ck]] %||% 0L) > (ck_done[[t$ck]] %||% 0L))
             next
-          if (n_slot[["comp"]] < cap_comp) slot <- "comp"
-          else next
+          if (n_slot[["comp"]] >= cap_comp) next
+          cprof <- pick_comp_prof()
+          if (is.null(cprof)) next          # every profile at depth
+          slot <- "comp"
         }
       }
       if (!is_ready(k)) next
       if (!is.null(t$ck))
         ck_inflight[[t$ck]] <- (ck_inflight[[t$ck]] %||% 0L) + 1L
-      prof <- if (slot == "read") read_prof else comp_prof
+      prof <- if (slot == "read") read_prof else cprof
       inflight[[k]] <- if (is.null(t$ck)) t$launch(prof) else {
         # Compute-pool launches of warmed kernels ship the cache key
         # only; a kernel the warm-up did not cover carries its closure so
@@ -2056,6 +2113,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                                      isTRUE(warmed_ck[[t$ck]])))
       }
       tasks[[k]]$slot <- slot
+      tasks[[k]]$prof <- prof
+      if (slot == "comp") prof_slots[[prof]] <- prof_slots[[prof]] + 1L
       n_slot[[slot]] <- n_slot[[slot]] + 1L
       n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
       tasks[[k]]$mb_live <- mb_eff(t)
@@ -2065,7 +2124,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # pin store bytes just the same).
       mb_store_resident <- mb_store_resident + t$store_mb
       tasks[[k]]$state <- "running"
-      log_line("launch", k, pool = t$pool, slot = slot,
+      log_line("launch", k, pool = t$pool,
+               # routed profiles put the daemon identity in the slot
+               # column: free per-daemon task attribution in
+               # garry_task_report (the observability gap the deep
+               # review deferred)
+               slot = if (slot == "comp") prof else slot,
                mb = round(tasks[[k]]$mb_live, 1),
                store_mb = round(t$store_mb %||% 0, 1),
                ready = sprintf("%.3f", tasks[[k]]$t_ready %||% t_drain0))
@@ -2094,9 +2158,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             if (!is.null(tasks[[k]]$ck))
               rm(list = intersect(tasks[[k]]$ck, ls(warmed_ck)),
                  envir = warmed_ck)
-            inflight[[k]] <- tasks[[k]]$launch(
-              if (tasks[[k]]$slot == "read") read_prof else comp_prof,
-              with_fn = TRUE)
+            # resend to the SAME profile: the miss identifies the one
+            # daemon whose cache is cold, and with routed profiles the
+            # closure must land exactly there
+            inflight[[k]] <- tasks[[k]]$launch(tasks[[k]]$prof,
+                                               with_fn = TRUE)
             next
           }
           cli::cli_abort(
@@ -2122,6 +2188,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         pool_k <- tasks[[k]]$pool
         n_inflight[[pool_k]] <- n_inflight[[pool_k]] - 1L
         n_slot[[tasks[[k]]$slot]] <- n_slot[[tasks[[k]]$slot]] - 1L
+        if (identical(tasks[[k]]$slot, "comp")) {
+          pk <- tasks[[k]]$prof
+          prof_slots[[pk]] <- prof_slots[[pk]] - 1L
+        }
         mb_inflight <- mb_inflight - (tasks[[k]]$mb_live %||% tasks[[k]]$mb)
         harvested <- TRUE
         log_line("done", k)

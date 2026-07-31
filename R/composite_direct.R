@@ -552,7 +552,16 @@ NULL
   ny <- spec$grid@dims[["y"]]; nx <- spec$grid@dims[["x"]]
   progress <- isTRUE(getOption("garry.progress", FALSE))
   masked <- length(spec$fmask_srcs) > 0L
-  prof_r <- "garry_read"; prof_c <- "garry_compute"
+  prof_r <- "garry_read"
+  # Compute dispatch rides the profile set (one legacy pool, or N
+  # routed width-1 profiles): warm every profile, round-robin the
+  # mask/band jobs across them.
+  comp_profs <- .comp_profiles()
+  cp_i <- 0L
+  next_cp <- function() {
+    cp_i <<- cp_i + 1L
+    comp_profs[[1L + (cp_i - 1L) %% length(comp_profs)]]
+  }
 
   b <- .gd_build_jobs(plan, spec$grid, tmp)
   info <- b$info; K <- b$K
@@ -576,9 +585,10 @@ NULL
   fmask_p <- if (masked) fetch(spec$fmask_srcs) else NULL
   band_p <- lapply(spec$band_srcs, fetch)
   # Warm + attach the compute pool while the read pool fetches (hides cold init).
-  mirai::everywhere({
-    suppressMessages(library(garry)); try(garry::.gd_warm(), silent = TRUE)
-  }, .compute = prof_c)
+  for (p in comp_profs)
+    mirai::everywhere({
+      suppressMessages(library(garry)); try(garry::.gd_warm(), silent = TRUE)
+    }, .compute = p)
 
   # Mask: once fmask lands, compute the cleaned cube on the compute pool while
   # the bands are still fetching. One mask .bin, read by every band median.
@@ -594,7 +604,8 @@ NULL
                chain = lapply(spec$mask_chain, function(n) {
                  n@fn <- .slim_fn(n@fn); n }),
                halo = spec$halo, ny = ny, nx = nx, dev = spec$device)
-    mask_p <- mirai::mirai(garry::.gd_compute_mask(km), km = Km, .compute = prof_c)
+    mask_p <- mirai::mirai(garry::.gd_compute_mask(km), km = Km,
+                           .compute = next_cp())
   }
 
   # Per-band medians: wait each band's fetch, then dispatch its median (async)
@@ -605,7 +616,7 @@ NULL
              op = spec$op, nan_rm = spec$nan_rm, ny = ny, nx = nx,
              dev = spec$device, mask_bin = if (masked) mask_bin else character(0))
   n_slices <- length(spec$band_srcs[[1L]])
-  cap <- .gd_compute_cap(n_slices, ny, nx, .gd_n_compute(prof_c))
+  cap <- .gd_compute_cap(n_slices, ny, nx, .comp_n())
   if (progress && cap < length(spec$band_srcs))
     cli::cli_inform(sprintf("[gdal-direct] compute in-flight capped at %d (RAM budget)", cap))
   mask_done <- !masked
@@ -630,7 +641,7 @@ NULL
     while (length(inflight) >= cap) harvest()         # RAM cap: bound concurrency
     jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]))
     res_p[[bi]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
-                                jb = jb, kb = Kb, .compute = prof_c)
+                                jb = jb, kb = Kb, .compute = next_cp())
     inflight <- c(inflight, bi)
   }
   if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
