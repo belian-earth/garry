@@ -79,6 +79,39 @@ Ship list, contingent on findings (in likely order of effect):
 Exit criterion: warmed scan daemon <= ~3 GB (width 4 fits 42G), or a
 documented floor priced into admission.
 
+### B outcome (2026-08-01/02)
+
+Characterisation ran (`benchmarks/scan-retention-spike.R`): same-kernel
+reruns plateau; distinct kernels accumulate ~60-90 MB each; of a 904 MB
+standing daemon, 475 MB was trimmable glibc arena and 72 MB evictable
+jit handles. SHIPPED: `src/trim.c` + per-task `malloc_trim`,
+`.daemon_hygiene(deep=)`, run-start hygiene broadcast,
+`garry_pool_hygiene()` — idle standing state 904 -> 557 MB across the
+kernel sweep at zero wall cost.
+
+The width-4 SI validation still died at ~38.9 GB, and its task-log
+attribution reframes the wall: at kill the fleet held 22 GB LIVE
+(compute daemons at 7.5 / 6.2 / 5.8 GB, one PEAKED at 11.8 GB during
+its cold scan window) against 1.3 GB modelled. Three conclusions:
+
+1. The wall is the LIVE scan working set during execution, not the
+   idle retention the trim addresses. The SI robust smoother's cold
+   window costs ~6-12 GB per daemon — the briefly-shipped
+   `scan_compile_mb = 1500` (calibrated on the too-light synthetic)
+   let three such scans launch in one refresh window; restored to
+   10000 (c385b70). The surcharge prices cold LIVE working set and is
+   workload-dependent; per-kernel measurement-driven pricing (the task
+   log now supports it) is the follow-up.
+2. Anonymous pools ROTATE scans across every daemon, so even
+   serialised scans grow every daemon to the scan working set. Width
+   confinement is an IDENTITY problem: workstream C is upgraded from
+   "fixes compile multiplication" to "confines scan memory to K
+   designated daemons" — the primary lever for wide pools.
+3. Box safety: this is a 62 GB laptop; MEMMAX=42G left too little for
+   the desktop and a run at the ceiling took the session down
+   (systemd-oomd pressure kill). Cap MEMMAX at 24-32G here; wide
+   sweeps belong on the bc-cohort box.
+
 ## Workstream C — width-1 routed dispatch (spike is GO)
 
 Design sketch (scheduler-scoped; option-gated):

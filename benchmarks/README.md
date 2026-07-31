@@ -298,6 +298,21 @@ Findings:
   the default hutan engine; cache/parallelise on the hutan ledger) +
   ~288 s garry drain of ~800-900 s compute over 2 daemons.
 
+**Workstream B: scan retention + the width wall (2026-08-01/02).**
+`benchmarks/scan-retention-spike.R`: a scan daemon's idle standing
+state is mostly reclaimable (475/904 MB glibc arena, 72 MB jit
+handles; distinct kernels accumulate ~60-90 MB each, reruns plateau).
+Shipped malloc_trim hygiene (src/trim.c, per-task + run-start +
+`garry_pool_hygiene()`): idle state 904 -> 557 MB, wall time
+unchanged. But width 4 at crop=2048 still died at ~38.9 GB: kill-time
+attribution shows 22 GB LIVE fleet (one daemon peaking 11.8 GB in its
+cold scan window) vs 1.3 GB modelled — the wall is live scan working
+sets rotating across the anonymous pool, not idle retention. The
+1500 scan_compile_mb recalibration was reverted (unsafe for the SI
+smoother shape); routed dispatch is now the memory-confinement lever,
+and MEMMAX on this 62 GB box stays <= 32G (a 42G scope at ceiling
+took the desktop session down).
+
 **Scheduler-route composite A/B (same sitting, composite_direct=FALSE,
 3 reps interleaved)**: baseline f72cbce 40.24/41.84/38.48 s vs
 placement-pass 42.99/40.98/42.58 s. Ranges overlap; a branch run with
