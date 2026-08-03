@@ -230,7 +230,12 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 # The RHS is a LazyRaster (or a per-slice list) on the dataset's grid; because
 # band math like `ds[["B04"]] - ds[["B03"]]` already builds on the shared graph,
 # the derivation is part of the dataset's graph and is written by collect().
-S7::method(`[[<-`, LazyDataset) <- function(x, i, value) {
+# Registered as a plain S3 method, not via S7::method(): S7's dynamic
+# registration stores the closure itself in the namespace's S3methods table,
+# and R < 4.6's `checking replacement functions` calls get() on that entry
+# and halts.
+#' @rawNamespace S3method("[[<-", "garry::LazyDataset", .lazy_dataset_assign)
+.lazy_dataset_assign <- function(x, i, value) {
   layers <- if (S7::S7_inherits(value, LazyRaster)) list(value)
             else if (is.list(value)) value
             else cli::cli_abort(

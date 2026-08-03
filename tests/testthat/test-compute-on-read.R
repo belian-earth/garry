@@ -43,7 +43,11 @@ test_that("source-fed kernel chains execute on their read tasks", {
 
   local_pools(2, 1, gdal_config = TRUE)
   tlog <- tempfile(fileext = ".csv")
-  old <- options(garry.chunk_target_px = 400, garry.task_log = tlog)
+  # rules mode: this test gates the fused-execution machinery, and the
+  # cost model's fuse/materialise decision depends on the live machine
+  # (cores, free RAM); rules fuses this chain unconditionally.
+  old <- options(garry.chunk_target_px = 400, garry.task_log = tlog,
+                 garry.placement = "rules")
   on.exit(options(old), add = TRUE)
   for (st in "mori") {
     old_st <- options(garry.store = st)
