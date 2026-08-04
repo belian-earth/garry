@@ -32,6 +32,7 @@ NULL
 # away from its own limit -- budgeting on it would overcommit straight
 # into a cgroup OOM kill.
 .garry_cgroup_avail_mb <- function() {
+  if (!file.exists("/proc/self/cgroup")) return(NA_real_)  # non-Linux
   ln <- tryCatch(readLines("/proc/self/cgroup", n = 5L),
                  error = function(e) character(0))
   rel <- sub("^0::", "", grep("^0::", ln, value = TRUE)[1L])

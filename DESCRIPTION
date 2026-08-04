@@ -23,7 +23,7 @@ Imports:
     rlang
 Remotes:
     hypertidy/vaster,
-    belian-earth/anvl@raw-payload-nv-array,
+    belian-earth/anvl@nv-scan,
     belian-earth/cptkirk
 Additional_repositories:
     https://r-xla.r-universe.dev

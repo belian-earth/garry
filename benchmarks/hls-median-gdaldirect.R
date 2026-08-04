@@ -107,7 +107,7 @@ t_all <- system.time({
     bad     <- nv_and(fmi, nv_fill_like(fmi, 15L))          # Fmask bits 0-3
     masked  <- nv_ifelse(bad > nv_fill_like(bad, 0L),
                          nv_fill_like(b04, NaN), b04)
-    med     <- nv_median(masked, dim=1L, nan_rm=TRUE)       # temporal median
+    med     <- nv_median(masked, axis=1L, nan_rm=TRUE)       # temporal median
     m <- as_array(med)                       # (ny, nx)
   })[["elapsed"]]
 

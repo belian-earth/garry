@@ -281,7 +281,7 @@ g_cast <- function(x, dtype) {
 g_stack <- function(values) {
   if (.g_traced(values[[1L]])) {
     ex <- lapply(values, function(v) anvl::nv_unsqueeze(v, 1L))
-    return(do.call(anvl::nv_concatenate, c(ex, list(dimension = 1L))))
+    return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
   nr <- nrow(values[[1L]]); nc <- ncol(values[[1L]])
   out <- array(NA_real_, c(length(values), nr, nc))
@@ -464,7 +464,7 @@ g_concat_t <- function(xs) {
     ex <- lapply(xs, function(v) {
       if (length(.g_shape(v)) == 2L) anvl::nv_unsqueeze(v, 1L) else v
     })
-    return(do.call(anvl::nv_concatenate, c(ex, list(dimension = 1L))))
+    return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
   ex <- lapply(xs, function(v) {
     d <- dim(v)
@@ -549,7 +549,7 @@ NULL
 #' @export
 g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x))
-    return(anvl::nv_reduce_sum(x, dims = dims, nan_rm = nan_rm))
+    return(anvl::nv_reduce_sum(x, axes = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))
 }
 
@@ -585,7 +585,7 @@ g_broadcast_arrays <- function(...) {
 #' @export
 g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x))
-    return(anvl::nv_mean(x, dims = dims, nan_rm = nan_rm))
+    return(anvl::nv_mean(x, axes = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) mean(.nan_filter(v, nan_rm)))
 }
 
@@ -593,7 +593,7 @@ g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_min <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x))
-    return(anvl::nv_reduce_min(x, dims = dims, nan_rm = nan_rm))
+    return(anvl::nv_reduce_min(x, axes = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
     if (length(v) == 0L) Inf else min(v)   # XLA init value, no warning
@@ -604,7 +604,7 @@ g_min <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_max <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x))
-    return(anvl::nv_reduce_max(x, dims = dims, nan_rm = nan_rm))
+    return(anvl::nv_reduce_max(x, axes = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
     if (length(v) == 0L) -Inf else max(v)
@@ -615,7 +615,7 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x))
-    return(anvl::nv_median(x, dim = dims, nan_rm = nan_rm))
+    return(anvl::nv_median(x, axis = dims, nan_rm = nan_rm))
   .g_reduce(x, dims, function(v) {
     m <- stats::median(v, na.rm = nan_rm)
     if (is.na(m)) NaN else m               # all-nodata -> NaN, never NA
@@ -627,7 +627,7 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
 g_count <- function(x, dims = NULL) {
   if (.g_traced(x)) {
     valid <- anvl::nv_convert(anvl::nv_not(anvl::nv_is_nan(x)), "f32")
-    return(anvl::nv_reduce_sum(valid, dims = dims))
+    return(anvl::nv_reduce_sum(valid, axes = dims))
   }
   .g_reduce(x, dims, function(v) sum(!is.na(v)))
 }

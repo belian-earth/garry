@@ -104,7 +104,7 @@ t_all <- system.time({
     fmi     <- nv_convert(fm, "i32")
     bad     <- nv_and(fmi, nv_fill_like(fmi, 15L))
     masked  <- nv_ifelse(bad > nv_fill_like(bad, 0L), nv_fill_like(b04, NaN), b04)
-    med     <- nv_median(masked, dim=1L, nan_rm=TRUE)
+    med     <- nv_median(masked, axis=1L, nan_rm=TRUE)
     m <- as_array(med)
   })[["elapsed"]]
 
