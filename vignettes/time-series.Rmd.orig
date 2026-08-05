@@ -60,13 +60,16 @@ ds
 adjacent MGRS tiles merge, and the dataset print shows the shared graph
 growing underneath.
 
-## NDVI, and one honest guard
+## NDVI, and two honest guards
 
 `ds[["B08"]]` pulls a band out as a `(t, y, x)` stack; band algebra on the
-stacks is the index. One guard is required: surface reflectance near zero
-(shadow, water) makes the denominator vanish, and the ratio explodes (this
-AOI's raw year contains an "NDVI" of 683). Values outside the definitional
-range are junk observations, so mask them to NaN rather than clamp:
+stacks is the index. Two guards are required, and both come from looking at
+the data rather than trusting it.
+
+First, surface reflectance near zero (shadow, water) makes the denominator
+vanish and the ratio explodes: this AOI's raw year contains an "NDVI" of
+683. Values outside the definitional range are junk observations, so mask
+them to NaN rather than clamp:
 
 ```{r ts-ndvi}
 nir <- ds[["B08"]]; red <- ds[["B04"]]
@@ -76,9 +79,26 @@ dates <- as.Date(ndvi@grid@labels$t)
 range(dates)
 ```
 
-Nothing has been read yet. The stack carries its slice dates as labels on
-the `t` axis (`time_sel(ndvi, "2024-06")` would select June lazily); we
-keep the `dates` vector for plotting.
+Second, scene edges lie. The one to two pixels just inside each granule's
+data footprint carry corrupt radiometry (median red reflectance is
+*negative* there, against an interior median of ~0.18), and Fmask does not
+flag them. Half of this year's dates put a swath edge somewhere in this
+AOI, each at a slightly different position, so unguarded edge pixels seed
+line artifacts along every footprint boundary that survive all the way
+through a smoother. The cure is to shrink each date's footprint by the
+contaminated margin: a focal kernel that returns the centre plus zero
+times the window sum is NaN wherever *any* neighbour is NaN, which erodes
+every nodata boundary (scene edges and cloud holes alike) by the focal
+radius:
+
+```{r ts-erode}
+ndvi <- focal(ndvi, radius = 2L, fn = function(sh)
+  sh[[(length(sh) + 1) %/% 2]] + 0 * Reduce(`+`, sh))
+```
+
+Nothing has been read yet. The band stacks carry their slice dates as
+labels on the `t` axis (`time_sel(nir, "2024-06")` would select June
+lazily); we keep the `dates` vector for plotting.
 
 ## A ragged series
 
@@ -93,8 +113,8 @@ dim(raw)
 mean(is.finite(raw))
 ```
 
-A third of the cube is missing, and not at random: the two-tile overlap
-zone observes twice as often as the rest. Pull two pixel series, the
+Over a third of the cube is missing, and not at random: the inter-orbit
+overlap zone observes twice as often as the rest. Pull two pixel series, the
 strongest seasonal signal and the most poorly observed pixel:
 
 ```{r ts-raw-series, fig.height = 3.5}
@@ -102,7 +122,8 @@ nv  <- apply(is.finite(raw), c(1, 2), sum)
 rng <- apply(raw, c(1, 2), function(v)          # 5-95% spread: seasonal
   diff(quantile(v, c(.05, .95), na.rm = TRUE))) # signal, spike-insensitive
 p1  <- arrayInd(which.max(rng * (nv >= 45)), dim(rng))
-p2  <- arrayInd(which.min(nv), dim(nv))
+p2  <- arrayInd(which.min(ifelse(nv > 0, nv, NA)), dim(nv))  # sparsest
+                       # observed pixel (the eroded border has none)
 
 par(mfrow = c(1, 2), mar = c(3, 3, 2, 1))
 for (p in list(p1, p2))
@@ -201,6 +222,10 @@ gifski::save_gif(
 ```
 
 ![Smoothed NDVI, December 2023 to December 2024](figure/ndvi-timeseries.gif)
+
+The pulsing of individual pivots is real: centre-pivot fields green up,
+get cut, and regrow on their own schedules, and at a ~5 day cadence the
+smoother keeps that signal rather than averaging it away.
 
 ## Compose further: a custom temporal reducer
 
