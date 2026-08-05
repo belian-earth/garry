@@ -1,0 +1,187 @@
+---
+title: "Getting started with garry"
+output:
+  rmarkdown::html_vignette:
+    self_contained: false
+vignette: >
+  %\VignetteIndexEntry{Getting started with garry}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.path = "figure/",
+                      fig.width = 6, fig.height = 5, dpi = 96, error = FALSE)
+```
+
+garry is a lazy raster engine. Verbs like `lazy_source()`, `focal()`, and
+`reduce_over()` do not compute anything; each one adds a node to an
+intermediate representation (IR) graph, and the whole graph runs only when you
+call `collect()`. At that point garry plans the computation, splits it into
+chunks, fuses adjacent operations into single compiled kernels (via
+[anvl](https://github.com/r-xla/anvl), which lowers to XLA), and executes them
+with bounded memory. GDAL handles all reading, warping, and writing; the
+compute vocabulary is a small closed set of primitives (map, focal, reduce,
+scan, warp, stack) that compose freely.
+
+This vignette walks the core loop on a single elevation tile: open lazily,
+build a pipeline, inspect the graph, execute. The tile is Mount Hood, Oregon
+(LANDFIRE elevation, 30 m, UTM zone 10N), read straight from GitHub over
+HTTP; nothing is downloaded until execution touches it.
+
+## Open a raster lazily
+
+```{r hood-open, message = FALSE}
+library(garry)
+
+f <- paste0("/vsicurl/https://raw.githubusercontent.com/",
+            "firelab/gdalraster/main/sample-data/",
+            "lf_elev_220_mt_hood_utm.tif")
+el <- lazy_source(f)
+el
+```
+
+Opening reads only metadata: one HTTP request for the file header, zero
+pixels. The `LazyRaster` knows its grid (extent, resolution, CRS, dtype) and
+carries a one-node graph. Accessors read the grid without touching the file
+again:
+
+```{r hood-accessors}
+res(el)
+c(xmin(el), ymin(el), xmax(el), ymax(el))
+```
+
+```{r hood-preview}
+preview(el, main = "Mount Hood elevation (m)")
+```
+
+`preview()` is the cheap look: it renders a decimated version sized to your
+device, not the full raster.
+
+## Build a computation
+
+Arithmetic on a `LazyRaster` returns a new `LazyRaster`; nothing runs.
+
+```{r hood-map}
+el_km <- el / 1000
+el_km
+```
+
+`focal()` applies a moving-window (stencil) operation. Its `fn` receives a
+list of the `(2r + 1)^2` shifted copies of the window, ordered row-major over
+`(dy, dx)` offsets, and processes the whole neighbourhood vectorised across
+every pixel at once. A 3x3 mean is one line:
+
+```{r hood-smooth}
+sm <- focal(el, radius = 1L, fn = function(sh) Reduce(`+`, sh) / 9)
+```
+
+The same convention supports real terrain analysis. For a radius-1 stencil
+the list indexes as a 3x3 grid: `sh[[2]]` is the neighbour to the north,
+`sh[[8]]` south, `sh[[4]]` west, `sh[[6]]` east, `sh[[5]]` the centre. Central
+differences over those four neighbours give the elevation gradient, the
+gradient gives the surface normal, and the dot product with a sun vector is a
+hillshade:
+
+```{r hood-hillshade-def}
+hillshade <- function(elev, azimuth = 315, altitude = 45) {
+  rs  <- res(elev)
+  az  <- (90 - azimuth) * pi / 180
+  alt <- altitude * pi / 180
+  sun <- c(cos(alt) * cos(az), cos(alt) * sin(az), sin(alt))
+  focal(elev, radius = 1L, fn = function(sh) {
+    dzdx <- (sh[[6]] - sh[[4]]) / (2 * rs[[1]])   # east - west
+    dzdy <- (sh[[2]] - sh[[8]]) / (2 * rs[[2]])   # north - south
+    v <- (-dzdx * sun[[1]] - dzdy * sun[[2]] + sun[[3]]) /
+      sqrt(dzdx^2 + dzdy^2 + 1)
+    g_ifelse(v < 0, 0, v)                         # clamp shadowed slopes
+  })
+}
+
+hs <- hillshade(el)
+```
+
+The body mixes ordinary arithmetic with `g_ifelse()`, one of the `g_*`
+functions garry's kernels are written in. The same closure runs in two
+worlds: as plain R on matrices (the testing oracle) and traced through anvl
+into a compiled XLA kernel (execution). You never choose; garry does.
+
+## The graph is the object
+
+```{r hood-draw}
+draw(hs)
+```
+
+That is the whole mental model: `hs` *is* this pipeline, not an array. When
+it executes, the planner will fuse the focal into its source read, compile
+its body once, and run it chunk by chunk.
+
+## Grids are strict
+
+Every `LazyRaster` is pinned to its grid, and binary operations refuse
+operands whose grids differ; there is no silent resampling. Build a coarser
+270 m grid and aggregate onto it with `align()`:
+
+```{r hood-align}
+coarse <- grid_spec(crs = "EPSG:26910",
+                    extent = c(xmin(el), ymin(el), xmax(el), ymax(el)),
+                    res = 270)
+el_mean <- align(el, coarse, resampling = "average")
+```
+
+Mixing the two grids is an error, and the error is a feature: an analysis
+that silently warps one operand is an analysis with an undisclosed
+resampling step.
+
+```{r hood-mismatch, error = TRUE}
+el - el_mean
+```
+
+State the resample explicitly and it composes like anything else. Aligning
+the same source twice, once point-sampled and once aggregated, and
+differencing on the shared grid gives a local relief model: elevation
+relative to the neighbourhood mean.
+
+```{r hood-relief}
+el_pt  <- align(el, coarse, resampling = "bilinear")
+relief <- el_pt - el_mean
+preview(relief, main = "Local relief (m)")
+```
+
+One v1 rule to know: `align()` applies to *sources*, not to computed
+results (warping a computed raster raises an error suggesting the
+alternatives). Align inputs onto the analysis grid first, then compute; or
+materialise a result with `collect(path = ...)` and re-open it.
+
+## Execute
+
+`collect()` runs the graph and returns an ordinary array carrying a `gis`
+attribute (extent, CRS) so the result stays georeferenced:
+
+```{r hood-collect}
+arr <- collect(hs)
+str(attr(arr, "gis"))
+preview(arr, col = grDevices::hcl.colors(64, "Grays", rev = TRUE),
+        legend = FALSE, main = "Hillshade")
+```
+
+Write straight to a GeoTIFF instead by passing `path`; chunks stream to disk
+as they finish, so the full result never needs to fit in memory:
+
+```{r hood-write}
+tif <- file.path(tempdir(), "hood-hillshade.tif")
+collect(hs, path = tif)
+file.size(tif)
+```
+
+For handoff to the wider R spatial ecosystem, `as_terra()` converts a
+collected array into a `terra::SpatRaster`.
+
+## Where this scales
+
+Everything above ran in a single R process, which is exactly right at this
+size. The same `collect()` call distributes across daemon pools
+(`garry_daemons()`) with separate read and compute fleets, warp-on-read onto
+an analysis grid, and memory-bounded scheduling; that machinery is the
+subject of the next vignette, which builds a cloud-masked satellite composite
+from a STAC catalogue.

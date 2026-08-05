@@ -20,7 +20,7 @@ ymax(x, ...)
 res(x, ...)
 }
 \arguments{
-\item{x}{A \code{GridSpec}.}
+\item{x}{A \code{GridSpec} or a \code{LazyRaster} (which forwards to its grid).}
 
 \item{...}{Passed to methods.}
 }

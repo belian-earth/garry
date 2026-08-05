@@ -32,6 +32,13 @@ LazyRaster <- S7::new_class(
     cli::cli_abort("{.arg {arg}} must be a {.cls {name}}.", call = call)
 }
 
+# Grid accessors forward to the cached GridSpec (generics in grid.R).
+S7::method(xmin, LazyRaster) <- function(x) xmin(x@grid)
+S7::method(ymin, LazyRaster) <- function(x) ymin(x@grid)
+S7::method(xmax, LazyRaster) <- function(x) xmax(x@grid)
+S7::method(ymax, LazyRaster) <- function(x) ymax(x@grid)
+S7::method(res, LazyRaster) <- function(x) res(x@grid)
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
