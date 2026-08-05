@@ -2,16 +2,18 @@
 % Please edit documentation in R/ops.R
 \name{g_stack}
 \alias{g_stack}
-\title{Stack 2D layers into a (t, y, x) array (decision D17 layout).}
+\title{Stack same-shaped arrays along a new leading axis.}
 \usage{
 g_stack(values)
 }
 \arguments{
-\item{values}{List of same-shaped (y, x) matrices.}
+\item{values}{List of same-shaped arrays.}
 }
 \value{
-A \verb{length(values) x nrow x ncol} array.
+A \verb{length(values) x dim(values[[1]])} array.
 }
 \description{
-Stack 2D layers into a (t, y, x) array (decision D17 layout).
+\verb{(y, x)} matrices stack into a \verb{(t, y, x)} cube (decision D17
+layout); \verb{(t, y, x)} cubes stack into a \verb{(k, t, y, x)} hyper-cube
+(e.g. a rolling window's shifted copies, reduced over dim 1).
 }

@@ -273,20 +273,23 @@ g_cast <- function(x, dtype) {
   out
 }
 
-#' Stack 2D layers into a (t, y, x) array (decision D17 layout).
+#' Stack same-shaped arrays along a new leading axis.
 #'
-#' @param values List of same-shaped (y, x) matrices.
-#' @return A `length(values) x nrow x ncol` array.
+#' `(y, x)` matrices stack into a `(t, y, x)` cube (decision D17
+#' layout); `(t, y, x)` cubes stack into a `(k, t, y, x)` hyper-cube
+#' (e.g. a rolling window's shifted copies, reduced over dim 1).
+#'
+#' @param values List of same-shaped arrays.
+#' @return A `length(values) x dim(values[[1]])` array.
 #' @export
 g_stack <- function(values) {
   if (.g_traced(values[[1L]])) {
     ex <- lapply(values, function(v) anvl::nv_unsqueeze(v, 1L))
     return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
-  nr <- nrow(values[[1L]]); nc <- ncol(values[[1L]])
-  out <- array(NA_real_, c(length(values), nr, nc))
-  for (i in seq_along(values)) out[i, , ] <- values[[i]]
-  out
+  d <- dim(values[[1L]])
+  arr <- simplify2array(values)                # (d..., k)
+  aperm(arr, c(length(d) + 1L, seq_along(d)))  # -> (k, d...)
 }
 
 #' Extract element `i` of a 1-D array as a scalar (static index).
