@@ -86,14 +86,13 @@ flag them. Half of this year's dates put a swath edge somewhere in this
 AOI, each at a slightly different position, so unguarded edge pixels seed
 line artifacts along every footprint boundary that survive all the way
 through a smoother. The cure is to shrink each date's footprint by the
-contaminated margin: a focal kernel that returns the centre plus zero
-times the window sum is NaN wherever *any* neighbour is NaN, which erodes
-every nodata boundary (scene edges and cloud holes alike) by the focal
-radius:
+contaminated margin. `shrink_footprint()` erodes every nodata boundary
+(scene edges and cloud holes alike) by a pixel radius; underneath it is
+one focal kernel, the centre plus zero times the window sum, which is NaN
+wherever any neighbour is NaN:
 
 ```{r ts-erode}
-ndvi <- focal(ndvi, radius = 2L, fn = function(sh)
-  sh[[(length(sh) + 1) %/% 2]] + 0 * Reduce(`+`, sh))
+ndvi <- shrink_footprint(ndvi, radius = 2)
 ```
 
 Nothing has been read yet. The band stacks carry their slice dates as
@@ -180,7 +179,10 @@ The three standard deviations are the model: `sigma_lvl` and `sigma_slp`
 set how fast the level and slope may drift between dates (smoothness),
 `sigma_obs` how noisy a single observation is (trust). They are fixed
 scalars, fitted off-raster by maximum likelihood or, as here, set by eye
-and judged against the data:
+and judged against the data. (For spike removal without a state-space
+model, `hampel_smooth()` applies the classic rolling median/MAD despike
+over `t`; it composes naturally ahead of the smoother when residual
+outliers survive the masking.)
 
 ```{r ts-kalman, message = FALSE}
 sm <- kalman_smooth(ndvi, sigma_lvl = 0.025, sigma_slp = 0.003,

@@ -112,20 +112,17 @@ Dec 2024, assets B04 / B08 / Fmask, cloud cover < 30%.
 **Figures:** raw vs masked scene count map, sample-pixel series (raw /
 monthly / kalman), smoothed map trio, final GIF.
 
-**Follow-ups recorded, not in scope:**
+**Follow-ups (both SHIPPED, commit 4f0646d):**
 
-- A Hampel filter verb (windowed median/MAD outlier knockdown over t) as a
-  pre-smoothing step; the vrtility article used one and it composes
-  naturally ahead of `kalman_smooth`. Candidate for ir-extensions once
-  wanted.
-- A footprint-erosion verb (`shrink_footprint(x, radius)` or similar).
-  Diagnosed while building vignette 3: HLS granule data edges carry 1-2 px
-  of corrupt radiometry (negative reflectance, Fmask-blind), which seeds
-  line artifacts along every swath edge and survives per-pixel smoothing.
-  The vignette spells it as a focal NaN-spread one-liner
-  (`sh[[centre]] + 0 * Reduce("+", sh)`); a named verb would make the
-  recipe discoverable and is standard practice (ODC pipelines buffer
-  scene edges for the same reason).
+- `hampel_smooth(x, k, t0)`: centred rolling median/MAD despike over t as
+  a `scan_over()` body; gaps stay gaps. Referenced in the vignette's
+  kalman section as the pre-smoothing spike filter.
+- `shrink_footprint(x, radius)`: erodes every nodata boundary by a pixel
+  margin via the focal NaN-spread kernel. Diagnosed while building
+  vignette 3: HLS granule data edges carry 1-2 px of corrupt radiometry
+  (negative reflectance, Fmask-blind) that seeds line artifacts along
+  every swath edge and survives per-pixel smoothing. Used in the
+  vignette.
 
 ## Mechanics
 
