@@ -67,6 +67,16 @@ NULL
       base$out_dtype <- n@dtype
       base$fn <- norm_fn(n@fn[[1L]])
     }
+    if (S7::S7_inherits(n, PatchNode)) {
+      # A patch kernel's identity is its content hash, NEVER a
+      # serialization of fn: a model closure carries tens of MB of
+      # weights, and per-slice stages sharing one model must collapse
+      # to one kernel signature (one warm-up, one XLA compile).
+      base$radius <- n@radius
+      base$out_bands <- n@out_bands
+      base$out_dtype <- n@dtype
+      base$kernel_id <- n@kernel_id
+    }
     base
   })
   sig <- list(kind = s@kind, halo = s@halo, out_pad = s@out_pad,
