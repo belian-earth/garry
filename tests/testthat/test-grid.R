@@ -63,3 +63,13 @@ test_that("halo padding clips at edges", {
   expect_equal(w$pad_right,  2L)
   expect_equal(w$pad_bottom, 2L)
 })
+
+test_that("grid accessors forward from LazyRaster to its grid", {
+  f <- fixture_gradient_f32()
+  a <- lazy_source(f)
+  expect_identical(res(a),  res(a@grid))
+  expect_identical(xmin(a), xmin(a@grid))
+  expect_identical(ymin(a), ymin(a@grid))
+  expect_identical(xmax(a), xmax(a@grid))
+  expect_identical(ymax(a), ymax(a@grid))
+})

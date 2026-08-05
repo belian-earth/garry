@@ -273,7 +273,7 @@ grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
 
 #' Grid extent and resolution accessors.
 #'
-#' @param x A `GridSpec`.
+#' @param x A `GridSpec` or a `LazyRaster` (which forwards to its grid).
 #' @param ... Passed to methods.
 #' @return A numeric scalar (`xmin`, `ymin`, `xmax`, `ymax`) or a length-2
 #'   numeric `c(xres, yres)` for `res`.

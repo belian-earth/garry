@@ -73,6 +73,8 @@ Collate:
     'lazy_cog.R'
     'placement.R'
     'preview.R'
+    'reduce_multiband.R'
+    'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'
     'zzz.R'

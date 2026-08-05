@@ -273,20 +273,23 @@ g_cast <- function(x, dtype) {
   out
 }
 
-#' Stack 2D layers into a (t, y, x) array (decision D17 layout).
+#' Stack same-shaped arrays along a new leading axis.
 #'
-#' @param values List of same-shaped (y, x) matrices.
-#' @return A `length(values) x nrow x ncol` array.
+#' `(y, x)` matrices stack into a `(t, y, x)` cube (decision D17
+#' layout); `(t, y, x)` cubes stack into a `(k, t, y, x)` hyper-cube
+#' (e.g. a rolling window's shifted copies, reduced over dim 1).
+#'
+#' @param values List of same-shaped arrays.
+#' @return A `length(values) x dim(values[[1]])` array.
 #' @export
 g_stack <- function(values) {
   if (.g_traced(values[[1L]])) {
     ex <- lapply(values, function(v) anvl::nv_unsqueeze(v, 1L))
     return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
-  nr <- nrow(values[[1L]]); nc <- ncol(values[[1L]])
-  out <- array(NA_real_, c(length(values), nr, nc))
-  for (i in seq_along(values)) out[i, , ] <- values[[i]]
-  out
+  d <- dim(values[[1L]])
+  arr <- simplify2array(values)                # (d..., k)
+  aperm(arr, c(length(d) + 1L, seq_along(d)))  # -> (k, d...)
 }
 
 #' Extract element `i` of a 1-D array as a scalar (static index).
@@ -500,6 +503,31 @@ g_rep_t <- function(x, n) {
   d <- dim(x)
   # column-major: the leading axis is fastest, so each element repeats n times
   array(rep(as.vector(x), each = n), c(n, d))
+}
+
+#' Insert a broadcast axis at an arbitrary position.
+#'
+#' The rank-general sibling of [g_rep_t()]: expands `x` with a new axis
+#' of `n` copies at position `axis`, so a reduced statistic broadcasts
+#' back against the array it came from (base R arrays do not broadcast,
+#' so the untraced oracle needs the copies materialised; traced, this is
+#' a free `broadcast_to`).
+#'
+#' @param x Array (traced or plain).
+#' @param axis 1-based position of the new axis in the output.
+#' @param n Length of the new axis.
+#' @return Array of rank `length(dim(x)) + 1`.
+#' @export
+g_expand <- function(x, axis, n) {
+  axis <- as.integer(axis); n <- as.integer(n)
+  if (.g_traced(x)) {
+    sh <- .g_shape(x)
+    out_sh <- append(sh, n, after = axis - 1L)
+    return(anvl::nv_broadcast_to(anvl::nv_unsqueeze(x, axis), out_sh))
+  }
+  d <- dim(x)
+  arr <- array(as.vector(x), c(d, n))            # copies on a trailing axis
+  aperm(arr, append(seq_along(d), length(d) + 1L, after = axis - 1L))
 }
 
 # -- Pixel-matrix bridge (band-collapsing linear algebra) ----------------------

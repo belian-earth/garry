@@ -32,6 +32,13 @@ LazyRaster <- S7::new_class(
     cli::cli_abort("{.arg {arg}} must be a {.cls {name}}.", call = call)
 }
 
+# Grid accessors forward to the cached GridSpec (generics in grid.R).
+S7::method(xmin, LazyRaster) <- function(x) xmin(x@grid)
+S7::method(ymin, LazyRaster) <- function(x) ymin(x@grid)
+S7::method(xmax, LazyRaster) <- function(x) xmax(x@grid)
+S7::method(ymax, LazyRaster) <- function(x) ymax(x@grid)
+S7::method(res, LazyRaster) <- function(x) res(x@grid)
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -452,6 +459,33 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
     boundary = boundary
   )
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
+}
+
+#' Shrink the valid-data footprint by a pixel margin.
+#'
+#' Sets to NaN every pixel within `radius` pixels of nodata, eroding
+#' each nodata boundary (scene footprint edges, cloud-mask holes, the
+#' raster border) by that margin. The standard cure for corrupt scene
+#' edges: satellite granules commonly carry one or two pixels of bad
+#' radiometry just inside their data footprint that QA masks miss, and
+#' on a `(t, y, x)` stack each slice's footprint erodes independently.
+#'
+#' Implemented as a [focal()] kernel (centre plus zero times the window
+#' sum, which is NaN wherever any neighbour is NaN), so it plans and
+#' fuses like any stencil, and applies per band over a `LazyDataset`.
+#'
+#' @param x A `LazyRaster`, or a `LazyDataset`.
+#' @param radius Margin to remove, in pixels.
+#' @param bands `LazyDataset` only: bands to apply to (default: all
+#'   value bands).
+#' @return The eroded object, same class and grid as `x`.
+#' @export
+shrink_footprint <- function(x, radius = 1L, bands = NULL) {
+  radius <- as.integer(radius)
+  if (length(radius) != 1L || is.na(radius) || radius < 1L)
+    cli::cli_abort("{.arg radius} must be a positive integer")
+  focal(x, radius = radius, bands = bands,
+        fn = function(sh) sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh))
 }
 
 #' A bilateral (edge-preserving) focal body for [focal()].

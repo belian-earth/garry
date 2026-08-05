@@ -63,12 +63,22 @@ S7::method(output_grid, MapNode)    <- function(node, parent_grids) parent_grids
 S7::method(output_grid, FocalNode)  <- function(node, parent_grids) parent_grids[[1L]]
 S7::method(output_grid, StackNode)  <- function(node, parent_grids) {
   pg <- parent_grids[[1L]]
+  if (node@along %in% names(pg@dims))
+    .garry_error(paste0("cannot stack along existing dim `", node@along,
+                        "`: the parents already carry it"),
+                 "garry_plan_error")
   dtype <- Reduce(dtype_promote, vapply(parent_grids, function(p) p@dtype,
                                         character(1)))
+  # The new axis leads the array (g_stack), and parent non-spatial dims
+  # follow it, so dims order here mirrors .dim_layout(): stacking
+  # (t, y, x) cubes along "band" yields a (band, t, y, x) cube whose
+  # grid is (x, y, band, t). Parent labels (slice dates) carry through.
+  extras <- pg@dims[setdiff(names(pg@dims), c("x", "y"))]
   dims <- c(pg@dims[c("x", "y")],
-            stats::setNames(length(parent_grids), node@along))
+            stats::setNames(length(parent_grids), node@along),
+            extras)
   GridSpec(crs = pg@crs, transform = pg@transform, extent = pg@extent,
-           dims = dims, dtype = dtype)
+           dims = dims, dtype = dtype, labels = pg@labels)
 }
 S7::method(output_grid, FusedNode)  <- function(node, parent_grids) parent_grids[[1L]]
 S7::method(output_grid, WarpNode)   <- function(node, parent_grids) node@target_grid
