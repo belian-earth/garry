@@ -727,3 +727,143 @@ g_shiftr <- function(a, n) {
   if (.g_traced(a)) return(anvl::nv_shift_right_logical(a, .g_int_like(a, n)))
   .bitw(bitwShiftR, a, n)
 }
+
+# -- Neural-network ops (OCM native inference) --------------------------------
+
+#' 2D convolution over a (C, H, W) chunk.
+#'
+#' Torch-layout convolution for in-graph model inference: `x` is a
+#' channels-first `(C_in, H, W)` array, `w` a `(C_out, C_in/groups, kH,
+#' kW)` kernel, `bias` an optional length-`C_out` vector. `stride`,
+#' `padding` (symmetric), and `dilation` are scalars or length-2
+#' `(y, x)`. `groups` gives grouped/depthwise convolution. Weights and
+#' bias are plain R arrays; traced they enter the kernel as constants
+#' uploaded once at compile.
+#'
+#' The oracle branch is an im2col matmul: correct at any size, meant
+#' for tests, not throughput.
+#'
+#' @param x `(C_in, H, W)` array (traced or plain).
+#' @param w `(C_out, C_in/groups, kH, kW)` numeric array.
+#' @param bias Optional length-`C_out` numeric.
+#' @param stride,padding,dilation Scalar or length-2 integers.
+#' @param groups Feature group count.
+#' @return `(C_out, H_out, W_out)` array.
+#' @export
+g_conv2d <- function(x, w, bias = NULL, stride = 1L, padding = 0L,
+                     dilation = 1L, groups = 1L) {
+  stride   <- as.integer(rep_len(stride, 2L))
+  padding  <- as.integer(rep_len(padding, 2L))
+  dilation <- as.integer(rep_len(dilation, 2L))
+  groups   <- as.integer(groups)
+  co <- dim(w)[[1L]]
+  if (.g_traced(x)) {
+    out <- anvl::nv_conv2d(anvl::nv_unsqueeze(x, 1L), g_upload(w, "f32"),
+                           stride = stride, padding = padding,
+                           dilation = dilation, groups = groups)
+    out <- anvl::nv_squeeze(out, 1L)
+    if (!is.null(bias)) {
+      bt <- g_upload(array(as.numeric(bias), c(co, 1L, 1L)), "f32")
+      out <- out + anvl::nv_broadcast_to(bt, .g_shape(out))
+    }
+    return(out)
+  }
+  d <- dim(x); ci <- d[[1L]]; h <- d[[2L]]; wd <- d[[3L]]
+  kh <- dim(w)[[3L]]; kw <- dim(w)[[4L]]
+  xp <- array(0, c(ci, h + 2L * padding[[1L]], wd + 2L * padding[[2L]]))
+  xp[, padding[[1L]] + seq_len(h), padding[[2L]] + seq_len(wd)] <- x
+  ho <- (dim(xp)[[2L]] - (kh - 1L) * dilation[[1L]] - 1L) %/% stride[[1L]] + 1L
+  wo <- (dim(xp)[[3L]] - (kw - 1L) * dilation[[2L]] - 1L) %/% stride[[2L]] + 1L
+  cig <- ci %/% groups; cog <- co %/% groups
+  out <- array(0, c(co, ho, wo))
+  for (g in seq_len(groups)) {
+    cs <- (g - 1L) * cig + seq_len(cig)          # input channels of the group
+    os <- (g - 1L) * cog + seq_len(cog)          # output channels
+    cols <- vector("list", kh * kw)
+    wcols <- vector("list", kh * kw)
+    i <- 0L
+    for (ky in seq_len(kh)) for (kx in seq_len(kw)) {
+      ys <- (ky - 1L) * dilation[[1L]] + seq(1L, by = stride[[1L]], length.out = ho)
+      xs <- (kx - 1L) * dilation[[2L]] + seq(1L, by = stride[[2L]], length.out = wo)
+      sl <- xp[cs, ys, xs, drop = FALSE]
+      i <- i + 1L
+      cols[[i]]  <- matrix(sl, nrow = cig)       # (Cin/g, ho*wo) col-major
+      wcols[[i]] <- matrix(w[os, , ky, kx], nrow = cog)   # (Cout/g, Cin/g)
+    }
+    res <- do.call(cbind, wcols) %*% do.call(rbind, cols) # (Cout/g, ho*wo)
+    out[os, , ] <- array(res, c(cog, ho, wo))
+  }
+  if (!is.null(bias)) out <- out + array(rep(as.numeric(bias), ho * wo),
+                                         c(co, ho, wo))
+  out
+}
+
+#' Nearest-neighbour 2x upsample of a (C, H, W) chunk.
+#'
+#' Each pixel becomes a 2x2 block (the U-Net decoder upsample).
+#'
+#' @param x `(C, H, W)` array (traced or plain).
+#' @return `(C, 2H, 2W)` array.
+#' @export
+g_upsample2x <- function(x) {
+  if (.g_traced(x)) {
+    sh <- .g_shape(x)
+    u <- anvl::nv_unsqueeze(anvl::nv_unsqueeze(x, 3L), 5L)  # (C,H,1,W,1)
+    b <- anvl::nv_broadcast_to(u, c(sh[[1L]], sh[[2L]], 2L, sh[[3L]], 2L))
+    return(anvl::nv_reshape(b, c(sh[[1L]], 2L * sh[[2L]], 2L * sh[[3L]])))
+  }
+  d <- dim(x)
+  x[, rep(seq_len(d[[2L]]), each = 2L), rep(seq_len(d[[3L]]), each = 2L),
+    drop = FALSE]
+}
+
+#' Pad the bottom/right edges of the last two dims.
+#'
+#' Grows the spatial dims by `(dy, dx)` cells of `value` on the high
+#' side only: the shape-alignment pad (e.g. to a /32-divisible U-Net
+#' input) that a later slice removes exactly.
+#'
+#' @param x Array of rank >= 2 (traced or plain).
+#' @param dy,dx Non-negative cell counts to add below / to the right.
+#' @param value Fill value.
+#' @return Array with the last two dims grown by `dy`, `dx`.
+#' @export
+g_pad_rb <- function(x, dy, dx, value = 0) {
+  dy <- as.integer(dy); dx <- as.integer(dx)
+  if (.g_traced(x)) {
+    r <- length(.g_shape(x))
+    hi <- c(rep(0L, r - 2L), dy, dx)
+    return(anvl::nv_pad(x, value, edge_padding_low = rep(0L, r),
+                        edge_padding_high = hi))
+  }
+  d <- dim(x)
+  nd <- d; nd[length(d) - 1L] <- d[[length(d) - 1L]] + dy
+  nd[length(d)] <- d[[length(d)]] + dx
+  out <- array(value, nd)
+  idx <- lapply(d, seq_len)
+  do.call(`[<-`, c(list(out), idx, list(value = x)))
+}
+
+#' Transpose an array (general permutation).
+#'
+#' `perm[i]` names the input axis that becomes output axis `i`
+#' (base R `aperm()` semantics); `NULL` reverses the axes.
+#'
+#' @param x Array (traced or plain).
+#' @param perm Integer permutation, or `NULL`.
+#' @return Permuted array.
+#' @export
+g_transpose <- function(x, perm = NULL) {
+  if (.g_traced(x)) return(anvl::nv_transpose(x, permutation = perm))
+  aperm(x, perm)
+}
+
+#' Error function (exact GELU building block).
+#'
+#' @param x Numeric array (traced or plain).
+#' @return `erf(x)` elementwise.
+#' @export
+g_erf <- function(x) {
+  if (.g_traced(x)) return(anvl::nv_erf(x))
+  2 * stats::pnorm(x * sqrt(2)) - 1
+}
