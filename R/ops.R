@@ -505,6 +505,31 @@ g_rep_t <- function(x, n) {
   array(rep(as.vector(x), each = n), c(n, d))
 }
 
+#' Insert a broadcast axis at an arbitrary position.
+#'
+#' The rank-general sibling of [g_rep_t()]: expands `x` with a new axis
+#' of `n` copies at position `axis`, so a reduced statistic broadcasts
+#' back against the array it came from (base R arrays do not broadcast,
+#' so the untraced oracle needs the copies materialised; traced, this is
+#' a free `broadcast_to`).
+#'
+#' @param x Array (traced or plain).
+#' @param axis 1-based position of the new axis in the output.
+#' @param n Length of the new axis.
+#' @return Array of rank `length(dim(x)) + 1`.
+#' @export
+g_expand <- function(x, axis, n) {
+  axis <- as.integer(axis); n <- as.integer(n)
+  if (.g_traced(x)) {
+    sh <- .g_shape(x)
+    out_sh <- append(sh, n, after = axis - 1L)
+    return(anvl::nv_broadcast_to(anvl::nv_unsqueeze(x, axis), out_sh))
+  }
+  d <- dim(x)
+  arr <- array(as.vector(x), c(d, n))            # copies on a trailing axis
+  aperm(arr, append(seq_along(d), length(d) + 1L, after = axis - 1L))
+}
+
 # -- Pixel-matrix bridge (band-collapsing linear algebra) ----------------------
 
 # Flatten a (band, y, x) chunk to a (band, npix) matrix and back. The
