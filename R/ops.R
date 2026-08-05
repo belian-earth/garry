@@ -246,8 +246,11 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
       limit_indices = c(sh[seq_len(lead)], out_nrow + h + dy, out_ncol + h + dx),
       strides = rep(1L, lead + 2L)))
   }
-  xpad[(1L + h + dy):(out_nrow + h + dy),
-       (1L + h + dx):(out_ncol + h + dx), drop = FALSE]
+  d <- dim(xpad)
+  idx <- c(rep(list(quote(expr = )), length(d) - 2L),
+           list((1L + h + dy):(out_nrow + h + dy),
+                (1L + h + dx):(out_ncol + h + dx)))
+  do.call(`[`, c(list(xpad), idx, list(drop = FALSE)))
 }
 
 #' Cast to a garry dtype (oracle: value semantics only).
@@ -525,7 +528,7 @@ g_expand <- function(x, axis, n) {
     out_sh <- append(sh, n, after = axis - 1L)
     return(anvl::nv_broadcast_to(anvl::nv_unsqueeze(x, axis), out_sh))
   }
-  d <- dim(x)
+  d <- dim(x) %||% length(x)                     # vectors are rank-1
   arr <- array(as.vector(x), c(d, n))            # copies on a trailing axis
   aperm(arr, append(seq_along(d), length(d) + 1L, after = axis - 1L))
 }
@@ -866,4 +869,19 @@ g_transpose <- function(x, perm = NULL) {
 g_erf <- function(x) {
   if (.g_traced(x)) return(anvl::nv_erf(x))
   2 * stats::pnorm(x * sqrt(2)) - 1
+}
+
+#' Drop a leading unit axis.
+#'
+#' The inverse of `g_expand(x, 1L, 1L)`: `(1, d...)` becomes `(d...)`
+#' (e.g. a `g_slice_t` single-slice result back to its plane).
+#'
+#' @param x Array with `dim(x)[1] == 1` (traced or plain).
+#' @return Array of one lower rank.
+#' @export
+g_squeeze1 <- function(x) {
+  if (.g_traced(x)) return(anvl::nv_squeeze(x, 1L))
+  d <- dim(x)
+  stopifnot(d[[1L]] == 1L)
+  array(x, d[-1L])
 }
