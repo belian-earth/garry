@@ -117,12 +117,6 @@
   cls
 }
 
-# edgenext_small forward (P5); defined here so the dispatch below is
-# complete.
-.ocm_forward_edgenext <- function(x, W) {
-  cli::cli_abort("edgenext forward not implemented yet (P5)")
-}
-
 # The complete OCM inference body on a raw (3, H, W) window (any H, W):
 # channel_norm, pad right/bottom to /32, forward each requested model,
 # average logits (OCM ensembles raw logits; argmax(mean) == OCM's

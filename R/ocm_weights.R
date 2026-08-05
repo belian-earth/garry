@@ -99,11 +99,87 @@
        decoder = decoder, head = head)
 }
 
-# edgenext_small encoder (P5): ConvNeXt/SDTA blocks with LayerNorms.
+# Plain (weight, bias) pair, any layer kind.
+.ocm_wb <- function(std, prefix) {
+  w <- std[[paste0(prefix, ".weight")]]
+  b <- std[[paste0(prefix, ".bias")]]
+  if (is.null(w) || is.null(b))
+    cli::cli_abort("missing tensors under {.val {prefix}}")
+  list(w = w, b = as.numeric(b))
+}
+
+# edgenext_small encoder (timm) + SMP Unet decoder. LayerNorms stay as
+# gamma/beta (input-dependent, not foldable); decoder BNs fold as for
+# regnety. Structure: dims 48/96/160/304, depths 3/3/9/3, the LAST
+# block of stages 2..4 is an SDTA (split-transpose attention) block,
+# Fourier pos-embed on stage 2's SDTA only.
 .ocm_weights_edgenext <- function(std) {
-  cli::cli_abort(c(
-    "the edgenext ensemble member is not implemented yet.",
-    "i" = "use {.code models = \"regnety\"} for now"))
+  keys <- names(std)
+  ln <- function(prefix) list(g = as.numeric(std[[paste0(prefix, ".weight")]]),
+                              b = as.numeric(std[[paste0(prefix, ".bias")]]))
+
+  stem <- list(conv = .ocm_wb(std, "encoder.model.stem_0"),
+               ln   = ln("encoder.model.stem_1"))
+  .ocm_assert_dim(stem$conv$w, c(48L, 3L, 4L, 4L), "edgenext stem")
+
+  stages <- lapply(0:3, function(s) {
+    pre <- sprintf("encoder.model.stages_%d", s)
+    ds <- if (paste0(pre, ".downsample.1.weight") %in% keys)
+      list(ln = ln(paste0(pre, ".downsample.0")),
+           conv = .ocm_wb(std, paste0(pre, ".downsample.1")))
+    bl <- unique(regmatches(keys, regexpr(
+      sprintf("^encoder\\.model\\.stages_%d\\.blocks\\.\\d+", s), keys)))
+    bl <- bl[order(as.integer(sub(".*blocks\\.", "", bl)))]
+    blocks <- lapply(bl, function(p) {
+      sdta <- paste0(p, ".xca.qkv.weight") %in% keys
+      base <- list(
+        sdta  = sdta,
+        norm  = ln(paste0(p, ".norm")),
+        fc1   = .ocm_wb(std, paste0(p, ".mlp.fc1")),
+        fc2   = .ocm_wb(std, paste0(p, ".mlp.fc2")),
+        gamma = as.numeric(std[[paste0(p, ".gamma")]]))
+      if (!sdta) {
+        base$conv_dw <- .ocm_wb(std, paste0(p, ".conv_dw"))
+        return(base)
+      }
+      ci <- unique(regmatches(keys, regexpr(
+        sprintf("^%s\\.convs\\.\\d+", gsub("\\.", "\\\\.", p)), keys)))
+      ci <- ci[order(as.integer(sub(".*convs\\.", "", ci)))]
+      base$convs <- lapply(ci, function(cp) .ocm_wb(std, cp))
+      base$norm_xca <- ln(paste0(p, ".norm_xca"))
+      base$gamma_xca <- as.numeric(std[[paste0(p, ".gamma_xca")]])
+      base$xca <- list(
+        qkv  = .ocm_wb(std, paste0(p, ".xca.qkv")),
+        proj = .ocm_wb(std, paste0(p, ".xca.proj")),
+        temperature = as.numeric(std[[paste0(p, ".xca.temperature")]]))
+      pe <- paste0(p, ".pos_embd.token_projection")
+      if (paste0(pe, ".weight") %in% keys) base$pos <- .ocm_wb(std, pe)
+      base
+    })
+    list(downsample = ds, blocks = blocks)
+  })
+  widths <- vapply(stages, function(st) {
+    b1 <- st$blocks[[1L]]
+    if (is.null(b1$conv_dw)) length(b1$gamma) else dim(b1$conv_dw$w)[[1L]]
+  }, 0L)
+  if (!identical(widths, c(48L, 96L, 160L, 304L)))
+    cli::cli_abort("unexpected edgenext_small stage widths: {.val {widths}}")
+
+  decoder <- lapply(0:4, function(i) list(
+    conv1 = .ocm_fold_conv_bn(
+      std, sprintf("decoder.blocks.%d.conv1.0.weight", i),
+      sprintf("decoder.blocks.%d.conv1.1", i)),
+    conv2 = .ocm_fold_conv_bn(
+      std, sprintf("decoder.blocks.%d.conv2.0.weight", i),
+      sprintf("decoder.blocks.%d.conv2.1", i))))
+  if (!identical(dim(decoder[[1L]]$conv1$w), c(256L, 464L, 3L, 3L)))
+    cli::cli_abort("unexpected edgenext decoder block 0 shape")
+
+  head <- .ocm_conv_bias(std, "segmentation_head.0")
+  .ocm_assert_dim(head$w, c(4L, 16L, 3L, 3L), "segmentation head")
+
+  list(arch = "edgenext_small", stem = stem, stages = stages,
+       decoder = decoder, head = head)
 }
 
 #' Load and fold OmniCloudMask weights.

@@ -553,6 +553,15 @@ g_expand <- function(x, axis, n) {
   if (.g_traced(v)) return(anvl::nv_reshape(v, c(as.integer(ny), as.integer(nx))))
   matrix(as.vector(v), ny, nx)
 }
+# Rank-3 inverse of .g_flatten_yx: (k, ny*nx) back to (k, ny, nx).
+# Same contract as the pair above: each branch inverts its own
+# flatten ordering, so it is only valid around per-pixel-column math.
+.g_unflatten_kyx <- function(v, k, ny, nx) {
+  if (.g_traced(v))
+    return(anvl::nv_reshape(v, c(as.integer(k), as.integer(ny),
+                                 as.integer(nx))))
+  array(as.vector(v), c(k, ny, nx))
+}
 
 # -- Reductions ---------------------------------------------------------------
 

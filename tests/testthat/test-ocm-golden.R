@@ -66,6 +66,39 @@ test_that("traced inference equals the oracle", {
   expect_gte(mean(got[ok] == ref[ok]), 0.9999)
 })
 
+test_that("edgenext logits match Python OCM on the golden input", {
+  skip_if(!file.exists(.ocm_fixture), "golden fixture not present")
+  skip_if(!dir.exists(.ocm_wdir), "OCM weights not present")
+
+  fx <- safetensors_read(.ocm_fixture)
+  wl <- ocm_load_weights(.ocm_wdir, models = "edgenext")
+  x <- fx$input
+  x[x == 0] <- NaN
+  cn <- garry:::.ocm_channel_norm(x)
+  lg <- garry:::.ocm_forward_edgenext(cn$x, wl$weights$edgenext)
+  expect_lt(max(abs(lg - fx$logits_edgenext)), 1e-4)
+})
+
+test_that("the two-model ensemble matches Python OCM exactly", {
+  skip_if(!file.exists(.ocm_fixture), "golden fixture not present")
+  skip_if(!dir.exists(.ocm_wdir), "OCM weights not present")
+
+  fx <- safetensors_read(.ocm_fixture)
+  wl <- ocm_load_weights(.ocm_wdir)
+  x <- fx$input
+  x[x == 0] <- NaN
+  cn <- garry:::.ocm_channel_norm(x)
+  le <- (garry:::.ocm_forward_regnety(cn$x, wl$weights$regnety) +
+         garry:::.ocm_forward_edgenext(cn$x, wl$weights$edgenext)) / 2
+  expect_lt(max(abs(le - fx$logits_ensemble)), 1e-4)
+
+  cls <- garry:::.ocm_infer(x, wl$weights)
+  am <- fx$argmax_ensemble
+  if (length(dim(am)) == 3L) am <- am[1L, , ]
+  ok <- is.finite(cls)
+  expect_gte(mean(cls[ok] == am[ok]), 0.999)
+})
+
 test_that("non-/32 window sizes pad and trim transparently", {
   skip_if(!file.exists(.ocm_fixture), "golden fixture not present")
   skip_if(!dir.exists(.ocm_wdir), "OCM weights not present")

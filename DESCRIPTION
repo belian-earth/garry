@@ -74,6 +74,7 @@ Collate:
     'lazy_cog.R'
     'ocm.R'
     'ocm_blocks.R'
+    'ocm_edgenext.R'
     'ocm_weights.R'
     'placement.R'
     'preview.R'

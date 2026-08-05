@@ -4,16 +4,16 @@
 \alias{ocm_model}
 \title{Load the native OmniCloudMask model.}
 \usage{
-ocm_model(weights_dir = NULL, models = "regnety", halo = 128L)
+ocm_model(weights_dir = NULL, models = c("regnety", "edgenext"), halo = 128L)
 }
 \arguments{
 \item{weights_dir}{Directory with the OCM v4 safetensors files;
 default: \code{GARRY_OCM_WEIGHTS}, else the newest version under the
 Python package's cache (\verb{~/.local/share/omnicloudmask}).}
 
-\item{models}{Ensemble members to run (\code{"regnety"}, \code{"edgenext"});
-OCM v4 averages both. Default: regnety only until the edgenext
-port lands.}
+\item{models}{Ensemble members to run; the default matches OCM v4
+exactly (both U-Nets, logits averaged). A single member is ~2x
+faster at slightly lower accuracy.}
 
 \item{halo}{Chunk overlap margin in pixels (multiple of 32
 recommended).}

@@ -42,16 +42,16 @@
 #' @param weights_dir Directory with the OCM v4 safetensors files;
 #'   default: `GARRY_OCM_WEIGHTS`, else the newest version under the
 #'   Python package's cache (`~/.local/share/omnicloudmask`).
-#' @param models Ensemble members to run (`"regnety"`, `"edgenext"`);
-#'   OCM v4 averages both. Default: regnety only until the edgenext
-#'   port lands.
+#' @param models Ensemble members to run; the default matches OCM v4
+#'   exactly (both U-Nets, logits averaged). A single member is ~2x
+#'   faster at slightly lower accuracy.
 #' @param halo Chunk overlap margin in pixels (multiple of 32
 #'   recommended).
 #' @return An `ocm_model` list: `fn`, `kernel_id`, `halo`, `bytes_px`,
 #'   `flops_px`, `models`.
 #' @export
-ocm_model <- function(weights_dir = NULL, models = "regnety",
-                      halo = 128L) {
+ocm_model <- function(weights_dir = NULL,
+                      models = c("regnety", "edgenext"), halo = 128L) {
   models <- match.arg(models, c("regnety", "edgenext"), several.ok = TRUE)
   halo <- as.integer(halo)
   if (length(halo) != 1L || is.na(halo) || halo < 32L)
