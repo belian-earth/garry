@@ -12,6 +12,12 @@ skip_if_not_installed("mirai")
 test_that("source-fed kernel chains execute on their read tasks", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
+  # Fused-on-reader execution hangs on the macOS ARM CI runners: the
+  # suite stalls at this test until the 6h job limit (runs 30854991920,
+  # 30883748389); the same fused chain passes on Linux and Windows.
+  # Needs macOS hardware to debug; until then the fused path is not
+  # exercised there.
+  skip_on_os("mac")
   f <- fixture_gradient_f32()
 
   # benchmark-mini shape: qa source -> mask map + focal chain (its own

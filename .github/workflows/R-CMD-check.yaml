@@ -15,6 +15,11 @@ jobs:
 
     name: ${{ matrix.config.os }} (${{ matrix.config.r }})
 
+    # A hung test otherwise burns the 6h job maximum (macOS fused-path
+    # stall, runs 30854991920 / 30883748389). The R-level test timeout
+    # below fires first so the check fails with partial test output.
+    timeout-minutes: 150
+
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +34,11 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       PJRT_INSTALL: "1"          # let pjrt fetch the CPU plugin non-interactively
+      # Kill a hung test run instead of stalling: the suite takes ~15-30
+      # min per platform, so 60 min means a hang. R kills the process and
+      # the check fails with the partial testthat.Rout in the artifact,
+      # which names the stalled test.
+      _R_CHECK_TESTS_ELAPSED_TIMEOUT_: "3600"
 
     steps:
       - uses: actions/checkout@v6
