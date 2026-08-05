@@ -31,6 +31,7 @@ Suggests:
     anvl,
     cptkirk,
     httr2,
+    jsonlite,
     KFAS,
     knitr,
     mirai,
@@ -71,10 +72,13 @@ Collate:
     'gradient.R'
     'grid_from.R'
     'lazy_cog.R'
+    'ocm_weights.R'
     'placement.R'
     'preview.R'
     'reduce_multiband.R'
+    'safetensors.R'
     'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'
     'zzz.R'
+URL: https://belian-earth.github.io/garry/
