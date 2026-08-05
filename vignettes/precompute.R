@@ -26,6 +26,7 @@ prerender_it <- function(filename) {
 }
 
 prerender_it("garry.Rmd")
+prerender_it("stac-composite.Rmd")
 prerender_it("time-series.Rmd")
 prerender_it("hls-harmonized-pca.Rmd")
 prerender_it("aef-embeddings.Rmd")

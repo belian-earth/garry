@@ -135,3 +135,21 @@ monthly / kalman), smoothed map trio, final GIF.
 - Delivery order: vignette 1 first (this branch), then 3 (kalman is the
   differentiator), then 2 (largest, but much of its content exists in the
   README and case studies to crib from).
+
+## Status: all three delivered (this branch)
+
+1. `garry.Rmd` as planned (Mount Hood).
+2. `stac-composite.Rmd` diverged from the plan, deliberately: AOI moved to
+   the Castro Marim salinas, Guadiana, southern Portugal (Hugh's pick;
+   working salt ponds are both photogenic and a genuinely hard composite
+   target), collection moved to Sentinel-2 L2A at 10 m with SCL value-set
+   masking, and the centrepiece became the per-band median vs
+   `geomedian()` comparison with a spectral-distance map (plus a
+   `medoid()` pointer). NDVI/derived-band content lives in vignette 3
+   instead.
+3. `time-series.Rmd` as planned plus the swath-edge diagnosis,
+   `shrink_footprint()`, and the `hampel_smooth()` reference.
+
+Verbs shipped for the arc: `shrink_footprint()`, `hampel_smooth()`,
+`geomedian()`, `medoid()` (with 4D band-time stacks and `g_expand()`
+underneath).
