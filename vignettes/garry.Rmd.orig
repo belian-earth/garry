@@ -161,7 +161,7 @@ attribute (extent, CRS) so the result stays georeferenced:
 ```{r hood-collect}
 arr <- collect(hs)
 str(attr(arr, "gis"))
-preview(arr, col = grDevices::hcl.colors(64, "Grays", rev = TRUE),
+preview(arr, col = grDevices::hcl.colors(64, "Rocket"),
         legend = FALSE, main = "Hillshade")
 ```
 

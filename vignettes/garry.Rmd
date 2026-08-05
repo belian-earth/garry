@@ -197,7 +197,7 @@ str(attr(arr, "gis"))
 #>  $ dim     : int [1:3] 1013 799 1
 #>  $ srs     : chr "PROJCS[\"NAD83 / UTM zone 10N\",GEOGCS[\"NAD83\",DATUM[\"North_American_Datum_1983\",SPHEROID[\"GRS 1980\",6378"| __truncated__
 #>  $ datatype: chr "Float32"
-preview(arr, col = grDevices::hcl.colors(64, "Grays", rev = TRUE),
+preview(arr, col = grDevices::hcl.colors(64, "Rocket"),
         legend = FALSE, main = "Hillshade")
 ```
 
