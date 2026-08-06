@@ -928,7 +928,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       ngrid <- graph_get(plan@graph, nid)@grid
       it <- chunk_iter(st@chunks)
       ds <- gdal_create_output(p, ngrid, nodata = wnodata,
-                               band_names = band_names)
+                               band_names = .sink_band_names(band_names,
+                                                             nm, ngrid))
       if (writer_on) { ds$close(); ds <- NULL }
       stream_sinks[[nm]] <- list(
         sid = st@id,

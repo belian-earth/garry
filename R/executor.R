@@ -522,6 +522,15 @@ NULL
 # write, used by BOTH executors (the single-threaded oracle and the
 # scheduler's post-drain host phase). Two near-verbatim copies had
 # begun to diverge silently — and this is the seam the H1 defect
+# Resolve the band descriptions for one sink of a multi-export plan:
+# a NAMED LIST keyed by sink name (per-sink descriptions, e.g. ragged
+# time groups), a plain vector (every sink), else the sink grid's own
+# band labels (carried from lazy_stack/stack_bands layer names).
+.sink_band_names <- function(band_names, nm, ngrid) {
+  if (is.list(band_names)) return(band_names[[nm]])
+  band_names %||% .grid_layer_labels(ngrid)
+}
+
 # (silently lost raw sink) lived in — one implementation means one
 # place to guard it. `chunks_of(stage)` returns the stage's list of
 # per-chunk EXPORT lists (reduce_combine: a one-element list holding
@@ -551,7 +560,8 @@ NULL
         else path[[nm]]
         sk <- st
         S7::prop(sk, "grid") <- ngrid
-        return(.exec_write_sink(chunks, it, sk, p, nodata, band_names,
+        return(.exec_write_sink(chunks, it, sk, p, nodata,
+                                .sink_band_names(band_names, nm, ngrid),
                                 sink_pad = pad))
       }
       if (nrow(it) == 1L) {

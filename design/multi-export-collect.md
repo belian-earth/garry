@@ -1,6 +1,6 @@
 # Design note: multi-export collect (one plan, many sinks)
 
-Status: **design, not started.** Written 2026-07-17, from the hutan
+Status: **v1 implemented** (named-list collect, multi-sink plans, per-sink streamed writes; sibling-barrier CSE of section 5 still open). Grouped collect routes through it since 2026-08-06 (network-pulse fix, ir-extensions-todo #5). Written 2026-07-17, from the hutan
 engine-comparison measurements (experiments/engine-cmp). Prerequisite for the
 single-graph SI pipeline: everything from MLP predict downstream as ONE
 garry graph with one execution.

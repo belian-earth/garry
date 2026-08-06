@@ -98,3 +98,10 @@ small (one tile x few assets), so no single group saturates the link.
 Candidate: prefetch group N+1's read tasks while group N computes and
 writes -- either a shared scheduler across group plans or a lookahead
 fetch queue. Surfaced by the OCM vignette's materialise-per-day step.
+
+RESOLVED 2026-08-06: .collect_groups now routes multi-group collects
+through multi-export (one plan, one sink per group; per-sink band
+names via collect(band_names = <named list>)). All groups' reads enter
+one ready queue and drain under fetch-first priority. Measured on the
+Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
+(one plan, continuous drain). plan_only keeps the per-group loop.

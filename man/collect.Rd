@@ -9,7 +9,8 @@ collect(
   plan_only = FALSE,
   path = NULL,
   nodata = NULL,
-  distributed = garry_daemons_set()
+  distributed = garry_daemons_set(),
+  band_names = NULL
 )
 }
 \arguments{
@@ -28,6 +29,11 @@ it; required for integer outputs containing nodata).}
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, so \code{collect(x)} uses the pools when they are running
 and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override; the
 distributed result is identical to the single-threaded one.}
+
+\item{band_names}{Output band descriptions for file writes. Usually
+inferred (a dataset's band names; a stack's layer labels). For a
+multi-export list input, a NAMED LIST keyed by sink name gives each
+sink its own descriptions.}
 }
 \value{
 With \code{plan_only = TRUE}, the \code{Plan}. With \code{path}, the path,

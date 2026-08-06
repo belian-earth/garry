@@ -18,6 +18,10 @@ NULL
 #'   [garry_daemons_set()], so `collect(x)` uses the pools when they are running
 #'   and runs single-threaded otherwise. Pass `TRUE`/`FALSE` to override; the
 #'   distributed result is identical to the single-threaded one.
+#' @param band_names Output band descriptions for file writes. Usually
+#'   inferred (a dataset's band names; a stack's layer labels). For a
+#'   multi-export list input, a NAMED LIST keyed by sink name gives each
+#'   sink its own descriptions.
 #' @return With `plan_only = TRUE`, the `Plan`. With `path`, the path,
 #'   invisibly. Otherwise the materialised result in the R raster convention
 #'   (spatial-first, layer-last): a scalar for global reductions, a `[y, x]`
@@ -29,7 +33,7 @@ NULL
 #'   self-describing and [preview()] can set real-world axes without the grid.
 #' @export
 collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
-                    distributed = garry_daemons_set()) {
+                    distributed = garry_daemons_set(), band_names = NULL) {
   .garry_opt_check()
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
@@ -38,7 +42,6 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     return(.collect_groups(x, plan_only, path, nodata, distributed))
   # A dataset's band names become the output band descriptions; capture them
   # before stack_bands() collapses the named bands into one node.
-  band_names <- NULL
   if (S7::S7_inherits(x, LazyDataset)) {
     band_names <- names(x@bands)
     x <- stack_bands(x)
@@ -54,9 +57,11 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
     .garry_state$route <- if (distributed) "scheduler" else "single"
     res <- if (distributed) {
-      execute_plan_mirai(p, path = path, nodata = nodata)
+      execute_plan_mirai(p, path = path, nodata = nodata,
+                         band_names = band_names)
     } else {
-      execute_plan(p, path = path, nodata = nodata)
+      execute_plan(p, path = path, nodata = nodata,
+                   band_names = band_names)
     }
     if (!is.null(path)) return(invisible(res))
     # per-sink: same layout + gis attribute as a single-sink collect
@@ -169,13 +174,29 @@ garry_last_route <- function() .garry_state$route
 # returns a named list of results (or Plans when `plan_only`).
 .collect_groups <- function(x, plan_only, path, nodata, distributed) {
   labels <- names(x@groups)
-  paths <- if (is.null(path)) NULL else .group_paths(path, labels)
+  paths <- if (is.null(path)) NULL else stats::setNames(unlist(.group_paths(path, labels)), labels)
+  # Multi-export route (design/multi-export-collect.md): ONE plan whose
+  # sinks are the per-group band stacks, so every group's reads enter
+  # one ready queue and drain together under fetch-first priority.
+  # The per-group loop pulsed the network instead: one fetch burst,
+  # then an idle assemble/compute/write trough, per group
+  # (ir-extensions-todo.md #5). plan_only keeps the loop: callers
+  # expect one inspectable Plan per group.
+  if (!plan_only && length(x@groups) > 1L) {
+    sinks <- stats::setNames(lapply(x@groups, stack_bands), labels)
+    bn <- stats::setNames(lapply(x@groups, function(g) names(g@bands)),
+                          labels)
+    res <- collect(sinks, path = paths, nodata = nodata,
+                   distributed = distributed, band_names = bn)
+    if (!is.null(path)) return(invisible(paths))
+    return(res)
+  }
   res <- lapply(seq_along(x@groups), function(i)
     collect(x@groups[[i]], plan_only = plan_only,
             path = if (is.null(paths)) NULL else paths[[i]],
             nodata = nodata, distributed = distributed))
   names(res) <- labels
-  if (!is.null(path) && !plan_only) return(invisible(stats::setNames(unlist(paths), labels)))
+  if (!is.null(path) && !plan_only) return(invisible(paths))
   res
 }
 
