@@ -92,3 +92,26 @@ test_that("real OCM regnety state dict parses into the expected structure", {
   wl2 <- ocm_load_weights(dir, models = "regnety")
   expect_identical(wl2$kernel_id, wl$kernel_id)
 })
+
+test_that("ocm_fetch_weights verifies and is idempotent", {
+  skip_if(!nzchar(Sys.getenv("GARRY_RUN_NETWORK")),
+          "set GARRY_RUN_NETWORK=1 to run (downloads ~58 MB)")
+  dir <- withr::local_tempdir()
+  got <- ocm_fetch_weights(dir, quiet = TRUE)
+  fs <- list.files(got, pattern = "safetensors$", full.names = TRUE)
+  expect_length(fs, 2L)
+  for (f in fs)
+    expect_true(rlang::hash_file(f) %in% garry:::.ocm_release_hash)
+  # second call: verified, no re-download
+  expect_message(ocm_fetch_weights(dir), "already present")
+  # a corrupted file is re-fetched, a bad mirror refused
+  writeBin(as.raw(1:100), fs[[1L]])
+  got2 <- ocm_fetch_weights(dir, quiet = TRUE)
+  expect_identical(rlang::hash_file(fs[[1L]]),
+                   unname(garry:::.ocm_release_hash[
+                     match(basename(fs[[1L]]),
+                           garry:::.ocm_release_files)]))
+  # and the fetched dir loads end to end
+  wl <- ocm_load_weights(got, models = "regnety")
+  expect_identical(wl$weights$regnety$arch, "regnety_004")
+})

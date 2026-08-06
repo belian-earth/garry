@@ -182,6 +182,61 @@
        decoder = decoder, head = head)
 }
 
+# The mirrored OCM v4 release (unmodified upstream safetensors + a
+# NOTICE.md with attribution, licence, citation, and these hashes).
+.ocm_release_base <- paste0(
+  "https://github.com/belian-earth/garry/releases/download/ocm-weights-v4/")
+.ocm_release_files <- c(
+  regnety  = "PM_model_OCM_7.97_R_G_NIR_3_smp_regnety_004.pycls_in1k_PT_state.safetensors",
+  edgenext = "PM_model_OCM_7.97_R_G_NIR_3_smp_edgenext_small.usi_in1k_PT_state.safetensors")
+.ocm_release_hash <- c(
+  regnety  = "44bccacce24f4ddd4ba08eaa763c2d04",
+  edgenext = "8556cbea5e7b14b2de2e2a9f6d784331")
+
+#' Download the OmniCloudMask v4 model weights.
+#'
+#' Fetches garry's mirror of the official OmniCloudMask v4 weights (two
+#' safetensors files, ~58 MB total, unmodified from upstream; MIT
+#' licensed by DPIRD-DMA, see the release's NOTICE.md for attribution
+#' and citation) into a per-user data directory, verifying each file's
+#' content hash. Idempotent: files already present and intact are not
+#' re-downloaded. [ocm_model()] finds this directory automatically.
+#'
+#' @param dir Destination directory (default:
+#'   `tools::R_user_dir("garry", "data")/ocm-v4`).
+#' @param quiet Suppress progress output.
+#' @return The weights directory, invisibly.
+#' @export
+ocm_fetch_weights <- function(dir = NULL, quiet = FALSE) {
+  dir <- dir %||% file.path(tools::R_user_dir("garry", "data"), "ocm-v4")
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  for (m in names(.ocm_release_files)) {
+    f <- .ocm_release_files[[m]]
+    dest <- file.path(dir, f)
+    if (file.exists(dest) &&
+        identical(rlang::hash_file(dest), .ocm_release_hash[[m]])) {
+      if (!quiet) cli::cli_inform("{.file {f}} already present, verified.")
+      next
+    }
+    if (!quiet) cli::cli_inform("downloading {.file {f}} ...")
+    tmp <- paste0(dest, ".part")
+    status <- utils::download.file(paste0(.ocm_release_base, f), tmp,
+                                   mode = "wb", quiet = quiet)
+    if (status != 0L || !file.exists(tmp)) {
+      unlink(tmp)
+      cli::cli_abort("download failed for {.file {f}}")
+    }
+    if (!identical(rlang::hash_file(tmp), .ocm_release_hash[[m]])) {
+      unlink(tmp)
+      cli::cli_abort(c(
+        "hash mismatch for downloaded {.file {f}}.",
+        "i" = "the mirror may be corrupt or altered; not installing it"))
+    }
+    file.rename(tmp, dest)
+  }
+  invisible(dir)
+}
+
 #' Load and fold OmniCloudMask weights.
 #'
 #' Reads the OCM v4 safetensors state dicts, folds batch norms into
@@ -211,7 +266,7 @@ ocm_load_weights <- function(dir, models = c("regnety", "edgenext")) {
     if (length(hits) != 1L)
       cli::cli_abort(c(
         "expected exactly one OCM v4 {.val {pat[[m]]}} weight file in {.path {dir}}; found {length(hits)}.",
-        "i" = "official weights land there via the Python package: pip install omnicloudmask; omnicloudmask.download_models()"))
+        "i" = "download them with {.run garry::ocm_fetch_weights()}"))
     hits
   }, "")
 

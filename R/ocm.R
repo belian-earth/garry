@@ -17,10 +17,12 @@
 .ocm_default_dir <- function() {
   env <- Sys.getenv("GARRY_OCM_WEIGHTS")
   if (nzchar(env)) return(env)
+  fetched <- file.path(tools::R_user_dir("garry", "data"), "ocm-v4")
+  if (length(list.files(fetched, pattern = "safetensors$"))) return(fetched)
   base <- path.expand("~/.local/share/omnicloudmask")
-  if (!dir.exists(base)) return(base)
+  if (!dir.exists(base)) return(fetched)
   vers <- sort(list.dirs(base, recursive = FALSE), decreasing = TRUE)
-  if (length(vers)) vers[[1L]] else base
+  if (length(vers)) vers[[1L]] else fetched
 }
 
 #' Load the native OmniCloudMask model.
