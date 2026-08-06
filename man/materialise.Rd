@@ -6,7 +6,7 @@
 \usage{
 materialise(
   x,
-  dir,
+  dir = NULL,
   name = "garry",
   nodata = NULL,
   overwrite = FALSE,
@@ -16,7 +16,8 @@ materialise(
 \arguments{
 \item{x}{A \code{LazyDataset} or \code{LazyRaster}.}
 
-\item{dir}{Directory for the cubes (created if missing).}
+\item{dir}{Directory for the cubes (created if missing); default: a
+unique session-temporary directory.}
 
 \item{name}{File-name stem (default \code{"garry"}).}
 
@@ -53,4 +54,11 @@ Files land at \verb{dir/name-<slice>.vrt} (dataset) or \code{dir/name.vrt}
 (raster). Existing files are refused unless \code{overwrite = TRUE}:
 the graph may have changed since they were written, and silently
 reusing stale pixels is the failure mode a checkpoint must not have.
+
+\code{dir} defaults to a fresh unique directory under the session's
+\code{\link[=tempdir]{tempdir()}}, announced by a message: convenient, but session-scoped
+(the files vanish when R exits), and every call writes a NEW copy,
+so repeated interactive re-runs accumulate until the session ends.
+For large cubes, or to keep or reuse a checkpoint, give a real
+directory (note some systems mount \verb{/tmp} in RAM).
 }

@@ -93,3 +93,18 @@ test_that("masking works unchanged on the rebuilt dataset", {
                  distributed = FALSE)
   expect_equal(out, ref, tolerance = 1e-6, ignore_attr = TRUE)
 })
+
+test_that("dir defaults to a unique announced temp directory", {
+  f <- fixture_gradient_f32()
+  lr <- lazy_source(f) * 2
+  expect_message(m1 <- materialise(lr, distributed = FALSE),
+                 "session-temporary")
+  suppressMessages(m2 <- materialise(lr, distributed = FALSE))
+  n1 <- graph_get(m1@graph, m1@node_id)
+  n2 <- graph_get(m2@graph, m2@node_id)
+  expect_false(identical(n1@path, n2@path))   # unique per call
+  expect_true(startsWith(n1@path, tempdir()))
+  expect_equal(collect(m1, distributed = FALSE),
+               collect(m2, distributed = FALSE), tolerance = 1e-6,
+               ignore_attr = TRUE)
+})

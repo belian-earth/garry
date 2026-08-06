@@ -2,6 +2,18 @@
 #' @keywords internal
 NULL
 
+# Refuse (or clear, with overwrite = TRUE) an existing .vrt/.bin pair.
+.mat_check_clear <- function(path, overwrite) {
+  bin <- sub("\\.vrt$", ".bin", path)
+  hit <- c(path, bin)[file.exists(c(path, bin))]
+  if (length(hit) && !overwrite)
+    cli::cli_abort(c(
+      "target already exists: {.path {hit[[1L]]}}.",
+      "i" = "pass {.code overwrite = TRUE} to replace it (the existing
+             file may hold pixels from an older graph)"))
+  unlink(c(path, bin))
+}
+
 #' Materialise a lazy object locally and stay lazy.
 #'
 #' The checkpoint verb (dbplyr's `compute()` for rasters): execute the
@@ -25,8 +37,16 @@ NULL
 #' the graph may have changed since they were written, and silently
 #' reusing stale pixels is the failure mode a checkpoint must not have.
 #'
+#' `dir` defaults to a fresh unique directory under the session's
+#' [tempdir()], announced by a message: convenient, but session-scoped
+#' (the files vanish when R exits), and every call writes a NEW copy,
+#' so repeated interactive re-runs accumulate until the session ends.
+#' For large cubes, or to keep or reuse a checkpoint, give a real
+#' directory (note some systems mount `/tmp` in RAM).
+#'
 #' @param x A `LazyDataset` or `LazyRaster`.
-#' @param dir Directory for the cubes (created if missing).
+#' @param dir Directory for the cubes (created if missing); default: a
+#'   unique session-temporary directory.
 #' @param name File-name stem (default `"garry"`).
 #' @param nodata Optional sentinel for the written files, as in
 #'   [collect()].
@@ -35,9 +55,13 @@ NULL
 #' @return A lazy object of the same class as `x`, reading the local
 #'   cubes.
 #' @export
-materialise <- function(x, dir, name = "garry", nodata = NULL,
+materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
                         overwrite = FALSE,
                         distributed = garry_daemons_set()) {
+  if (is.null(dir)) {
+    dir <- tempfile("materialise-")
+    cli::cli_inform("materialising to {.path {dir}} (session-temporary)")
+  }
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   if (S7::S7_inherits(x, LazyRaster)) {
     path <- file.path(dir, paste0(name, ".vrt"))
@@ -80,13 +104,4 @@ materialise <- function(x, dir, name = "garry", nodata = NULL,
   as_dataset(bands, mask_asset = if (length(x@mask_asset)) x@mask_asset)
 }
 
-.mat_check_clear <- function(path, overwrite) {
-  bin <- sub("\\.vrt$", ".bin", path)
-  hit <- c(path, bin)[file.exists(c(path, bin))]
-  if (length(hit) && !overwrite)
-    cli::cli_abort(c(
-      "target already exists: {.path {hit[[1L]]}}.",
-      "i" = "pass {.code overwrite = TRUE} to replace it (the existing
-             file may hold pixels from an older graph)"))
-  unlink(c(path, bin))
-}
+
