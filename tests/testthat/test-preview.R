@@ -162,3 +162,13 @@ test_that("preview() coarse-collects a grid-pinned lazy raster", {
   on.exit({ grDevices::dev.off(); unlink(tf) })
   expect_error(preview(p$lr, max_px = 20), NA)
 })
+
+test_that("na_col paints nodata instead of leaving it transparent", {
+  m <- matrix(runif(120), 10, 12)
+  m[1:3, 1:4] <- NaN
+  f <- tempfile(fileext = ".png")
+  grDevices::png(f, 200, 200)
+  preview(m, na_col = "#eb4310", legend = FALSE, axes = FALSE)
+  grDevices::dev.off()
+  expect_true(file.exists(f) && file.size(f) > 0)
+})

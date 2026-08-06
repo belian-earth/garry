@@ -40,6 +40,11 @@ Sentinel-2's scene classification (SCL) all the way to the composite.
 
 ## A deliberately awful stack of scenes
 
+SCL rides along as an ordinary band here (not the dataset's
+`mask_asset`), because we want to compare masking routes rather than
+commit to one; the named `resampling` keeps its class codes exact
+while the reflectance bands interpolate.
+
 ```{r ocm-discover, message = FALSE}
 library(garry)
 
@@ -54,13 +59,52 @@ items <- stac_query(bbox = bbox, stac_source = mpc,
   stac_drop_duplicates()
 length(items$features)
 
-ds <- lazy_dataset(
+remote <- lazy_dataset(
   items, grid = grid_from_bbox(bbox, res = 10),
   assets = c("B02", "B03", "B04", "B08", "SCL"),
-  mask_asset = "SCL",
   nodata = c(B02 = 0, B03 = 0, B04 = 0, B08 = 0, SCL = 0),
-  resampling = "bilinear"
+  resampling = c(B02 = "bilinear", B03 = "bilinear", B04 = "bilinear",
+                 B08 = "bilinear", SCL = "near")
 )
+```
+
+## Download once, mask twice
+
+Everything below reads every band of every scene more than once: two
+masking routes, per-date looks, and two composites. Rather than pull
+the pixels from the Planetary Computer each time, materialise the
+warped stack locally first. A `.vrt` destination writes garry's
+raw-BSQ cube format: band-sequential f32 planes in a `.bin` beside a
+plain VRT that any GDAL tool reads, while garry's own reader
+recognises the shape and reads the bin directly (about 9x faster than
+tiled GeoTIFF on repeat reads). `group_by_time()` splits the dataset
+by day and `{group}` in the path names one file per date.
+
+```{r ocm-materialise, message = FALSE}
+garry_daemons()
+
+dir <- file.path(tempdir(), "zurich")
+dir.create(dir, showWarnings = FALSE)
+remote |>
+  group_by_time("day") |>
+  collect(path = file.path(dir, "zurich-{group}.vrt"))
+basename(list.files(dir, pattern = "\\.vrt$"))
+```
+
+From here on, nothing touches the network. Rebuild the dataset from
+the local cubes (band order and slice dates carry through), and this
+time declare SCL as the `mask_asset`:
+
+```{r ocm-local}
+files <- sort(list.files(dir, pattern = "\\.vrt$", full.names = TRUE))
+dates <- sub(".*zurich-(.*)\\.vrt$", "\\1", files)
+g <- graph_new()
+band_i <- function(b) stats::setNames(
+  lapply(files, function(f) lazy_source(f, band = b, graph = g)), dates)
+ds <- as_dataset(
+  list(B02 = band_i(1), B03 = band_i(2), B04 = band_i(3),
+       B08 = band_i(4), SCL = band_i(5)),
+  mask_asset = "SCL")
 ds
 ```
 
@@ -81,11 +125,7 @@ garry verb: the class raster below is a graph node until something
 collects it.
 
 ```{r ocm-classes, fig.height = 3.1, message = FALSE}
-garry_daemons()
-
-cc <- vapply(items$features, function(f)
-  f$properties[["eo:cloud_cover"]], numeric(1))
-i <- order(cc)[4]                        # ~53% cover: broken cloud
+i <- match("2024-05-25", dates)          # cumulus towers + hard shadows
 
 slice <- function(band) time_sel(ds[[band]], i)
 cls <- ocm_predict(slice("B04"), slice("B03"), slice("B08"), model = m)
@@ -95,35 +135,23 @@ rgb_i <- collect(lazy_stack(list(slice("B04"), slice("B03"), slice("B02")),
 scl_i <- collect(slice("SCL"))
 ocm_i <- collect(cls)
 
-plot_rgb <- function(arr, main, na_col = "#eb4310") {
-  st <- function(v) { q <- quantile(v, c(.02, .98), na.rm = TRUE)
-    pmin(pmax((v - q[1]) / diff(q), 0), 1) }
-  img <- array(0, c(dim(arr)[1:2], 3))
-  for (b in 1:3) img[, , b] <- st(arr[, , b])
-  bad <- !apply(is.finite(arr[, , 1:3]), c(1, 2), all)
-  nc <- grDevices::col2rgb(na_col) / 255
-  for (b in 1:3) { p <- img[, , b]; p[bad] <- nc[b]; img[, , b] <- p }
-  plot.new(); plot.window(0:1, 0:1, asp = dim(arr)[1] / dim(arr)[2])
-  rasterImage(img, 0, 0, 1, 1); title(main)
-}
-par(mfrow = c(1, 3), mar = c(0.5, 0.5, 2, 0.5))
-plot_rgb(rgb_i, "RGB")
-image(t(scl_i[nrow(scl_i):1, ]), col = hcl.colors(12, "Spectral"),
-      axes = FALSE, asp = nrow(scl_i) / ncol(scl_i)); title("SCL")
-image(t(ocm_i[nrow(ocm_i):1, ]),
-      col = c("grey85", "white", "lightblue", "grey25"), zlim = c(0, 3),
-      axes = FALSE, asp = nrow(ocm_i) / ncol(ocm_i)); title("OmniCloudMask")
+par(mfrow = c(1, 3))
+preview(rgb_i, main = "RGB", axes = FALSE)
+preview(scl_i, col = hcl.colors(12, "Spectral"), main = "SCL", axes = FALSE)
+preview(ocm_i, col = c("grey85", "white", "lightblue", "grey25"),
+        main = "OmniCloudMask", axes = FALSE)
 ```
 
-The RGB shows the situation: the west of the scene is clear, the east
-sits under a sheet of thin cloud. OmniCloudMask's classes trace that
-sheet almost exactly. The SCL band gets it wrong in both directions at
-once: its cloud classes sprawl across clear ground in the west while
-missing much of the actual haze in the east.
+The RGB shows cumulus towers throwing hard shadows across a darkened
+scene. OmniCloudMask's map reads like an annotation of it: every cloud
+(white) paired with its shadow (dark grey), thin fringes (blue) around
+the towers, clear corridors (light grey) between. The SCL band over the
+same pixels is a fragmented patchwork that classifies parts of the
+clouds as vegetation and water.
 
 ## Masking a date, both ways
 
-Route one: the dataset already carries SCL as its `mask_asset`, so the
+Route one: the local dataset carries SCL as its `mask_asset`, so the
 standard masking call is one line (the value set is everything SCL
 considers not-usable: nodata, defective, shadows, clouds, cirrus,
 snow).
@@ -141,22 +169,25 @@ ocm_masked <- ds[c("B02", "B03", "B04", "B08")] |>
   ocm_mask(red = "B04", green = "B03", nir = "B08", model = m)
 ```
 
-Same date, both masks applied, masked pixels in orange:
+Same date, both masks applied, masked pixels in orange (`preview()`'s
+`na_col` makes the mask footprint explicit):
 
 ```{r ocm-masked-rgb, fig.height = 4, message = FALSE}
 rgb_of <- function(md) collect(lazy_stack(
   list(time_sel(md[["B04"]], i), time_sel(md[["B03"]], i),
        time_sel(md[["B02"]], i)), along = "band"))
-par(mfrow = c(1, 2), mar = c(0.5, 0.5, 2, 0.5))
-plot_rgb(rgb_of(scl_masked), "SCL masked")
-plot_rgb(rgb_of(ocm_masked), "OmniCloudMask masked")
+par(mfrow = c(1, 2))
+preview(rgb_of(scl_masked), main = "SCL masked", axes = FALSE,
+        na_col = "#eb4310")
+preview(rgb_of(ocm_masked), main = "OmniCloudMask masked", axes = FALSE,
+        na_col = "#eb4310")
 ```
 
-The two errors now have consequences. The SCL mask throws away large
-areas of perfectly clear city and forest (false positives) while
-letting hazy pixels through in the east; OmniCloudMask keeps the usable
-half of the scene and removes the cloud sheet coherently. Over a stack,
-SCL's behaviour costs you twice: fewer clean observations per pixel AND
+Look closely at what each mask kept. The SCL result retains more area,
+but bright cloud fragments are embedded in it, and patches of
+perfectly clear city have been thrown away; OmniCloudMask keeps the
+genuinely clear corridors and removes cloud and shadow together. Over
+a stack this costs SCL twice: fewer clean observations per pixel AND
 contaminated ones sneaking into what remains.
 
 ## The composite is where it counts
@@ -164,8 +195,8 @@ contaminated ones sneaking into what remains.
 Median-composite the two masked stacks. Residual cloud pulls a median
 towards bright; residual shadow pulls it dark; a good mask is the
 difference between a milky composite and a clean one. (Both routes are
-one graph each: reads, per-scene CNN inference, masking, and the median
-fuse and execute together.)
+one graph each over the local cubes: reads, per-scene CNN inference,
+masking, and the median fuse and execute together.)
 
 ```{r ocm-composites, fig.height = 4, message = FALSE}
 comp_of <- function(md) collect(
@@ -174,9 +205,11 @@ comp_of <- function(md) collect(
 scl_comp <- comp_of(scl_masked)
 ocm_comp <- comp_of(ocm_masked)
 
-par(mfrow = c(1, 2), mar = c(0.5, 0.5, 2, 0.5))
-plot_rgb(scl_comp, "median of SCL-masked")
-plot_rgb(ocm_comp, "median of OCM-masked")
+par(mfrow = c(1, 2))
+preview(scl_comp, main = "median of SCL-masked", axes = FALSE,
+        na_col = "#eb4310")
+preview(ocm_comp, main = "median of OCM-masked", axes = FALSE,
+        na_col = "#eb4310")
 ```
 
 ```{r ocm-cleanup, include = FALSE}
@@ -190,9 +223,10 @@ observations per pixel, which matters everywhere upstream of a
 composite, a time series, or a classification.
 
 Two closing notes. First, everything here ran as ordinary garry graph
-stages: the CNN is subject to the same planning, chunking, halo, and
-distribution as any focal or reduction, and on a time series the
-per-scene inferences pipeline across the daemon pool while reads drain.
-Second, for composites the natural next step is the multivariate route:
-`reduce_over(cube, geomedian(), over = "t")` on the OCM-masked stack
-gives spectra no per-band median can (see the composite vignette).
+stages over locally materialised cubes: the CNN is subject to the same
+planning, chunking, halo, and distribution as any focal or reduction,
+and on a time series the per-scene inferences pipeline across the
+daemon pool. Second, for composites the natural next step is the
+multivariate route: `reduce_over(cube, geomedian(), over = "t")` on the
+OCM-masked stack gives spectra no per-band median can (see the
+composite vignette).

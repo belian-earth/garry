@@ -135,7 +135,8 @@ NULL
 .plot_array <- function(arr, grid = NULL, bands = NULL, stretch = c(2, 98),
                         col = grDevices::hcl.colors(64, "Viridis"),
                         legend = NULL, main = "", axes = TRUE,
-                        xlab = "", ylab = "", interpolate = TRUE) {
+                        xlab = "", ylab = "", interpolate = TRUE,
+                        na_col = NULL) {
   nb_avail <- if (length(dim(arr)) == 3L) dim(arr)[[3L]] else 1L
   if (is.null(bands)) bands <- if (nb_avail >= 3L) 1:3 else 1L
   if (!length(bands) %in% c(1L, 3L))
@@ -151,6 +152,13 @@ NULL
     built <- .pv_band_raster(band1(), col, stretch)
   } else {
     built <- list(ras = .pv_rgb_raster(arr, bands, stretch), disc = NULL, mm = NULL)
+  }
+  if (!is.null(na_col)) {
+    # nodata renders as this colour instead of transparent (e.g. to
+    # make a mask's footprint visible against a white page)
+    r <- built$ras
+    r[is.na(r)] <- na_col
+    built$ras <- r
   }
   if (is.null(legend)) legend <- length(bands) == 1L
   if (legend && length(bands) != 1L) legend <- FALSE
@@ -329,13 +337,15 @@ NULL
 #' @param legend Draw a legend? Defaults to `TRUE` for single band, `FALSE` for
 #'   RGB.
 #' @param main,axes,xlab,ylab Plot title, axes toggle, and axis labels.
+#' @param na_col Colour for nodata pixels, or `NULL` (default) to leave
+#'   them transparent. Useful to make a mask's footprint explicit.
 #' @param ... Unused.
 #' @return `x`, invisibly.
 #' @export
 preview <- function(x, bands = NULL, max_px = NULL, stretch = c(2, 98),
                     col = grDevices::hcl.colors(64, "Viridis"),
                     legend = NULL, main = "", axes = TRUE, xlab = "", ylab = "",
-                    ...) {
+                    na_col = NULL, ...) {
   target <- .pv_target(max_px)
   orig <- x
   grid <- NULL
@@ -359,6 +369,7 @@ preview <- function(x, bands = NULL, max_px = NULL, stretch = c(2, 98),
                          "a matrix/array, or a file path."))
   }
   .plot_array(arr, grid = grid, bands = bands, stretch = stretch, col = col,
-              legend = legend, main = main, axes = axes, xlab = xlab, ylab = ylab)
+              legend = legend, main = main, axes = axes, xlab = xlab, ylab = ylab,
+              na_col = na_col)
   invisible(orig)
 }
