@@ -56,6 +56,10 @@ test_that("a distributed run still completes with a tiny memory fraction", {
   old <- options(garry.exec_ram_fraction = 1e-6,
                  garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
-  got <- suppressMessages(collect(out, distributed = TRUE))
+  # The single-chunk-over-budget warning ("will run one at a time") is
+  # this test's INTENDED regime, but whether it fires depends on the
+  # machine's free RAM (the budget floor is a fraction of it), so
+  # tolerate rather than expect it.
+  got <- suppressWarnings(suppressMessages(collect(out, distributed = TRUE)))
   expect_equal(got, mem, tolerance = 1e-6)
 })
