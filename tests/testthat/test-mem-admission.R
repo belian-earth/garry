@@ -63,3 +63,24 @@ test_that("a distributed run still completes with a tiny memory fraction", {
   got <- suppressWarnings(suppressMessages(collect(out, distributed = TRUE)))
   expect_equal(got, mem, tolerance = 1e-6)
 })
+
+test_that("Darwin reclaimable-memory parser reads vm_stat shapes", {
+  lines <- c(
+    "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+    "Pages free:                               10000.",
+    "Pages active:                            200000.",
+    "Pages inactive:                          150000.",
+    "Pages speculative:                        20000.",
+    "Pages throttled:                              0.",
+    "Pages wired down:                         90000.",
+    "Pages purgeable:                          30000.")
+  got <- garry:::.garry_darwin_avail_mb(lines)
+  # (10000 + 150000 + 20000 + 30000) * 16384 / 2^20
+  expect_equal(got, 210000 * 16384 / 2^20, tolerance = 1e-9)
+  # malformed inputs degrade to NA, never error
+  expect_true(is.na(garry:::.garry_darwin_avail_mb(character(0))))
+  expect_true(is.na(garry:::.garry_darwin_avail_mb(c("nonsense", "lines"))))
+  expect_true(is.na(garry:::.garry_darwin_avail_mb(
+    c("Mach Virtual Memory Statistics: (page size of 16384 bytes)",
+      "Pages wired down: 100."))))
+})

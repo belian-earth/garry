@@ -50,16 +50,51 @@ NULL
   max(0, (mx - cur) / 2^20)
 }
 
+# macOS reclaimable memory in MB via vm_stat, NA elsewhere or on parse
+# failure. Darwin keeps truly-FREE pages near zero by design (file
+# cache and inactive pages fill RAM), so memuse's freeram reads ~0.1 GB
+# on an idle 7 GB machine and every garry budget clamps to its floor
+# (measured on CI: the whole distributed suite serialised chunk-by-
+# chunk and blew the 60-minute test budget at 28 min of CPU). The
+# honest figure is free + inactive + speculative + purgeable: all
+# reclaimable on demand. `lines` is injectable for off-platform tests.
+.garry_darwin_avail_mb <- function(lines = NULL) {
+  if (is.null(lines)) {
+    if (!identical(Sys.info()[["sysname"]], "Darwin")) return(NA_real_)
+    lines <- tryCatch(system2("vm_stat", stdout = TRUE, stderr = FALSE),
+                      error = function(e) character(0))
+  }
+  if (length(lines) < 2L) return(NA_real_)
+  ps <- suppressWarnings(as.numeric(
+    sub(".*page size of (\\d+) bytes.*", "\\1", lines[[1L]])))
+  if (!is.finite(ps) || ps <= 0) return(NA_real_)
+  page_of <- function(key) {
+    ln <- grep(paste0("^Pages ", key, ":"), lines, value = TRUE)
+    if (!length(ln)) return(0)
+    v <- suppressWarnings(as.numeric(gsub("[^0-9]", "", ln[[1L]])))
+    if (is.finite(v)) v else 0
+  }
+  pages <- page_of("free") + page_of("inactive") +
+    page_of("speculative") + page_of("purgeable")
+  if (pages <= 0) return(NA_real_)
+  pages * ps / 2^20
+}
+
 # Available RAM in MB, as the MINIMUM of what the machine reports free and
 # what this process's cgroup still allows. memuse supplies the machine
-# figure portably (Linux/macOS/Windows/BSD); the cgroup term is what makes
-# the answer meaningful inside a container, systemd scope or SLURM step,
-# where the machine figure can be tens of GB while this process is a
-# breath from its own limit. NA when neither can be determined.
+# figure portably (Linux/Windows/BSD); on macOS the vm_stat reclaimable
+# figure replaces memuse's misleading freeram (see above). The cgroup
+# term is what makes the answer meaningful inside a container, systemd
+# scope or SLURM step, where the machine figure can be tens of GB while
+# this process is a breath from its own limit. NA when neither can be
+# determined.
 .garry_ram_avail_mb <- function() {
-  host <- tryCatch(
-    as.numeric(memuse::Sys.meminfo()$freeram) / 2^20,
-    error = function(e) NA_real_)
+  host <- .garry_darwin_avail_mb()
+  if (!is.finite(host)) {
+    host <- tryCatch(
+      as.numeric(memuse::Sys.meminfo()$freeram) / 2^20,
+      error = function(e) NA_real_)
+  }
   if (length(host) != 1L || !is.finite(host)) host <- NA_real_
   cg <- .garry_cgroup_avail_mb()
   if (is.na(cg)) host else if (is.na(host)) cg else min(host, cg)

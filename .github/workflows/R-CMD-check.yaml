@@ -34,11 +34,11 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       PJRT_INSTALL: "1"          # let pjrt fetch the CPU plugin non-interactively
-      # Kill a hung test run instead of stalling: the suite takes ~15-30
-      # min per platform, so 60 min means a hang. R kills the process and
-      # the check fails with the partial testthat.Rout in the artifact,
-      # which names the stalled test.
-      _R_CHECK_TESTS_ELAPSED_TIMEOUT_: "3600"
+      # Kill a hung test run instead of stalling: R kills the process and
+      # the check fails with the partial testthat.Rout in the artifact.
+      # 90 min: the suite runs ~30-55 min per platform (macOS slowest on
+      # 3 cores), so this only fires on a genuine wedge.
+      _R_CHECK_TESTS_ELAPSED_TIMEOUT_: "5400"
 
     steps:
       - uses: actions/checkout@v6
