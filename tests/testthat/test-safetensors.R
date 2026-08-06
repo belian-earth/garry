@@ -47,6 +47,7 @@ test_that("safetensors_read round-trips torch index order", {
 
 test_that("BN folding equals conv-then-batchnorm (torch referee)", {
   skip_if_not_installed("torch")
+  skip_if(!torch::torch_is_installed(), "libtorch not installed")
   skip_if_not_installed("anvl")
   set.seed(2)
   co <- 5L; ci <- 3L
