@@ -99,6 +99,29 @@ test_that("the two-model ensemble matches Python OCM exactly", {
   expect_gte(mean(cls[ok] == am[ok]), 0.999)
 })
 
+test_that("CUDA inference equals the CPU classes", {
+  skip_if(!file.exists(.ocm_fixture), "golden fixture not present")
+  skip_if(!dir.exists(.ocm_wdir), "OCM weights not present")
+  skip_on_os(c("windows", "mac"))
+  skip_if(!nzchar(Sys.which("nvidia-smi")), "no NVIDIA GPU")
+  skip_if(!nzchar(Sys.getenv("GARRY_OCM_CUDA")),
+          "set GARRY_OCM_CUDA=1 to run (~1 min XLA CUDA compile)")
+
+  fx <- safetensors_read(.ocm_fixture)
+  wl <- ocm_load_weights(.ocm_wdir, models = "regnety")
+  x <- fx$input
+  x[x == 0] <- NaN
+  cpu <- garry:::.ocm_infer(x, wl$weights)
+  jf <- g_jit(function(inputs) garry:::.ocm_infer(inputs[[1L]], wl$weights),
+              device = "cuda")
+  gpu <- g_download(jf(list(g_upload(x, "f32", device = "cuda"))))
+  expect_identical(is.na(gpu), is.na(cpu))
+  ok <- !is.na(cpu)
+  # conv reassociation differs across backends; borderline logits can
+  # flip a class on isolated pixels
+  expect_gte(mean(gpu[ok] == cpu[ok]), 0.999)
+})
+
 test_that("non-/32 window sizes pad and trim transparently", {
   skip_if(!file.exists(.ocm_fixture), "golden fixture not present")
   skip_if(!dir.exists(.ocm_wdir), "OCM weights not present")

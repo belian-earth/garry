@@ -60,17 +60,19 @@ ocm_model <- function(weights_dir = NULL,
                          models = models)
   weights <- wl$weights
   fn <- function(x) .ocm_infer(x, weights)
-  # Kernel pricing (calibration pass pending): a U-Net's live
-  # activations peak around the full-resolution decoder tail (~48
-  # channels of f32) plus XLA slack, inflated by the padded-window
-  # ratio at ~1000 px chunks; flops are dominated by the decoder's
-  # full-resolution 3x3 convs (~3-4e4/px per model).
+  # Kernel pricing, calibrated 2026-08-06 against VmHWM deltas of the
+  # warm two-model kernel at 640/1280/1920 px windows on the CPU PJRT
+  # client: marginal ~610-700 B/px for the ensemble (decreasing with
+  # window size), plus ~1.2 GB fixed per process (weights + compile
+  # arenas) that amortises over the chunk and is corrected at run time
+  # by the fleet RSS measurement. flops from the full-resolution
+  # decoder tail, ~3-4e4/px per model.
   structure(list(
     fn = fn,
     kernel_id = paste0("ocm-", wl$kernel_id, "-",
                        paste(models, collapse = "+")),
     halo = halo,
-    bytes_px = 800 * length(models),
+    bytes_px = 350 * length(models),
     flops_px = 4e4 * length(models),
     models = models
   ), class = "garry_ocm_model")

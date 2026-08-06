@@ -1041,6 +1041,17 @@ plan_lazy <- function(x) {
   }, numeric(1))
   px_cap <- garry_opt("ram_budget_mb") * 2^20 / max(bytes_per_px)
   target <- max(1, min(garry_opt("chunk_target_px"), px_cap))
+  # A patch (model) stage wants the LARGEST chunk the RAM budget
+  # allows: its kernel already saturates the machine, so intra-scene
+  # chunk parallelism adds only dispatch and halo-recompute overhead
+  # (measured: 2.1x recompute at ~580 px chunks under a 128 px halo).
+  # An explicitly set chunk_target_px still wins (tests, tuning).
+  has_patch <- any(vapply(protos, function(s)
+    any(vapply(s$members, function(id)
+      S7::S7_inherits(graph_get(graph, id), PatchNode), logical(1))),
+    logical(1)))
+  if (has_patch && is.null(getOption("garry.chunk_target_px")))
+    target <- max(1, px_cap)
   side <- max(1L, as.integer(floor(sqrt(target))))
 
   blocks <- lapply(protos, function(s) .stage_block(graph, protos, s))
