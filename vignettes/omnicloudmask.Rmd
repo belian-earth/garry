@@ -37,11 +37,6 @@ Sentinel-2's scene classification (SCL) all the way to the composite.
 
 ## A deliberately awful stack of scenes
 
-SCL rides along as an ordinary band here (not the dataset's
-`mask_asset`), because we want to compare masking routes rather than
-commit to one; the named `resampling` keeps its class codes exact
-while the reflectance bands interpolate.
-
 
 ``` r
 library(garry)
@@ -61,9 +56,9 @@ length(items$features)
 remote <- lazy_dataset(
   items, grid = grid_from_bbox(bbox, res = 10),
   assets = c("B02", "B03", "B04", "B08", "SCL"),
+  mask_asset = "SCL",
   nodata = c(B02 = 0, B03 = 0, B04 = 0, B08 = 0, SCL = 0),
-  resampling = c(B02 = "bilinear", B03 = "bilinear", B04 = "bilinear",
-                 B08 = "bilinear", SCL = "near")
+  resampling = "bilinear"                # the mask band always reads near
 )
 ```
 
@@ -71,44 +66,20 @@ remote <- lazy_dataset(
 
 Everything below reads every band of every scene more than once: two
 masking routes, per-date looks, and two composites. Rather than pull
-the pixels from the Planetary Computer each time, materialise the
-warped stack locally first. A `.vrt` destination writes garry's
-raw-BSQ cube format: band-sequential f32 planes in a `.bin` beside a
-plain VRT that any GDAL tool reads, while garry's own reader
-recognises the shape and reads the bin directly (about 9x faster than
-tiled GeoTIFF on repeat reads). `group_by_time()` splits the dataset
-by day and `{group}` in the path names one file per date.
+the pixels from the Planetary Computer each time, checkpoint the
+warped stack locally: `materialise()` executes the graph into garry's
+raw-BSQ cube format (one multiband `.vrt` + `.bin` per date, readable
+by any GDAL tool and re-read by garry about 9x faster than tiled
+GeoTIFF) through ONE plan, and returns the same lazy dataset rebuilt
+over the local files with band names, slice dates, and the
+`mask_asset` intact. From here on, nothing touches the network.
 
 
 ``` r
 garry_daemons()
 
-dir <- file.path(tempdir(), "zurich")
-dir.create(dir, showWarnings = FALSE)
-remote |>
-  group_by_time("day") |>
-  collect(path = file.path(dir, "zurich-{group}.vrt"))
-basename(list.files(dir, pattern = "\\.vrt$"))
-#> [1] "zurich-2024-04-05.vrt" "zurich-2024-04-08.vrt" "zurich-2024-04-30.vrt"
-#> [4] "zurich-2024-05-10.vrt" "zurich-2024-05-13.vrt" "zurich-2024-05-18.vrt"
-#> [7] "zurich-2024-05-20.vrt" "zurich-2024-05-25.vrt" "zurich-2024-05-28.vrt"
-```
-
-From here on, nothing touches the network. Rebuild the dataset from
-the local cubes (band order and slice dates carry through), and this
-time declare SCL as the `mask_asset`:
-
-
-``` r
-files <- sort(list.files(dir, pattern = "\\.vrt$", full.names = TRUE))
-dates <- sub(".*zurich-(.*)\\.vrt$", "\\1", files)
-g <- graph_new()
-band_i <- function(b) stats::setNames(
-  lapply(files, function(f) lazy_source(f, band = b, graph = g)), dates)
-ds <- as_dataset(
-  list(B02 = band_i(1), B03 = band_i(2), B04 = band_i(3),
-       B08 = band_i(4), SCL = band_i(5)),
-  mask_asset = "SCL")
+ds <- materialise(remote, file.path(tempdir(), "zurich"),
+                  name = "zurich")
 ds
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
 #>   bands  B02 B03 B04 B08  (+SCL)
@@ -132,8 +103,8 @@ m
 #> $fn
 #> function (x) 
 #> .ocm_infer(x, weights)
-#> <bytecode: 0x5e105d9afde8>
-#> <environment: 0x5e105d9af918>
+#> <bytecode: 0x575df53f27a8>
+#> <environment: 0x575df53f22d8>
 #> 
 #> $kernel_id
 #> [1] "ocm-6709c94dbdec4de35b51a4a36ccd4e6a-regnety+edgenext"
@@ -161,6 +132,7 @@ collects it.
 
 
 ``` r
+dates <- ds[["B04"]]@grid@labels$t       # slice dates rode through
 i <- match("2024-05-25", dates)          # cumulus towers + hard shadows
 
 slice <- function(band) time_sel(ds[[band]], i)

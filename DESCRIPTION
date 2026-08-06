@@ -72,6 +72,7 @@ Collate:
     'gradient.R'
     'grid_from.R'
     'lazy_cog.R'
+    'materialise.R'
     'ocm.R'
     'ocm_blocks.R'
     'ocm_edgenext.R'
