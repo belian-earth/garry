@@ -17,12 +17,13 @@ Imports:
     S7,
     cli,
     codetools,
-    gdalraster,
+    gdalraster (>= 2.6.1.9001),
     memuse,
     methods,
     rlang
 Remotes:
     hypertidy/vaster,
+    firelab/gdalraster,
     belian-earth/anvl@nv-scan,
     belian-earth/cptkirk
 Additional_repositories:
