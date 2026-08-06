@@ -279,3 +279,69 @@ FusedNode <- S7::new_class(
     halo    = S7::class_integer
   )
 )
+
+#' Whole-window model op: fn over the raw padded chunk. Halo-consuming.
+#'
+#' The stencil shape for kernels whose spatial context is far beyond a
+#' shift-list focal (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
+#' receives the parent's value carrying at least `radius` halo cells per
+#' side (a `(C, H, W)` cube, traced or plain) and returns a
+#' SIZE-PRESERVING result on the same spatial dims, deriving every size
+#' from the input shape (chunk shapes vary); the evaluator crops the
+#' `radius` ring afterwards, exactly as focal shifts consume theirs.
+#' Output rank: 2 when `out_bands == 0` (the band axis is consumed),
+#' else 3 with a leading band axis of length `out_bands`.
+#'
+#' `kernel_id` is the content identity of the closed-over model (weights
+#' + configuration): the scheduler hashes it INSTEAD of serializing `fn`
+#' (a model closure can carry tens of MB). `bytes_px` / `flops_px` are
+#' planner cost hints per CORE pixel; they price chunk sizing, memory
+#' admission, and placement, which cannot introspect an arbitrary model
+#' closure.
+#'
+#' @param id Integer node id (assigned by `graph_add()`).
+#' @param parents Integer ids of parent nodes (length 1).
+#' @param grid Output `GridSpec` of this node.
+#' @param fn The model body `fn(xpad)`.
+#' @param radius Halo consumed per side, pixels.
+#' @param out_bands Output band count; 0 drops the band axis.
+#' @param dtype Length-0 (parent's dtype) or length-1 dtype override.
+#' @param kernel_id Content hash standing in for `fn` in kernel
+#'   signatures.
+#' @param bytes_px Resident working-set estimate, bytes per core pixel.
+#' @param flops_px Compute estimate, flops per core pixel.
+#' @return A `PatchNode`.
+#' @export
+PatchNode <- S7::new_class(
+  "PatchNode",
+  parent = Node,
+  properties = list(
+    fn        = S7::class_function,
+    radius    = S7::class_integer,
+    out_bands = S7::class_integer,
+    dtype     = S7::class_character,
+    kernel_id = S7::class_character,
+    bytes_px  = S7::class_numeric,
+    flops_px  = S7::class_numeric
+  ),
+  validator = function(self) {
+    if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 1L)
+      return("`radius` must be a positive integer")
+    if (length(self@out_bands) != 1L || is.na(self@out_bands) ||
+        self@out_bands < 0L)
+      return("`out_bands` must be a non-negative integer")
+    if (length(self@dtype) > 1L ||
+        (length(self@dtype) == 1L && !dtype_valid(self@dtype)))
+      return(paste0("`dtype` must be empty or one of: ",
+                    paste(.garry_dtypes, collapse = ", ")))
+    if (length(self@kernel_id) != 1L || !nzchar(self@kernel_id))
+      return("`kernel_id` must be a non-empty string")
+    if (length(self@bytes_px) != 1L || !is.finite(self@bytes_px) ||
+        self@bytes_px < 0)
+      return("`bytes_px` must be a finite non-negative number")
+    if (length(self@flops_px) != 1L || !is.finite(self@flops_px) ||
+        self@flops_px < 0)
+      return("`flops_px` must be a finite non-negative number")
+    NULL
+  }
+)

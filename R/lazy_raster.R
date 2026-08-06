@@ -488,6 +488,58 @@ shrink_footprint <- function(x, radius = 1L, bands = NULL) {
         fn = function(sh) sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh))
 }
 
+#' Whole-window model op (advanced): apply `fn` to the raw padded chunk.
+#'
+#' The escape hatch behind model-inference verbs such as `ocm_mask()`:
+#' where [focal()] materialises a shift list (unusable beyond small
+#' radii), a patch op hands `fn` the raw window carrying `radius` halo
+#' cells per side and crops the contaminated ring off the result. `fn`
+#' must be size-preserving on the last two (spatial) dims, derive every
+#' size from its input's shape, be written in the `g_*` vocabulary, and
+#' reduce the leading band axis to `out_bands` channels (0 = a plain
+#' 2D result). Not differentiable.
+#'
+#' `kernel_id` stands in for `fn` in kernel signatures: give two calls
+#' the same id ONLY if their fns are interchangeable (same weights,
+#' same code). `bytes_px`/`flops_px` price the kernel for chunk sizing,
+#' memory admission, and placement, which cannot introspect `fn`.
+#'
+#' @param x A `LazyRaster` (typically a `(band, y, x)` stack).
+#' @param fn Model body `fn(xpad)`, size-preserving.
+#' @param radius Halo consumed per side, pixels.
+#' @param out_bands Output band count; 0 drops the band axis.
+#' @param dtype Output dtype (default `"f32"`).
+#' @param kernel_id Content identity of the closed-over model.
+#' @param bytes_px Working-set estimate, bytes per core pixel.
+#' @param flops_px Compute estimate, flops per core pixel.
+#' @return A `LazyRaster` on the spatial grid (plus `out_bands` bands).
+#' @export
+lazy_patch <- function(x, fn, radius, out_bands = 0L, dtype = "f32",
+                       kernel_id, bytes_px = 512, flops_px = 1e4) {
+  .assert_class(x, LazyRaster, "LazyRaster")
+  node_tmp <- PatchNode(id = 0L, parents = x@node_id, grid = x@grid, fn = fn,
+                        radius = as.integer(radius),
+                        out_bands = as.integer(out_bands),
+                        dtype = dtype, kernel_id = as.character(kernel_id),
+                        bytes_px = as.numeric(bytes_px),
+                        flops_px = as.numeric(flops_px))
+  grid <- output_grid(node_tmp, list(x@grid))
+  id <- graph_add(
+    x@graph,
+    PatchNode,
+    parents   = x@node_id,
+    grid      = grid,
+    fn        = fn,
+    radius    = as.integer(radius),
+    out_bands = as.integer(out_bands),
+    dtype     = dtype,
+    kernel_id = as.character(kernel_id),
+    bytes_px  = as.numeric(bytes_px),
+    flops_px  = as.numeric(flops_px)
+  )
+  LazyRaster(graph = x@graph, node_id = id, grid = grid)
+}
+
 #' A bilateral (edge-preserving) focal body for [focal()].
 #'
 #' Returns a focal `fn(shifts)` computing the classic bilateral filter:

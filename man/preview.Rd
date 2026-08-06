@@ -15,6 +15,7 @@ preview(
   axes = TRUE,
   xlab = "",
   ylab = "",
+  na_col = NULL,
   ...
 )
 }
@@ -38,6 +39,9 @@ for min/max.}
 RGB.}
 
 \item{main, axes, xlab, ylab}{Plot title, axes toggle, and axis labels.}
+
+\item{na_col}{Colour for nodata pixels, or \code{NULL} (default) to leave
+them transparent. Useful to make a mask's footprint explicit.}
 
 \item{...}{Unused.}
 }

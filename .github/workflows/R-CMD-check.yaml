@@ -34,11 +34,11 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       PJRT_INSTALL: "1"          # let pjrt fetch the CPU plugin non-interactively
-      # Kill a hung test run instead of stalling: the suite takes ~15-30
-      # min per platform, so 60 min means a hang. R kills the process and
-      # the check fails with the partial testthat.Rout in the artifact,
-      # which names the stalled test.
-      _R_CHECK_TESTS_ELAPSED_TIMEOUT_: "3600"
+      # Kill a hung test run instead of stalling: R kills the process and
+      # the check fails with the partial testthat.Rout in the artifact.
+      # 90 min: the suite runs ~30-55 min per platform (macOS slowest on
+      # 3 cores), so this only fires on a genuine wedge.
+      _R_CHECK_TESTS_ELAPSED_TIMEOUT_: "5400"
 
     steps:
       - uses: actions/checkout@v6
@@ -74,11 +74,14 @@ jobs:
           extra-packages: any::rcmdcheck
           needs: check
 
-      # Force a source build so gdalraster links the recent system GDAL above
-      # (the binary from CRAN/P3M is compiled against an older one).
-      - name: Rebuild gdalraster from source (macOS/Linux)
+      # Force a source rebuild of DEV gdalraster against the recent
+      # system GDAL above: garry needs >= 2.6.1.9001 (exported
+      # get_data_ptr, the DESCRIPTION Remotes pin), and pak's cache can
+      # otherwise serve a build linked against a since-upgraded GDAL.
+      # Windows keeps whatever the Remotes pin installed (Rtools GDAL).
+      - name: Rebuild dev gdalraster from source (macOS/Linux)
         if: runner.os != 'Windows'
-        run: Rscript -e "install.packages('gdalraster', type = 'source', repos = 'https://cloud.r-project.org')"
+        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster', force = TRUE)"
 
       - name: Print GDAL version
         run: Rscript -e "cat('GDAL:', gdalraster::gdal_version()[[1]], '\n')"

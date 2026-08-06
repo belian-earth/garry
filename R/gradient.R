@@ -130,6 +130,9 @@ NULL
     if (S7::S7_inherits(node, ScanNode))
       .garry_error("scans on the gradient tape are not supported (anvl's while loop has no reverse rule)",
                    "garry_grad_unsupported_error")
+    if (S7::S7_inherits(node, PatchNode))
+      .garry_error("patch kernels (model inference) are not differentiable",
+                   "garry_grad_unsupported_error")
   }
 
   if (!wrt@node_id %in% compute@members)

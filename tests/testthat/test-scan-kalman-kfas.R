@@ -299,3 +299,31 @@ test_that("robust traced (PJRT) body matches the untraced oracle", {
   expect_identical(is.na(traced), is.na(untraced))
   expect_lt(max(abs(traced - untraced), na.rm = TRUE), 1e-3)
 })
+
+test_that("mean+sd collect as ONE multi-sink plan, scans sharing a stage", {
+  skip_if_not_installed("anvl")
+  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
+  f <- fixture_gradient_f32()
+  g <- graph_new(); s <- function(k) lazy_source(f, graph = g) * k
+  stk <- lazy_stack(list(a = s(1), b = s(2), c = s(3), d = s(4)),
+                    along = "t")
+  sm <- kalman_smooth(stk, sigma_lvl = 1, sigma_slp = 0.1, sigma_obs = 2)
+
+  # sibling scans share one compute stage (multi-export-collect.md s5):
+  # the forward filter dedupes inside one kernel (measured 1.59x for
+  # the pair vs 2x as separate stages/collects)
+  p <- plan_lazy(sm)
+  scan_stages <- Filter(function(st) any(vapply(st@members, function(id)
+    S7::S7_inherits(graph_get(p@graph, id), garry::ScanNode), TRUE)),
+    p@stages)
+  expect_length(scan_stages, 1L)
+  expect_length(p@sinks, 2L)
+
+  # one collect returns both, equal to the separate collects
+  both <- collect(sm, distributed = FALSE)
+  expect_identical(names(both), c("mean", "sd"))
+  expect_equal(both$mean, collect(sm$mean, distributed = FALSE),
+               tolerance = 1e-6)
+  expect_equal(both$sd, collect(sm$sd, distributed = FALSE),
+               tolerance = 1e-6)
+})

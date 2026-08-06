@@ -51,6 +51,24 @@ NULL
   )
 }
 
+# Halo a node consumes from its (single) padded input: focal shifts and
+# patch kernels eat their radius ring; everything else passes padding
+# through untouched. The pad walks (runtime and static) key off this.
+.halo_consumed <- function(node) {
+  if (S7::S7_inherits(node, FocalNode)) return(node@radius)
+  if (S7::S7_inherits(node, PatchNode)) return(node@radius)
+  0L
+}
+
+# Does this node make its stage a NARROW halo stage (no new external
+# inputs fused in; see the has_focal fusion guard)? Unweighted focals
+# and patch kernels; weighted (differentiable) focals are exempt
+# because the v1 gradient tape needs the whole loss in one stage.
+.node_halo_narrow <- function(node) {
+  (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L) ||
+    S7::S7_inherits(node, PatchNode)
+}
+
 # Evaluate one IR node given its parent chunk values. Focal members
 # consume `radius` cells of padding via shifted slices (halo contract in
 # plan.R), so array shapes track the remaining pad implicitly.
@@ -75,6 +93,15 @@ NULL
     } else {
       node@fn(shifts)
     }
+  } else if (S7::S7_inherits(node, PatchNode)) {
+    # fn is size-preserving on the padded window; the evaluator trims
+    # the consumed halo ring, mirroring the focal shift contract.
+    x <- pv[[1L]]
+    r <- node@radius
+    sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
+    nr <- sh[[length(sh) - 1L]] - 2L * r
+    nc <- sh[[length(sh)]] - 2L * r
+    g_shift_slice(node@fn(x), 0L, 0L, nr, nc, r)
   } else if (S7::S7_inherits(node, StackNode)) {
     g_stack(pv)
   } else if (S7::S7_inherits(node, ReduceNode)) {
@@ -199,8 +226,9 @@ NULL
       pv <- lapply(node@parents, function(p) get(.key(p), envir = vals))
       pp <- vapply(node@parents, function(p) get(.key(p), envir = pads),
                    integer(1))
-      if (S7::S7_inherits(node, FocalNode)) {
-        out_pad <- pp[[1L]] - node@radius
+      hc <- .halo_consumed(node)
+      if (hc > 0L) {
+        out_pad <- pp[[1L]] - hc
       } else {
         out_pad <- min(pp)
         pv <- Map(function(v, d) .trim_to_pad(v, d - out_pad), pv,
@@ -229,8 +257,8 @@ NULL
     node <- graph_get(graph, id)
     pp <- vapply(node@parents, function(p) get(.key(p), envir = pads),
                  integer(1))
-    out <- if (S7::S7_inherits(node, FocalNode)) pp[[1L]] - node@radius
-           else min(pp)
+    hc <- .halo_consumed(node)
+    out <- if (hc > 0L) pp[[1L]] - hc else min(pp)
     assign(.key(id), as.integer(out), envir = pads)
   }
   vapply(exports, function(e) get(.key(e), envir = pads), integer(1))
@@ -598,12 +626,12 @@ plan_lazy <- function(x) {
                       vapply(parents, function(p) node_stage[[.key(p)]],
                              integer(1)),
                       parents,
-                      has_focal = S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+                      has_focal = .node_halo_narrow(node))
           next
         }
         # Fuse into the single open compute ancestor.
         protos[[sid]]$members <- c(protos[[sid]]$members, id)
-        if (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+        if (.node_halo_narrow(node))
           protos[[sid]]$has_focal <- TRUE
         if (length(ext) > 0L) {
           ext_sids <- vapply(ext, function(p) node_stage[[.key(p)]],
@@ -634,11 +662,11 @@ plan_lazy <- function(x) {
           node_stage[[.key(id)]] <-
             new_proto("compute", id, .node_grid(node), parent_sids,
                       parents,
-                      has_focal = S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+                      has_focal = .node_halo_narrow(node))
         } else {
           sid <- joinable$id
           protos[[sid]]$members <- c(protos[[sid]]$members, id)
-          if (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+          if (.node_halo_narrow(node))
             protos[[sid]]$has_focal <- TRUE
           protos[[sid]]$input_nodes <-
             unique(c(protos[[sid]]$input_nodes, parents))
@@ -650,7 +678,7 @@ plan_lazy <- function(x) {
         node_stage[[.key(id)]] <-
           new_proto("compute", id, .node_grid(node), parent_sids,
                     parents,
-                    has_focal = S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L)
+                    has_focal = .node_halo_narrow(node))
       }
     }
   }
@@ -916,7 +944,14 @@ plan_lazy <- function(x) {
     cubes <- if (identical(n@direction, "bidir")) 20 else 7
     8 * cubes * max(1, prod(d[!names(d) %in% c("x", "y")]))
   }, numeric(1))))
-  8 * outer_max + 8 * max(1, in_px) + 16 + scan_px
+  # A patch kernel (model inference) declares its own working set: the
+  # planner cannot introspect an arbitrary model closure, and an
+  # unpriced model is exactly the AEF-MLP OOM failure mode.
+  patch_px <- max(c(0, vapply(members, function(id) {
+    n <- graph_get(graph, id)
+    if (S7::S7_inherits(n, PatchNode)) n@bytes_px else 0
+  }, numeric(1))))
+  8 * outer_max + 8 * max(1, in_px) + 16 + scan_px + patch_px
 }
 
 # Per-pixel COMPUTE estimate for one stage's kernel, in flops. The
@@ -934,6 +969,7 @@ plan_lazy <- function(x) {
   sum(vapply(members, function(id) {
     n <- graph_get(graph, id)
     if (S7::S7_inherits(n, FocalNode)) return((2 * n@radius + 1)^2)
+    if (S7::S7_inherits(n, PatchNode)) return(n@flops_px)
     if (S7::S7_inherits(n, ScanNode)) return(NA_real_)
     if (S7::S7_inherits(n, ReduceNode)) {
       if (!identical(n@op, "custom")) {
@@ -970,6 +1006,8 @@ plan_lazy <- function(x) {
   for (id in members) {
     n <- graph_get(graph, id)
     if (identical(n@grid@dtype, "f64")) f64 <- TRUE
+    if (S7::S7_inherits(n, PatchNode))
+      maxw <- max(maxw, n@bytes_px / 4)
     if (S7::S7_inherits(n, ReduceNode) && identical(n@op, "custom") &&
         length(n@fn)) {
       w <- tryCatch(get("weights", envir = environment(n@fn[[1L]]),
@@ -1003,6 +1041,17 @@ plan_lazy <- function(x) {
   }, numeric(1))
   px_cap <- garry_opt("ram_budget_mb") * 2^20 / max(bytes_per_px)
   target <- max(1, min(garry_opt("chunk_target_px"), px_cap))
+  # A patch (model) stage wants the LARGEST chunk the RAM budget
+  # allows: its kernel already saturates the machine, so intra-scene
+  # chunk parallelism adds only dispatch and halo-recompute overhead
+  # (measured: 2.1x recompute at ~580 px chunks under a 128 px halo).
+  # An explicitly set chunk_target_px still wins (tests, tuning).
+  has_patch <- any(vapply(protos, function(s)
+    any(vapply(s$members, function(id)
+      S7::S7_inherits(graph_get(graph, id), PatchNode), logical(1))),
+    logical(1)))
+  if (has_patch && is.null(getOption("garry.chunk_target_px")))
+    target <- max(1, px_cap)
   side <- max(1L, as.integer(floor(sqrt(target))))
 
   blocks <- lapply(protos, function(s) .stage_block(graph, protos, s))

@@ -1,6 +1,6 @@
 # Design note: multi-export collect (one plan, many sinks)
 
-Status: **design, not started.** Written 2026-07-17, from the hutan
+Status: **v1 implemented** (named-list collect, multi-sink plans, per-sink streamed writes; sibling-barrier CSE of section 5 still open). Grouped collect routes through it since 2026-08-06 (network-pulse fix, ir-extensions-todo #5). Written 2026-07-17, from the hutan
 engine-comparison measurements (experiments/engine-cmp). Prerequisite for the
 single-graph SI pipeline: everything from MLP predict downstream as ONE
 garry graph with one execution.
@@ -98,6 +98,17 @@ steps:
    XLA's common-subexpression elimination collapses them. No new IR; a true
    multi-output ScanNode (emitting a named list, like `nv_scan`'s `out`)
    is the later, cleaner form if CSE proves insufficient — measure first.
+
+   MEASURED 2026-08-06: step 1 landed with the SI work (both ScanNodes
+   share one compute stage; regression-gated in test-scan-kalman-kfas).
+   Pair-in-one-kernel = 1.59x a single output (60x512x512 f32, warm) --
+   NOT a CSE failure: the forward filter DOES dedupe, but the two
+   backward RTS passes compute different quantities (smoothed mean vs
+   covariance), so ~1.6x is the shared-work floor. collect(sm) as one
+   multi-sink plan is therefore the shipped form (1.59x scan + one set
+   of overheads, vs 2x + two for separate collects; the time-series
+   vignette uses it). The remaining ~25% needs the multi-output
+   ScanNode emitting mean and sd from ONE backward pass -- open.
 
 ## 6. What this unlocks, in order
 

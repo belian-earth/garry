@@ -1,0 +1,107 @@
+#' @include dataset.R lazy_raster.R collect.R
+#' @keywords internal
+NULL
+
+# Refuse (or clear, with overwrite = TRUE) an existing .vrt/.bin pair.
+.mat_check_clear <- function(path, overwrite) {
+  bin <- sub("\\.vrt$", ".bin", path)
+  hit <- c(path, bin)[file.exists(c(path, bin))]
+  if (length(hit) && !overwrite)
+    cli::cli_abort(c(
+      "target already exists: {.path {hit[[1L]]}}.",
+      "i" = "pass {.code overwrite = TRUE} to replace it (the existing
+             file may hold pixels from an older graph)"))
+  unlink(c(path, bin))
+}
+
+#' Materialise a lazy object locally and stay lazy.
+#'
+#' The checkpoint verb (dbplyr's `compute()` for rasters): execute the
+#' current graph, write the results to local raw-BSQ cubes (`.vrt` +
+#' `.bin`, the format any GDAL tool reads and garry re-reads ~9x faster
+#' than tiled GeoTIFF), and return the SAME KIND of lazy object rebuilt
+#' over the local files. Everything downstream continues unchanged;
+#' nothing upstream (network reads, warps, masking, model inference)
+#' runs again.
+#'
+#' A `LazyDataset` writes one multiband cube per time slice through a
+#' single multi-sink plan (all slices' reads drain together), carrying
+#' band names, slice dates, and the `mask_asset` into the rebuilt
+#' dataset; ragged bands (a band missing some slices) survive. A
+#' `LazyRaster` writes one cube and reopens it, which is also the
+#' sanctioned route around the v1 "cannot warp a computed raster" rule:
+#' `align(materialise(x, dir), grid)`.
+#'
+#' Files land at `dir/name-<slice>.vrt` (dataset) or `dir/name.vrt`
+#' (raster). Existing files are refused unless `overwrite = TRUE`:
+#' the graph may have changed since they were written, and silently
+#' reusing stale pixels is the failure mode a checkpoint must not have.
+#'
+#' `dir` defaults to a fresh unique directory under the session's
+#' [tempdir()], announced by a message: convenient, but session-scoped
+#' (the files vanish when R exits), and every call writes a NEW copy,
+#' so repeated interactive re-runs accumulate until the session ends.
+#' For large cubes, or to keep or reuse a checkpoint, give a real
+#' directory (note some systems mount `/tmp` in RAM).
+#'
+#' @param x A `LazyDataset` or `LazyRaster`.
+#' @param dir Directory for the cubes (created if missing); default: a
+#'   unique session-temporary directory.
+#' @param name File-name stem (default `"garry"`).
+#' @param nodata Optional sentinel for the written files, as in
+#'   [collect()].
+#' @param overwrite Replace existing files at the target paths?
+#' @param distributed As in [collect()].
+#' @return A lazy object of the same class as `x`, reading the local
+#'   cubes.
+#' @export
+materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
+                        overwrite = FALSE,
+                        distributed = garry_daemons_set()) {
+  if (is.null(dir)) {
+    dir <- tempfile("materialise-")
+    cli::cli_inform("materialising to {.path {dir}} (session-temporary)")
+  }
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  if (S7::S7_inherits(x, LazyRaster)) {
+    path <- file.path(dir, paste0(name, ".vrt"))
+    .mat_check_clear(path, overwrite)
+    collect(x, path = path, nodata = nodata, distributed = distributed)
+    return(lazy_source(path))
+  }
+  .assert_class(x, LazyDataset, "LazyDataset")
+
+  slices <- unique(unlist(lapply(x@bands, names), use.names = FALSE))
+  if (is.null(slices) || !all(nzchar(slices)))
+    cli::cli_abort(c(
+      "the dataset's slices must be named (dates) to materialise.",
+      "i" = "unnamed layers cannot be matched back into a dataset"))
+  slices <- sort(slices)
+
+  # one sink per slice: the bands PRESENT on that date, stacked in the
+  # dataset's band order (ragged bands shrink their dates' cubes)
+  order_of <- lapply(stats::setNames(nm = slices), function(nm)
+    names(x@bands)[vapply(x@bands, function(b) nm %in% names(b),
+                          logical(1))])
+  sinks <- lapply(stats::setNames(nm = slices), function(nm) {
+    layers <- lapply(order_of[[nm]], function(b) x@bands[[b]][[nm]])
+    if (length(layers) == 1L) layers[[1L]]
+    else lazy_stack(stats::setNames(layers, order_of[[nm]]),
+                    along = "band")
+  })
+  paths <- stats::setNames(
+    file.path(dir, paste0(name, "-", slices, ".vrt")), slices)
+  for (p in paths) .mat_check_clear(p, overwrite)
+
+  collect(sinks, path = paths, nodata = nodata, distributed = distributed,
+          band_names = order_of)
+
+  bands <- lapply(stats::setNames(nm = names(x@bands)), function(b) {
+    have <- slices[vapply(order_of, function(o) b %in% o, logical(1))]
+    stats::setNames(lapply(have, function(nm)
+      lazy_source(paths[[nm]], band = match(b, order_of[[nm]]))), have)
+  })
+  as_dataset(bands, mask_asset = if (length(x@mask_asset)) x@mask_asset)
+}
+
+

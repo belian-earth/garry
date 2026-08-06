@@ -187,8 +187,9 @@ outliers survive the masking.)
 ```{r ts-kalman, message = FALSE}
 sm <- kalman_smooth(ndvi, sigma_lvl = 0.025, sigma_slp = 0.003,
                     sigma_obs = 0.07)
-smooth <- collect(sm$mean)
-band   <- collect(sm$sd)
+res <- collect(sm)          # ONE plan: both outputs share the forward
+smooth <- res$mean          # filter inside a single compiled kernel
+band   <- res$sd
 ```
 
 ```{r ts-kalman-series, fig.height = 3.5}

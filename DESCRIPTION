@@ -17,12 +17,13 @@ Imports:
     S7,
     cli,
     codetools,
-    gdalraster,
+    gdalraster (>= 2.6.1.9001),
     memuse,
     methods,
     rlang
 Remotes:
     hypertidy/vaster,
+    firelab/gdalraster,
     belian-earth/anvl@nv-scan,
     belian-earth/cptkirk
 Additional_repositories:
@@ -31,6 +32,7 @@ Suggests:
     anvl,
     cptkirk,
     httr2,
+    jsonlite,
     KFAS,
     knitr,
     mirai,
@@ -71,10 +73,17 @@ Collate:
     'gradient.R'
     'grid_from.R'
     'lazy_cog.R'
+    'materialise.R'
+    'ocm.R'
+    'ocm_blocks.R'
+    'ocm_edgenext.R'
+    'ocm_weights.R'
     'placement.R'
     'preview.R'
     'reduce_multiband.R'
+    'safetensors.R'
     'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'
     'zzz.R'
+URL: https://belian-earth.github.io/garry/

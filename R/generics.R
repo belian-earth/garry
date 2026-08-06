@@ -23,6 +23,7 @@ S7::method(required_halo, ScanNode)   <- function(node) 0L
 S7::method(required_halo, WarpNode)   <- function(node) 0L
 S7::method(required_halo, StackNode)  <- function(node) 0L
 S7::method(required_halo, FusedNode)  <- function(node) node@halo
+S7::method(required_halo, PatchNode)  <- function(node) node@radius
 
 #' Can this node be composed with fusable neighbours into a single kernel?
 #'
@@ -34,6 +35,7 @@ fusable <- S7::new_generic("fusable", "node")
 S7::method(fusable, MapNode)   <- function(node) TRUE
 S7::method(fusable, FocalNode) <- function(node) TRUE
 S7::method(fusable, StackNode) <- function(node) TRUE
+S7::method(fusable, PatchNode) <- function(node) TRUE
 S7::method(fusable, Node)      <- function(node) FALSE   # default: barrier
 
 #' Does this node force a stage boundary?
@@ -90,6 +92,19 @@ S7::method(output_grid, ScanNode) <- function(node, parent_grids) {
   # dtype may change (explicit override on the node).
   pg <- parent_grids[[1L]]
   if (!length(node@dtype)) pg else .grid_retype(pg, node@dtype)
+}
+S7::method(output_grid, PatchNode) <- function(node, parent_grids) {
+  # Spatial geometry unchanged (the halo is consumed, not the core);
+  # the band axis is consumed (out_bands == 0) or replaced by the
+  # model's output channels.
+  pg <- parent_grids[[1L]]
+  dims <- pg@dims[setdiff(names(pg@dims), "band")]
+  if (node@out_bands > 0L)
+    dims <- c(dims, c(band = node@out_bands))
+  labels <- pg@labels[setdiff(names(pg@labels), "band")]
+  GridSpec(crs = pg@crs, transform = pg@transform, extent = pg@extent,
+           dims = dims, labels = labels,
+           dtype = if (length(node@dtype)) node@dtype else pg@dtype)
 }
 
 # Output dtype of a reduction (decision D7/D12): float-producing ops

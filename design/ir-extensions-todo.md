@@ -87,3 +87,21 @@ band should work per chunk; (b) ship geometric-median (fixed-iter Weiszfeld) and
 medoid as reference reducers; (c) a `multi_band_reduce(cube, fn)` convenience
 wrapper matching vrtility's ergonomics; (d) later, a composite-fast-path variant
 for the multi-band shape if it becomes hot. Deferred by Hugh 2026-07-11.
+
+## 5. Grouped-collect read pipelining (observed 2026-08-06)
+
+`group_by_time() |> collect(path = "{group}")` runs one plan per group,
+sequentially: the network profile pulses (fetch burst, then idle
+assemble/compute/write, x n_groups) instead of the single-plan
+fetch-first drain's solid saturation. Per-group fetch counts are also
+small (one tile x few assets), so no single group saturates the link.
+Candidate: prefetch group N+1's read tasks while group N computes and
+writes -- either a shared scheduler across group plans or a lookahead
+fetch queue. Surfaced by the OCM vignette's materialise-per-day step.
+
+RESOLVED 2026-08-06: .collect_groups now routes multi-group collects
+through multi-export (one plan, one sink per group; per-sink band
+names via collect(band_names = <named list>)). All groups' reads enter
+one ready queue and drain under fetch-first priority. Measured on the
+Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
+(one plan, continuous drain). plan_only keeps the per-group loop.
