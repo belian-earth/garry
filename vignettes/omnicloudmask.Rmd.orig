@@ -73,13 +73,16 @@ raw-BSQ cube format (one multiband `.vrt` + `.bin` per date, readable
 by any GDAL tool and re-read by garry about 9x faster than tiled
 GeoTIFF) through ONE plan, and returns the same lazy dataset rebuilt
 over the local files with band names, slice dates, and the
-`mask_asset` intact. From here on, nothing touches the network.
+`mask_asset` intact. By default the cubes land in a unique
+session-temporary directory, announced as it runs; give `dir` a real
+path to keep or reuse them. From here on, nothing touches the network.
 
-```{r ocm-materialise, message = FALSE}
+```{r ocm-daemons, include = FALSE}
 garry_daemons()
+```
 
-ds <- materialise(remote, file.path(tempdir(), "zurich"),
-                  name = "zurich")
+```{r ocm-materialise}
+ds <- materialise(remote)
 ds
 ```
 
