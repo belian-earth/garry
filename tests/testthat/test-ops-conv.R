@@ -41,6 +41,7 @@ test_that("g_conv2d oracle matches traced across parameterisations", {
 
 test_that("g_conv2d matches torch", {
   skip_if_not_installed("torch")
+  skip_if(!torch::torch_is_installed(), "libtorch not installed")
   x <- .arr(10, 6, 15, 11)
   for (cs in list(list(co = 4, k = 3, stride = 1L, padding = 1L, groups = 1L),
                   list(co = 6, k = 3, stride = 2L, padding = 1L, groups = 6L),
