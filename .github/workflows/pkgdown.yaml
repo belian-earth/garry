@@ -39,8 +39,14 @@ jobs:
       # entirely. Its CRAN binary links a GDAL soname the PPA install
       # above removes, and the site build never needs it: the only use
       # is the check_installed-guarded as_terra(), with no examples.
+      # cache-version 2: prefix-matched restore keys can resurrect a
+      # pre-ignore library cache that still contains the broken terra
+      # binary (downlit loadNamespace()s it when autolinking
+      # as_terra.Rd). Bumping orphans those caches; v2 builds never
+      # contain terra.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          cache-version: 2
           extra-packages: any::pkgdown, local::., terra=?ignore
           needs: website
 
