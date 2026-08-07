@@ -1,0 +1,84 @@
+# Reading Alpha Earth embeddings with lazy_cog()
+
+[Alpha Earth
+Foundations](https://deepmind.google/blog/alphaearth-foundations-helps-map-our-planet-in-unprecedented-detail/)
+(AEF) by Google is published by [Source
+Cooperative](https://source.coop/tge-labs/aef). This dataset is a
+collection of annual geospatial embeddings stored as **64-band Int8
+Cloud-Optimised GeoTIFFs**: each band is one dimension of a learned
+embedding, quantised to a signed byte and decoded with a nonlinear,
+sign-preserving transform, `((x / 127.5)^2) * sign(x)`.
+
+Tens of bands in one file is exactly what
+[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
+is for. Where
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
+opens each band separately,
+[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
+routes the read through
+[cptkirk](https://belian-earth.github.io/cptkirk/), whose async-tiff
+reader opens the tile **once** and streams all 64 band planes
+concurrently. This vignette reads one tile, resamples to 30 m,
+dequantises on the read, and renders three arbitrary bands as a
+false-colour composite.
+
+## Read and dequantise
+
+``` r
+
+library(garry)
+
+# One AEF annual tile (Source Cooperative, public, no auth). UTM 36S, ~10 m.
+tile <- paste0("https://data.source.coop/tge-labs/aef/v1/annual/2021/36S/",
+               "xekh5rjs4wg6wb9b4-0000000000-0000000000.tiff")
+
+# get the grid specification from the source tile and spe
+grid <- grid_from_src(tile, 30)
+
+embeddings <- lazy_cog(tile, grid, resampling = "average") |>
+  lazy_map(fn = dequantize_aef, dtype = "f32")
+
+embeddings
+#> ── <LazyDataset> ──────────────────────────────────────────────────
+#>   bands  b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 b16 b17 b18 b19 b20 b21 b22 b23 b24 b25 b26 b27 b28 b29 b30 b31 b32 b33 b34 b35 b36 b37 b38 b39 b40 b41 b42 b43 b44 b45 b46 b47 b48 b49 b50 b51 b52 b53 b54 b55 b56 b57 b58 b59 b60 b61 b62 b63 b64
+#>   time   1 slice
+#>   grid   2732 x 2731 • f32
+#>   crs    EPSG:32736
+#>   graph  128 nodes • lazy
+#>   ℹ draw(x) to see the pipeline
+```
+
+[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
+records a lazy 64-band dataset; nothing is fetched yet.
+[`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
+is applied as a map, which garry fuses onto the read so the nonlinear
+decode runs on-device, not as a separate pass.
+
+## Collect three bands and plot
+
+Pick three arbitrary embedding dimensions and collect just those: the
+band-axis subset means only those three are ever computed.
+
+``` r
+
+garry_daemons()
+cube <- collect(embeddings[c("b10", "b11", "b12")])
+garry_daemons(0, 0)
+
+dim(cube)
+#> [1] 2731 2732    3
+
+preview(cube, bands=c(2,1,3))   # False-colour composite
+```
+
+![plot of chunk
+aef-plot](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/aef-plot-1.png)
+
+plot of chunk aef-plot
+
+Neighbouring pixels of similar land cover carry similar embeddings, so
+the false-colour image segments the landscape into coherent regions: the
+structure the embeddings encode. The same dequantised dataset feeds any
+downstream verb – a band-axis PCA (`reduce_over(over = "band")` with
+[`band_project()`](https://belian-earth.github.io/garry/reference/band_project.md)),
+a similarity search, or a classifier fit on the collected array.
