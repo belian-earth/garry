@@ -4,42 +4,48 @@ NULL
 
 #' Materialise a LazyRaster (or inspect its plan).
 #'
+#' Executes the plan and returns the result in the R session, always.
+#' To stream the result to a file instead, use [write_tif()]; to
+#' checkpoint to local cubes and stay lazy, use [materialise()].
 #' `plan_only = TRUE` runs the planner passes and returns the `Plan`
 #' without executing: the permanent introspection path.
 #'
-#' @param x A `LazyRaster`, or a `LazyDataset` (its bands are assembled along the
-#'   band axis via `stack_bands()` first).
+#' @param x A `LazyRaster`, a `LazyDataset` (its bands are assembled along
+#'   the band axis via `stack_bands()` first), a named list of lazy rasters
+#'   (multi-export: one plan, a named list of results), or a
+#'   `LazyDatasetGroups` (one result per group).
 #' @param plan_only Return the `Plan` instead of executing?
-#' @param path Optional GTiff destination; the result is written chunk
-#'   by chunk and the path returned invisibly.
-#' @param nodata Optional sentinel for the written file (NaN demotes to
-#'   it; required for integer outputs containing nodata).
 #' @param distributed Execute across the [garry_daemons()] pools? Defaults to
 #'   [garry_daemons_set()], so `collect(x)` uses the pools when they are running
 #'   and runs single-threaded otherwise. Pass `TRUE`/`FALSE` to override; the
 #'   distributed result is identical to the single-threaded one.
-#' @param band_names Output band descriptions for file writes. Usually
-#'   inferred (a dataset's band names; a stack's layer labels). For a
-#'   multi-export list input, a NAMED LIST keyed by sink name gives each
-#'   sink its own descriptions.
-#' @return With `plan_only = TRUE`, the `Plan`. With `path`, the path,
-#'   invisibly. Otherwise the materialised result in the R raster convention
-#'   (spatial-first, layer-last): a scalar for global reductions, a `[y, x]`
-#'   matrix for a single layer, or a `(y, x, band)` array for multiple bands
+#' @return With `plan_only = TRUE`, the `Plan`. Otherwise the materialised
+#'   result in the R raster convention (spatial-first, layer-last): a scalar
+#'   for global reductions, a `[y, x]` matrix for a single layer, or a
+#'   `(y, x, band)` array for multiple bands
 #'   (matching `terra::as.array()`; plots directly with `rasterImage`/`ximage`).
 #'   A matrix/array result also carries a `gis` attribute in the style of
 #'   `gdalraster::read_ds()` (`type`, `bbox` = `c(xmin, ymin, xmax, ymax)`,
 #'   `dim` = `c(nx, ny, nbands)`, `srs` = WKT, `datatype`), so the array is
 #'   self-describing and [preview()] can set real-world axes without the grid.
 #' @export
-collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
-                    distributed = garry_daemons_set(), band_names = NULL) {
+collect <- function(x, plan_only = FALSE,
+                    distributed = garry_daemons_set()) {
+  .collect_impl(x, plan_only = plan_only, distributed = distributed)
+}
+
+# The execution engine behind collect()/write_tif()/materialise().
+# `wspec` (write_tif) is the sink write spec: list(dtype, scale, offset),
+# applied at the sink boundary by the executors.
+.collect_impl <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
+                          distributed = garry_daemons_set(),
+                          band_names = NULL, wspec = NULL) {
   .garry_opt_check()
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.
   if (S7::S7_inherits(x, LazyDatasetGroups))
-    return(.collect_groups(x, plan_only, path, nodata, distributed))
+    return(.collect_groups(x, plan_only, path, nodata, distributed, wspec))
   # A dataset's band names become the output band descriptions; capture them
   # before stack_bands() collapses the named bands into one node.
   if (S7::S7_inherits(x, LazyDataset)) {
@@ -58,10 +64,10 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
     .garry_state$route <- if (distributed) "scheduler" else "single"
     res <- if (distributed) {
       execute_plan_mirai(p, path = path, nodata = nodata,
-                         band_names = band_names)
+                         band_names = band_names, wspec = wspec)
     } else {
       execute_plan(p, path = path, nodata = nodata,
-                   band_names = band_names)
+                   band_names = band_names, wspec = wspec)
     }
     if (!is.null(path)) return(invisible(res))
     # per-sink: same layout + gis attribute as a single-sink collect
@@ -101,17 +107,19 @@ collect <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
       else "scheduler"
     if (!is.null(spec))
       .execute_composite_direct(p, spec, path = path, nodata = nodata,
-                                band_names = band_names)
+                                band_names = band_names, wspec = wspec)
     else if (!is.null(decomp))
       # Any reduce-structured graph (ndvi, nested reduce->map->reduce, focal over
       # a composite): overlap-compute the leaf reduces, run the upper IR on them.
       .execute_gd_reduce(p, decomp, path = path, nodata = nodata,
-                         band_names = band_names)
+                         band_names = band_names, wspec = wspec)
     else
-      execute_plan_mirai(p, path = path, nodata = nodata, band_names = band_names)
+      execute_plan_mirai(p, path = path, nodata = nodata,
+                         band_names = band_names, wspec = wspec)
   } else {
     .garry_state$route <- "single"
-    execute_plan(p, path = path, nodata = nodata, band_names = band_names)
+    execute_plan(p, path = path, nodata = nodata, band_names = band_names,
+                 wspec = wspec)
   }
   if (!is.null(path)) return(invisible(res))
   out <- .collect_layout(res)
@@ -172,7 +180,8 @@ garry_last_route <- function() .garry_state$route
 # file per group (a `{group}` placeholder is substituted, else the group label
 # is inserted before the extension) and returns the paths invisibly; otherwise
 # returns a named list of results (or Plans when `plan_only`).
-.collect_groups <- function(x, plan_only, path, nodata, distributed) {
+.collect_groups <- function(x, plan_only, path, nodata, distributed,
+                            wspec = NULL) {
   labels <- names(x@groups)
   paths <- if (is.null(path)) NULL else stats::setNames(unlist(.group_paths(path, labels)), labels)
   # Multi-export route (design/multi-export-collect.md): ONE plan whose
@@ -186,15 +195,16 @@ garry_last_route <- function() .garry_state$route
     sinks <- stats::setNames(lapply(x@groups, stack_bands), labels)
     bn <- stats::setNames(lapply(x@groups, function(g) names(g@bands)),
                           labels)
-    res <- collect(sinks, path = paths, nodata = nodata,
-                   distributed = distributed, band_names = bn)
+    res <- .collect_impl(sinks, path = paths, nodata = nodata,
+                         distributed = distributed, band_names = bn,
+                         wspec = wspec)
     if (!is.null(path)) return(invisible(paths))
     return(res)
   }
   res <- lapply(seq_along(x@groups), function(i)
-    collect(x@groups[[i]], plan_only = plan_only,
-            path = if (is.null(paths)) NULL else paths[[i]],
-            nodata = nodata, distributed = distributed))
+    .collect_impl(x@groups[[i]], plan_only = plan_only,
+                  path = if (is.null(paths)) NULL else paths[[i]],
+                  nodata = nodata, distributed = distributed, wspec = wspec))
   names(res) <- labels
   if (!is.null(path) && !plan_only) return(invisible(paths))
   res

@@ -9,7 +9,8 @@
   spec,
   path = NULL,
   nodata = NULL,
-  band_names = NULL
+  band_names = NULL,
+  wspec = NULL
 )
 }
 \description{

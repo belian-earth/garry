@@ -5,8 +5,6 @@
 # store estimate prices the kernel EXPORT, not the source window; the
 # /dev/shm backstop degrades to a serial trickle, never a stall.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 test_that(".store_region_mb prices fused exports, not source windows", {
   dims <- c(x = 512L, y = 512L)

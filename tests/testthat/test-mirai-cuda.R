@@ -2,8 +2,6 @@
 # kernel on the CUDA device and returns correct values. Skips wherever
 # CUDA/PJRT-CUDA is unavailable.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_on_os(c("windows", "mac"))   # CUDA/PJRT-CUDA is Linux-only
 
 .cuda_available <- function() {

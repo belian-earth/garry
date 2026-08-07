@@ -198,7 +198,9 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
     inputs <- lapply(src_meta, function(meta) {
       g_upload(.exec_read_padded(meta$node@path, meta$node@band,
                                  meta$node@nodata, meta$chunks, it[j, ],
-                                 open_options = meta$node@open_options),
+                                 open_options = meta$node@open_options,
+                                 scale = meta$node@scale,
+                                 offset = meta$node@offset),
                meta$dtype)
     })
     r <- vg(w_up, inputs)

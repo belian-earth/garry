@@ -6,7 +6,6 @@
 # cap plus injected constants flips the MLP chain to fuse; mask
 # cleanup fuses in both modes; decisions respond to pool width.
 
-skip_if_not_installed("anvl")
 
 .plc <- function(p, ..., mode = "cost") {
   # Decisions are asserted against a fixed machine: pin the core count

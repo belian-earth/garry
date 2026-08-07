@@ -5,7 +5,6 @@
 # sources are not candidates at all. Behavioural equivalence of the
 # fused execution is gated by test-compute-on-read.R, unchanged.
 
-skip_if_not_installed("anvl")
 
 .pl <- function(p, mode = "rules") {
   sc <- garry:::.placement_scan(p)
@@ -92,7 +91,6 @@ test_that("sink chains are sinkful candidates; multi-consumer sources are not", 
 })
 
 test_that("multi-export sink chains round-trip in both placement modes", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   f <- fixture_gradient_f32()
@@ -138,7 +136,6 @@ test_that("unknown placement mode errors", {
 })
 
 test_that("a source that is itself a sink keeps its window (defect H1)", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   f <- fixture_gradient_f32()

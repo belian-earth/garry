@@ -549,13 +549,18 @@ stac_gti_index <- function(sources, asset,
 #' @param nodata Optional nodata override passed to each slice source.
 #' @param lon Longitude for `granularity = "solar_day"` (see
 #'   `stac_time_slices()`).
+#' @param scale,offset Read affine, as in [lazy_source()]: `FALSE`
+#'   (default) reads raw values, `TRUE` discovers the file's band
+#'   scale/offset (probing the mosaic, then the first item), a numeric
+#'   supplies it explicitly.
 #' @return A list: `stack` (`LazyRaster`), `slices` (character),
 #'   `index` (path).
 #' @export
 lazy_stac_stack <- function(sources, grid, asset,
                             granularity = "day",
                             sort_field = "datetime",
-                            nodata = NULL, lon = NULL) {
+                            nodata = NULL, lon = NULL,
+                            scale = FALSE, offset = NULL) {
   sources <- stac_time_slices(sources, granularity, lon = lon)
   idx <- stac_gti_index(sources, asset, crs = grid@crs)
   slices <- sort(unique(sources$slice[sources$asset == asset]))
@@ -567,6 +572,10 @@ lazy_stac_stack <- function(sources, grid, asset,
                          open_options = gti_open_options(grid))
   if (is.null(nodata) && length(meta$nodata) == 1L)
     nodata <- meta$nodata
+  aff <- .resolve_scale(scale, offset, function() {
+    if (length(meta$scale) == 1L) return(meta)
+    gdal_grid_spec(sources$location[sources$asset == asset][[1L]])
+  }, what = asset)
   graph <- graph_new()
   layers <- lapply(slices, function(sl) {
     lazy_source(
@@ -578,7 +587,9 @@ lazy_stac_stack <- function(sources, grid, asset,
         filter = sprintf("slice = '%s'", sl),
         sort_field = sort_field),
       grid = meta$grid,
-      block_dim = meta$block_dim)
+      block_dim = meta$block_dim,
+      scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
+      offset = if (length(aff$offset) == 1L) aff$offset else NULL)
   })
   list(stack = lazy_stack(layers), slices = slices, index = idx)
 }

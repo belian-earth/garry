@@ -4,8 +4,6 @@
 # unlink (defect hunt L3) and closes the output; and the writer_on=FALSE
 # host-inline fallback stays alive and correct.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
@@ -48,7 +46,7 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
   invisible(collect(x, distributed = TRUE))
   .we_break_writer(from = 2L)
   err <- expect_error(
-    suppressWarnings(collect(x, path = path, distributed = TRUE)),
+    suppressWarnings(write_tif(x, path, distributed = TRUE)),
     class = "garry_write_error")
   expect_match(conditionMessage(err), "mock write failure")
 
@@ -58,7 +56,7 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
   expect_true(file.remove(path))
   .we_fix_writer()
   path2 <- withr::local_tempfile(fileext = ".tif")
-  collect(x, path = path2, distributed = TRUE)
+  write_tif(x, path2, distributed = TRUE)
   want <- collect(x, distributed = FALSE)
   got <- gdal_read_window(path2, 1L, 0L, 0L, 60L, 40L)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
@@ -71,7 +69,7 @@ test_that("the writer_on = FALSE host-inline fallback still matches the oracle",
   f <- fixture_gradient_f32()
   x <- lazy_source(f) + 1
   path <- withr::local_tempfile(fileext = ".tif")
-  collect(x, path = path, distributed = TRUE)
+  write_tif(x, path, distributed = TRUE)
   want <- collect(x, distributed = FALSE)
   got <- gdal_read_window(path, 1L, 0L, 0L, 60L, 40L)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)

@@ -6,7 +6,6 @@
 # disagreement for residual boundary ties (both engines are GDAL, but
 # tie-breaking at exact cell boundaries is not contractual).
 
-skip_if_not_installed("anvl")
 
 .warp_target <- function(dims = c(71L, 47L)) {
   f <- fixture_gradient_f32()

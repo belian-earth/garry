@@ -64,7 +64,7 @@ t <- system.time({
     mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
     reduce_over("median", over = "t")
 
-  collect(composite, path = "hls_harmonized.tif", nodata = -9999)
+  write_tif(composite, "hls_harmonized.tif", nodata = -9999)
 })
 cat(sprintf("HLS harmonized composite (%d bands): %.2fs -> hls_harmonized.tif\n",
             length(bands), t[["elapsed"]]))

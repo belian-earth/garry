@@ -5,8 +5,6 @@
 # the gd_compute_budget scheduler fall-through. Until this file, the
 # production default composite path had no offline test at all.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
@@ -61,7 +59,7 @@ test_that("composite_direct writes to path identically to in-memory", {
   expect_identical(garry_last_route(), "composite_direct")
   path <- tempfile(fileext = ".tif")
   on.exit(unlink(path), add = TRUE)
-  collect(x, path = path, nodata = -9999, distributed = TRUE)
+  write_tif(x, path, nodata = -9999, distributed = TRUE)
   cube <- gdal_read_window(path, 1:2, 0L, 0L, 60L, 40L, nodata = -9999)
   .gg_close(aperm(cube, c(2L, 3L, 1L)), mem)
 })

@@ -51,8 +51,7 @@ t_all <- system.time({
   composite[["ndvi"]] <- (composite[["B08"]] - composite[["B04"]]) /
                          (composite[["B08"]] + composite[["B04"]])
   cat("graph built; planning + executing...\n")
-  collect(composite[["ndvi"]], path = "ndvi_garry.tif", nodata = -9999,
-          distributed = TRUE)
+  write_tif(composite[["ndvi"]], "ndvi_garry.tif", nodata = -9999, distributed = TRUE)
 })
 cat(sprintf("processing time (garry NDVI, daemons %s): %.2fs\n",
             daemons_arg, t_all[["elapsed"]]))

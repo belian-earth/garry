@@ -368,7 +368,6 @@ NULL
 #' @export
 garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
                           gdal_config = TRUE, ...) {
-  rlang::check_installed("mirai", reason = "for distributed execution.")
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
     # Machine-derived defaults (deep review 2026-08-02, from the

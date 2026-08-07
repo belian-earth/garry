@@ -3,8 +3,6 @@
 # alone; a failed fetch under read_fail="nodata" degrades to a hole
 # instead of aborting; the tmpfs cache cleans up.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 .fa_fixture <- function(dir, n_slices = 3L) {
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400),

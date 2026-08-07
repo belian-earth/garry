@@ -22,7 +22,7 @@ unique session-temporary directory.}
 \item{name}{File-name stem (default \code{"garry"}).}
 
 \item{nodata}{Optional sentinel for the written files, as in
-\code{\link[=collect]{collect()}}.}
+\code{\link[=write_tif]{write_tif()}}.}
 
 \item{overwrite}{Replace existing files at the target paths?}
 

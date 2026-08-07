@@ -4,42 +4,26 @@
 \alias{collect}
 \title{Materialise a LazyRaster (or inspect its plan).}
 \usage{
-collect(
-  x,
-  plan_only = FALSE,
-  path = NULL,
-  nodata = NULL,
-  distributed = garry_daemons_set(),
-  band_names = NULL
-)
+collect(x, plan_only = FALSE, distributed = garry_daemons_set())
 }
 \arguments{
-\item{x}{A \code{LazyRaster}, or a \code{LazyDataset} (its bands are assembled along the
-band axis via \code{stack_bands()} first).}
+\item{x}{A \code{LazyRaster}, a \code{LazyDataset} (its bands are assembled along
+the band axis via \code{stack_bands()} first), a named list of lazy rasters
+(multi-export: one plan, a named list of results), or a
+\code{LazyDatasetGroups} (one result per group).}
 
 \item{plan_only}{Return the \code{Plan} instead of executing?}
-
-\item{path}{Optional GTiff destination; the result is written chunk
-by chunk and the path returned invisibly.}
-
-\item{nodata}{Optional sentinel for the written file (NaN demotes to
-it; required for integer outputs containing nodata).}
 
 \item{distributed}{Execute across the \code{\link[=garry_daemons]{garry_daemons()}} pools? Defaults to
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, so \code{collect(x)} uses the pools when they are running
 and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override; the
 distributed result is identical to the single-threaded one.}
-
-\item{band_names}{Output band descriptions for file writes. Usually
-inferred (a dataset's band names; a stack's layer labels). For a
-multi-export list input, a NAMED LIST keyed by sink name gives each
-sink its own descriptions.}
 }
 \value{
-With \code{plan_only = TRUE}, the \code{Plan}. With \code{path}, the path,
-invisibly. Otherwise the materialised result in the R raster convention
-(spatial-first, layer-last): a scalar for global reductions, a \verb{[y, x]}
-matrix for a single layer, or a \verb{(y, x, band)} array for multiple bands
+With \code{plan_only = TRUE}, the \code{Plan}. Otherwise the materialised
+result in the R raster convention (spatial-first, layer-last): a scalar
+for global reductions, a \verb{[y, x]} matrix for a single layer, or a
+\verb{(y, x, band)} array for multiple bands
 (matching \code{terra::as.array()}; plots directly with \code{rasterImage}/\code{ximage}).
 A matrix/array result also carries a \code{gis} attribute in the style of
 \code{gdalraster::read_ds()} (\code{type}, \code{bbox} = \code{c(xmin, ymin, xmax, ymax)},
@@ -47,6 +31,9 @@ A matrix/array result also carries a \code{gis} attribute in the style of
 self-describing and \code{\link[=preview]{preview()}} can set real-world axes without the grid.
 }
 \description{
+Executes the plan and returns the result in the R session, always.
+To stream the result to a file instead, use \code{\link[=write_tif]{write_tif()}}; to
+checkpoint to local cubes and stay lazy, use \code{\link[=materialise]{materialise()}}.
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}
 without executing: the permanent introspection path.
 }

@@ -7,8 +7,6 @@
 # stage's input set still completes (escape hatch, no deadlock), and
 # results are identical to single-threaded whatever the budget.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 test_that("coarse read window shrinks with the widest stage's inputs", {
   f <- fixture_gradient_f32()
@@ -51,7 +49,7 @@ test_that("eager release: cross-stage intermediates drop, results identical", {
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
 
-  collect(out, path = file.path(dir, "out.tif"), distributed = TRUE)
+  write_tif(out, file.path(dir, "out.tif"), distributed = TRUE)
   mem <- collect(out, distributed = FALSE)
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "out.tif"))
   got <- matrix(d$read(1, 0, 0, 60, 40, 60, 40), 40, 60, byrow = TRUE)

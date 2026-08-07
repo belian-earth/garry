@@ -6,8 +6,6 @@
 # the correctness half of PR5; the wall-time half is the SI predict
 # benchmark.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(Sys.info()[["sysname"]] != "Linux", "affinity is Linux-only")
 skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
 skip_if(parallel::detectCores() < 5L, "reader cap is a no-op below 5 cores")

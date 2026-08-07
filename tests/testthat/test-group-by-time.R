@@ -46,7 +46,6 @@ test_that("group_by_time partitions slices by period", {
 })
 
 test_that("group_by_time |> reduce_over builds one composite per month", {
-  skip_if_not_installed("anvl")
   src <- .gbt_sources(
     c("2023-01-05", "2023-01-20", "2023-02-05", "2023-02-20", "2023-03-05", "2023-03-20"),
     c(10, 20, 100, 200, 5, 15))
@@ -64,14 +63,13 @@ test_that("group_by_time |> reduce_over builds one composite per month", {
 })
 
 test_that("collect writes one file per group via a {group} placeholder", {
-  skip_if_not_installed("anvl")
   src <- .gbt_sources(c("2023-01-05", "2023-02-05"), c(1, 2))
   grid <- gdal_grid_spec(src$location[[1L]])$grid
   comps <- lazy_dataset(src, grid, assets = "V") |>
     group_by_time("month") |> reduce_over("median", "t")
 
   tmpl <- file.path(tempdir(), "comp_{group}.tif")
-  out <- collect(comps, path = tmpl, nodata = -9999)
+  out <- write_tif(comps, tmpl, nodata = -9999)
   expect_named(out, c("2023-01", "2023-02"))
   expect_true(all(file.exists(out)))
   expect_match(out[["2023-01"]], "comp_2023-01\\.tif$")

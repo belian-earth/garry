@@ -1,7 +1,6 @@
 # Decision D17 lock: stacks are (t, y, x) chunks, StackNode fuses, and
 # temporal reductions run chunk-locally (median included, per D12).
 
-skip_if_not_installed("anvl")
 
 # Three-date fixtures on one grid, deterministic values.
 .stack_fixtures <- function() {
@@ -135,7 +134,6 @@ test_that("stacks are chunk-invariant", {
 })
 
 test_that("distributed stacks match single-threaded", {
-  skip_if_not_installed("mirai")
   paths <- .stack_fixtures()
   st <- lazy_stack(lapply(paths, lazy_source))
   med <- reduce_over(st, "median", "t", nan_rm = TRUE)

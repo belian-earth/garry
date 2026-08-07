@@ -13,7 +13,9 @@ gdal_read_window(
   y_size,
   nodata = numeric(0),
   open_options = character(0),
-  out = c("matrix", "raw_f32")
+  out = c("matrix", "raw_f32"),
+  scale = numeric(0),
+  offset = numeric(0)
 )
 }
 \arguments{
@@ -29,6 +31,10 @@ gdal_read_window(
 
 \item{out}{Output form: a \verb{[y, x]} \code{"matrix"} (default), or a raw f32
 store value (\code{"raw_f32"}) for the distributed store path.}
+
+\item{scale, offset}{Length-0 (absent) or length-1 band affine: values
+become \code{v * scale + offset} after the nodata sentinel is promoted
+to NaN, so sentinels never scale.}
 }
 \value{
 A numeric \verb{y_size x x_size} matrix.

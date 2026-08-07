@@ -450,6 +450,8 @@ NULL
         identical(n@open_options, p1@open_options) &&
         identical(n@nodata, p1@nodata) &&
         identical(n@resampling, p1@resampling) &&
+        identical(n@scale, p1@scale) &&
+        identical(n@offset, p1@offset) &&
         identical(.node_grid(n)@dtype, .node_grid(p1)@dtype) &&
         grid_equal(.node_grid(n), .node_grid(p1))
     }, logical(1))
@@ -463,7 +465,9 @@ NULL
       nodata = p1@nodata,
       block_dim = p1@block_dim,
       open_options = p1@open_options,
-      resampling = p1@resampling))
+      resampling = p1@resampling,
+      scale = p1@scale,
+      offset = p1@offset))
   }
   invisible(graph)
 }
@@ -566,7 +570,7 @@ plan_lazy <- function(x) {
         .garry_error(paste0(
           "warping a computed raster is not supported in v1: align() ",
           "sources before computing on them, or materialise to disk ",
-          "first (collect(x, path = ...))."),
+          "first (write_tif() / materialise())."),
           "garry_warp_unsupported_error")
       node_stage[[.key(id)]] <-
         new_proto("warp", id, node@target_grid,

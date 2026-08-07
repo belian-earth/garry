@@ -131,11 +131,7 @@ t_all <- system.time({
     reduce_over("median", over = "t", nan_rm = TRUE)
 
   cat("graph built; planning + executing...\n")
-  collect(
-    composite,
-    path = "composite_garry.tif",
-    nodata = -9999
-  )
+  write_tif(composite, "composite_garry.tif", nodata = -9999)
 })
 cat(sprintf(
   "processing time (garry, %s engine, %s, daemons %s): %.2fs\n",

@@ -75,11 +75,21 @@ S7::method(res, LazyRaster) <- function(x) res(x@grid)
 #' @param resampling GDAL resampling used when a read reprojects or rescales
 #'   this source onto the analysis grid. `"near"` (default) preserves exact
 #'   source values; use `"bilinear"`, `"average"`, `"cubic"`, ... to interpolate.
+#' @param scale Apply the band's scale/offset at read. `FALSE` (default)
+#'   reads raw values. `TRUE` discovers the affine from the file's band
+#'   metadata (the GDAL scale/offset QGIS applies) and every read returns
+#'   `v * scale + offset`, applied after the nodata sentinel becomes NaN.
+#'   A length-1 numeric supplies the scale explicitly (with `offset`),
+#'   skipping discovery. Discovery only consults the file: STAC-side
+#'   metadata is never read.
+#' @param offset Explicit additive offset used when `scale` is numeric;
+#'   defaults to 0. Ignored when `scale` is logical.
 #' @return A `LazyRaster`.
 #' @export
 lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
                         open_options = character(0), grid = NULL,
-                        block_dim = NULL, resampling = "near") {
+                        block_dim = NULL, resampling = "near",
+                        scale = FALSE, offset = NULL) {
   if (is.null(grid)) {
     meta <- gdal_grid_spec(path, band = as.integer(band),
                            open_options = open_options)
@@ -90,8 +100,16 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
     .assert_class(grid, GridSpec, "GridSpec")
     nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
     block_dim <- if (is.null(block_dim)) integer(0) else as.integer(block_dim)
+    meta <- NULL
   }
-  if (length(nodata) == 1L && .dtype_family(grid@dtype) != "float")
+  aff <- .resolve_scale(scale, offset, function() {
+    if (is.null(meta))
+      meta <<- gdal_grid_spec(path, band = as.integer(band),
+                              open_options = open_options)
+    meta
+  }, what = path)
+  if ((length(nodata) == 1L || length(aff$scale) == 1L) &&
+      .dtype_family(grid@dtype) != "float")
     grid <- .grid_retype(grid, "f32")
   id <- graph_add(
     graph,
@@ -103,9 +121,37 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
     nodata       = nodata,
     block_dim    = block_dim,
     open_options = open_options,
-    resampling   = as.character(resampling)
+    resampling   = as.character(resampling),
+    scale        = aff$scale,
+    offset       = aff$offset
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
+}
+
+# Resolve a lazy_source()/lazy_dataset() `scale` argument to a normalised
+# affine: list(scale, offset), both length 0 (absent) or both length 1.
+# `probe` is a zero-arg closure returning a gdal_grid_spec() list, called
+# only when scale = TRUE needs discovery.
+.resolve_scale <- function(scale, offset, probe, what) {
+  if (isFALSE(scale)) return(list(scale = numeric(0), offset = numeric(0)))
+  if (isTRUE(scale)) {
+    meta <- probe()
+    if (length(meta$scale) != 1L) {
+      cli::cli_inform(c(
+        "i" = "{.arg scale}: no scale/offset metadata on {.file {what}}; reading raw values."))
+      return(list(scale = numeric(0), offset = numeric(0)))
+    }
+    return(list(scale = meta$scale, offset = meta$offset))
+  }
+  if (!is.numeric(scale) || length(scale) != 1L)
+    cli::cli_abort(
+      "{.arg scale} must be `FALSE`, `TRUE`, or a length-1 numeric.")
+  off <- if (is.null(offset)) 0 else as.numeric(offset)
+  if (length(off) != 1L)
+    cli::cli_abort("{.arg offset} must be a length-1 numeric.")
+  if (scale == 1 && off == 0)
+    return(list(scale = numeric(0), offset = numeric(0)))
+  list(scale = as.numeric(scale), offset = off)
 }
 
 #' Elementwise map over one or more aligned rasters.

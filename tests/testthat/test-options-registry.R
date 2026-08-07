@@ -32,7 +32,6 @@ test_that("out-of-range values name the offending option", {
 })
 
 test_that("collect refuses to run under an invalid option", {
-  skip_if_not_installed("anvl")
   withr::local_options(garry.read_fail = "nodta")
   f <- fixture_gradient_f32()
   expect_error(collect(lazy_source(f) + 1, distributed = FALSE),

@@ -1,7 +1,6 @@
 # THE correctness gate for chunked execution (D14): identical results
 # across chunk sizes, including focal halos, on the anvl path.
 
-skip_if_not_installed("anvl")
 
 .collect_with_px <- function(x, px) {
   old <- options(garry.chunk_target_px = px)

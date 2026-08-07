@@ -125,11 +125,11 @@ NULL
 #' equivalence is gate-tested).
 #'
 #' @param plan A `Plan`.
-#' @param path,nodata,band_names As in `execute_plan()`.
+#' @param path,nodata,band_names,wspec As in `execute_plan()`.
 #' @return As `execute_plan()`.
 #' @export
-execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
-  rlang::check_installed("mirai", reason = "for distributed execution.")
+execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL,
+                               wspec = NULL) {
   .garry_opt_check()
   # Distributed execution runs on the garry_daemons() split pools: read/warp
   # tasks route to the read pool — where anvl/PJRT never loads, so a reader
@@ -239,9 +239,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))
-  if (!requireNamespace("mori", quietly = TRUE))
-    .garry_error("the distributed scheduler requires the mori package",
-                 "garry_scheduler_error")
   # Raw f32 store payloads (phase 12c, D19-D21). Resolved once here:
   # daemon processes do not inherit host options, so the flag rides in
   # every task payload.
@@ -455,11 +452,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                              wnode@resampling, src_nodata = snode@nodata)
         rpath <- vrt; rband <- 1L; rnodata <- snode@nodata
         roo <- character(0)
+        rsc <- snode@scale; rof <- snode@offset
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
         rband <- node@band; rnodata <- node@nodata
         roo <- node@open_options
+        rsc <- node@scale; rof <- node@offset
       }
       skey <- .key(s@members[[1L]])
       fspec <- fuse_of[[.key(s@id)]]
@@ -535,6 +534,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
+            sc <- rsc; of <- rof
             key <- sprintf("s%d_c%d", sid, jj)
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
                      store_mb = store_mb_read,
@@ -543,10 +543,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo,
                                               fuse = fs, read_raw = rr,
-                                              store_raw = sr),
+                                              store_raw = sr,
+                                              scale = sc, offset = of),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, reg = sprintf("r%d_%s", run_id, key), fs = fs,
-                rr = rr, sr = sr,
+                rr = rr, sr = sr, sc = sc, of = of,
                 .compute = prof)
             })
             task_stage_of[[key]] <- oid2
@@ -573,6 +574,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             sid <- s@id; rr2 <- r; cg <- s@chunks; core <- it[rr2, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
+            sc <- rsc; of <- rof
             key <- sprintf("s%d_r%d", sid, rr2)
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -590,10 +592,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                                               reg, parts = parts,
                                               open_options = oo,
                                               fuse = fs, read_raw = rr,
-                                              store_raw = sr),
+                                              store_raw = sr,
+                                              scale = sc, offset = of),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
                 k2 = k2, oo = oo, parts = parts, fs = fs,
-                rr = rr, sr = sr,
+                rr = rr, sr = sr, sc = sc, of = of,
                 reg = sprintf("r%d_%s", run_id, key),
                 .compute = prof)
             })
@@ -906,7 +909,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     sink_it <- chunk_iter(sink@chunks)
     sink_spad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
     sink_task_j <- sink_task_map(sink@id, nrow(sink_it))
-    sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata, band_names = band_names)
+    sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata,
+                                  band_names = band_names,
+                                  dtype = wspec$dtype,
+                                  options = wspec$options,
+                                  scale = wspec$scale %||% numeric(0),
+                                  offset = wspec$offset %||% numeric(0))
     if (writer_on) { sink_ds$close(); sink_ds <- NULL }
     on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
             add = TRUE)
@@ -929,12 +937,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       it <- chunk_iter(st@chunks)
       ds <- gdal_create_output(p, ngrid, nodata = wnodata,
                                band_names = .sink_band_names(band_names,
-                                                             nm, ngrid))
+                                                             nm, ngrid),
+                               dtype = wspec$dtype,
+                               options = wspec$options,
+                               scale = wspec$scale %||% numeric(0),
+                               offset = wspec$offset %||% numeric(0))
       if (writer_on) { ds$close(); ds <- NULL }
       stream_sinks[[nm]] <- list(
         sid = st@id,
         key = .key(nid), it = it, pad = .exec_export_pad(st, nid), ds = ds,
-        dtype = ngrid@dtype, path = p,
+        dtype = wspec$dtype %||% ngrid@dtype, path = p,
         task_j = sink_task_map(st@id, nrow(it)))
     }
     on.exit(for (sp in stream_sinks)
@@ -1209,10 +1221,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       rk = ref$rk,
       h = mirai::mirai(
         garry::.daemon_write_chunk(wpath, xo, yo, val, skey, el, pad,
-                                   dtype, nodata = nd, n_chunks = nc),
+                                   dtype, nodata = nd, n_chunks = nc,
+                                   scale = wsc, offset = wof),
         wpath = wpath, xo = it$x_off[[j]], yo = it$y_off[[j]],
         val = ref$v, skey = skey, el = ref$el, pad = pad,
         dtype = dtype, nd = wnodata, nc = nrow(it),
+        wsc = wspec$scale %||% numeric(0),
+        wof = wspec$offset %||% numeric(0),
         .compute = "garry_write"))
     invisible(NULL)
   }
@@ -1417,12 +1432,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           for (j in sink_task_j[[k]]) {
             if (writer_on) {
               dispatch_write(sink@id, j, path, sink_it, sink_skey,
-                             sink_spad, sink@grid@dtype)
+                             sink_spad, wspec$dtype %||% sink@grid@dtype)
             } else {
               ch <- chunk_of(sink@id, j)[[sink_skey]]
               .exec_check_writable(ch, nrow(sink_it))
               .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
-                                ch, sink_spad, sink@grid@dtype, wnodata)
+                                ch, sink_spad,
+                                wspec$dtype %||% sink@grid@dtype, wnodata,
+                                scale = wspec$scale %||% numeric(0),
+                                offset = wspec$offset %||% numeric(0))
             }
           }
           log_line("write", k)
@@ -1437,7 +1455,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
               ch <- chunk_of(sp$sid, j)[[sp$key]]
               .exec_check_writable(ch, nrow(sp$it))
               .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
-                                ch, sp$pad, sp$dtype, wnodata)
+                                ch, sp$pad, sp$dtype, wnodata,
+                                scale = wspec$scale %||% numeric(0),
+                                offset = wspec$offset %||% numeric(0))
             }
           }
           log_line("write", k)
@@ -1554,6 +1574,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     sp$path
   }
   .exec_sink_tail(plan, graph, chunks_of = chunks_of, path = path,
+                  wspec = wspec,
                   nodata = nodata, band_names = band_names,
                   streamed_path = streamed_path)
 }

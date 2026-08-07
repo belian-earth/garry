@@ -6,7 +6,6 @@
 # identical geometry. Weights are not distributed: tests needing them
 # skip unless the OCM cache (or GARRY_OCM_WEIGHTS) is present.
 
-skip_if_not_installed("anvl")
 skip_if_not_installed("jsonlite")
 
 .ocm_fixture <- test_path("fixtures", "ocm", "golden-128.safetensors")

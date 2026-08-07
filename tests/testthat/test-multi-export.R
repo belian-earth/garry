@@ -11,7 +11,6 @@
 }
 
 test_that("multi-export equals single collects across mixed sinks", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   a <- lazy_source(f); b <- lazy_source(f)
   stk <- lazy_stack(list(a + 1, b * 2, a - b))
@@ -35,13 +34,12 @@ test_that("multi-export equals single collects across mixed sinks", {
 })
 
 test_that("multi-export writes one file per sink from one execution", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   a <- lazy_source(f); b <- lazy_source(f)
   stk <- lazy_stack(list(a + 1, b * 2))
   red <- reduce_over(stk, "sum", "t")
   dir <- withr::local_tempdir("me")
-  collect(list(cum = stk, total = red), path = dir, distributed = FALSE)
+  write_tif(list(cum = stk, total = red), dir, distributed = FALSE)
   expect_setequal(list.files(dir), c("cum.tif", "total.tif"))
   ref <- collect(red, distributed = FALSE)
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "total.tif"))
@@ -51,7 +49,6 @@ test_that("multi-export writes one file per sink from one execution", {
 })
 
 test_that("sibling ScanNodes share one compute stage (kalman mean+sd)", {
-  skip_if_not_installed("anvl")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   f <- fixture_gradient_f32()
   g <- graph_new()
@@ -76,8 +73,6 @@ test_that("multi-export validates its input", {
 })
 
 test_that("multi-export: distributed == single-process", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
@@ -98,8 +93,6 @@ test_that("multi-export: distributed == single-process", {
 })
 
 test_that("multi-export: distributed streamed writes match memory results", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
@@ -113,8 +106,7 @@ test_that("multi-export: distributed streamed writes match memory results", {
            xs = xs[[1L]])$out)
   red <- reduce_over(stk, "sum", "t")
   dir <- withr::local_tempdir("mstream")
-  .with_px(400, collect(list(cum = sc, tot = red), path = dir,
-                        distributed = TRUE))
+  .with_px(400, write_tif(list(cum = sc, tot = red), dir, distributed = TRUE))
   ms <- .with_px(400, collect(list(cum = sc, tot = red),
                               distributed = FALSE))
   rd <- function(fp, b) {

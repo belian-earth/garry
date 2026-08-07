@@ -1,6 +1,5 @@
 # Decision D15 lock: the differentiability boundary is structural.
 
-skip_if_not_installed("anvl")
 
 .simple_kernel_loss <- function() {
   a <- lazy_source(fixture_gradient_f32())

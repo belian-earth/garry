@@ -18,8 +18,6 @@ test_that(".daemon_hygiene deep-evicts the jit cache", {
 })
 
 test_that("garry_pool_hygiene runs and the pools stay serviceable", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   local_pools(2, 1)

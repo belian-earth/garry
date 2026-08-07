@@ -85,7 +85,6 @@ test_that("reverse scan writes at original positions (oracle)", {
 # -- traced path (anvl): scan_over through execute_plan ------------------------
 
 test_that("cumsum scan matches apply() and its last slice the reduce", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   sc <- build_scan_stack(f, cumsum_body)
   out <- execute_plan(plan_lazy(sc))
@@ -101,7 +100,6 @@ test_that("cumsum scan matches apply() and its last slice the reduce", {
 })
 
 test_that("a multi-input scan reads parent cubes in lockstep", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
   b <- lazy_source(f)
@@ -127,7 +125,6 @@ test_that("a multi-input scan reads parent cubes in lockstep", {
 })
 
 test_that("a scan body can compute in f64 internally and emit f32", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   f64_body <- function(xs, margin) {
     x <- g_cast(xs[[1L]], "f64")
@@ -147,8 +144,6 @@ test_that("a scan body can compute in f64 internally and emit f32", {
 })
 
 test_that("scan: distributed == single-threaded", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
@@ -165,7 +160,6 @@ test_that("scan: distributed == single-threaded", {
 # -- dataset dispatch ----------------------------------------------------------
 
 test_that("scan_over a LazyDataset scans each band's t-stack", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new()
   src <- function() lazy_source(f, graph = g)

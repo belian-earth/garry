@@ -3,7 +3,6 @@
 # ocm_mask derives per slice, masks value bands, consumes the class
 # band, and preserves slice names; distributed == single-threaded.
 
-skip_if_not_installed("anvl")
 skip_if_not_installed("jsonlite")
 
 .ocm_wdir2 <- Sys.getenv("GARRY_OCM_WEIGHTS",
@@ -64,7 +63,6 @@ test_that("ocm_mask masks value bands per slice and keeps names", {
 
 test_that("ocm patch stages: distributed == single-threaded", {
   skip_if(!dir.exists(.ocm_wdir2), "OCM weights not present")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 

@@ -122,7 +122,7 @@ g <- graph_new()
 feats <- lapply(seq_len(2L * n_feat), function(b)
   lazy_source(ctx_path, band = b, graph = g))
 rf_out <- file.path(tempdir(), "bilat-pred-rf.tif")
-collect(mlp_over(feats), path = rf_out)
+write_tif(mlp_over(feats), rf_out)
 t_rf_pred <- tick() - t0
 cat(sprintf("rf arm   : filter+write %.1f s + predict %.1f s = %.1f s\n",
             t_rf_filter, t_rf_pred, t_rf_filter + t_rf_pred))
@@ -136,7 +136,7 @@ ctx <- lapply(raw, function(lr)
   focal(lr, fn = bilateral_focal(sigma_r = sigma_r, sigma_d = sigma_d),
         radius = 1L))
 ga_out <- file.path(tempdir(), "bilat-pred-garry.tif")
-collect(mlp_over(c(raw, ctx)), path = ga_out)
+write_tif(mlp_over(c(raw, ctx)), ga_out)
 t_garry <- tick() - t0
 cat(sprintf("garry arm: fused filter+predict = %.1f s  (%.2fx vs rf arm)\n",
             t_garry, (t_rf_filter + t_rf_pred) / t_garry))

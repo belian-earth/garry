@@ -5,7 +5,6 @@
 # body (the halo mechanics proof); distributed == single-threaded;
 # draw/gradient behaviour.
 
-skip_if_not_installed("anvl")
 
 # Translation-invariant toy body: collapse band, add two fixed shifts.
 # Size-preserving; needs radius >= 2 to crop the pad-contaminated ring,
@@ -88,7 +87,6 @@ test_that("chunked equals whole-frame (halo mechanics)", {
 })
 
 test_that("patch: distributed == single-threaded", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 

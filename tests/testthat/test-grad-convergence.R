@@ -2,7 +2,6 @@
 # input/output rasters by gradient descent THROUGH THE FULL PRODUCT PATH
 # (lazy sources, planner, chunked executor, mask-form gradients).
 
-skip_if_not_installed("anvl")
 
 test_that("kernel recovery converges through the product path", {
   fx <- fixture_random_f32()   # noise: identifiable (linear surfaces are
@@ -15,7 +14,7 @@ test_that("kernel recovery converges through the product path", {
   # enters the loss as a real source.
   a0 <- lazy_source(fx)
   y_path <- tempfile(fileext = ".tif")
-  collect(focal_kernel(a0, k_true), path = y_path)
+  write_tif(focal_kernel(a0, k_true), y_path)
 
   build_loss <- function() {
     a <- lazy_source(fx)
@@ -33,6 +32,9 @@ test_that("kernel recovery converges through the product path", {
     r <- lazy_value_and_grad(lp$loss, lp$fk, weights = k_est)
     k_est <- k_est - lr * r$grad
     losses <- c(losses, r$value)
+    # stop once both exit assertions below already hold; 300 is the
+    # divergence backstop, not a required iteration count
+    if (r$value < 1e-7 && max(abs(k_est - k_true)) < 1e-3) break
   }
   err <- max(abs(k_est - k_true))
   expect_lt(err, 1e-3)

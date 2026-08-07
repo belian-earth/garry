@@ -11,3 +11,4 @@ Rplots.pdf
 docs
 *.aux.xml
 tests/testthat/_problems/
+.Rprofile

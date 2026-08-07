@@ -43,7 +43,6 @@ test_that(".raw_bsq_vrt_xml describes a raw BSQ buffer GDAL reads with the senti
 }
 
 test_that("lazy_cog is lazy: construction records a CK: source, fetches nothing", {
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lclazy")
   f <- .lc_cog(dir)
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
@@ -57,8 +56,6 @@ test_that("lazy_cog is lazy: construction records a CK: source, fetches nothing"
 })
 
 test_that("lazy_cog reads a multi-band COG and fuses dequant (end to end)", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lc")
   f <- .lc_cog(dir)
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
@@ -78,8 +75,6 @@ test_that("lazy_cog reads a multi-band COG and fuses dequant (end to end)", {
 })
 
 test_that("lazy_cog carries the source sentinel to NaN before the decode", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lcnd")
   f <- .lc_cog(dir, codes = c(-128L, 90L), nd = -128L)     # band 1 is all sentinel
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
@@ -91,8 +86,6 @@ test_that("lazy_cog carries the source sentinel to NaN before the decode", {
 })
 
 test_that("lazy_cog band subset reads and names only the selected bands", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lcsub")
   f <- .lc_cog(dir, codes = c(-40L, 50L, 90L))
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
@@ -116,8 +109,6 @@ test_that("lazy_cog band subset reads and names only the selected bands", {
 }
 
 test_that("lazy_cog mosaics a vector of tiles in one fetch (B2)", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lcmos")
   left  <- .lc_tile(file.path(dir, "L.tif"), 0,    -40L)
   right <- .lc_tile(file.path(dir, "R.tif"), 2560,  90L)
@@ -130,9 +121,6 @@ test_that("lazy_cog mosaics a vector of tiles in one fetch (B2)", {
 })
 
 test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3)", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   dir <- withr::local_tempdir("lcdist")
@@ -164,8 +152,6 @@ test_that("lazy_cog reads under distributed daemons (shared /dev/shm staging, B3
 }
 
 test_that("lazy_cog (dataframe form) mirrors lazy_dataset: time-series median", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lcser")
   src <- data.frame(
     location = c(.lc_scog(file.path(dir, "a1.tif"), 10L),
@@ -204,8 +190,6 @@ test_that("lazy_cog (dataframe form) mirrors lazy_dataset: time-series median", 
 }
 
 test_that("lazy_cog (dataframe form) batches a mosaic slice through one pool", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lcbatchmos")
   # asset A slice has TWO tiles (left 20 / right 30 -> mosaic); asset B one tile.
   # Two source sets share a signature -> one ck_batch pool; A's tiles -> buildVRT.
@@ -225,8 +209,6 @@ test_that("lazy_cog (dataframe form) batches a mosaic slice through one pool", {
 })
 
 test_that("lazy_cog (dataframe form) carries a mask asset for mask()", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lcmask")
   src <- data.frame(
     location = c(.lc_scog(file.path(dir, "v.tif"), 100L),
@@ -271,7 +253,6 @@ test_that(".ck_stage_base falls back to disk beyond the RAM budget", {
 })
 
 test_that("lazy_cog stages on disk (and still reads right) under a tiny budget", {
-  skip_if_not_installed("cptkirk")
   skip_if(!dir.exists("/dev/shm"), "no tmpfs on this platform")
   dir <- withr::local_tempdir("lcbudget")
   f <- .lc_cog(dir)
@@ -290,7 +271,6 @@ test_that("lazy_cog survives no-nodata sources holding exact zeros", {
   # R-callback error handler and ABORTS the process unless the CK fetch
   # runs under CPL_LOG_ERRORS=OFF (.ck_quiet). A failure here may crash
   # the test runner outright -- that is the regression signal.
-  skip_if_not_installed("cptkirk")
   dir <- withr::local_tempdir("lczero")
   f <- file.path(dir, "zero.tif")
   d <- gdalraster::create("GTiff", f, 512, 512, 2, "Float32",

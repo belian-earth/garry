@@ -16,7 +16,9 @@
   open_options = character(0),
   fuse = NULL,
   read_raw = FALSE,
-  store_raw = FALSE
+  store_raw = FALSE,
+  scale = numeric(0),
+  offset = numeric(0)
 )
 }
 \arguments{

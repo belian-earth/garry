@@ -69,9 +69,13 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "GTIFF_SRS_SOURCE=EPSG" >> $GITHUB_ENV
 
+      # rustyfilters=?ignore: declared in Suggests as the bilateral
+      # reference implementation, but it is a cargo build (fragile on
+      # the Windows runner toolchain) and its tests skip cleanly when
+      # absent. Reference checks run on dev machines, not CI.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck
+          extra-packages: any::rcmdcheck, rustyfilters=?ignore
           needs: check
 
       # Force a source rebuild of DEV gdalraster against the recent

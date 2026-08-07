@@ -6,7 +6,7 @@ Authors@R:
 Description: Experimental. Lazy raster arrays with CRS/transform-aware
     semantics, chunked execution via mirai, and JIT-compiled kernels via
     anvl (XLA). Compute graph IR is R-native; GDAL handles IO via
-    gdalraster; grid math via vaster.
+    gdalraster.
 License: MIT + file LICENSE
 SystemRequirements: GDAL (>= 3.9, for the GTI mosaic driver)
 Encoding: UTF-8
@@ -15,29 +15,31 @@ Depends:
     R (>= 4.3)
 Imports:
     S7,
+    anvl,
     cli,
     codetools,
+    cptkirk,
     gdalraster (>= 2.6.1.9001),
     memuse,
     methods,
+    mirai,
+    mori,
     rlang
 Remotes:
     hypertidy/vaster,
     firelab/gdalraster,
     belian-earth/anvl@nv-scan,
-    belian-earth/cptkirk
+    belian-earth/cptkirk,
+    belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
-    anvl,
-    cptkirk,
     httr2,
     jsonlite,
     KFAS,
     knitr,
-    mirai,
-    mori,
     rmarkdown,
+    rustyfilters,
     torch,
     rstac,
     terra,
@@ -46,6 +48,8 @@ Suggests:
     withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+Config/testthat/parallel: true
+Config/testthat/start-first: grad-convergence, routed-dispatch, route-matrix, gd-general, mirai-equivalence, composite-direct, ocm-golden, raw-store, ocm-mask, scheduler-failures
 Config/roxygen2/version: 8.0.0
 Collate: 
     'band_mlp.R'
@@ -85,5 +89,6 @@ Collate:
     'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'
+    'write_tif.R'
     'zzz.R'
 URL: https://belian-earth.github.io/garry/

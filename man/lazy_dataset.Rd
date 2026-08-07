@@ -13,7 +13,9 @@ lazy_dataset(
   sort_field = "datetime",
   nodata = NULL,
   lon = NULL,
-  resampling = "near"
+  resampling = "near",
+  scale = FALSE,
+  offset = NULL
 )
 }
 \arguments{
@@ -46,6 +48,22 @@ back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardles
 interpolating packed QA bits corrupts them. \code{"near"} (the default)
 preserves exact source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"},
 ... to interpolate. Resample after the fact instead with \code{\link[=align]{align()}}.}
+
+\item{scale}{Apply each value band's scale/offset at read. \code{FALSE}
+(default) reads raw digital numbers. \code{TRUE} discovers the affine from
+the assets' file metadata (the GDAL band scale/offset QGIS applies;
+one asset per band is probed and the collection is assumed
+homogeneous) and every read returns \code{v * scale + offset}, applied
+after the nodata sentinel becomes NaN. A scalar or named numeric
+(keyed by asset) supplies scales explicitly. Discovery only consults
+the files themselves: STAC metadata is never read, so collections
+whose files carry no scaling metadata (e.g. Planetary Computer
+Sentinel-2 L2A) read raw and scale explicitly instead.
+\code{mask_asset} is never scaled.}
+
+\item{offset}{Explicit additive offset(s) (scalar or named by asset)
+used when \code{scale} is numeric; defaults to 0. Ignored when \code{scale} is
+logical.}
 }
 \value{
 A \code{LazyDataset}.

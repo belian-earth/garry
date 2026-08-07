@@ -62,7 +62,6 @@ test_that("standardisation and sigmoid output match the reference", {
 })
 
 test_that("traced (PJRT) kernel matches the untraced oracle", {
-  skip_if_not_installed("anvl")
   set.seed(3)
   n_in <- 5L
   w <- .mk_weights(n_in)
@@ -77,7 +76,6 @@ test_that("traced (PJRT) kernel matches the untraced oracle", {
 })
 
 test_that("a full band-stacked plan predicts through execute_plan", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   w <- .mk_weights(3L, hidden = 4L, seed = 11)
   g <- graph_new()
@@ -156,7 +154,6 @@ test_that("qa_plane gates predictions inside the kernel (untraced + traced)", {
   expect_equal(got, ref, tolerance = 1e-12)
 
   # traced kernel matches the oracle
-  skip_if_not_installed("anvl")
   jf <- g_jit(function(x) fn(x, 1L))
   traced <- g_download(jf(g_upload(full, "f32")))
   expect_identical(is.na(traced), is.na(ref))

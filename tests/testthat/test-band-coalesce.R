@@ -9,7 +9,6 @@
 # a sink), and results are identical to the per-band plan on every
 # execution path.
 
-skip_if_not_installed("anvl")
 
 .mb_graph <- function(fx, fn = NULL) {
   g <- graph_new()
@@ -129,8 +128,6 @@ test_that("a stack requested as a sink keeps its per-band shape", {
 })
 
 test_that("distributed execution matches memory on a coalesced plan", {
-  skip_if_not_installed("mirai")
-  skip_if_not_installed("mori")
   skip_on_cran()
   fx <- fixture_multiband()
   local_pools(2, 1, gdal_config = TRUE)

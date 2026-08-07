@@ -3,8 +3,6 @@
 # the on.exit chain leaves /dev/shm clean, and the pools stay (or can be
 # made) serviceable afterwards.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 skip_on_os(c("windows", "mac"))   # /dev/shm scan

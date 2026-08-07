@@ -63,7 +63,6 @@ test_that("time_sel selects by exact label, prefix, and position", {
 })
 
 test_that("stack_bands carries band labels; band_sel selects", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new()
   src <- function() lazy_source(f, graph = g)
@@ -78,7 +77,6 @@ test_that("stack_bands carries band labels; band_sel selects", {
 })
 
 test_that("group_by_time works on a bare labelled cube", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new()
   a <- lazy_source(f, graph = g)
@@ -97,14 +95,13 @@ test_that("group_by_time works on a bare labelled cube", {
 })
 
 test_that("collect writes t labels as band descriptions on unreduced stacks", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new()
   a <- lazy_source(f, graph = g)
   s <- lazy_stack(list("2023-01-01" = a + 0, "2023-01-02" = a * 2),
                   along = "t")
   path <- withr::local_tempfile(fileext = ".tif")
-  collect(s, path = path)
+  write_tif(s, path)
   r <- new(gdalraster::GDALRaster, path)
   on.exit(r$close())
   expect_equal(vapply(1:2, function(b) r$getDescription(b), character(1)),
@@ -112,7 +109,6 @@ test_that("collect writes t labels as band descriptions on unreduced stacks", {
 })
 
 test_that("a 3-formal scan body receives the axis labels", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new()
   a <- lazy_source(f, graph = g)
@@ -126,7 +122,6 @@ test_that("a 3-formal scan body receives the axis labels", {
 })
 
 test_that("mask join='inner' pairs shared slices; 'exact' aborts prescriptively", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new()
   src <- function() lazy_source(f, graph = g)

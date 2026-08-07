@@ -4,7 +4,6 @@
 # SORT_FIELD gives deterministic overlaps; lazy pipelines run on GTI
 # sources chunk-invariantly.
 
-skip_if_not_installed("anvl")
 
 # Cut the 60x40 gradient fixture into 2x2 tiles (30x20 each), offset by
 # `add`; returns a tile entries data.frame.

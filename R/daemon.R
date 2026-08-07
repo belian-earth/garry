@@ -200,10 +200,12 @@ NULL
                                    reg_key, parts = NULL,
                                    open_options = character(0),
                                    fuse = NULL, read_raw = FALSE,
-                                   store_raw = FALSE) {
+                                   store_raw = FALSE,
+                                   scale = numeric(0), offset = numeric(0)) {
   m <- .exec_read_padded(path, band, nodata, cg, core,
                          open_options = open_options,
-                         out = if (read_raw) "raw_f32" else "matrix")
+                         out = if (read_raw) "raw_f32" else "matrix",
+                         scale = scale, offset = offset)
   if (!is.null(fuse)) {
     m <- .apply_fuse(m, fuse, store_raw)
     if ((fuse$out_pad %||% 0L) > 0L)
@@ -260,7 +262,8 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_write_chunk <- function(path, x_off, y_off, val, skey, el,
-                                pad, dtype, nodata, n_chunks) {
+                                pad, dtype, nodata, n_chunks,
+                                scale = numeric(0), offset = numeric(0)) {
   ds <- .daemon_ds[[path]]
   if (is.null(ds)) {
     ds <- gdal_open_update(path)
@@ -268,7 +271,8 @@ NULL
   }
   ch <- if (is.null(el)) val[[skey]] else val[[el]]
   .exec_check_writable(ch, n_chunks)
-  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
+  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata,
+                    scale = scale, offset = offset)
   rm(ch, val)
   gc(FALSE)
   .garry_malloc_trim()
@@ -484,13 +488,18 @@ NULL
     "f32", c(length(bins), k$ny, k$nx), device = dev)
   band <- cube(job$band_bins)
   masked <- length(k$mask_bin) == 1L
+  # Read affine (SourceNode scale/offset), applied to the DN cube before the
+  # masked-apply so the kernel sees what a scaled read would have produced.
+  aff <- job$affine
+  adj <- if (!is.null(aff) && length(aff$scale) == 1L)
+    function(x) x * aff$scale + aff$offset else identity
   if (masked) {
     mask <- g_upload_raw(readBin(k$mask_bin, "raw", n = n * k$ny * k$nx * 4L),
                          "f32", c(n, k$ny, k$nx), device = dev)
-    lean <- function(inp) .apply_reduce(k$op, k$F(inp[[1L]], inp[[2L]]), 1L, k$nan_rm)
+    lean <- function(inp) .apply_reduce(k$op, k$F(adj(inp[[1L]]), inp[[2L]]), 1L, k$nan_rm)
     g_download_raw(g_jit(lean, device = dev)(list(band, mask)))
   } else {
-    lean <- function(inp) .apply_reduce(k$op, inp[[1L]], 1L, k$nan_rm)
+    lean <- function(inp) .apply_reduce(k$op, adj(inp[[1L]]), 1L, k$nan_rm)
     g_download_raw(g_jit(lean, device = dev)(list(band)))
   }
 }

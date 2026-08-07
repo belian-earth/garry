@@ -5,8 +5,6 @@
 # to the general scheduler (execute_plan_mirai), for any shape .cd_spec (the
 # composite fast path) does not match.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 # GTI fixtures (.gg_grid / .gg_gti / .gg_slice / .gg_val) and the strict
 # comparator live in helper-gti.R, shared with the composite-direct and

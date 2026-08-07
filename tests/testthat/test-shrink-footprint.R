@@ -1,7 +1,6 @@
 # shrink_footprint(): NaN spreads by the radius from every nodata
 # boundary, including the raster border (boundary = "nodata").
 
-skip_if_not_installed("anvl")
 
 test_that("shrink_footprint erodes nodata boundaries by the radius", {
   f <- fixture_gradient_f32()

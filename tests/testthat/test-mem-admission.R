@@ -39,9 +39,6 @@ test_that("the exec_ram_fraction option is registered and sane", {
 })
 
 test_that("a distributed run still completes with a tiny memory fraction", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
-  skip_if_not_installed("mori")
   skip_on_cran()
   # Squeezing the fraction to ~0 drives every gate to its floor (one
   # compute task, one read window at a time). That must serialise, not

@@ -70,6 +70,8 @@ reference:
   desc: Plan, distribute across daemons, and write the result.
   contents:
   - collect
+  - write_tif
+  - materialise
   - garry_daemons
   - garry_gdal_config
   - garry_opt

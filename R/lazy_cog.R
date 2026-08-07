@@ -99,8 +99,6 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
                      resampling = "near", names = NULL, mask_asset = NULL,
                      granularity = "day", sort_field = "datetime",
                      nodata = NULL, lon = NULL) {
-  rlang::check_installed("cptkirk",
-                         reason = "for lazy_cog(), the cptkirk read engine.")
   .assert_class(grid, GridSpec, "GridSpec")
   # A STAC `doc_items` (post query/filter) becomes the sources table internally;
   # a data.frame is a manual/non-STAC time series; a character path is a single

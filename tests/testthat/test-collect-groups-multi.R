@@ -3,7 +3,6 @@
 # the legacy per-group loop, ragged groups keep per-group band
 # descriptions, {group} paths are unchanged, distributed == single.
 
-skip_if_not_installed("anvl")
 
 .grp_fixture <- function(ragged = FALSE) {
   f <- fixture_gradient_f32()
@@ -22,9 +21,9 @@ skip_if_not_installed("anvl")
   paths <- if (is.null(path)) NULL else
     stats::setNames(unlist(garry:::.group_paths(path, labels)), labels)
   res <- lapply(seq_along(x@groups), function(i)
-    collect(x@groups[[i]],
-            path = if (is.null(paths)) NULL else paths[[i]],
-            nodata = nodata, distributed = FALSE))
+    garry:::.collect_impl(x@groups[[i]],
+                          path = if (is.null(paths)) NULL else paths[[i]],
+                          nodata = nodata, distributed = FALSE))
   names(res) <- labels
   if (!is.null(path)) return(paths)
   res
@@ -44,8 +43,7 @@ test_that("multi-export grouped writes match legacy files and names", {
   gr <- .grp_fixture(ragged = TRUE) |> group_by_time("month") |>
     reduce_over("median", over = "t", nan_rm = TRUE)
   d1 <- withr::local_tempdir(); d2 <- withr::local_tempdir()
-  p_new <- collect(gr, path = file.path(d1, "m-{group}.tif"),
-                   distributed = FALSE)
+  p_new <- write_tif(gr, file.path(d1, "m-{group}.tif"), distributed = FALSE)
   p_old <- .legacy_groups(gr, path = file.path(d2, "m-{group}.tif"))
   expect_identical(basename(p_new), basename(p_old))
   for (nm in names(p_new)) {
@@ -72,8 +70,8 @@ test_that("grouped raw-cube (.vrt) writes work through multi-export", {
   # unreduced dataset writes one raw-BSQ cube per date
   gr <- .grp_fixture() |> group_by_time("day")
   d <- withr::local_tempdir()
-  ps <- collect(gr, path = file.path(d, "z-{group}.vrt"),
-                distributed = FALSE)
+  ps <- garry:::.collect_impl(gr, path = file.path(d, "z-{group}.vrt"),
+                              distributed = FALSE)
   expect_length(ps, 4L)
   expect_true(all(file.exists(ps)))
   expect_true(all(file.exists(sub("\\.vrt$", ".bin", ps))))
@@ -90,7 +88,6 @@ test_that("grouped raw-cube (.vrt) writes work through multi-export", {
 })
 
 test_that("grouped multi-export: distributed == single-threaded", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 1, gdal_config = TRUE)

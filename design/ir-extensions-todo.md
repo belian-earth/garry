@@ -110,9 +110,11 @@ Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 
 GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
 scale 0.0001, offset -0.1 in raster:bands terms; often absent from
-STAC metadata but present in the TIFF). NEXT UP after #9 (with
-#8): an explicit `unscale = TRUE` on lazy_source() /
-lazy_dataset() that reads GetScale/GetOffset at discovery (the D8
+STAC metadata but present in the TIFF). DONE 2026-08-07
+(branch scale-and-write-tif, with #8; resolution below). Naming decided by Hugh: the
+argument is `scale` on lazy_source() / lazy_dataset(), default
+FALSE; `scale = TRUE` applies the discovered affine at read (not
+`unscale = TRUE`). Original proposal: an explicit flag that reads GetScale/GetOffset at discovery (the D8
 nodata pattern) and fuses the affine into the read kernel when
 non-trivial. NOT auto-on: silent value rescaling is the value-space
 version of silent resampling. No memory cost in garry (unlike VRT
@@ -163,7 +165,7 @@ Details to settle at implementation:
 - Failure cleanup: temp GeoTIFF must be removed on translate error;
   the requested path must never hold a half-written COG.
 
-## 8. collect() / write_tif() split: type-stable sinks (2026-08-08)
+## 8. collect() / write_tif() split: type-stable sinks -- DONE 2026-08-07
 
 Decided (Hugh): split execution verbs by sink instead of ballooning
 collect() arguments. NEXT UP after #9, together with #6.
@@ -200,7 +202,7 @@ Traps / details:
 - Soft-deprecate `collect(path=)` for one release (warning + forward
   to write_tif); update README + stac-composite + OCM vignettes.
 
-## 9. Dependency placement + test-suite speed (2026-08-08) -- FIRST
+## 9. Dependency placement + test-suite speed (2026-08-08) -- DONE 2026-08-07 (see resolution below)
 
 Prioritised by Hugh ahead of #6/#8. Two coupled problems.
 
@@ -251,3 +253,109 @@ Traps:
 - terra's CRAN binary links system GDAL sonames (pkgdown ?ignore
   history); fixtures remove it from default CI entirely, which also
   kills that failure class.
+
+### 9 resolution (2026-08-07, branch deps-test-speed)
+
+Placement DONE as planned, with two corrections found in audit:
+vaster is reference-tier, not engine (as_vaster_extent() is a pure
+reorder; vaster's only use is 4 cross-check assertions in
+test-grid-convention.R) so it stays in Suggests; rustyfilters was
+UNDECLARED despite test usage, now Suggests + Remotes with
+rustyfilters=?ignore on CI (cargo build, fragile on the Windows
+runner toolchain). anvl/cptkirk/mirai/mori moved to Imports; 194
+skip guards + 4 dead runtime guards stripped.
+
+Speed: the golden-test hypothesis did NOT survive measurement.
+Baseline (ListReporter, full local suite): 667 s test time / 11.2 min
+wall; ALL reference tests combined (KFAS 11.4 s, terra files 16 s
+whole-file, torch ~2.8 s, vaster/rustyfilters negligible) = ~30 s =
+4.5% of the suite. Fixture-ising them was dropped: it buys no
+meaningful time and the dependency-hygiene goal was met by
+declaration + CI ignore instead. The real costs are engine suites:
+grad-convergence 105 s (fixed: early-exit once assertions hold,
+-> 58 s), routed-dispatch 51 s, route-matrix 32 s,
+mirai-equivalence 24 s, gd-general 25 s (equivalence sweeps that
+earn their time). After: 591 s / 9.9 min, 0 failures, identical
+6984 passes.
+
+TAKEN after Hugh pushed back on 9.9 min: testthat parallel. The
+daemon-contention trap was tested empirically and does NOT apply at
+test-pool scale (2-3 daemons per file; the original incident was a
+benchmark-sized pool concurrent with the suite). Config/testthat/
+parallel: true + start-first for the slow files. Measured on the
+20-core dev machine, all runs 0 failures / identical 6984 passes:
+4 workers 3.5 min, 8 workers 2.34 and 2.68 min (two runs). Local:
+set TESTTHAT_CPUS=8 in user .Renviron (NOT the repo: CI checkouts
+would inherit it). CI: testthat defaults to 2 workers under R CMD
+check; watch the first macOS run. Caveat: each worker budgets
+memory admission against system-available RAM independently, so
+worker counts well beyond 8 overcommit admission.
+
+Remaining lever, deliberately NOT taken (own pass if wanted):
+- Shared file-level pools: ~50 local_pools() spawn/teardown cycles;
+  a per-file pool fixture would cut per-worker time but some tests
+  kill/rebuild pools mid-test and need isolation. Less pressing now
+  that workers overlap the spawn latency.
+
+### 6+7+8 resolution (2026-08-07, branch scale-and-write-tif)
+
+All three shipped. Deviations from the spec, all Hugh's calls:
+- #6 argument named `scale` (default FALSE), not `unscale`; TIFF/GDAL
+  band metadata is the ONLY discovery source (no STAC raster:bands
+  fallback: garry reads what QGIS reads; earth-search S2 users apply
+  the arithmetic explicitly). Empirical probe matrix recorded in the
+  session: MPC S2 = no metadata anywhere; HLS = TIFF tags; e84 S2 =
+  STAC only (deliberately unsupported).
+- #8 with NO deprecation shim: pre-release, so collect() lost
+  path/nodata/band_names outright. Tests/benchmarks converted;
+  .collect_impl (internal engine) keeps the full surface for
+  write_tif()/materialise()/groups, including .vrt raw-cube sinks.
+- Read affine applies in the read kernel AFTER sentinel->NaN (never
+  as IR), so graph shape is unchanged and composite_direct stays
+  eligible (affine rides the job, applied to the DN cube on device;
+  heterogeneous per-slice affines fall through to the scheduler).
+  Bonus discovered in mapping: the manual `(ds*s)+o` idiom DISABLES
+  the composite_direct fast path (per-slice MapNodes break the
+  2-parent masked shape); scale=TRUE does not.
+- Write quantization at the single gdal_write_window choke point
+  covers all five routes; sentinel maps AFTER quantization (DN
+  units). round() is R round-half-even, documented.
+- Roundtrip test: write_tif(dtype=i16, scale, offset) read back via
+  lazy_source(scale=TRUE) is exact to scale/2. stac-composite writes
+  the geomedian at 3.6 MB int16 vs 8.3 MB f32.
+
+WATCH: one non-reproducible 8-worker suite hang (write-tif +
+writer-errors area, log silent 33 min, all daemons idle) during this
+work; two subsequent full runs green. If it recurs, suspect the
+writer-daemon dispatch under concurrent pools; a stall detector
+pattern (log mtime vs 120 s) is in the session scratchpad.
+
+## 10. write_zarr(): Zarr output via the GDAL driver (2026-08-07)
+
+Proposal (Hugh): a write_zarr() sibling of write_tif(). Decision:
+sits behind the GDAL Zarr driver, NOT a new dependency (pixarr/Rarr
+etc. stay out). Probed 2026-08-07 on GDAL 3.13/gdalraster: classic
+Create + windowed band writes + readback all work, full dtype set --
+so the entire write_tif machinery (wspec quantization at
+gdal_write_window, streamed chunk writes, multi-export) reuses with a
+driver switch at gdal_create_output.
+
+Gating: garry's floor is already GDAL >= 3.9 (GTI driver), above the
+Zarr driver's 3.4 (V2) / 3.8 (V3 spec-final) landings, so no NEW
+version gate -- but builds can omit the driver, so gate at runtime on
+gdal_formats("Zarr") with a clear error.
+
+Details to settle at implementation:
+- FORMAT=ZARR_V2 vs ZARR_V3 creation option: default V2 (widest
+  ecosystem read support: xarray/zarr-python/dask) with a format arg.
+- Chunking via BLOCKSIZE creation option; align to garry's chunk grid
+  so streamed writes are whole-chunk (no read-modify-write).
+- Compression codecs are build-dependent (BLOSC/ZSTD optional):
+  probe, default to what exists, expose via creation_options.
+- v1 scope: the write_tif raster model ((y, x, band) via classic
+  API). A labelled (t, y, x) cube -- the real Zarr appeal -- needs
+  GDAL's multidim API; check gdalraster coverage before promising it,
+  else it waits.
+- quantization/scale metadata: Zarr driver stores scale/offset as
+  attributes? verify SetScale round-trips through the driver; if not,
+  write _ARRAY_ATTRIBUTES/CF-style attrs explicitly.

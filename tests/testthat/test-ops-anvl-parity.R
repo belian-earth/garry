@@ -2,7 +2,6 @@
 # jit(), must match the pure-R oracle on NaN-bearing inputs to f32
 # tolerance. Extends test-ops-oracle.R (decision D9/D14).
 
-skip_if_not_installed("anvl")
 
 .f32tol <- 1e-5
 

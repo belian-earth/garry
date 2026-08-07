@@ -151,7 +151,7 @@ preview(relief, main = "Local relief (m)")
 One v1 rule to know: `align()` applies to *sources*, not to computed
 results (warping a computed raster raises an error suggesting the
 alternatives). Align inputs onto the analysis grid first, then compute; or
-materialise a result with `collect(path = ...)` and re-open it.
+materialise a result with `write_tif()` and re-open it.
 
 ## Execute
 
@@ -165,12 +165,12 @@ preview(arr, col = grDevices::hcl.colors(64, "Rocket"),
         legend = FALSE, main = "Hillshade")
 ```
 
-Write straight to a GeoTIFF instead by passing `path`; chunks stream to disk
-as they finish, so the full result never needs to fit in memory:
+Write straight to a GeoTIFF instead with `write_tif()`; chunks stream to
+disk as they finish, so the full result never needs to fit in memory:
 
 ```{r hood-write}
 tif <- file.path(tempdir(), "hood-hillshade.tif")
-collect(hs, path = tif)
+write_tif(hs, tif)
 file.size(tif)
 ```
 
