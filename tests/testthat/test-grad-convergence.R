@@ -2,7 +2,6 @@
 # input/output rasters by gradient descent THROUGH THE FULL PRODUCT PATH
 # (lazy sources, planner, chunked executor, mask-form gradients).
 
-skip_if_not_installed("anvl")
 
 test_that("kernel recovery converges through the product path", {
   fx <- fixture_random_f32()   # noise: identifiable (linear surfaces are

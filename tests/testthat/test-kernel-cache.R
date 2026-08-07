@@ -2,7 +2,6 @@
 # chunk grid submits at most 4 distinct shapes per stage (D4), so each
 # stage compiles at most 4 executables.
 
-skip_if_not_installed("anvl")
 
 test_that("a ragged chunk grid submits at most 4 shapes per stage", {
   f <- fixture_gradient_f32()          # 60 x 40

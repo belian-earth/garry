@@ -109,7 +109,6 @@ test_that("the batched body advances every pixel independently", {
 })
 
 test_that("traced (PJRT) body matches the untraced oracle", {
-  skip_if_not_installed("anvl")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(6)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
@@ -126,7 +125,6 @@ test_that("traced (PJRT) body matches the untraced oracle", {
 })
 
 test_that("kalman_smooth() through a full scan_over plan matches KFAS", {
-  skip_if_not_installed("anvl")
   skip_if_not_installed("KFAS")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(7)
@@ -170,8 +168,6 @@ test_that("kalman_smooth() through a full scan_over plan matches KFAS", {
 })
 
 test_that("kalman scan: distributed == single-threaded", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
@@ -286,7 +282,6 @@ test_that("robust reweighting is per pixel in a batched cube", {
 })
 
 test_that("robust traced (PJRT) body matches the untraced oracle", {
-  skip_if_not_installed("anvl")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(10)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
@@ -301,7 +296,6 @@ test_that("robust traced (PJRT) body matches the untraced oracle", {
 })
 
 test_that("mean+sd collect as ONE multi-sink plan, scans sharing a stage", {
-  skip_if_not_installed("anvl")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function(k) lazy_source(f, graph = g) * k

@@ -4,8 +4,6 @@
 # exceeds the modelled working sets — an estimate defect becomes a
 # throughput dip and a log line instead of an OOM.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

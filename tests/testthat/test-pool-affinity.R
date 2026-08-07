@@ -5,7 +5,6 @@
 # Spike A (benchmarks/README.md 2026-07-29) established that this mask
 # bounds the XLA client's thread pool and that k >= 2 is a hard floor.
 
-skip_if_not_installed("mirai")
 skip_if(Sys.info()[["sysname"]] != "Linux", "affinity is Linux-only")
 skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
 

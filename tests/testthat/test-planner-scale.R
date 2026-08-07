@@ -6,7 +6,6 @@
 # stage's read window is budgeted by ITS consumers' fan-in rather than
 # the plan-wide widest stage.
 
-skip_if_not_installed("anvl")
 
 test_that("a post-reduce map does not fold year stages into the join", {
   fx <- fixture_multiband()

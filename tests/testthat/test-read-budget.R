@@ -7,8 +7,6 @@
 # stage's input set still completes (escape hatch, no deadlock), and
 # results are identical to single-threaded whatever the budget.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 test_that("coarse read window shrinks with the widest stage's inputs", {
   f <- fixture_gradient_f32()

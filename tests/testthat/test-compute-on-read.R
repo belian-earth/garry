@@ -6,8 +6,6 @@
 # do not exist; guards hold (sink and multi-consumer sources stay
 # unfused).
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 test_that("source-fed kernel chains execute on their read tasks", {
   skip_if(!requireNamespace("garry", quietly = TRUE),

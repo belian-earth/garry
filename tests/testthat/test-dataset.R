@@ -33,7 +33,6 @@ test_that("as_dataset builds a named dataset; indexing round-trips", {
 })
 
 test_that("reduce_over per band equals the manual stack+reduce path", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
 
@@ -49,14 +48,12 @@ test_that("reduce_over per band equals the manual stack+reduce path", {
 })
 
 test_that("collect on a single-band dataset returns a matrix", {
-  skip_if_not_installed("anvl")
   ds <- ds_fixture(fixture_gradient_f32())["V1"]
   out <- collect(reduce_over(ds, "mean", "t"))
   expect_equal(dim(out), c(40L, 60L))
 })
 
 test_that("mask(qa_bits) equals a manual bitmask + apply", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
 
@@ -81,7 +78,6 @@ test_that("mask(qa_bits) equals a manual bitmask + apply", {
 })
 
 test_that("mask(value set) flags category membership", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
 
@@ -106,7 +102,6 @@ test_that("mask(value set) flags category membership", {
 })
 
 test_that("mask morphology (open + dilate) matches a manual erode/dilate chain", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
   got <- collect(reduce_over(mask(ds, where = qa_bits(0:1), open = 2, dilate = 3),
@@ -146,7 +141,6 @@ test_that("stack_bands needs one layer per band", {
 })
 
 test_that("scalar arithmetic scales value bands and leaves the mask band", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
   scaled <- ds * 0.1
@@ -161,7 +155,6 @@ test_that("scalar arithmetic scales value bands and leaves the mask band", {
 })
 
 test_that("dataset + dataset combines shared value bands slice by slice", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   a <- ds_fixture(f)                                      # V1, V2, Q
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
@@ -205,7 +198,6 @@ test_that("dataset + dataset combines shared value bands slice by slice", {
 }
 
 test_that("lazy_dataset builds from a STAC table and masks end to end (offline)", {
-  skip_if_not_installed("anvl")
   src  <- stac_sources(.ds_fake_items(), assets = c("V", "Q"))
   vloc <- src$location[src$asset == "V"]
   qloc <- src$location[src$asset == "Q"]
@@ -257,7 +249,6 @@ test_that("lazy_dataset threads resampling to value bands, keeps the mask near",
 })
 
 test_that("resampling actually rescales the warp-on-read (near vs average)", {
-  skip_if_not_installed("anvl")
   dir <- withr::local_tempdir("dsrs")
   s <- file.path(dir, "g.tif")
   d <- gdalraster::create("GTiff", s, 16, 16, 1, "Float32", return_obj = TRUE)
@@ -288,7 +279,6 @@ test_that("resampling actually rescales the warp-on-read (near vs average)", {
 })
 
 test_that("a derived band joins the graph and is written by collect", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
   comp <- as_dataset(list(B04 = list(s() * 1), B03 = list(s() * 2),
@@ -318,7 +308,6 @@ test_that("assigning a band on the wrong grid is rejected", {
 })
 
 test_that("collect writes dataset band names as GDAL descriptions", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
   ds <- as_dataset(list(red = list(s()), green = list(s() * 2), blue = list(s() * 3)))
@@ -331,8 +320,6 @@ test_that("collect writes dataset band names as GDAL descriptions", {
 })
 
 test_that("distributed collect writes band descriptions too", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 2)
 
@@ -348,8 +335,6 @@ test_that("distributed collect writes band descriptions too", {
 })
 
 test_that("distributed masked composite equals the oracle", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)

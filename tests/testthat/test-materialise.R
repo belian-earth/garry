@@ -3,7 +3,6 @@
 # original; band names / slice dates / mask_asset / ragged bands carry
 # through; overwrite guard refuses stale targets; one multi-sink plan.
 
-skip_if_not_installed("anvl")
 
 .mat_fixture <- function(ragged = FALSE) {
   f <- fixture_gradient_f32()

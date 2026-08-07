@@ -1,8 +1,6 @@
 # Scaling smoke (slow; run on demand: GARRY_RUN_SCALING=1). Wall-clock
 # assertions are environment-sensitive, so this is nightly/manual tier.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!nzchar(Sys.getenv("GARRY_RUN_SCALING")),
         "set GARRY_RUN_SCALING=1 to run")
 

@@ -20,14 +20,12 @@
 }
 
 test_that("reduce_over(over = band) collapses the band axis", {
-  skip_if_not_installed("anvl")
   rb <- .rb_cube()
   got <- collect(reduce_over(rb$cube, function(x, d) g_sum(x, d), over = "band"))
   expect_equal(got, Reduce(`+`, rb$mats), ignore_attr = "gis", tolerance = 1e-3)
 })
 
 test_that("band_project forms a per-pixel linear combination of bands", {
-  skip_if_not_installed("anvl")
   rb <- .rb_cube(); w <- c(0.5, -0.3, 0.8)
   got  <- collect(reduce_over(rb$cube, band_project(w), over = "band"))
   want <- Reduce(`+`, Map(function(m, wk) wk * m, rb$mats, w))
@@ -35,7 +33,6 @@ test_that("band_project forms a per-pixel linear combination of bands", {
 })
 
 test_that("band_project centres each band before weighting", {
-  skip_if_not_installed("anvl")
   rb <- .rb_cube(); w <- c(1, 1, 1); ctr <- c(10, 20, 30)
   got  <- collect(reduce_over(rb$cube, band_project(w, center = ctr), over = "band"))
   want <- Reduce(`+`, Map(function(m, wk, ck) wk * (m - ck), rb$mats, w, ctr))
@@ -43,7 +40,6 @@ test_that("band_project centres each band before weighting", {
 })
 
 test_that("stacked band_projects give multiple components (PCA-style)", {
-  skip_if_not_installed("anvl")
   rb <- .rb_cube()
   W <- matrix(c(0.5, -0.3, 0.8, 0.1, 0.9, -0.2), nrow = 3)   # 3 bands x 2 comps
   pcs <- lazy_stack(

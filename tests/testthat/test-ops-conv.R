@@ -3,7 +3,6 @@
 # on every parameterisation used by the model (stride, padding,
 # dilation, groups incl. depthwise), and conv semantics == torch.
 
-skip_if_not_installed("anvl")
 
 .f32tol <- 1e-4
 

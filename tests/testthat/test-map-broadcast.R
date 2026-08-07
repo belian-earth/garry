@@ -7,7 +7,6 @@
 # computed, which blocks multi-band read coalescing. Both spellings must
 # give identical values, and the post-stack one must collapse the reads.
 
-skip_if_not_installed("anvl")
 
 test_that("a (y, x) plane may join a cube in lazy_map", {
   fx <- fixture_multiband()

@@ -4,8 +4,6 @@
 # unlink (defect hunt L3) and closes the output; and the writer_on=FALSE
 # host-inline fallback stays alive and correct.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

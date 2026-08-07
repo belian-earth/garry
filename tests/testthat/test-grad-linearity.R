@@ -1,6 +1,5 @@
 # Chunked gradients equal unchunked gradients (linearity of sum/mean).
 
-skip_if_not_installed("anvl")
 
 test_that("kernel gradient is identical across chunk sizes", {
   f <- fixture_gradient_f32()

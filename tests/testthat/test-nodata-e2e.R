@@ -1,7 +1,6 @@
 # Decision D8 end-to-end: i16 + nodata source through map, focal, and
 # nan_rm reductions vs terra's na.rm = TRUE as the independent oracle.
 
-skip_if_not_installed("anvl")
 
 test_that("nodata flows as NaN through map and reduce, matches terra", {
   skip_if_not_installed("terra")

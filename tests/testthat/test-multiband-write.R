@@ -2,7 +2,6 @@
 # multi-band GTiff. One plan for all bands means one scheduler pass —
 # the fix for per-band sequential collects in composite workloads.
 
-skip_if_not_installed("anvl")
 
 test_that("band stack writes a multiband GTiff, layer order preserved", {
   f <- fixture_gradient_f32()

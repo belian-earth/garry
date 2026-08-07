@@ -38,7 +38,6 @@ test_that("read_retry = 0 is a single attempt with no warning", {
 })
 
 test_that(".exec_read_padded survives one transient read failure", {
-  skip_if_not_installed("anvl")
   withr::local_options(garry.read_retry = 1L)
   f <- fixture_gradient_f32()
   want <- collect(lazy_source(f) + 0)

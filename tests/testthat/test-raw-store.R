@@ -33,8 +33,6 @@ test_that("sv helpers mirror matrix slicing exactly", {
 })
 
 test_that("distributed raw f32 store == single-threaded oracle", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   skip_if(!garry::.g_has_raw_upload(),
@@ -72,8 +70,6 @@ test_that("distributed raw f32 store == single-threaded oracle", {
 })
 
 test_that("distributed multiband sink streams to GTiff like the oracle", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   skip_if(!garry::.g_has_raw_upload(),
@@ -123,7 +119,6 @@ test_that("f64 payloads round-trip the sv layer bit-exactly", {
 })
 
 test_that("f64 raw upload/download round-trips through anvl bit-exactly", {
-  skip_if_not_installed("anvl")
   skip_if(!garry:::.g_has_raw_upload(), "no raw upload support")
   m <- matrix(c(1.5, -2.25, pi, 1e-300), 2, 2)
   v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
@@ -134,8 +129,6 @@ test_that("f64 raw upload/download round-trips through anvl bit-exactly", {
 })
 
 test_that("an f64 chain runs distributed bit-identically to the oracle", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   f <- fixture_gradient_f32()
   # an f64 map chain feeding an f64 sink: with the f64 raw store the
   # distributed result must be BIT-identical to the all-doubles oracle

@@ -3,7 +3,6 @@
 # alignment aborts, as_terra() from the gis attribute, and fill_gaps()
 # (ffill / bfill / linear) as scan_over bodies.
 
-skip_if_not_installed("anvl")
 
 test_that("comparisons produce f32 0/1 masks that compose", {
   f <- fixture_gradient_f32()

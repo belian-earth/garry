@@ -12,7 +12,6 @@ build_stack <- function(f, red, nan_rm = TRUE) {
 }
 
 test_that("a custom reducer re-expressing a builtin matches it", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   sum_fn <- function(x, dims) g_sum(x, dims = dims, nan_rm = TRUE)
   custom  <- execute_plan(plan_lazy(build_stack(f, sum_fn)))
@@ -21,7 +20,6 @@ test_that("a custom reducer re-expressing a builtin matches it", {
 })
 
 test_that("a custom reducer runs arbitrary anvl math (range = max - min)", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   range_fn <- function(x, dims) {
     g_max(x, dims = dims, nan_rm = TRUE) - g_min(x, dims = dims, nan_rm = TRUE)
@@ -33,8 +31,6 @@ test_that("a custom reducer runs arbitrary anvl math (range = max - min)", {
 })
 
 test_that("custom reducer: distributed == single-threaded oracle", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
@@ -51,8 +47,6 @@ test_that("custom reducer: distributed == single-threaded oracle", {
 })
 
 test_that("a custom reducer cannot be distributed over spatial dims", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)

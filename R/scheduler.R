@@ -129,7 +129,6 @@ NULL
 #' @return As `execute_plan()`.
 #' @export
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
-  rlang::check_installed("mirai", reason = "for distributed execution.")
   .garry_opt_check()
   # Distributed execution runs on the garry_daemons() split pools: read/warp
   # tasks route to the read pool — where anvl/PJRT never loads, so a reader
@@ -239,9 +238,6 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))
-  if (!requireNamespace("mori", quietly = TRUE))
-    .garry_error("the distributed scheduler requires the mori package",
-                 "garry_scheduler_error")
   # Raw f32 store payloads (phase 12c, D19-D21). Resolved once here:
   # daemon processes do not inherit host options, so the flag rides in
   # every task payload.

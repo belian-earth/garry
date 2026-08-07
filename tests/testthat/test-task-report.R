@@ -4,8 +4,6 @@
 # pairs, per-stage durations and queue waits, max concurrency, drain vs
 # host tail.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

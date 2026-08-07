@@ -3,7 +3,6 @@
 # the legacy per-group loop, ragged groups keep per-group band
 # descriptions, {group} paths are unchanged, distributed == single.
 
-skip_if_not_installed("anvl")
 
 .grp_fixture <- function(ragged = FALSE) {
   f <- fixture_gradient_f32()
@@ -90,7 +89,6 @@ test_that("grouped raw-cube (.vrt) writes work through multi-export", {
 })
 
 test_that("grouped multi-export: distributed == single-threaded", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 1, gdal_config = TRUE)

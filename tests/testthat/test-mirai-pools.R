@@ -4,8 +4,6 @@
 # works; and distributed execution requires the garry pools (a plain
 # mirai::daemons() pool is not silently used).
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 test_that("pooled distributed == single-threaded; pools stay lean", {
   skip_if(!requireNamespace("garry", quietly = TRUE),

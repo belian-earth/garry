@@ -11,7 +11,6 @@
 }
 
 test_that("multi-export equals single collects across mixed sinks", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   a <- lazy_source(f); b <- lazy_source(f)
   stk <- lazy_stack(list(a + 1, b * 2, a - b))
@@ -35,7 +34,6 @@ test_that("multi-export equals single collects across mixed sinks", {
 })
 
 test_that("multi-export writes one file per sink from one execution", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   a <- lazy_source(f); b <- lazy_source(f)
   stk <- lazy_stack(list(a + 1, b * 2))
@@ -51,7 +49,6 @@ test_that("multi-export writes one file per sink from one execution", {
 })
 
 test_that("sibling ScanNodes share one compute stage (kalman mean+sd)", {
-  skip_if_not_installed("anvl")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   f <- fixture_gradient_f32()
   g <- graph_new()
@@ -76,8 +73,6 @@ test_that("multi-export validates its input", {
 })
 
 test_that("multi-export: distributed == single-process", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
@@ -98,8 +93,6 @@ test_that("multi-export: distributed == single-process", {
 })
 
 test_that("multi-export: distributed streamed writes match memory results", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")

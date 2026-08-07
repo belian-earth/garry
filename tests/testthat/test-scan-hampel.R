@@ -3,7 +3,6 @@
 # gaps and series ends); t0 = 0 degenerates to a rolling median; gaps
 # stay gaps; distributed == single-threaded.
 
-skip_if_not_installed("anvl")
 
 # independent reference: per-pixel clipped-window hampel
 .ref_hampel <- function(v, k, t0) {
@@ -59,7 +58,6 @@ test_that("gaps stay gaps; the spike slice is repaired", {
 })
 
 test_that("hampel scan: distributed == single-threaded", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 

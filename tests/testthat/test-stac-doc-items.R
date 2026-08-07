@@ -89,8 +89,6 @@ test_that("stac_filter_coverage also works on a sources data frame", {
 })
 
 test_that("lazy_cog accepts a doc_items and reads it (internal conversion)", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("cptkirk")
   skip_if_not_installed("rstac")
   dir <- withr::local_tempdir("dicog")
   its <- .di_items(list(.di_feat(

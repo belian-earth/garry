@@ -5,8 +5,6 @@
 # scheduler silently, and a plan changing route is exactly the
 # regression class an equivalence suite must observe to catch.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

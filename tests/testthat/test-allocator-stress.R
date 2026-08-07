@@ -3,7 +3,6 @@
 # Asserts bounded growth of R-visible memory across hundreds of
 # upload/run/download cycles.
 
-skip_if_not_installed("anvl")
 skip_on_cran()
 
 test_that("500 chunk cycles do not leak R-visible memory", {

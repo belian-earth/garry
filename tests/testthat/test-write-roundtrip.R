@@ -2,7 +2,6 @@
 # the sentinel on write (D8 reversed); integer output with NaN and no
 # sentinel errors.
 
-skip_if_not_installed("anvl")
 
 test_that("f32 pipeline writes and reads back bit-exactly", {
   f <- fixture_gradient_f32()

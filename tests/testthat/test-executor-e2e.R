@@ -1,7 +1,6 @@
 # Phase 5 gate: end-to-end collect() on real GeoTIFFs vs whole-array
 # pure-R references (and terra where it adds an independent oracle).
 
-skip_if_not_installed("anvl")
 
 test_that("source |> +1 |> focal mean |> global mean matches reference", {
   f <- fixture_gradient_f32()
@@ -64,7 +63,6 @@ test_that("scalar reduction sinks return scalars", {
 })
 
 test_that("read_fail = 'nodata' turns a dead source into NaN, not an abort", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   meta <- gdal_grid_spec(f)
   ghost <- lazy_source(file.path(tempdir(), "garry-gone.tif"),

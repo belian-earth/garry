@@ -1,7 +1,6 @@
 # align -> compute pipelines end to end, including focal-after-warp
 # (allowed by D11: warp stages satisfy halos like sources do).
 
-skip_if_not_installed("anvl")
 
 test_that("align -> map matches reference", {
   skip_if_not_installed("terra")

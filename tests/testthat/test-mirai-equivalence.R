@@ -2,8 +2,6 @@
 # to the single-threaded executor on every golden pipeline shape (same
 # Plan, same kernels, two schedulers).
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 
 test_that("distributed == single-threaded across pipeline shapes", {
   # The current package must be installed for daemons to load it.
@@ -57,7 +55,6 @@ test_that("mori store matches rds store on the benchmark shape", {
   # Coarse whole-window reads + zero-copy consumer slicing (the mori
   # path skips the producer-side split entirely), per-band fused
   # stages, band-stack join, multiband write sink.
-  skip_if_not_installed("mori")
   skip_if(!requireNamespace("garry", quietly = TRUE))
   local_pools(2, 2)
   old <- options(garry.chunk_target_px = 400, garry.read_target_px = 4e3)

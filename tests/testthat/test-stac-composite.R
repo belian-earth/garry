@@ -4,7 +4,6 @@
 # local tiles keep the gate deterministic; live-network smoke is
 # env-gated (GARRY_RUN_NETWORK=1).
 
-skip_if_not_installed("anvl")
 
 # Fabricate a doc_items-shaped list over the three local stack fixtures
 # (two tiles per date: west/east half of the 50x40 EPSG:3857 grid).

@@ -51,7 +51,6 @@ test_that(".plot_array rejects a band count other than 1 or 3", {
 })
 
 test_that("preview() dispatches over array, path, and lazy objects", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
   ds <- as_dataset(list(a = list(s()), b = list(s() * 2), c = list(s() * 3)))
@@ -122,7 +121,6 @@ test_that(".preview_coarsen re-plans grid-pinned sources; NULL otherwise", {
 })
 
 test_that("coarse preview reads COG overviews, even for a derived band", {
-  skip_if_not_installed("anvl")
   # A checkerboard: native pixels are 0/1; the AVERAGE overview is ~0.5. A coarse
   # read that uses the overview is uniform (sd ~ 0); native decimation scatters.
   n <- 256
@@ -151,7 +149,6 @@ test_that("coarse preview reads COG overviews, even for a derived band", {
 })
 
 test_that("preview() coarse-collects a grid-pinned lazy raster", {
-  skip_if_not_installed("anvl")
   p <- .pinned_lr()
   # the coarse pipeline actually executes at reduced res
   arr <- collect(.preview_coarsen(p$lr, 20))

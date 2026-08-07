@@ -4,7 +4,6 @@
 # timesteps; the medoid returns an observed spectrum; distributed ==
 # single-threaded.
 
-skip_if_not_installed("anvl")
 
 .mb_cube <- function() {
   f <- fixture_gradient_f32()
@@ -80,7 +79,6 @@ test_that("medoid returns the observed vector nearest the geomedian", {
 })
 
 test_that("multiband reducers: distributed == single-threaded", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
   skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 

@@ -5,8 +5,6 @@
 # classed garry_version_skew_error instead of undefined behavior
 # mid-drain ("unused argument" mirai errors, silent semantic drift).
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

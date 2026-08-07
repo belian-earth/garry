@@ -7,8 +7,6 @@
 # tasks are CONFINED to the designated profiles with mixed per-role
 # masks.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

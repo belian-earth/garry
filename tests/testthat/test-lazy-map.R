@@ -1,6 +1,5 @@
 # lazy_map: the user-facing elementwise map (no IR types in sight).
 
-skip_if_not_installed("anvl")
 
 test_that("single-input map with g_* vocabulary matches the reference", {
   f <- fixture_gradient_f32()

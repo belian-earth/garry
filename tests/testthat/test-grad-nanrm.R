@@ -4,7 +4,6 @@
 # gradients are NaN-poisoned whenever nodata multiplies the parameter
 # (0 x NaN in the cotangent). The mask form is poison-free and equal.
 
-skip_if_not_installed("anvl")
 
 .nan_data <- function(seed = 60, n = 8) {
   set.seed(seed)

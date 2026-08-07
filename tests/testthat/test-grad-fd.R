@@ -1,6 +1,5 @@
 # Pipeline gradients vs finite differences of collect()'d losses.
 
-skip_if_not_installed("anvl")
 
 .fd_kernel_grad <- function(build_loss, k0, eps = 1e-2) {
   g <- matrix(0, nrow(k0), ncol(k0))

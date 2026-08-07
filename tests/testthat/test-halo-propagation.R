@@ -42,7 +42,6 @@
 }
 
 test_that("focal over computed maps equals the materialise-first reference", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   ref <- .hp_reference(f)
   for (px in c(300, 1e6)) {   # many chunks (ring recompute) and one
@@ -56,7 +55,6 @@ test_that("focal over computed maps equals the materialise-first reference", {
 })
 
 test_that("the plan carries out_pad on the map stages, not a refusal", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   plan <- plan_lazy(.hp_graph(f)$ctx)
   pads <- vapply(plan@stages, function(s) s@out_pad, integer(1))
@@ -68,7 +66,6 @@ test_that("the plan carries out_pad on the map stages, not a refusal", {
 })
 
 test_that("multi-export: a padded sink export writes trimmed and exact", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   nodes <- .hp_graph(f)
   ref_stack <- collect(nodes$stack, distributed = FALSE)
@@ -94,7 +91,6 @@ test_that("multi-export: a padded sink export writes trimmed and exact", {
 })
 
 test_that("focal after a t-reduce recomputes the ring across the barrier", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   build <- function(g) {
     stk <- lazy_stack(lapply(1:3, function(i)
@@ -113,7 +109,6 @@ test_that("focal after a t-reduce recomputes the ring across the barrier", {
 })
 
 test_that("focal after a scan recomputes the ring across the barrier", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   build <- function(g) {
     stk <- lazy_stack(lapply(1:3, function(i)
@@ -139,7 +134,6 @@ test_that("focal after a scan recomputes the ring across the barrier", {
 })
 
 test_that("cross-stage focal towers accumulate pads", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   build <- function(g) {
     a <- lazy_source(f, graph = g)
@@ -168,7 +162,6 @@ test_that("cross-stage focal towers accumulate pads", {
 })
 
 test_that("distributed == single-threaded for compute-fed focals", {
-  skip_if_not_installed("anvl")
   skip_on_cran()
   f <- fixture_gradient_f32()
   nodes <- .hp_graph(f)
@@ -194,7 +187,6 @@ test_that("distributed == single-threaded for compute-fed focals", {
 })
 
 test_that("kernel signatures distinguish out_pad", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   plan <- plan_lazy(lazy_source(f) + 1)
   s <- Filter(function(s) s@kind == "compute", plan@stages)[[1L]]

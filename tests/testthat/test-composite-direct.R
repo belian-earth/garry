@@ -5,8 +5,6 @@
 # the gd_compute_budget scheduler fall-through. Until this file, the
 # production default composite path had no offline test at all.
 
-skip_if_not_installed("anvl")
-skip_if_not_installed("mirai")
 skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 

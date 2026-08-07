@@ -3,7 +3,6 @@
 # XLA program per chunk, no store round-trips); multi-consumer
 # producers and focal stages stay materialised.
 
-skip_if_not_installed("anvl")
 
 # Two bands + one shared QA on a common grid.
 .merge_fixtures <- function() {
@@ -205,7 +204,6 @@ test_that("sources with different native blocks share one chunk table", {
 })
 
 test_that("merged plans run identically under the mirai scheduler", {
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   fx <- .merge_fixtures()

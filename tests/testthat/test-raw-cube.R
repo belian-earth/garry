@@ -80,7 +80,6 @@ test_that("f64 cubes read identically through the fast path", {
 })
 
 test_that("collect(path = '*.vrt') writes a raw cube, single-threaded", {
-  skip_if_not_installed("anvl")
   f <- fixture_gradient_f32()
   vrt <- file.path(withr::local_tempdir("rcw"), "out.vrt")
   collect(lazy_source(f) + 1, path = vrt)
@@ -91,8 +90,6 @@ test_that("collect(path = '*.vrt') writes a raw cube, single-threaded", {
 })
 
 test_that("streamed distributed writes land in a raw cube via the writer", {
-  skip_if_not_installed("anvl")
-  skip_if_not_installed("mirai")
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   local_pools(2, 1)
@@ -106,7 +103,6 @@ test_that("streamed distributed writes land in a raw cube via the writer", {
 })
 
 test_that("a raw cube feeds lazy_source like any raster", {
-  skip_if_not_installed("anvl")
   dir <- withr::local_tempdir("rcs")
   src <- .rc_fixture(dir, nb = 1L)
   vrt <- file.path(dir, "cube.vrt")

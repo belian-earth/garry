@@ -51,7 +51,6 @@ test_that("bilateral_focal matches the reference and rf_bilateral (untraced)", {
 })
 
 test_that("bilateral_focal through a traced plan matches rf_bilateral", {
-  skip_if_not_installed("anvl")
   skip_if_not_installed("rustyfilters")
   f <- fixture_gradient_f32()
   lr <- lazy_source(f)
@@ -72,7 +71,6 @@ test_that("bilateral_focal validates", {
 })
 
 test_that("bilateral_focal: per-channel sigma_r filters a cube in one node", {
-  skip_if_not_installed("anvl")
   set.seed(41)
   nch <- 3L; ny <- 24L; nx <- 20L
   cube <- array(rnorm(nch * ny * nx), c(nch, ny, nx))

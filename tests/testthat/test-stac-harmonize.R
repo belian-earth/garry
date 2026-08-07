@@ -73,7 +73,6 @@ test_that("stac_merge errors on mismatched columns", {
 }
 
 test_that("harmonised HLS-style collections build a ragged dataset that composites", {
-  skip_if_not_installed("anvl")
   # "Landsat": R, N2 (narrow NIR), QA over 2 days. "Sentinel": R, N (broad NIR),
   # QA over 2 other days. N is Sentinel-only; N2 is Landsat-only; R is shared.
   L <- stac_rename_assets(
