@@ -276,12 +276,21 @@ mirai-equivalence 24 s, gd-general 25 s (equivalence sweeps that
 earn their time). After: 591 s / 9.9 min, 0 failures, identical
 6984 passes.
 
-Remaining levers, deliberately NOT taken (own pass if wanted):
+TAKEN after Hugh pushed back on 9.9 min: testthat parallel. The
+daemon-contention trap was tested empirically and does NOT apply at
+test-pool scale (2-3 daemons per file; the original incident was a
+benchmark-sized pool concurrent with the suite). Config/testthat/
+parallel: true + start-first for the slow files. Measured on the
+20-core dev machine, all runs 0 failures / identical 6984 passes:
+4 workers 3.5 min, 8 workers 2.34 and 2.68 min (two runs). Local:
+set TESTTHAT_CPUS=8 in user .Renviron (NOT the repo: CI checkouts
+would inherit it). CI: testthat defaults to 2 workers under R CMD
+check; watch the first macOS run. Caveat: each worker budgets
+memory admission against system-available RAM independently, so
+worker counts well beyond 8 overcommit admission.
+
+Remaining lever, deliberately NOT taken (own pass if wanted):
 - Shared file-level pools: ~50 local_pools() spawn/teardown cycles;
-  a per-file pool fixture would cut real time but some tests kill/
-  rebuild pools mid-test and need isolation. Estimate first by
-  timing garry_daemons() spawn+teardown in isolation.
-- testthat parallel: collides with the daemon-contention trap
-  (concurrent pools oversubscribe cores, ABI-skew-style false
-  failures); would need a serial group for daemon files, which
-  testthat does not support natively.
+  a per-file pool fixture would cut per-worker time but some tests
+  kill/rebuild pools mid-test and need isolation. Less pressing now
+  that workers overlap the spawn latency.

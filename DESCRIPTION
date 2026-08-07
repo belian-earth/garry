@@ -48,6 +48,8 @@ Suggests:
     withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+Config/testthat/parallel: true
+Config/testthat/start-first: grad-convergence, routed-dispatch, route-matrix, gd-general, mirai-equivalence, composite-direct, ocm-golden, raw-store, ocm-mask, scheduler-failures
 Config/roxygen2/version: 8.0.0
 Collate: 
     'band_mlp.R'
