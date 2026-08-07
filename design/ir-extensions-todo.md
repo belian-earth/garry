@@ -110,8 +110,8 @@ Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 
 GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
 scale 0.0001, offset -0.1 in raster:bands terms; often absent from
-STAC metadata but present in the TIFF). Proposal, discussed and
-parked undecided: an explicit `unscale = TRUE` on lazy_source() /
+STAC metadata but present in the TIFF). NEXT UP (2026-08-08, with
+#8): an explicit `unscale = TRUE` on lazy_source() /
 lazy_dataset() that reads GetScale/GetOffset at discovery (the D8
 nodata pattern) and fuses the affine into the read kernel when
 non-trivial. NOT auto-on: silent value rescaling is the value-space
@@ -137,9 +137,10 @@ sugar for those who know.
 
 ## 7. cog = TRUE: cloud-optimised GeoTIFF output on collect (2026-08-07)
 
-Proposal (Hugh): `collect(x, path = "out.tif", cog = TRUE)` writes a
-COG instead of a plain GeoTIFF. Default FALSE keeps current behaviour
-and cost.
+Proposal (Hugh): a `cog = TRUE` flag writes a COG instead of a plain
+GeoTIFF. Default FALSE keeps current behaviour and cost. SURFACE
+SUPERSEDED by #8: the flag lives on `write_tif()`, not `collect()`;
+the mechanics below stand.
 
 Implementation shape is fixed by GDAL: the COG driver is
 CreateCopy-only (overviews precede full-res data, strict IFD
@@ -161,3 +162,40 @@ Details to settle at implementation:
   variant mirroring `band_names` if mixed outputs are ever wanted.
 - Failure cleanup: temp GeoTIFF must be removed on translate error;
   the requested path must never hold a half-written COG.
+
+## 8. collect() / write_tif() split: type-stable sinks (2026-08-08)
+
+Decided (Hugh): split execution verbs by sink instead of ballooning
+collect() arguments. NEXT UP together with #6.
+
+- `collect(x)`: execute, return the (y, x, band) array with its gis
+  attribute. Always an array: the current path= form makes the return
+  type depend on an optional argument. Multi-export
+  `collect(list(...))` unchanged.
+- `write_tif(x, path, dtype, scale, offset, nodata, cog,
+  creation_options, overview_resampling)`: execute, stream to GeoTIFF,
+  return the path invisibly. Later siblings (`write_zarr()`) follow
+  the same pattern. Naming settled: write_* (exit verbs, alongside
+  materialise()), not collect_*.
+- `materialise(x)`: unchanged; checkpoint to local cubes, stay lazy.
+
+dtype/scale/offset is the payoff: write int16 reflectance with
+scale/offset in band metadata; half the raw bytes of f32 and far
+better compression (quantized ints vs float mantissas). Writer
+applies round((v - offset) / scale) + cast per chunk at the sink
+boundary; no graph changes; GDAL consumers (and #6's unscale) recover
+physical values automatically. This is the exact inverse of #6, so
+land them together and share the affine conventions.
+
+Traps / details:
+- NaN -> integer nodata sentinel chosen OUTSIDE the valid quantized
+  range, mapped before scale metadata makes it ambiguous (reverse of
+  the #6 sentinel-before-scaling rule).
+- Rounding mode: document round-half-even vs round-half-up; pick one
+  and test against gdal_translate -ot Int16 -a_scale behaviour.
+- cog = TRUE from #7 lands here (stream to temp tiled GeoTIFF, then
+  gdalraster::translate(of = "COG")).
+- Multi-export file writes become `write_tif(list(...), paths)` when
+  wanted; Plan@sinks is already sink-shaped.
+- Soft-deprecate `collect(path=)` for one release (warning + forward
+  to write_tif); update README + stac-composite + OCM vignettes.
