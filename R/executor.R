@@ -613,6 +613,10 @@ NULL
 #'   demote NaN on write (required for integer outputs containing NaN).
 #' @param band_names Optional character vector of band descriptions written to
 #'   the output bands (multiband GTiff).
+#' @param wspec Optional sink write spec from [write_tif()]: a list of
+#'   `dtype` (output dtype override), `scale`/`offset` (quantization
+#'   affine applied per chunk at the sink boundary) and `options`
+#'   (creation options).
 #' @return The sink stage's value (matrix for raster sinks, scalar for
 #'   global reductions), or `path` invisibly when writing. When
 #'   `options(garry.exec_stats = TRUE)`, in-memory results carry a

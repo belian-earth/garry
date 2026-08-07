@@ -38,6 +38,9 @@ unknown; the chunking pass snaps chunk sizes to it.}
 
 \item{resampling}{GDAL resampling used when a read reprojects/rescales the
 source onto the analysis grid (default "near").}
+
+\item{scale, offset}{Length-0 (absent) or length-1 band affine applied
+inside the read kernel after sentinel -> NaN (see \code{\link[=lazy_source]{lazy_source()}}).}
 }
 \value{
 A \code{SourceNode}.

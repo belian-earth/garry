@@ -17,6 +17,11 @@ demote NaN on write (required for integer outputs containing NaN).}
 
 \item{band_names}{Optional character vector of band descriptions written to
 the output bands (multiband GTiff).}
+
+\item{wspec}{Optional sink write spec from \code{\link[=write_tif]{write_tif()}}: a list of
+\code{dtype} (output dtype override), \code{scale}/\code{offset} (quantization
+affine applied per chunk at the sink boundary) and \code{options}
+(creation options).}
 }
 \value{
 The sink stage's value (matrix for raster sinks, scalar for

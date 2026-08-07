@@ -50,6 +50,8 @@ Node <- S7::new_class(
 #' @param open_options GDAL open options ("KEY=VALUE"), e.g. GTI FILTER.
 #' @param resampling GDAL resampling used when a read reprojects/rescales the
 #'   source onto the analysis grid (default "near").
+#' @param scale,offset Length-0 (absent) or length-1 band affine applied
+#'   inside the read kernel after sentinel -> NaN (see [lazy_source()]).
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(
