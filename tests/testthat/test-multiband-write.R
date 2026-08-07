@@ -10,7 +10,7 @@ test_that("band stack writes a multiband GTiff, layer order preserved", {
   expect_identical(unname(stacked@grid@dims[["band"]]), 3L)
 
   outfile <- tempfile(fileext = ".tif")
-  collect(stacked, path = outfile)
+  write_tif(stacked, outfile)
 
   meta <- gdal_grid_spec(outfile)
   expect_true(grid_equal(meta$grid, gdal_grid_spec(f)$grid))
@@ -27,7 +27,7 @@ test_that("multiband write demotes NaN to the sentinel in every band", {
   a <- lazy_source(f)
   stacked <- lazy_stack(list(a, a * 2), along = "band")
   outfile <- tempfile(fileext = ".tif")
-  collect(stacked, path = outfile, nodata = -9999)
+  write_tif(stacked, outfile, nodata = -9999)
 
   ds <- methods::new(gdalraster::GDALRaster, outfile)
   on.exit(ds$close(), add = TRUE)
@@ -83,7 +83,7 @@ test_that("band-stacked composites share sources and match per-band runs", {
   expect_length(sources, 3L)   # b1, b2, qa once — not qa per band
 
   outfile <- tempfile(fileext = ".tif")
-  collect(out, path = outfile, nodata = -9999)
+  write_tif(out, outfile, nodata = -9999)
 
   for (b in 1:2) {
     solo <- collect(composite_of(list(f_b1, f_b2)[[b]]))

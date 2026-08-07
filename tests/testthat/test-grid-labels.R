@@ -101,7 +101,7 @@ test_that("collect writes t labels as band descriptions on unreduced stacks", {
   s <- lazy_stack(list("2023-01-01" = a + 0, "2023-01-02" = a * 2),
                   along = "t")
   path <- withr::local_tempfile(fileext = ".tif")
-  collect(s, path = path)
+  write_tif(s, path)
   r <- new(gdalraster::GDALRaster, path)
   on.exit(r$close())
   expect_equal(vapply(1:2, function(b) r$getDescription(b), character(1)),

@@ -86,10 +86,10 @@ test_that("distributed multiband sink streams to GTiff like the oracle", {
   ), along = "band")
 
   out_d <- tempfile(fileext = ".tif")
-  collect(bands, path = out_d, distributed = TRUE)
+  write_tif(bands, out_d, distributed = TRUE)
   dist <- lapply(1:2, function(b) gdal_read_window(out_d, b, 0L, 0L, 60L, 40L))
   out_s <- tempfile(fileext = ".tif")
-  collect(bands, path = out_s)
+  write_tif(bands, out_s)
   single <- lapply(1:2, function(b) gdal_read_window(out_s, b, 0L, 0L, 60L, 40L))
   expect_equal(dist, single, tolerance = 1e-5)
 })

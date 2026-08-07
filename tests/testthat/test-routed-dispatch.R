@@ -70,7 +70,7 @@ test_that("streamed writes work under routed dispatch", {
   local_pools(2, 2)
   f <- fixture_gradient_f32()
   path <- withr::local_tempfile(fileext = ".tif")
-  collect(lazy_source(f) + 1, path = path, distributed = TRUE)
+  write_tif(lazy_source(f) + 1, path, distributed = TRUE)
   want <- collect(lazy_source(f) + 1, distributed = FALSE)
   got <- gdal_read_window(path, 1L, 0L, 0L, 60L, 40L)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)

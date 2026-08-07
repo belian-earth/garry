@@ -5,7 +5,14 @@
 \title{Execute a reduce-decomposable plan: overlap-compute the leaf reduces, then
 run the upper IR on the materialised results.}
 \usage{
-.execute_gd_reduce(plan, decomp, path = NULL, nodata = NULL, band_names = NULL)
+.execute_gd_reduce(
+  plan,
+  decomp,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+)
 }
 \description{
 Execute a reduce-decomposable plan: overlap-compute the leaf reduces, then

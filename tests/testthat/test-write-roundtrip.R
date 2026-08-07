@@ -12,7 +12,7 @@ test_that("f32 pipeline writes and reads back bit-exactly", {
   outfile <- tempfile(fileext = ".tif")
   old <- options(garry.chunk_target_px = 300)   # chunked writes
   on.exit(options(old))
-  collect(expr, path = outfile)
+  write_tif(expr, outfile)
 
   back <- gdal_read_window(outfile, 1L, 0L, 0L, 60L, 40L)
   expect_equal(back, in_mem, tolerance = 0, ignore_attr = "gis")
@@ -27,7 +27,7 @@ test_that("NaN demotes to the sentinel and survives a roundtrip", {
   f <- fixture_i16_nodata()
   a <- lazy_source(f)                      # f32 with NaN
   outfile <- tempfile(fileext = ".tif")
-  collect(a * 1, path = outfile, nodata = -9999)
+  write_tif(a * 1, outfile, nodata = -9999)
 
   meta <- gdal_grid_spec(outfile)
   expect_identical(meta$nodata, -9999)
@@ -61,7 +61,7 @@ test_that("pure-source write copies the raster (i16 in, i16 out)", {
   a <- lazy_source(f)
   expect_identical(a@grid@dtype, "i16")
   outfile <- tempfile(fileext = ".tif")
-  collect(a, path = outfile)
+  write_tif(a, outfile)
 
   expect_identical(gdal_grid_spec(outfile)$grid@dtype, "i16")
   expect_identical(gdal_read_window(outfile, 1L, 0L, 0L, 20L, 15L),
@@ -72,7 +72,6 @@ test_that("integer output with NaN and no sentinel errors; scalars refuse", {
   f <- fixture_i16_nodata()
   a <- lazy_source(f)
   expect_error(
-    collect(reduce_over(a, "mean", c("x", "y")),
-            path = tempfile(fileext = ".tif")),
+    write_tif(reduce_over(a, "mean", c("x", "y")), tempfile(fileext = ".tif")),
     class = "garry_plan_error")
 })

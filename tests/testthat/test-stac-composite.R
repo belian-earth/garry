@@ -158,7 +158,7 @@ test_that("the full benchmark shape runs: mask -> stack -> median", {
   })
   comp <- reduce_over(lazy_stack(masked), "median", "t", nan_rm = TRUE)
   outfile <- tempfile(fileext = ".tif")
-  collect(comp, path = outfile)
+  write_tif(comp, outfile)
 
   layers <- lapply(src$location, function(f) {
     m <- gdal_read_window(f, 1L, 0L, 0L, 50L, 40L)

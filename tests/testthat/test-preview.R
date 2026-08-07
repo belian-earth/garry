@@ -62,7 +62,7 @@ test_that("preview() dispatches over array, path, and lazy objects", {
   expect_error(preview(arr), NA)                       # collected array
   expect_identical(preview(ds, bands = c("a", "b", "c")), ds)  # names -> RGB, returns x
 
-  out <- tempfile(fileext = ".tif"); collect(ds, path = out, nodata = -9999)
+  out <- tempfile(fileext = ".tif"); write_tif(ds, out, nodata = -9999)
   expect_error(preview(out, bands = 1), NA)            # file path front door
 })
 

@@ -14,7 +14,7 @@ test_that("kernel recovery converges through the product path", {
   # enters the loss as a real source.
   a0 <- lazy_source(fx)
   y_path <- tempfile(fileext = ".tif")
-  collect(focal_kernel(a0, k_true), path = y_path)
+  write_tif(focal_kernel(a0, k_true), y_path)
 
   build_loss <- function() {
     a <- lazy_source(fx)

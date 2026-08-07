@@ -38,7 +38,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
     mem <- collect(x, distributed = cs$distributed)
     expect_identical(garry_last_route(), cs$route)
     path <- tempfile(fileext = ".tif")
-    collect(x, path = path, nodata = -9999, distributed = cs$distributed)
+    write_tif(x, path, nodata = -9999, distributed = cs$distributed)
     expect_identical(garry_last_route(), cs$route)
     nb <- if (is.null(dim(mem))) 1L
           else if (length(dim(mem)) == 3L) dim(mem)[[3L]] else 1L

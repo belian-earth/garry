@@ -313,7 +313,7 @@ test_that("collect writes dataset band names as GDAL descriptions", {
   ds <- as_dataset(list(red = list(s()), green = list(s() * 2), blue = list(s() * 3)))
   ds[["ndvi"]] <- ds[["red"]] / ds[["green"]]
   out <- tempfile(fileext = ".tif")
-  collect(ds, path = out, nodata = -9999, distributed = FALSE)
+  write_tif(ds, out, nodata = -9999, distributed = FALSE)
   r <- new(gdalraster::GDALRaster, out); on.exit(r$close())
   expect_equal(vapply(1:4, function(b) r$getDescription(b), character(1)),
                c("red", "green", "blue", "ndvi"))
@@ -328,7 +328,7 @@ test_that("distributed collect writes band descriptions too", {
   ds <- as_dataset(list(a = list(s(), s() * 2), b = list(s() * 3, s() * 4)))
   comp <- reduce_over(ds, "median", "t")     # plain sources -> scheduler path
   out <- tempfile(fileext = ".tif")
-  collect(comp, path = out, distributed = TRUE)
+  write_tif(comp, out, distributed = TRUE)
   r <- new(gdalraster::GDALRaster, out); on.exit(r$close(), add = TRUE)
   expect_equal(vapply(1:2, function(b) r$getDescription(b), character(1)),
                c("a", "b"))

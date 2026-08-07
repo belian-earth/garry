@@ -79,10 +79,10 @@ test_that("f64 cubes read identically through the fast path", {
                    gdal_read_window(gdal_copy, 1:2, 0L, 0L, 60L, 40L))
 })
 
-test_that("collect(path = '*.vrt') writes a raw cube, single-threaded", {
+test_that("a '*.vrt' sink path writes a raw cube, single-threaded", {
   f <- fixture_gradient_f32()
   vrt <- file.path(withr::local_tempdir("rcw"), "out.vrt")
-  collect(lazy_source(f) + 1, path = vrt)
+  garry:::.collect_impl(lazy_source(f) + 1, path = vrt)
   expect_true(file.exists(sub("\\.vrt$", ".bin", vrt)))
   want <- collect(lazy_source(f) + 1)
   got <- gdal_read_window(vrt, 1L, 0L, 0L, 60L, 40L)
@@ -96,7 +96,7 @@ test_that("streamed distributed writes land in a raw cube via the writer", {
   withr::local_options(garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()
   vrt <- file.path(withr::local_tempdir("rcd"), "out.vrt")
-  collect(lazy_source(f) + 1, path = vrt, distributed = TRUE)
+  garry:::.collect_impl(lazy_source(f) + 1, path = vrt, distributed = TRUE)
   want <- collect(lazy_source(f) + 1, distributed = FALSE)
   got <- gdal_read_window(vrt, 1L, 0L, 0L, 60L, 40L)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)

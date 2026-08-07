@@ -134,8 +134,8 @@ garry_arm <- function(tag, device) {
       lazy_source(rh98_path, band = b, graph = g)), along = "t")
     sm <- kalman_smooth(stk, hp$sigma_lvl, hp$sigma_slp, hp$sigma_obs,
                         robust_iters = 2L)
-    collect(sm$mean, path = fm)
-    collect(sm$sd, path = fs)
+    write_tif(sm$mean, fm)
+    write_tif(sm$sd, fs)
     c(mean = fm, sd = fs)
   })
 }

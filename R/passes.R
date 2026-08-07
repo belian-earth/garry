@@ -570,7 +570,7 @@ plan_lazy <- function(x) {
         .garry_error(paste0(
           "warping a computed raster is not supported in v1: align() ",
           "sources before computing on them, or materialise to disk ",
-          "first (collect(x, path = ...))."),
+          "first (write_tif() / materialise())."),
           "garry_warp_unsupported_error")
       node_stage[[.key(id)]] <-
         new_proto("warp", id, node@target_grid,

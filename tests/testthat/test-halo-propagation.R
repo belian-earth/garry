@@ -34,7 +34,7 @@
 # Materialise-first reference: write the decoded stack, focal the file.
 .hp_reference <- function(f) {
   p <- withr::local_tempfile(fileext = ".tif")
-  collect(.hp_graph(f)$stack, path = p, distributed = FALSE)
+  write_tif(.hp_graph(f)$stack, p, distributed = FALSE)
   g2 <- graph_new()
   cube <- lazy_stack(lapply(1:3, function(b)
     lazy_source(p, band = b, graph = g2)), along = "band")
@@ -80,8 +80,7 @@ test_that("multi-export: a padded sink export writes trimmed and exact", {
   }
   # file mode: the raw sink chunk carries pad and must trim on write
   dir <- withr::local_tempdir("hp")
-  .hp_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
-                      path = dir, distributed = FALSE))
+  .hp_px(300, write_tif(list(raw = nodes$stack, ctx = nodes$ctx), dir, distributed = FALSE))
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "raw.tif"))
   on.exit(d$close(), add = TRUE)
   expect_equal(c(d$getRasterXSize(), d$getRasterYSize()), c(60, 40))
@@ -99,7 +98,7 @@ test_that("focal after a t-reduce recomputes the ring across the barrier", {
   }
   # reference: materialise the composite, focal the file
   p <- withr::local_tempfile(fileext = ".tif")
-  collect(build(graph_new()), path = p, distributed = FALSE)
+  write_tif(build(graph_new()), p, distributed = FALSE)
   ref <- collect(focal(lazy_source(p), fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
   got <- .hp_px(300, collect(focal(build(graph_new()), fn = .hp_mean9,
@@ -124,7 +123,7 @@ test_that("focal after a scan recomputes the ring across the barrier", {
     reduce_over(sc, "sum", "t", nan_rm = FALSE)
   }
   p <- withr::local_tempfile(fileext = ".tif")
-  collect(build(graph_new()), path = p, distributed = FALSE)
+  write_tif(build(graph_new()), p, distributed = FALSE)
   ref <- collect(focal(lazy_source(p), fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
   got <- .hp_px(300, collect(focal(build(graph_new()), fn = .hp_mean9,
@@ -150,7 +149,7 @@ test_that("cross-stage focal towers accumulate pads", {
   f1 <- focal(a + 1, fn = .hp_mean9, radius = 1L)
   stk <- lazy_stack(list(f1, lazy_source(f, graph = g) * 2), along = "band")
   p <- withr::local_tempfile(fileext = ".tif")
-  collect(stk, path = p, distributed = FALSE)
+  write_tif(stk, p, distributed = FALSE)
   g2 <- graph_new()
   cube <- lazy_stack(lapply(1:2, function(b)
     lazy_source(p, band = b, graph = g2)), along = "band")
@@ -176,8 +175,7 @@ test_that("distributed == single-threaded for compute-fed focals", {
                ignore_attr = TRUE)
   # streamed file writes
   dir <- withr::local_tempdir("hpd")
-  .hp_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
-                      path = dir, distributed = TRUE))
+  .hp_px(300, write_tif(list(raw = nodes$stack, ctx = nodes$ctx), dir, distributed = TRUE))
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "ctx.tif"))
   on.exit(d$close(), add = TRUE)
   got2 <- matrix(d$read(1, 0, 0, 60, 40, 60, 40), 40, 60, byrow = TRUE)

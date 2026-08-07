@@ -69,7 +69,7 @@ test_that("collect writes one file per group via a {group} placeholder", {
     group_by_time("month") |> reduce_over("median", "t")
 
   tmpl <- file.path(tempdir(), "comp_{group}.tif")
-  out <- collect(comps, path = tmpl, nodata = -9999)
+  out <- write_tif(comps, tmpl, nodata = -9999)
   expect_named(out, c("2023-01", "2023-02"))
   expect_true(all(file.exists(out)))
   expect_match(out[["2023-01"]], "comp_2023-01\\.tif$")

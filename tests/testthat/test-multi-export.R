@@ -39,7 +39,7 @@ test_that("multi-export writes one file per sink from one execution", {
   stk <- lazy_stack(list(a + 1, b * 2))
   red <- reduce_over(stk, "sum", "t")
   dir <- withr::local_tempdir("me")
-  collect(list(cum = stk, total = red), path = dir, distributed = FALSE)
+  write_tif(list(cum = stk, total = red), dir, distributed = FALSE)
   expect_setequal(list.files(dir), c("cum.tif", "total.tif"))
   ref <- collect(red, distributed = FALSE)
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "total.tif"))
@@ -106,8 +106,7 @@ test_that("multi-export: distributed streamed writes match memory results", {
            xs = xs[[1L]])$out)
   red <- reduce_over(stk, "sum", "t")
   dir <- withr::local_tempdir("mstream")
-  .with_px(400, collect(list(cum = sc, tot = red), path = dir,
-                        distributed = TRUE))
+  .with_px(400, write_tif(list(cum = sc, tot = red), dir, distributed = TRUE))
   ms <- .with_px(400, collect(list(cum = sc, tot = red),
                               distributed = FALSE))
   rd <- function(fp, b) {

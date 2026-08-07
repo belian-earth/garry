@@ -4,7 +4,14 @@
 \alias{.execute_gd_general}
 \title{Execute any warp-on-read plan via whole-IR replay in one jit.}
 \usage{
-.execute_gd_general(plan, gspec, path = NULL, nodata = NULL, band_names = NULL)
+.execute_gd_general(
+  plan,
+  gspec,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+)
 }
 \description{
 Execute any warp-on-read plan via whole-IR replay in one jit.

@@ -49,7 +49,7 @@ NULL
 #'   unique session-temporary directory.
 #' @param name File-name stem (default `"garry"`).
 #' @param nodata Optional sentinel for the written files, as in
-#'   [collect()].
+#'   [write_tif()].
 #' @param overwrite Replace existing files at the target paths?
 #' @param distributed As in [collect()].
 #' @return A lazy object of the same class as `x`, reading the local
@@ -66,7 +66,7 @@ materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
   if (S7::S7_inherits(x, LazyRaster)) {
     path <- file.path(dir, paste0(name, ".vrt"))
     .mat_check_clear(path, overwrite)
-    collect(x, path = path, nodata = nodata, distributed = distributed)
+    .collect_impl(x, path = path, nodata = nodata, distributed = distributed)
     return(lazy_source(path))
   }
   .assert_class(x, LazyDataset, "LazyDataset")
@@ -93,7 +93,7 @@ materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
     file.path(dir, paste0(name, "-", slices, ".vrt")), slices)
   for (p in paths) .mat_check_clear(p, overwrite)
 
-  collect(sinks, path = paths, nodata = nodata, distributed = distributed,
+  .collect_impl(sinks, path = paths, nodata = nodata, distributed = distributed,
           band_names = order_of)
 
   bands <- lapply(stats::setNames(nm = names(x@bands)), function(b) {
