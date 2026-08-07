@@ -105,3 +105,149 @@ names via collect(band_names = <named list>)). All groups' reads enter
 one ready queue and drain under fetch-first priority. Measured on the
 Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 (one plan, continuous drain). plan_only keeps the per-group loop.
+
+## 6. unscale = TRUE: discovered scale/offset applied at read (2026-08-07)
+
+GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
+scale 0.0001, offset -0.1 in raster:bands terms; often absent from
+STAC metadata but present in the TIFF). NEXT UP after #9 (with
+#8): an explicit `unscale = TRUE` on lazy_source() /
+lazy_dataset() that reads GetScale/GetOffset at discovery (the D8
+nodata pattern) and fuses the affine into the read kernel when
+non-trivial. NOT auto-on: silent value rescaling is the value-space
+version of silent resampling. No memory cost in garry (unlike VRT
+unscale, which promotes to Float64): two flops/px inside the already-
+f32 fused read.
+
+Traps recorded:
+- Ordering: sentinel -> NaN BEFORE scaling (a scaled sentinel stops
+  matching).
+- Per-ITEM heterogeneity: the S2 baseline-04 cutover (2022-01) puts
+  different offsets inside one band's time stack. Plain sources
+  discover per slice and are fine; the STAC fast path probes ONE
+  asset per band against a declared grid, so v1 would assume
+  collection-homogeneous scaling and must document the caveat.
+- Per-slice maps with DIFFERING constants break .cd_fn_sig slice
+  homogeneity -> composite_direct fast path fragmentation; check
+  before shipping.
+
+Vignettes keep the explicit `(ds * 0.0001) - 0.1` arithmetic
+regardless: teaching that the offset exists is the point; the flag is
+sugar for those who know.
+
+## 7. cog = TRUE: cloud-optimised GeoTIFF output on collect (2026-08-07)
+
+Proposal (Hugh): a `cog = TRUE` flag writes a COG instead of a plain
+GeoTIFF. Default FALSE keeps current behaviour and cost. SURFACE
+SUPERSEDED by #8: the flag lives on `write_tif()`, not `collect()`;
+the mechanics below stand.
+
+Implementation shape is fixed by GDAL: the COG driver is
+CreateCopy-only (overviews precede full-res data, strict IFD
+ordering), so it cannot be the streaming sink. `cog = TRUE` streams
+chunks into the existing tiled GeoTIFF writer at a temp path, then
+finalises with one `gdalraster::translate(of = "COG")` pass to the
+requested path (translate is already used by the adapter,
+R/gdal_adapter.R). Memory-bounded streaming is unchanged; the cost is
+one sequential re-read/re-write of the finished raster plus overview
+build, the trade every COG producer makes.
+
+Details to settle at implementation:
+- Overview resampling: expose it (nearest for categorical outputs
+  like masks, average otherwise); do not silently reuse the read-side
+  band resampling, which answers a different question.
+- Compression: COG driver defaults to LZW; probably accept a
+  `creation_options` passthrough rather than growing named args.
+- Multi-export `path =` form: flag applies per sink; a named-list
+  variant mirroring `band_names` if mixed outputs are ever wanted.
+- Failure cleanup: temp GeoTIFF must be removed on translate error;
+  the requested path must never hold a half-written COG.
+
+## 8. collect() / write_tif() split: type-stable sinks (2026-08-08)
+
+Decided (Hugh): split execution verbs by sink instead of ballooning
+collect() arguments. NEXT UP after #9, together with #6.
+
+- `collect(x)`: execute, return the (y, x, band) array with its gis
+  attribute. Always an array: the current path= form makes the return
+  type depend on an optional argument. Multi-export
+  `collect(list(...))` unchanged.
+- `write_tif(x, path, dtype, scale, offset, nodata, cog,
+  creation_options, overview_resampling)`: execute, stream to GeoTIFF,
+  return the path invisibly. Later siblings (`write_zarr()`) follow
+  the same pattern. Naming settled: write_* (exit verbs, alongside
+  materialise()), not collect_*.
+- `materialise(x)`: unchanged; checkpoint to local cubes, stay lazy.
+
+dtype/scale/offset is the payoff: write int16 reflectance with
+scale/offset in band metadata; half the raw bytes of f32 and far
+better compression (quantized ints vs float mantissas). Writer
+applies round((v - offset) / scale) + cast per chunk at the sink
+boundary; no graph changes; GDAL consumers (and #6's unscale) recover
+physical values automatically. This is the exact inverse of #6, so
+land them together and share the affine conventions.
+
+Traps / details:
+- NaN -> integer nodata sentinel chosen OUTSIDE the valid quantized
+  range, mapped before scale metadata makes it ambiguous (reverse of
+  the #6 sentinel-before-scaling rule).
+- Rounding mode: document round-half-even vs round-half-up; pick one
+  and test against gdal_translate -ot Int16 -a_scale behaviour.
+- cog = TRUE from #7 lands here (stream to temp tiled GeoTIFF, then
+  gdalraster::translate(of = "COG")).
+- Multi-export file writes become `write_tif(list(...), paths)` when
+  wanted; Plan@sinks is already sink-shaped.
+- Soft-deprecate `collect(path=)` for one release (warning + forward
+  to write_tif); update README + stac-composite + OCM vignettes.
+
+## 9. Dependency placement + test-suite speed (2026-08-08) -- FIRST
+
+Prioritised by Hugh ahead of #6/#8. Two coupled problems.
+
+**(a) Dependencies live in the wrong tier.** anvl, mirai, mori,
+cptkirk (and vaster) sit in Suggests but are fundamental: anvl is the
+compute engine (135 skip guards across 79 test files), mirai the
+daemon layer (44/39), cptkirk the warp reader, vaster the grid math.
+They are Suggests only because they are GitHub-only and CRAN forbids
+non-CRAN Imports; garry is not on CRAN, so Imports + Remotes is
+available today. Move the engine tier to Imports, delete the guard
+boilerplate, and let install-time fail fast instead of run-time
+skip-storms. Revisit tiers only if CRAN submission becomes real
+(then: vendoring/AdditionalRepositories decision, not a silent
+downgrade back to Suggests).
+
+**(b) Suggests-driven golden tests slow the suite.** The heavyweight
+packages that remain legitimately optional are reference
+implementations for golden tests: KFAS (kalman, 1 file), torch
+(conv/OCM blocks, 4), terra (comparisons, 8), rustyfilters (2).
+Running the reference implementation on every suite run buys nothing
+after the first pass. Direction: freeze references into checked-in
+fixtures (the ocm golden-fixture pattern: generate once offline with
+the reference, commit values + generator script, assert against the
+fixture); keep live-reference runs behind an env gate
+(GARRY_GOLDEN=1) for regeneration and nightly CI. Reference packages
+then leave Suggests entirely or stay for the gated path only.
+
+Plan of attack:
+1. Audit: per-test-file timings (testthat reporter) to rank cost;
+   classify every Suggests entry engine / reference / STAC / infra.
+2. Move engine tier (anvl, mirai, mori, cptkirk, vaster) to Imports +
+   Remotes; strip skip_if_not_installed guards for them; full suite +
+   R CMD check.
+3. Fixture-ise KFAS/torch/terra/rustyfilters goldens (generator
+   scripts in tools/, fixtures under tests/testthat/fixtures/);
+   env-gate the live comparisons.
+4. Measure suite wall-clock before/after; consider testthat parallel
+   (test files are daemon-heavy, so check pool contention first).
+5. CI: default runners run fixture suite; one job (or nightly) runs
+   GARRY_GOLDEN=1 with the reference packages installed.
+
+Traps:
+- torch on CI has no Lantern -> torch_is_installed() gates stay for
+  the gated path (see R-CMD-check history).
+- Daemon-spawning tests must not run concurrently with each other
+  (pool contention false failures); parallelisation needs a
+  daemon-test serial group.
+- terra's CRAN binary links system GDAL sonames (pkgdown ?ignore
+  history); fixtures remove it from default CI entirely, which also
+  kills that failure class.

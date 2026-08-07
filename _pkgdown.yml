@@ -1,6 +1,25 @@
 url: https://belian-earth.github.io/garry/
+development:
+  mode: auto
 template:
   bootstrap: 5
+  bootswatch: cosmo
+  bslib:
+    primary: '#74ac90ff'
+navbar:
+  structure:
+    left:
+    - reference
+    - intro
+    - articles
+    - news
+    right:
+    - search
+    - github
+  components:
+    github:
+      icon: fa-github
+      href: https://github.com/belian-earth/garry
 reference:
 - title: Discovery & sources
   desc: |
