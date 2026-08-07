@@ -63,7 +63,9 @@ slice resolve by ascending <code>sort_field</code> (highest drawn on top).</p>
 <span>  granularity <span class="op">=</span> <span class="st">"day"</span>,</span>
 <span>  sort_field <span class="op">=</span> <span class="st">"datetime"</span>,</span>
 <span>  nodata <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  lon <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  lon <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  scale <span class="op">=</span> <span class="cn">FALSE</span>,</span>
+<span>  offset <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -98,6 +100,13 @@ slice resolve by ascending <code>sort_field</code> (highest drawn on top).</p>
 <dt id="arg-lon">lon<a class="anchor" aria-label="anchor" href="#arg-lon"></a></dt>
 <dd><p>Longitude for <code>granularity = "solar_day"</code> (see
 <code><a href="stac_time_slices.html">stac_time_slices()</a></code>).</p></dd>
+
+
+<dt id="arg-scale-offset">scale, offset<a class="anchor" aria-label="anchor" href="#arg-scale-offset"></a></dt>
+<dd><p>Read affine, as in <code><a href="lazy_source.html">lazy_source()</a></code>: <code>FALSE</code>
+(default) reads raw values, <code>TRUE</code> discovers the file's band
+scale/offset (probing the mosaic, then the first item), a numeric
+supplies it explicitly.</p></dd>
 
 </dl></div>
     <div class="section level2">

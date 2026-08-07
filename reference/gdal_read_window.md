@@ -16,7 +16,9 @@ gdal_read_window(
   y_size,
   nodata = numeric(0),
   open_options = character(0),
-  out = c("matrix", "raw_f32")
+  out = c("matrix", "raw_f32"),
+  scale = numeric(0),
+  offset = numeric(0)
 )
 ```
 
@@ -46,6 +48,12 @@ gdal_read_window(
 
   Output form: a `[y, x]` `"matrix"` (default), or a raw f32 store value
   (`"raw_f32"`) for the distributed store path.
+
+- scale, offset:
+
+  Length-0 (absent) or length-1 band affine: values become
+  `v * scale + offset` after the nodata sentinel is promoted to NaN, so
+  sentinels never scale.
 
 ## Value
 

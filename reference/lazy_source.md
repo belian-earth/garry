@@ -18,7 +18,9 @@ lazy_source(
   open_options = character(0),
   grid = NULL,
   block_dim = NULL,
-  resampling = "near"
+  resampling = "near",
+  scale = FALSE,
+  offset = NULL
 )
 ```
 
@@ -60,6 +62,21 @@ lazy_source(
   GDAL resampling used when a read reprojects or rescales this source
   onto the analysis grid. `"near"` (default) preserves exact source
   values; use `"bilinear"`, `"average"`, `"cubic"`, ... to interpolate.
+
+- scale:
+
+  Apply the band's scale/offset at read. `FALSE` (default) reads raw
+  values. `TRUE` discovers the affine from the file's band metadata (the
+  GDAL scale/offset QGIS applies) and every read returns
+  `v * scale + offset`, applied after the nodata sentinel becomes NaN. A
+  length-1 numeric supplies the scale explicitly (with `offset`),
+  skipping discovery. Discovery only consults the file: STAC-side
+  metadata is never read.
+
+- offset:
+
+  Explicit additive offset used when `scale` is numeric; defaults to 0.
+  Ignored when `scale` is logical.
 
 ## Value
 

@@ -15,7 +15,10 @@ gdal_create_output(
   grid,
   nodata = numeric(0),
   options = NULL,
-  band_names = NULL
+  band_names = NULL,
+  dtype = NULL,
+  scale = numeric(0),
+  offset = numeric(0)
 )
 ```
 
@@ -46,6 +49,15 @@ gdal_create_output(
 
   Optional character vector of band descriptions, in band order; written
   as each band's GDAL description (shows in `gdalinfo`).
+
+- dtype:
+
+  Optional dtype override for the created file (else the grid's dtype).
+
+- scale, offset:
+
+  Optional band scale/offset metadata written on every band, so readers
+  (QGIS, GDAL, `scale = TRUE` reads) recover `stored * scale + offset`.
 
 ## Value
 

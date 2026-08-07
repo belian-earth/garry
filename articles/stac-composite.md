@@ -112,7 +112,11 @@ will recognise: since processing baseline 04.00 (January 2022), L2A
 digital numbers carry a +1000 offset ahead of the usual 1/10000 scale
 (`raster:bands`: scale 0.0001, offset -0.1). Undo both once, at the
 source, and everything downstream (composites, spectral distances, the
-written file) is in physical surface reflectance.
+written file) is in physical surface reflectance. (For collections whose
+files carry the affine in their band metadata, HLS for instance,
+`lazy_dataset(scale = TRUE)` discovers and applies it automatically;
+these Planetary Computer S2 files carry none, so the arithmetic stays
+explicit.)
 
 Everything so far is graph building.
 [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) shows
@@ -248,21 +252,31 @@ observation nearest the geometric median, one date’s actual spectrum.
 
 ## Write it out
 
-`collect(path = )` streams the composite to a GeoTIFF chunk by chunk as
-results arrive, so the full raster never needs to sit in memory; band
-descriptions carry through. (This is a fresh plan, so it reads the
-scenes again; a workflow that keeps running plans over the same stack
-would checkpoint first with
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
+streams the composite to a GeoTIFF chunk by chunk as results arrive, so
+the full raster never needs to sit in memory; band descriptions carry
+through. And it can undo the reflectance scaling from the top of the
+pipeline: `dtype = "i16"` with the S2 affine quantizes each value back
+to a digital number at the sink, writes the scale/offset into the band
+metadata, and NaN becomes the sentinel. Half the bytes of float32 before
+compression (quantized integers also compress far better), and QGIS,
+GDAL, or a `scale = TRUE` read recover reflectance automatically. (This
+is a fresh plan, so it reads the scenes again; a workflow that keeps
+running plans over the same stack would checkpoint first with
 [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md),
 as the OmniCloudMask vignette does.)
 
 ``` r
 
 tif <- file.path(tempdir(), "salinas-geomedian.tif")
-collect(gmed, path = tif)
+write_tif(gmed, tif, dtype = "i16", scale = 0.0001, offset = -0.1,
+          nodata = -32768)
 file.size(tif)
-#> [1] 8300358
+#> [1] 3617080
 ```
+
+Pass `cog = TRUE` to finalise the same streamed write into a Cloud
+Optimized GeoTIFF.
 
 ## What actually ran
 

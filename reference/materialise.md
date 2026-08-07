@@ -38,7 +38,7 @@ materialise(
 - nodata:
 
   Optional sentinel for the written files, as in
-  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md).
+  [`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md).
 
 - overwrite:
 

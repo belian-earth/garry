@@ -15,7 +15,9 @@ lazy_stac_stack(
   granularity = "day",
   sort_field = "datetime",
   nodata = NULL,
-  lon = NULL
+  lon = NULL,
+  scale = FALSE,
+  offset = NULL
 )
 ```
 
@@ -52,6 +54,14 @@ lazy_stac_stack(
 
   Longitude for `granularity = "solar_day"` (see
   [`stac_time_slices()`](https://belian-earth.github.io/garry/reference/stac_time_slices.md)).
+
+- scale, offset:
+
+  Read affine, as in
+  [`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md):
+  `FALSE` (default) reads raw values, `TRUE` discovers the file's band
+  scale/offset (probing the mosaic, then the first item), a numeric
+  supplies it explicitly.
 
 ## Value
 

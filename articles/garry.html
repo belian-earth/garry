@@ -215,7 +215,7 @@ elevation relative to the neighbourhood mean.</p>
 <em>sources</em>, not to computed results (warping a computed raster
 raises an error suggesting the alternatives). Align inputs onto the
 analysis grid first, then compute; or materialise a result with
-<code>collect(path = ...)</code> and re-open it.</p>
+<code><a href="../reference/write_tif.html">write_tif()</a></code> and re-open it.</p>
 </div>
 <div class="section level2">
 <h2 id="execute">Execute<a class="anchor" aria-label="anchor" href="#execute"></a>
@@ -237,12 +237,12 @@ georeferenced:</p>
 <div class="float">
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/hood-collect-1.png" alt="plot of chunk hood-collect"><div class="figcaption">plot of chunk hood-collect</div>
 </div>
-<p>Write straight to a GeoTIFF instead by passing <code>path</code>;
+<p>Write straight to a GeoTIFF instead with <code><a href="../reference/write_tif.html">write_tif()</a></code>;
 chunks stream to disk as they finish, so the full result never needs to
 fit in memory:</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">tif</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"hood-hillshade.tif"</span><span class="op">)</span></span>
-<span><span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">hs</span>, path <span class="op">=</span> <span class="va">tif</span><span class="op">)</span></span>
+<span><span class="fu"><a href="../reference/write_tif.html">write_tif</a></span><span class="op">(</span><span class="va">hs</span>, <span class="va">tif</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/file.info.html" class="external-link">file.size</a></span><span class="op">(</span><span class="va">tif</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] 1673358</span></span></code></pre></div>
 <p>For handoff to the wider R spatial ecosystem, <code><a href="../reference/as_terra.html">as_terra()</a></code>

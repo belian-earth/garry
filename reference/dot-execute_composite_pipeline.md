@@ -14,6 +14,7 @@ Requires a garry_daemons split.
   spec,
   path = NULL,
   nodata = NULL,
-  band_names = NULL
+  band_names = NULL,
+  wspec = NULL
 )
 ```

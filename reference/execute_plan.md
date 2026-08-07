@@ -5,7 +5,7 @@ Execute a Plan on the anvl backend (single-threaded).
 ## Usage
 
 ``` r
-execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL)
+execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL, wspec = NULL)
 ```
 
 ## Arguments
@@ -28,6 +28,14 @@ execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL)
 
   Optional character vector of band descriptions written to the output
   bands (multiband GTiff).
+
+- wspec:
+
+  Optional sink write spec from
+  [`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md):
+  a list of `dtype` (output dtype override), `scale`/`offset`
+  (quantization affine applied per chunk at the sink boundary) and
+  `options` (creation options).
 
 ## Value
 

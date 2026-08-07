@@ -6,5 +6,12 @@ then run the upper IR on the materialised results.
 ## Usage
 
 ``` r
-.execute_gd_reduce(plan, decomp, path = NULL, nodata = NULL, band_names = NULL)
+.execute_gd_reduce(
+  plan,
+  decomp,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+)
 ```

@@ -67,7 +67,9 @@ rewrite happens at read time in the adapter.</p>
 <span>  open_options <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  grid <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  block_dim <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  resampling <span class="op">=</span> <span class="st">"near"</span></span>
+<span>  resampling <span class="op">=</span> <span class="st">"near"</span>,</span>
+<span>  scale <span class="op">=</span> <span class="cn">FALSE</span>,</span>
+<span>  offset <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -110,6 +112,21 @@ with <code>grid</code>; defaults to unconstrained.</p></dd>
 <dd><p>GDAL resampling used when a read reprojects or rescales
 this source onto the analysis grid. <code>"near"</code> (default) preserves exact
 source values; use <code>"bilinear"</code>, <code>"average"</code>, <code>"cubic"</code>, ... to interpolate.</p></dd>
+
+
+<dt id="arg-scale">scale<a class="anchor" aria-label="anchor" href="#arg-scale"></a></dt>
+<dd><p>Apply the band's scale/offset at read. <code>FALSE</code> (default)
+reads raw values. <code>TRUE</code> discovers the affine from the file's band
+metadata (the GDAL scale/offset QGIS applies) and every read returns
+<code>v * scale + offset</code>, applied after the nodata sentinel becomes NaN.
+A length-1 numeric supplies the scale explicitly (with <code>offset</code>),
+skipping discovery. Discovery only consults the file: STAC-side
+metadata is never read.</p></dd>
+
+
+<dt id="arg-offset">offset<a class="anchor" aria-label="anchor" href="#arg-offset"></a></dt>
+<dd><p>Explicit additive offset used when <code>scale</code> is numeric;
+defaults to 0. Ignored when <code>scale</code> is logical.</p></dd>
 
 </dl></div>
     <div class="section level2">

@@ -64,7 +64,10 @@ GDAL's tile machinery; see <code><a href="stage_raw_cube.html">stage_raw_cube()<
 <span>  <span class="va">grid</span>,</span>
 <span>  nodata <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  options <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  band_names <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  band_names <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  dtype <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  scale <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -96,6 +99,17 @@ the band count on files garry itself wrote.</p></dd>
 <dt id="arg-band-names">band_names<a class="anchor" aria-label="anchor" href="#arg-band-names"></a></dt>
 <dd><p>Optional character vector of band descriptions, in band
 order; written as each band's GDAL description (shows in <code>gdalinfo</code>).</p></dd>
+
+
+<dt id="arg-dtype">dtype<a class="anchor" aria-label="anchor" href="#arg-dtype"></a></dt>
+<dd><p>Optional dtype override for the created file (else the
+grid's dtype).</p></dd>
+
+
+<dt id="arg-scale-offset">scale, offset<a class="anchor" aria-label="anchor" href="#arg-scale-offset"></a></dt>
+<dd><p>Optional band scale/offset metadata written on every
+band, so readers (QGIS, GDAL, <code>scale = TRUE</code> reads) recover
+<code>stored * scale + offset</code>.</p></dd>
 
 </dl></div>
     <div class="section level2">

@@ -20,7 +20,9 @@ lazy_dataset(
   sort_field = "datetime",
   nodata = NULL,
   lon = NULL,
-  resampling = "near"
+  resampling = "near",
+  scale = FALSE,
+  offset = NULL
 )
 ```
 
@@ -79,6 +81,24 @@ lazy_dataset(
   default) preserves exact source values; use `"bilinear"`, `"average"`,
   `"cubic"`, ... to interpolate. Resample after the fact instead with
   [`align()`](https://belian-earth.github.io/garry/reference/align.md).
+
+- scale:
+
+  Apply each value band's scale/offset at read. `FALSE` (default) reads
+  raw digital numbers. `TRUE` discovers the affine from the assets' file
+  metadata (the GDAL band scale/offset QGIS applies; one asset per band
+  is probed and the collection is assumed homogeneous) and every read
+  returns `v * scale + offset`, applied after the nodata sentinel
+  becomes NaN. A scalar or named numeric (keyed by asset) supplies
+  scales explicitly. Discovery only consults the files themselves: STAC
+  metadata is never read, so collections whose files carry no scaling
+  metadata (e.g. Planetary Computer Sentinel-2 L2A) read raw and scale
+  explicitly instead. `mask_asset` is never scaled.
+
+- offset:
+
+  Explicit additive offset(s) (scalar or named by asset) used when
+  `scale` is numeric; defaults to 0. Ignored when `scale` is logical.
 
 ## Value
 

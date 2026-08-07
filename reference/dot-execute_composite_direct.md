@@ -10,6 +10,7 @@ Execute a no-focal composite via the lean GDAL-direct cube path.
   spec,
   path = NULL,
   nodata = NULL,
-  band_names = NULL
+  band_names = NULL,
+  wspec = NULL
 )
 ```

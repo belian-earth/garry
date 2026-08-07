@@ -6,7 +6,17 @@ writing NaN into an integer band without a sentinel is an error.
 ## Usage
 
 ``` r
-gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
+gdal_write_window(
+  ds,
+  x_off,
+  y_off,
+  m,
+  dtype,
+  nodata = numeric(0),
+  band = 1L,
+  scale = numeric(0),
+  offset = numeric(0)
+)
 ```
 
 ## Arguments
@@ -35,6 +45,13 @@ gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
 - band:
 
   1-based destination band.
+
+- scale, offset:
+
+  Optional quantization affine: values are stored as
+  `round((v - offset) / scale)` (round-half-even) BEFORE NaN demotes to
+  `nodata`, so the sentinel lives in stored units and must sit outside
+  the quantized value range.
 
 ## Value
 

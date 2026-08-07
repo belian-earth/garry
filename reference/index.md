@@ -108,6 +108,10 @@ Plan, distribute across daemons, and write the result.
 
 - [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
   : Materialise a LazyRaster (or inspect its plan).
+- [`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
+  : Execute a lazy raster and stream it to a GeoTIFF.
+- [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
+  : Materialise a lazy object locally and stay lazy.
 - [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
   : Set up split mirai daemon pools for distributed execution.
 - [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)

@@ -9,7 +9,13 @@ be set by the caller. Results are identical to
 ## Usage
 
 ``` r
-execute_plan_mirai(plan, path = NULL, nodata = NULL, band_names = NULL)
+execute_plan_mirai(
+  plan,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+)
 ```
 
 ## Arguments
@@ -18,7 +24,7 @@ execute_plan_mirai(plan, path = NULL, nodata = NULL, band_names = NULL)
 
   A `Plan`.
 
-- path, nodata, band_names:
+- path, nodata, band_names, wspec:
 
   As in
   [`execute_plan()`](https://belian-earth.github.io/garry/reference/execute_plan.md).

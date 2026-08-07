@@ -62,7 +62,9 @@ file-level NA) are rewritten to NaN (D8) and the result is numeric.</p>
 <span>  <span class="va">y_size</span>,</span>
 <span>  nodata <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  open_options <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  out <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"matrix"</span>, <span class="st">"raw_f32"</span><span class="op">)</span></span>
+<span>  out <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"matrix"</span>, <span class="st">"raw_f32"</span><span class="op">)</span>,</span>
+<span>  scale <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -93,6 +95,12 @@ file-level NA) are rewritten to NaN (D8) and the result is numeric.</p>
 <dt id="arg-out">out<a class="anchor" aria-label="anchor" href="#arg-out"></a></dt>
 <dd><p>Output form: a <code>[y, x]</code> <code>"matrix"</code> (default), or a raw f32
 store value (<code>"raw_f32"</code>) for the distributed store path.</p></dd>
+
+
+<dt id="arg-scale-offset">scale, offset<a class="anchor" aria-label="anchor" href="#arg-scale-offset"></a></dt>
+<dd><p>Length-0 (absent) or length-1 band affine: values
+become <code>v * scale + offset</code> after the nodata sentinel is promoted
+to NaN, so sentinels never scale.</p></dd>
 
 </dl></div>
     <div class="section level2">

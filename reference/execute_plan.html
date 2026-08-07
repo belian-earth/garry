@@ -47,7 +47,7 @@
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">execute_plan</span><span class="op">(</span><span class="va">plan</span>, path <span class="op">=</span> <span class="cn">NULL</span>, nodata <span class="op">=</span> <span class="cn">NULL</span>, band_names <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">execute_plan</span><span class="op">(</span><span class="va">plan</span>, path <span class="op">=</span> <span class="cn">NULL</span>, nodata <span class="op">=</span> <span class="cn">NULL</span>, band_names <span class="op">=</span> <span class="cn">NULL</span>, wspec <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -71,6 +71,13 @@ demote NaN on write (required for integer outputs containing NaN).</p></dd>
 <dt id="arg-band-names">band_names<a class="anchor" aria-label="anchor" href="#arg-band-names"></a></dt>
 <dd><p>Optional character vector of band descriptions written to
 the output bands (multiband GTiff).</p></dd>
+
+
+<dt id="arg-wspec">wspec<a class="anchor" aria-label="anchor" href="#arg-wspec"></a></dt>
+<dd><p>Optional sink write spec from <code><a href="write_tif.html">write_tif()</a></code>: a list of
+<code>dtype</code> (output dtype override), <code>scale</code>/<code>offset</code> (quantization
+affine applied per chunk at the sink boundary) and <code>options</code>
+(creation options).</p></dd>
 
 </dl></div>
     <div class="section level2">

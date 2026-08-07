@@ -23,7 +23,9 @@ amortise the opens.
   pad,
   dtype,
   nodata,
-  n_chunks
+  n_chunks,
+  scale = numeric(0),
+  offset = numeric(0)
 )
 ```
 

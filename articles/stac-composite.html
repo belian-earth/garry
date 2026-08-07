@@ -170,7 +170,11 @@ metadata will recognise: since processing baseline 04.00 (January 2022),
 L2A digital numbers carry a +1000 offset ahead of the usual 1/10000
 scale (<code>raster:bands</code>: scale 0.0001, offset -0.1). Undo both
 once, at the source, and everything downstream (composites, spectral
-distances, the written file) is in physical surface reflectance.</p>
+distances, the written file) is in physical surface reflectance. (For
+collections whose files carry the affine in their band metadata, HLS for
+instance, <code>lazy_dataset(scale = TRUE)</code> discovers and applies
+it automatically; these Planetary Computer S2 files carry none, so the
+arithmetic stays explicit.)</p>
 <p>Everything so far is graph building. <code><a href="../reference/draw.html">draw()</a></code> shows the
 pipeline behind any one band:</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
@@ -272,17 +276,26 @@ date’s actual spectrum.</p>
 <div class="section level2">
 <h2 id="write-it-out">Write it out<a class="anchor" aria-label="anchor" href="#write-it-out"></a>
 </h2>
-<p><code>collect(path = )</code> streams the composite to a GeoTIFF
-chunk by chunk as results arrive, so the full raster never needs to sit
-in memory; band descriptions carry through. (This is a fresh plan, so it
-reads the scenes again; a workflow that keeps running plans over the
-same stack would checkpoint first with <code><a href="../reference/materialise.html">materialise()</a></code>, as
-the OmniCloudMask vignette does.)</p>
+<p><code><a href="../reference/write_tif.html">write_tif()</a></code> streams the composite to a GeoTIFF chunk by
+chunk as results arrive, so the full raster never needs to sit in
+memory; band descriptions carry through. And it can undo the reflectance
+scaling from the top of the pipeline: <code>dtype = "i16"</code> with
+the S2 affine quantizes each value back to a digital number at the sink,
+writes the scale/offset into the band metadata, and NaN becomes the
+sentinel. Half the bytes of float32 before compression (quantized
+integers also compress far better), and QGIS, GDAL, or a
+<code>scale = TRUE</code> read recover reflectance automatically. (This
+is a fresh plan, so it reads the scenes again; a workflow that keeps
+running plans over the same stack would checkpoint first with
+<code><a href="../reference/materialise.html">materialise()</a></code>, as the OmniCloudMask vignette does.)</p>
 <div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">tif</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"salinas-geomedian.tif"</span><span class="op">)</span></span>
-<span><span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">gmed</span>, path <span class="op">=</span> <span class="va">tif</span><span class="op">)</span></span>
+<span><span class="fu"><a href="../reference/write_tif.html">write_tif</a></span><span class="op">(</span><span class="va">gmed</span>, <span class="va">tif</span>, dtype <span class="op">=</span> <span class="st">"i16"</span>, scale <span class="op">=</span> <span class="fl">0.0001</span>, offset <span class="op">=</span> <span class="op">-</span><span class="fl">0.1</span>,</span>
+<span>          nodata <span class="op">=</span> <span class="op">-</span><span class="fl">32768</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/file.info.html" class="external-link">file.size</a></span><span class="op">(</span><span class="va">tif</span><span class="op">)</span></span>
-<span><span class="co">#&gt; [1] 8300358</span></span></code></pre></div>
+<span><span class="co">#&gt; [1] 3617080</span></span></code></pre></div>
+<p>Pass <code>cog = TRUE</code> to finalise the same streamed write into
+a Cloud Optimized GeoTIFF.</p>
 </div>
 <div class="section level2">
 <h2 id="what-actually-ran">What actually ran<a class="anchor" aria-label="anchor" href="#what-actually-ran"></a>

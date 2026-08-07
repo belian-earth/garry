@@ -16,7 +16,9 @@ SourceNode(
   nodata = integer(0),
   block_dim = integer(0),
   open_options = character(0),
-  resampling = "near"
+  resampling = "near",
+  scale = numeric(0),
+  offset = numeric(0)
 )
 ```
 
@@ -60,6 +62,12 @@ SourceNode(
 
   GDAL resampling used when a read reprojects/rescales the source onto
   the analysis grid (default "near").
+
+- scale, offset:
+
+  Length-0 (absent) or length-1 band affine applied inside the read
+  kernel after sentinel -\> NaN (see
+  [`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md)).
 
 ## Value
 

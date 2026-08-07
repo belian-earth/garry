@@ -187,7 +187,8 @@ One v1 rule to know:
 applies to *sources*, not to computed results (warping a computed raster
 raises an error suggesting the alternatives). Align inputs onto the
 analysis grid first, then compute; or materialise a result with
-`collect(path = ...)` and re-open it.
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
+and re-open it.
 
 ## Execute
 
@@ -214,13 +215,15 @@ hood-collect](https://raw.githubusercontent.com/belian-earth/garry/main/vignette
 
 plot of chunk hood-collect
 
-Write straight to a GeoTIFF instead by passing `path`; chunks stream to
-disk as they finish, so the full result never needs to fit in memory:
+Write straight to a GeoTIFF instead with
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md);
+chunks stream to disk as they finish, so the full result never needs to
+fit in memory:
 
 ``` r
 
 tif <- file.path(tempdir(), "hood-hillshade.tif")
-collect(hs, path = tif)
+write_tif(hs, tif)
 file.size(tif)
 #> [1] 1673358
 ```
