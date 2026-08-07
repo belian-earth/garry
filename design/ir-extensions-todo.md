@@ -200,7 +200,7 @@ Traps / details:
 - Soft-deprecate `collect(path=)` for one release (warning + forward
   to write_tif); update README + stac-composite + OCM vignettes.
 
-## 9. Dependency placement + test-suite speed (2026-08-08) -- FIRST
+## 9. Dependency placement + test-suite speed (2026-08-08) -- DONE 2026-08-07 (see resolution below)
 
 Prioritised by Hugh ahead of #6/#8. Two coupled problems.
 
@@ -251,3 +251,37 @@ Traps:
 - terra's CRAN binary links system GDAL sonames (pkgdown ?ignore
   history); fixtures remove it from default CI entirely, which also
   kills that failure class.
+
+### 9 resolution (2026-08-07, branch deps-test-speed)
+
+Placement DONE as planned, with two corrections found in audit:
+vaster is reference-tier, not engine (as_vaster_extent() is a pure
+reorder; vaster's only use is 4 cross-check assertions in
+test-grid-convention.R) so it stays in Suggests; rustyfilters was
+UNDECLARED despite test usage, now Suggests + Remotes with
+rustyfilters=?ignore on CI (cargo build, fragile on the Windows
+runner toolchain). anvl/cptkirk/mirai/mori moved to Imports; 194
+skip guards + 4 dead runtime guards stripped.
+
+Speed: the golden-test hypothesis did NOT survive measurement.
+Baseline (ListReporter, full local suite): 667 s test time / 11.2 min
+wall; ALL reference tests combined (KFAS 11.4 s, terra files 16 s
+whole-file, torch ~2.8 s, vaster/rustyfilters negligible) = ~30 s =
+4.5% of the suite. Fixture-ising them was dropped: it buys no
+meaningful time and the dependency-hygiene goal was met by
+declaration + CI ignore instead. The real costs are engine suites:
+grad-convergence 105 s (fixed: early-exit once assertions hold,
+-> 58 s), routed-dispatch 51 s, route-matrix 32 s,
+mirai-equivalence 24 s, gd-general 25 s (equivalence sweeps that
+earn their time). After: 591 s / 9.9 min, 0 failures, identical
+6984 passes.
+
+Remaining levers, deliberately NOT taken (own pass if wanted):
+- Shared file-level pools: ~50 local_pools() spawn/teardown cycles;
+  a per-file pool fixture would cut real time but some tests kill/
+  rebuild pools mid-test and need isolation. Estimate first by
+  timing garry_daemons() spawn+teardown in isolation.
+- testthat parallel: collides with the daemon-contention trap
+  (concurrent pools oversubscribe cores, ABI-skew-style false
+  failures); would need a serial group for daemon files, which
+  testthat does not support natively.
