@@ -110,9 +110,11 @@ Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 
 GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
 scale 0.0001, offset -0.1 in raster:bands terms; often absent from
-STAC metadata but present in the TIFF). NEXT UP after #9 (with
-#8): an explicit `unscale = TRUE` on lazy_source() /
-lazy_dataset() that reads GetScale/GetOffset at discovery (the D8
+STAC metadata but present in the TIFF). IN PROGRESS 2026-08-07
+(branch scale-and-write-tif, with #8). Naming decided by Hugh: the
+argument is `scale` on lazy_source() / lazy_dataset(), default
+FALSE; `scale = TRUE` applies the discovered affine at read (not
+`unscale = TRUE`). Original proposal: an explicit flag that reads GetScale/GetOffset at discovery (the D8
 nodata pattern) and fuses the affine into the read kernel when
 non-trivial. NOT auto-on: silent value rescaling is the value-space
 version of silent resampling. No memory cost in garry (unlike VRT
