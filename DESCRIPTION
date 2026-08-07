@@ -89,5 +89,6 @@ Collate:
     'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'
+    'write_tif.R'
     'zzz.R'
 URL: https://belian-earth.github.io/garry/
