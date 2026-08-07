@@ -36,16 +36,27 @@ GPU).
 ## Scope
 
 garry is a raster-algebra compiler, not a GIS. It provides a small,
-closed set of array primitives (elementwise map, focal, reduce, scan;
-fixed-point iteration is planned) over grid-pinned labelled cubes.
-Expressions are written in [anvl](https://github.com/r-xla/anvl)’s
-vocabulary, planned as one graph, and executed distributed and
-memory-bounded. Generality comes from composing those primitives, not
-from a catalogue of named algorithms: garry will never ship every
-geomorphometric function, but the primitive set is chosen so that, in
-principle, any raster-in, raster-out computation can be expressed and
-compiled. This closed world is what makes whole-graph fusion, cost
-placement and byte-identical distributed execution possible.
+closed set of array primitives (elementwise map, focal stencils,
+reductions, scans along time, whole-window model kernels; fixed-point
+iteration is planned) over grid-pinned labelled cubes. Expressions are
+written in [anvl](https://github.com/r-xla/anvl)’s vocabulary, planned
+as one graph, and executed distributed and memory-bounded. This closed
+world is what makes whole-graph fusion, cost placement and
+byte-identical distributed execution possible.
+
+On those primitives garry ships a growing catalogue of statistical
+verbs: `geomedian()` and `medoid()` for multivariate compositing,
+`kalman_smooth()` and `hampel_smooth()` for time series, `ocm_mask()`
+for learned cloud masking. Each is an ordinary composition in the same
+public vocabulary available to every user (a reducer body, a scan body,
+a focal or model kernel) with no privileged access to the engine, so
+anything garry ships, a script or downstream package can equally write.
+A verb earns its place by being useful across earth-observation
+pipelines and verifiable against a reference implementation;
+domain-specific analysis belongs downstream. When something genuinely
+cannot be expressed, that is the signal for a deliberate, rare extension
+of the primitive set, which is exactly how scans, band-time cubes, and
+model kernels arrived.
 
 GDAL is the only boundary. The warper is the universal ingest and
 reshape mechanism (reprojection, resolution change, mosaicking);
