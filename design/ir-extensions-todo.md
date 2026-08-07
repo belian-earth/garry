@@ -134,3 +134,30 @@ Traps recorded:
 Vignettes keep the explicit `(ds * 0.0001) - 0.1` arithmetic
 regardless: teaching that the offset exists is the point; the flag is
 sugar for those who know.
+
+## 7. cog = TRUE: cloud-optimised GeoTIFF output on collect (2026-08-07)
+
+Proposal (Hugh): `collect(x, path = "out.tif", cog = TRUE)` writes a
+COG instead of a plain GeoTIFF. Default FALSE keeps current behaviour
+and cost.
+
+Implementation shape is fixed by GDAL: the COG driver is
+CreateCopy-only (overviews precede full-res data, strict IFD
+ordering), so it cannot be the streaming sink. `cog = TRUE` streams
+chunks into the existing tiled GeoTIFF writer at a temp path, then
+finalises with one `gdalraster::translate(of = "COG")` pass to the
+requested path (translate is already used by the adapter,
+R/gdal_adapter.R). Memory-bounded streaming is unchanged; the cost is
+one sequential re-read/re-write of the finished raster plus overview
+build, the trade every COG producer makes.
+
+Details to settle at implementation:
+- Overview resampling: expose it (nearest for categorical outputs
+  like masks, average otherwise); do not silently reuse the read-side
+  band resampling, which answers a different question.
+- Compression: COG driver defaults to LZW; probably accept a
+  `creation_options` passthrough rather than growing named args.
+- Multi-export `path =` form: flag applies per sink; a named-list
+  variant mirroring `band_names` if mixed outputs are ever wanted.
+- Failure cleanup: temp GeoTIFF must be removed on translate error;
+  the requested path must never hold a half-written COG.
