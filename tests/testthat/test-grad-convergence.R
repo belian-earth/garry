@@ -32,6 +32,9 @@ test_that("kernel recovery converges through the product path", {
     r <- lazy_value_and_grad(lp$loss, lp$fk, weights = k_est)
     k_est <- k_est - lr * r$grad
     losses <- c(losses, r$value)
+    # stop once both exit assertions below already hold; 300 is the
+    # divergence backstop, not a required iteration count
+    if (r$value < 1e-7 && max(abs(k_est - k_true)) < 1e-3) break
   }
   err <- max(abs(k_est - k_true))
   expect_lt(err, 1e-3)
