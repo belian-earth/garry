@@ -110,7 +110,7 @@ Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 
 GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
 scale 0.0001, offset -0.1 in raster:bands terms; often absent from
-STAC metadata but present in the TIFF). NEXT UP (2026-08-08, with
+STAC metadata but present in the TIFF). NEXT UP after #9 (with
 #8): an explicit `unscale = TRUE` on lazy_source() /
 lazy_dataset() that reads GetScale/GetOffset at discovery (the D8
 nodata pattern) and fuses the affine into the read kernel when
@@ -166,7 +166,7 @@ Details to settle at implementation:
 ## 8. collect() / write_tif() split: type-stable sinks (2026-08-08)
 
 Decided (Hugh): split execution verbs by sink instead of ballooning
-collect() arguments. NEXT UP together with #6.
+collect() arguments. NEXT UP after #9, together with #6.
 
 - `collect(x)`: execute, return the (y, x, band) array with its gis
   attribute. Always an array: the current path= form makes the return
@@ -199,3 +199,55 @@ Traps / details:
   wanted; Plan@sinks is already sink-shaped.
 - Soft-deprecate `collect(path=)` for one release (warning + forward
   to write_tif); update README + stac-composite + OCM vignettes.
+
+## 9. Dependency placement + test-suite speed (2026-08-08) -- FIRST
+
+Prioritised by Hugh ahead of #6/#8. Two coupled problems.
+
+**(a) Dependencies live in the wrong tier.** anvl, mirai, mori,
+cptkirk (and vaster) sit in Suggests but are fundamental: anvl is the
+compute engine (135 skip guards across 79 test files), mirai the
+daemon layer (44/39), cptkirk the warp reader, vaster the grid math.
+They are Suggests only because they are GitHub-only and CRAN forbids
+non-CRAN Imports; garry is not on CRAN, so Imports + Remotes is
+available today. Move the engine tier to Imports, delete the guard
+boilerplate, and let install-time fail fast instead of run-time
+skip-storms. Revisit tiers only if CRAN submission becomes real
+(then: vendoring/AdditionalRepositories decision, not a silent
+downgrade back to Suggests).
+
+**(b) Suggests-driven golden tests slow the suite.** The heavyweight
+packages that remain legitimately optional are reference
+implementations for golden tests: KFAS (kalman, 1 file), torch
+(conv/OCM blocks, 4), terra (comparisons, 8), rustyfilters (2).
+Running the reference implementation on every suite run buys nothing
+after the first pass. Direction: freeze references into checked-in
+fixtures (the ocm golden-fixture pattern: generate once offline with
+the reference, commit values + generator script, assert against the
+fixture); keep live-reference runs behind an env gate
+(GARRY_GOLDEN=1) for regeneration and nightly CI. Reference packages
+then leave Suggests entirely or stay for the gated path only.
+
+Plan of attack:
+1. Audit: per-test-file timings (testthat reporter) to rank cost;
+   classify every Suggests entry engine / reference / STAC / infra.
+2. Move engine tier (anvl, mirai, mori, cptkirk, vaster) to Imports +
+   Remotes; strip skip_if_not_installed guards for them; full suite +
+   R CMD check.
+3. Fixture-ise KFAS/torch/terra/rustyfilters goldens (generator
+   scripts in tools/, fixtures under tests/testthat/fixtures/);
+   env-gate the live comparisons.
+4. Measure suite wall-clock before/after; consider testthat parallel
+   (test files are daemon-heavy, so check pool contention first).
+5. CI: default runners run fixture suite; one job (or nightly) runs
+   GARRY_GOLDEN=1 with the reference packages installed.
+
+Traps:
+- torch on CI has no Lantern -> torch_is_installed() gates stay for
+  the gated path (see R-CMD-check history).
+- Daemon-spawning tests must not run concurrently with each other
+  (pool contention false failures); parallelisation needs a
+  daemon-test serial group.
+- terra's CRAN binary links system GDAL sonames (pkgdown ?ignore
+  history); fixtures remove it from default CI entirely, which also
+  kills that failure class.
