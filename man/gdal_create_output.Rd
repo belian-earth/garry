@@ -9,7 +9,10 @@ gdal_create_output(
   grid,
   nodata = numeric(0),
   options = NULL,
-  band_names = NULL
+  band_names = NULL,
+  dtype = NULL,
+  scale = numeric(0),
+  offset = numeric(0)
 )
 }
 \arguments{
@@ -28,6 +31,13 @@ the band count on files garry itself wrote.}
 
 \item{band_names}{Optional character vector of band descriptions, in band
 order; written as each band's GDAL description (shows in \code{gdalinfo}).}
+
+\item{dtype}{Optional dtype override for the created file (else the
+grid's dtype).}
+
+\item{scale, offset}{Optional band scale/offset metadata written on every
+band, so readers (QGIS, GDAL, \code{scale = TRUE} reads) recover
+\code{stored * scale + offset}.}
 }
 \value{
 An open dataset object; caller must \verb{$close()}.

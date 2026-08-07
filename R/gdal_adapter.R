@@ -600,11 +600,18 @@ gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
 #'   the band count on files garry itself wrote.
 #' @param band_names Optional character vector of band descriptions, in band
 #'   order; written as each band's GDAL description (shows in `gdalinfo`).
+#' @param dtype Optional dtype override for the created file (else the
+#'   grid's dtype).
+#' @param scale,offset Optional band scale/offset metadata written on every
+#'   band, so readers (QGIS, GDAL, `scale = TRUE` reads) recover
+#'   `stored * scale + offset`.
 #' @return An open dataset object; caller must `$close()`.
 #' @export
 gdal_create_output <- function(path, grid, nodata = numeric(0),
                                options = NULL,
-                               band_names = NULL) {
+                               band_names = NULL, dtype = NULL,
+                               scale = numeric(0), offset = numeric(0)) {
+  if (!is.null(dtype)) grid <- .grid_retype(grid, dtype)
   dt <- .gdal_dtype_rev[[grid@dtype]]
   if (is.null(dt)) cli::cli_abort("cannot write dtype: {.val {grid@dtype}}")
   outer <- grid@dims[!names(grid@dims) %in% c("x", "y")]
@@ -630,6 +637,11 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
   ds$setProjection(grid@crs)
   if (length(nodata) == 1L)
     for (b in seq_len(n_bands)) ds$setNoDataValue(b, nodata)
+  if (length(scale) == 1L)
+    for (b in seq_len(n_bands)) {
+      ds$setScale(b, scale)
+      ds$setOffset(b, if (length(offset) == 1L) offset else 0)
+    }
   if (length(band_names) > 0L)
     for (b in seq_len(min(n_bands, length(band_names))))
       if (nzchar(band_names[[b]])) ds$setDescription(b, band_names[[b]])
@@ -647,10 +659,15 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
 #' @param dtype Output dtype (for the NaN check).
 #' @param nodata Optional sentinel for NaN demotion.
 #' @param band 1-based destination band.
+#' @param scale,offset Optional quantization affine: values are stored as
+#'   `round((v - offset) / scale)` (round-half-even) BEFORE NaN demotes to
+#'   `nodata`, so the sentinel lives in stored units and must sit outside
+#'   the quantized value range.
 #' @return Invisibly, `NULL`.
 #' @export
 gdal_write_window <- function(ds, x_off, y_off, m, dtype,
-                              nodata = numeric(0), band = 1L) {
+                              nodata = numeric(0), band = 1L,
+                              scale = numeric(0), offset = numeric(0)) {
   if (.sv_is(m)) {
     # Raw store payloads are already in GDAL's row-major write order.
     d <- .sv_dim(m)
@@ -662,6 +679,8 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
     nc <- ncol(m)
     v <- as.numeric(t(m))
   }
+  if (length(scale) == 1L)
+    v <- round((v - (if (length(offset) == 1L) offset else 0)) / scale)
   if (length(nodata) == 1L) {
     v[is.na(v)] <- nodata
   } else if (anyNA(v) && .dtype_family(dtype) != "float") {
@@ -671,6 +690,13 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
   }
   ds$write(as.integer(band), x_off, y_off, nc, nr, v)
   invisible(NULL)
+}
+
+# Whole-file gdal_translate (D13: the only home for the gdalraster call).
+# Used by write_tif(cog = TRUE) to finalise a streamed GeoTIFF into COG
+# layout. Returns TRUE on success.
+gdal_translate_file <- function(src, dst, cl_arg) {
+  gdalraster::translate(src, dst, cl_arg = cl_arg, quiet = TRUE)
 }
 
 # Warp sources straight into a caller-held f32 buffer via GDAL's MEM:::

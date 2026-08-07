@@ -262,7 +262,8 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_write_chunk <- function(path, x_off, y_off, val, skey, el,
-                                pad, dtype, nodata, n_chunks) {
+                                pad, dtype, nodata, n_chunks,
+                                scale = numeric(0), offset = numeric(0)) {
   ds <- .daemon_ds[[path]]
   if (is.null(ds)) {
     ds <- gdal_open_update(path)
@@ -270,7 +271,8 @@ NULL
   }
   ch <- if (is.null(el)) val[[skey]] else val[[el]]
   .exec_check_writable(ch, n_chunks)
-  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
+  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata,
+                    scale = scale, offset = offset)
   rm(ch, val)
   gc(FALSE)
   .garry_malloc_trim()

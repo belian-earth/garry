@@ -429,13 +429,15 @@ NULL
 # (t or band, D17). Padding (source/warp sinks, or D22 padded compute
 # exports) trims off first.
 .exec_write_chunk <- function(ds, x_off, y_off, ch, sink_pad, dtype,
-                              nodata) {
+                              nodata, scale = numeric(0),
+                              offset = numeric(0)) {
   ch <- .exec_trim(ch, sink_pad)
   if (.sv_is(ch)) {
     d <- .sv_dim(ch)
     if (length(d) == 2L) {
       gdal_write_window(ds, x_off, y_off, ch,
-                        dtype = dtype, nodata = nodata)
+                        dtype = dtype, nodata = nodata,
+                        scale = scale, offset = offset)
     } else {
       # Row-major (band, y, x) payload: each band's plane is one
       # contiguous byte range.
@@ -447,18 +449,20 @@ NULL
         gdal_write_window(ds, x_off, y_off,
                           structure(bytes, gdim = d[2:3],
                                     gdt = attr(ch, "gdt")),
-                          dtype = dtype, nodata = nodata, band = b)
+                          dtype = dtype, nodata = nodata, band = b,
+                          scale = scale, offset = offset)
       }
     }
   } else if (is.matrix(ch)) {
     gdal_write_window(ds, x_off, y_off, ch, dtype = dtype,
-                      nodata = nodata)
+                      nodata = nodata, scale = scale, offset = offset)
   } else {
     for (b in seq_len(dim(ch)[[1L]])) {
       m <- ch[b, , , drop = FALSE]
       dim(m) <- dim(ch)[2:3]
       gdal_write_window(ds, x_off, y_off, m, dtype = dtype,
-                        nodata = nodata, band = b)
+                        nodata = nodata, band = b,
+                        scale = scale, offset = offset)
     }
   }
   invisible(NULL)
@@ -481,15 +485,22 @@ NULL
 # distributed scheduler streams chunks through .exec_write_chunk as
 # they land instead).
 .exec_write_sink <- function(chunks, it, sink, path, nodata, band_names = NULL,
-                             sink_pad = NULL) {
+                             sink_pad = NULL, wspec = NULL) {
   .exec_check_writable(chunks[[1L]], nrow(it))
   if (is.null(sink_pad)) sink_pad <- .exec_out_pad(sink)
   nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
-  ds <- gdal_create_output(path, sink@grid, nodata = nodata, band_names = band_names)
+  ds <- gdal_create_output(path, sink@grid, nodata = nodata,
+                           band_names = band_names,
+                           dtype = wspec$dtype, options = wspec$options,
+                           scale = wspec$scale %||% numeric(0),
+                           offset = wspec$offset %||% numeric(0))
   on.exit(ds$close(), add = TRUE)
+  wdt <- wspec$dtype %||% sink@grid@dtype
   for (j in seq_len(nrow(it))) {
     .exec_write_chunk(ds, it$x_off[j], it$y_off[j], chunks[[j]],
-                      sink_pad, sink@grid@dtype, nodata)
+                      sink_pad, wdt, nodata,
+                      scale = wspec$scale %||% numeric(0),
+                      offset = wspec$offset %||% numeric(0))
   }
   invisible(path)
 }
@@ -540,7 +551,8 @@ NULL
 # on-disk path for a sink that already streamed chunk-by-chunk
 # (closing any open handle as a side effect), else NULL.
 .exec_sink_tail <- function(plan, graph, chunks_of, path, nodata,
-                            band_names, streamed_path = NULL) {
+                            band_names, streamed_path = NULL,
+                            wspec = NULL) {
   if (length(plan@sinks) > 1L) {
     res <- lapply(seq_along(plan@sinks), function(k) {
       nid <- plan@sinks[[k]]
@@ -564,7 +576,7 @@ NULL
         S7::prop(sk, "grid") <- ngrid
         return(.exec_write_sink(chunks, it, sk, p, nodata,
                                 .sink_band_names(band_names, nm, ngrid),
-                                sink_pad = pad))
+                                sink_pad = pad, wspec = wspec))
       }
       if (nrow(it) == 1L) {
         v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
@@ -583,7 +595,7 @@ NULL
   sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
   if (!is.null(path))
     return(.exec_write_sink(chunks, it, sink, path, nodata, band_names,
-                            sink_pad = sink_pad))
+                            sink_pad = sink_pad, wspec = wspec))
   if (nrow(it) == 1L) {
     v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
     if (is.matrix(v) && all(dim(v) == c(1L, 1L))) return(v[1L, 1L])
@@ -607,7 +619,8 @@ NULL
 #'   `garry_exec_stats` attribute with the distinct input shapes
 #'   submitted per stage (kernel-cache accounting).
 #' @export
-execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
+execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL,
+                         wspec = NULL) {
   .require_anvl()
   .garry_opt_check()
   graph <- plan@graph
@@ -721,7 +734,7 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
   result <- .exec_sink_tail(plan, graph,
                             chunks_of = function(st) out[[st@id]],
                             path = path, nodata = nodata,
-                            band_names = band_names)
+                            band_names = band_names, wspec = wspec)
 
   if (is.null(path) && length(plan@sinks) <= 1L &&
       isTRUE(getOption("garry.exec_stats", FALSE)))

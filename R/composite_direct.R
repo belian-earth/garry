@@ -359,17 +359,21 @@ NULL
 
 # Materialise the per-band results and write the composite GTiff (or return the
 # matrices when path is NULL). Shared by the direct and pipeline paths.
-.gd_write_result <- function(res, spec, path, nodata, band_names = NULL) {
+.gd_write_result <- function(res, spec, path, nodata, band_names = NULL,
+                             wspec = NULL) {
   mats <- lapply(res, .sv_materialise)                        # one per band
   if (is.null(path)) return(if (spec$n_bands == 1L) mats[[1L]] else mats)
-  ds <- gdal_create_output(path, spec$grid,
-                           nodata = if (is.null(nodata)) numeric(0) else nodata,
-                           band_names = band_names)
+  nd <- if (is.null(nodata)) numeric(0) else nodata
+  wsc <- wspec$scale %||% numeric(0)
+  wof <- wspec$offset %||% numeric(0)
+  ds <- gdal_create_output(path, spec$grid, nodata = nd,
+                           band_names = band_names, dtype = wspec$dtype,
+                           options = wspec$options,
+                           scale = wsc, offset = wof)
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_along(mats))
-    gdal_write_window(ds, 0L, 0L, mats[[b]], spec$grid@dtype,
-                      nodata = if (is.null(nodata)) numeric(0) else nodata,
-                      band = b)
+    gdal_write_window(ds, 0L, 0L, mats[[b]], wspec$dtype %||% spec$grid@dtype,
+                      nodata = nd, band = b, scale = wsc, offset = wof)
   invisible(path)
 }
 
@@ -381,7 +385,8 @@ NULL
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
 #' @keywords internal
-.execute_composite_direct <- function(plan, spec, path = NULL, nodata = NULL, band_names = NULL) {
+.execute_composite_direct <- function(plan, spec, path = NULL, nodata = NULL,
+                                      band_names = NULL, wspec = NULL) {
   .require_anvl()
   parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
   # Split pool: the fetch-ordered pipeline overlaps the mask + per-band medians
@@ -391,7 +396,8 @@ NULL
   # Parallel multi-band always takes the split-pool pipeline (distributed
   # execution requires garry_daemons(), so the pools are guaranteed here).
   if (parallel)
-    return(.execute_composite_pipeline(plan, spec, path, nodata, band_names))
+    return(.execute_composite_pipeline(plan, spec, path, nodata, band_names,
+                                       wspec = wspec))
 
   nx <- spec$grid@dims[["x"]]; ny <- spec$grid@dims[["y"]]
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
@@ -428,7 +434,7 @@ NULL
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
     cli::cli_inform(sprintf("[gdal-direct] lean compute=%.2fs", tcomp))
-  .gd_write_result(res, spec, path, nodata, band_names)
+  .gd_write_result(res, spec, path, nodata, band_names, wspec = wspec)
 }
 
 #' Execute a composite via the split-pool fetch-ordered pipeline.
@@ -438,10 +444,11 @@ NULL
 #' lands, so band B's median runs while later bands are still fetching. Only the
 #' last band's median is exposed after the drain. Requires a garry_daemons split.
 #' @keywords internal
-.execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL, band_names = NULL) {
+.execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL,
+                                        band_names = NULL, wspec = NULL) {
   .require_anvl()
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
-  .gd_write_result(.gd_reduce_results(plan, spec, tmp), spec, path, nodata, band_names)
+  .gd_write_result(.gd_reduce_results(plan, spec, tmp), spec, path, nodata, band_names, wspec = wspec)
 }
 
 # The fetch-ordered per-band compute of the composite pipeline, factored out so
@@ -604,7 +611,7 @@ NULL
 #' Execute any warp-on-read plan via whole-IR replay in one jit.
 #' @keywords internal
 .execute_gd_general <- function(plan, gspec, path = NULL, nodata = NULL,
-                                band_names = NULL) {
+                                band_names = NULL, wspec = NULL) {
   .require_anvl()
   graph <- plan@graph
   nx <- gspec$grid@dims[["x"]]; ny <- gspec$grid@dims[["y"]]
@@ -635,11 +642,17 @@ NULL
   if (is.null(path)) return(if (nb == 1L) mats[[1L]] else mats)
   wnodata <- if (is.null(nodata)) numeric(0) else nodata
   ds <- gdal_create_output(path, gspec$grid, nodata = wnodata,
-                           band_names = band_names)
+                           band_names = band_names, dtype = wspec$dtype,
+                           options = wspec$options,
+                           scale = wspec$scale %||% numeric(0),
+                           offset = wspec$offset %||% numeric(0))
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_len(nb))
-    gdal_write_window(ds, 0L, 0L, mats[[b]], gspec$grid@dtype,
-                      nodata = wnodata, band = b)
+    gdal_write_window(ds, 0L, 0L, mats[[b]],
+                      wspec$dtype %||% gspec$grid@dtype,
+                      nodata = wnodata, band = b,
+                      scale = wspec$scale %||% numeric(0),
+                      offset = wspec$offset %||% numeric(0))
   invisible(path)
 }
 
@@ -734,7 +747,7 @@ NULL
 #' run the upper IR on the materialised results.
 #' @keywords internal
 .execute_gd_reduce <- function(plan, decomp, path = NULL, nodata = NULL,
-                               band_names = NULL) {
+                               band_names = NULL, wspec = NULL) {
   .require_anvl()
   graph <- plan@graph
   tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
@@ -768,10 +781,17 @@ NULL
   mats <- if (length(d) == 3L) lapply(seq_len(nb), function(b) m[b, , ]) else list(m)
   if (is.null(path)) return(if (nb == 1L) mats[[1L]] else mats)
   wnodata <- if (is.null(nodata)) numeric(0) else nodata
-  ds <- gdal_create_output(path, u$grid, nodata = wnodata, band_names = band_names)
+  ds <- gdal_create_output(path, u$grid, nodata = wnodata,
+                           band_names = band_names, dtype = wspec$dtype,
+                           options = wspec$options,
+                           scale = wspec$scale %||% numeric(0),
+                           offset = wspec$offset %||% numeric(0))
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_len(nb))
-    gdal_write_window(ds, 0L, 0L, mats[[b]], u$grid@dtype, nodata = wnodata, band = b)
+    gdal_write_window(ds, 0L, 0L, mats[[b]], wspec$dtype %||% u$grid@dtype,
+                      nodata = wnodata, band = b,
+                      scale = wspec$scale %||% numeric(0),
+                      offset = wspec$offset %||% numeric(0))
   invisible(path)
 }
 
