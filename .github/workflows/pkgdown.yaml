@@ -35,9 +35,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gdal-bin libgdal-dev libproj-dev libgeos-dev
 
+      # terra=?ignore: pak's ignore parameter drops terra (soft dep)
+      # entirely. Its CRAN binary links a GDAL soname the PPA install
+      # above removes, and the site build never needs it: the only use
+      # is the check_installed-guarded as_terra(), with no examples.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::pkgdown, local::.
+          extra-packages: any::pkgdown, local::., terra=?ignore
           needs: website
 
       # Force a source rebuild of dev gdalraster against the PPA GDAL
