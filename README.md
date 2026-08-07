@@ -13,9 +13,7 @@ experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](h
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
 raster computation as a graph and it runs it fast: chunked, distributed
 across processes, with the numeric kernels JIT-compiled to XLA (CPU or
-GPU). It is built for cloud-native earth observation, turning a STAC
-search of remote COGs into an analysis-ready composite without leaving
-R.
+GPU).
 
 **What it is:**
 
