@@ -110,8 +110,8 @@ Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 
 GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
 scale 0.0001, offset -0.1 in raster:bands terms; often absent from
-STAC metadata but present in the TIFF). IN PROGRESS 2026-08-07
-(branch scale-and-write-tif, with #8). Naming decided by Hugh: the
+STAC metadata but present in the TIFF). DONE 2026-08-07
+(branch scale-and-write-tif, with #8; resolution below). Naming decided by Hugh: the
 argument is `scale` on lazy_source() / lazy_dataset(), default
 FALSE; `scale = TRUE` applies the discovered affine at read (not
 `unscale = TRUE`). Original proposal: an explicit flag that reads GetScale/GetOffset at discovery (the D8
@@ -165,7 +165,7 @@ Details to settle at implementation:
 - Failure cleanup: temp GeoTIFF must be removed on translate error;
   the requested path must never hold a half-written COG.
 
-## 8. collect() / write_tif() split: type-stable sinks (2026-08-08)
+## 8. collect() / write_tif() split: type-stable sinks -- DONE 2026-08-07
 
 Decided (Hugh): split execution verbs by sink instead of ballooning
 collect() arguments. NEXT UP after #9, together with #6.
@@ -296,3 +296,36 @@ Remaining lever, deliberately NOT taken (own pass if wanted):
   a per-file pool fixture would cut per-worker time but some tests
   kill/rebuild pools mid-test and need isolation. Less pressing now
   that workers overlap the spawn latency.
+
+### 6+7+8 resolution (2026-08-07, branch scale-and-write-tif)
+
+All three shipped. Deviations from the spec, all Hugh's calls:
+- #6 argument named `scale` (default FALSE), not `unscale`; TIFF/GDAL
+  band metadata is the ONLY discovery source (no STAC raster:bands
+  fallback: garry reads what QGIS reads; earth-search S2 users apply
+  the arithmetic explicitly). Empirical probe matrix recorded in the
+  session: MPC S2 = no metadata anywhere; HLS = TIFF tags; e84 S2 =
+  STAC only (deliberately unsupported).
+- #8 with NO deprecation shim: pre-release, so collect() lost
+  path/nodata/band_names outright. Tests/benchmarks converted;
+  .collect_impl (internal engine) keeps the full surface for
+  write_tif()/materialise()/groups, including .vrt raw-cube sinks.
+- Read affine applies in the read kernel AFTER sentinel->NaN (never
+  as IR), so graph shape is unchanged and composite_direct stays
+  eligible (affine rides the job, applied to the DN cube on device;
+  heterogeneous per-slice affines fall through to the scheduler).
+  Bonus discovered in mapping: the manual `(ds*s)+o` idiom DISABLES
+  the composite_direct fast path (per-slice MapNodes break the
+  2-parent masked shape); scale=TRUE does not.
+- Write quantization at the single gdal_write_window choke point
+  covers all five routes; sentinel maps AFTER quantization (DN
+  units). round() is R round-half-even, documented.
+- Roundtrip test: write_tif(dtype=i16, scale, offset) read back via
+  lazy_source(scale=TRUE) is exact to scale/2. stac-composite writes
+  the geomedian at 3.6 MB int16 vs 8.3 MB f32.
+
+WATCH: one non-reproducible 8-worker suite hang (write-tif +
+writer-errors area, log silent 33 min, all daemons idle) during this
+work; two subsequent full runs green. If it recurs, suspect the
+writer-daemon dispatch under concurrent pools; a stall detector
+pattern (log mtime vs 120 s) is in the session scratchpad.
