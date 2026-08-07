@@ -329,3 +329,33 @@ writer-errors area, log silent 33 min, all daemons idle) during this
 work; two subsequent full runs green. If it recurs, suspect the
 writer-daemon dispatch under concurrent pools; a stall detector
 pattern (log mtime vs 120 s) is in the session scratchpad.
+
+## 10. write_zarr(): Zarr output via the GDAL driver (2026-08-07)
+
+Proposal (Hugh): a write_zarr() sibling of write_tif(). Decision:
+sits behind the GDAL Zarr driver, NOT a new dependency (pixarr/Rarr
+etc. stay out). Probed 2026-08-07 on GDAL 3.13/gdalraster: classic
+Create + windowed band writes + readback all work, full dtype set --
+so the entire write_tif machinery (wspec quantization at
+gdal_write_window, streamed chunk writes, multi-export) reuses with a
+driver switch at gdal_create_output.
+
+Gating: garry's floor is already GDAL >= 3.9 (GTI driver), above the
+Zarr driver's 3.4 (V2) / 3.8 (V3 spec-final) landings, so no NEW
+version gate -- but builds can omit the driver, so gate at runtime on
+gdal_formats("Zarr") with a clear error.
+
+Details to settle at implementation:
+- FORMAT=ZARR_V2 vs ZARR_V3 creation option: default V2 (widest
+  ecosystem read support: xarray/zarr-python/dask) with a format arg.
+- Chunking via BLOCKSIZE creation option; align to garry's chunk grid
+  so streamed writes are whole-chunk (no read-modify-write).
+- Compression codecs are build-dependent (BLOSC/ZSTD optional):
+  probe, default to what exists, expose via creation_options.
+- v1 scope: the write_tif raster model ((y, x, band) via classic
+  API). A labelled (t, y, x) cube -- the real Zarr appeal -- needs
+  GDAL's multidim API; check gdalraster coverage before promising it,
+  else it waits.
+- quantization/scale metadata: Zarr driver stores scale/offset as
+  attributes? verify SetScale round-trips through the driver; if not,
+  write _ARRAY_ATTRIBUTES/CF-style attrs explicitly.
