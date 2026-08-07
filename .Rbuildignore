@@ -13,3 +13,4 @@
 ^vignettes/precompute\.R$
 \.tif$
 ^Rplots\.pdf$
+^\.Rprofile$
