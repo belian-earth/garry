@@ -39,15 +39,19 @@ jobs:
       # entirely. Its CRAN binary links a GDAL soname the PPA install
       # above removes, and the site build never needs it: the only use
       # is the check_installed-guarded as_terra(), with no examples.
-      # cache-version 2: prefix-matched restore keys can resurrect a
-      # pre-ignore library cache that still contains the broken terra
-      # binary (downlit loadNamespace()s it when autolinking
-      # as_terra.Rd). Bumping orphans those caches; v2 builds never
-      # contain terra.
+      # rstac=?ignore joins terra=?ignore: rstac hard-imports sf,
+      # whose CRAN binary links the pre-PPA GDAL soname, and sf
+      # cannot be ignored directly (hard dep). Neither package
+      # executes at site build (no examples on the STAC pages;
+      # vignettes are prerendered); downlit just skips their links.
+      # cache-version 3: prefix-matched restore keys resurrect older
+      # library caches that still contain the broken terra/sf
+      # binaries, which downlit loadNamespace()s when autolinking.
+      # Bumping orphans them; v3 builds never contain terra/rstac/sf.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          cache-version: 2
-          extra-packages: any::pkgdown, local::., terra=?ignore
+          cache-version: 3
+          extra-packages: any::pkgdown, local::., terra=?ignore, rstac=?ignore
           needs: website
 
       # Force a source rebuild of dev gdalraster against the PPA GDAL
