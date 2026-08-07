@@ -11,7 +11,9 @@ lazy_stac_stack(
   granularity = "day",
   sort_field = "datetime",
   nodata = NULL,
-  lon = NULL
+  lon = NULL,
+  scale = FALSE,
+  offset = NULL
 )
 }
 \arguments{
@@ -29,6 +31,11 @@ lazy_stac_stack(
 
 \item{lon}{Longitude for \code{granularity = "solar_day"} (see
 \code{stac_time_slices()}).}
+
+\item{scale, offset}{Read affine, as in \code{\link[=lazy_source]{lazy_source()}}: \code{FALSE}
+(default) reads raw values, \code{TRUE} discovers the file's band
+scale/offset (probing the mosaic, then the first item), a numeric
+supplies it explicitly.}
 }
 \value{
 A list: \code{stack} (\code{LazyRaster}), \code{slices} (character),

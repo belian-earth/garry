@@ -88,7 +88,8 @@ NULL
 #' @param band 1-based band index.
 #' @param open_options GDAL open options ("KEY=VALUE").
 #' @return A list: `grid` (`GridSpec`), `nodata` (length 0 or 1),
-#'   `block_dim` (integer length 2, x then y).
+#'   `block_dim` (integer length 2, x then y), and `scale`/`offset`
+#'   (each length 0 when the band carries no scaling metadata).
 #' @export
 gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   ds <- .gdal_handle(path, open_options)
@@ -103,6 +104,17 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 
   nodata <- ds$getNoDataValue(band)
   nodata <- if (is.na(nodata)) numeric(0) else as.numeric(nodata)
+
+  # Band scale/offset (TIFF/GDAL metadata; DN -> physical is v*scale+offset).
+  # Unset reads back as NA or as the identity (1, 0); both mean absent.
+  sc <- ds$getScale(band)
+  of <- ds$getOffset(band)
+  sc <- if (is.na(sc)) 1 else as.numeric(sc)
+  of <- if (is.na(of)) 0 else as.numeric(of)
+  if (sc == 1 && of == 0) {
+    sc <- numeric(0)
+    of <- numeric(0)
+  }
 
   block <- as.integer(ds$getBlockSize(band))   # (x, y)
 
@@ -125,7 +137,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     dims      = c(x = nx, y = ny),
     dtype     = dtype
   )
-  list(grid = grid, nodata = nodata, block_dim = block)
+  list(grid = grid, nodata = nodata, block_dim = block,
+       scale = sc, offset = of)
 }
 
 #' Read a window from a GDAL source as a garry-oriented matrix.
@@ -141,12 +154,16 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param open_options GDAL open options ("KEY=VALUE").
 #' @param out Output form: a `[y, x]` `"matrix"` (default), or a raw f32
 #'   store value (`"raw_f32"`) for the distributed store path.
+#' @param scale,offset Length-0 (absent) or length-1 band affine: values
+#'   become `v * scale + offset` after the nodata sentinel is promoted
+#'   to NaN, so sentinels never scale.
 #' @return A numeric `y_size x x_size` matrix.
 #' @export
 gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
                              nodata = numeric(0),
                              open_options = character(0),
-                             out = c("matrix", "raw_f32")) {
+                             out = c("matrix", "raw_f32"),
+                             scale = numeric(0), offset = numeric(0)) {
   out <- rlang::arg_match(out)
   # Raw-BSQ cube fast path: a garry raw cube (.bin + sibling
   # VRTRawRasterBand .vrt) reads via seek+readBin, skipping GDAL's
@@ -159,18 +176,19 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
     info <- .raw_vrt_info(path)
     if (!is.null(info) && all(band >= 1L) && all(band <= info$nb))
       return(.raw_vrt_read(info, band, x_off, y_off, x_size, y_size,
-                           nodata, out))
+                           nodata, out, scale, offset))
   }
   ds <- .gdal_handle(path, open_options)
   if (length(band) > 1L)
     return(.gdal_read_window_bands(ds, band, x_off, y_off, x_size, y_size,
-                                   nodata, out))
+                                   nodata, out, scale, offset))
   v <- ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size)
   v <- as.numeric(v)
   if (length(nodata) == 1L) {
     v[!is.na(v) & v == nodata] <- NaN
   }
   v[is.na(v) & !is.nan(v)] <- NaN        # GDAL-side masked values
+  if (length(scale) == 1L) v <- v * scale + offset
   # GDAL's buffer is already row-major: the raw f32 store payload (D19)
   # converts it directly, skipping the byrow transpose below.
   if (out == "raw_f32") return(.sv_from_vec(v, y_size, x_size))
@@ -187,7 +205,8 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
 # file); slab-sized reads keep a slab's blocks resident across the
 # band loop, so each block decompresses once regardless of cache size.
 .gdal_read_window_bands <- function(ds, band, x_off, y_off, x_size, y_size,
-                                    nodata, out) {
+                                    nodata, out, scale = numeric(0),
+                                    offset = numeric(0)) {
   nb <- length(band)
   bs <- as.integer(ds$getBlockSize(band[[1L]]))       # (x, y)
   el_b <- tryCatch(.gdal_dtype_bytes(ds$getDataTypeName(band[[1L]])),
@@ -212,6 +231,7 @@ gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
                               x_size, rows))
       if (length(nodata) == 1L) v[!is.na(v) & v == nodata] <- NaN
       v[is.na(v) & !is.nan(v)] <- NaN
+      if (length(scale) == 1L) v <- v * scale + offset
       if (out == "raw_f32") {
         p0 <- 4 * ((k - 1) * n_px + as.numeric(r0) * x_size)
         res[(p0 + 1):(p0 + 4 * length(v))] <- writeBin(v, raw(), size = 4L)
@@ -398,7 +418,8 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 # byte-identical to the GDAL path (the equivalence test holds them
 # together).
 .raw_vrt_read <- function(info, band, x_off, y_off, x_size, y_size,
-                          nodata, out) {
+                          nodata, out, scale = numeric(0),
+                          offset = numeric(0)) {
   con <- file(info$bin, "rb")
   on.exit(close(con))
   es <- info$bytes
@@ -411,7 +432,8 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   # Partial-width windows subset COLUMN BYTES with one precomputed
   # index (each output row is a contiguous byte run inside its
   # full-width row), so no numeric round-trip either way.
-  if (out == "raw_f32" && es == 4L && length(nodata) != 1L) {
+  if (out == "raw_f32" && es == 4L && length(nodata) != 1L &&
+      length(scale) != 1L) {
     idx <- if (!full) {
       within <- (x_off * 4L + 1L):((x_off + x_size) * 4L)
       rep((seq_len(y_size) - 1L) * (nx * 4L), each = length(within)) +
@@ -448,6 +470,7 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
     }
     if (length(nodata) == 1L) v[!is.na(v) & v == nodata] <- NaN
     v[is.na(v) & !is.nan(v)] <- NaN
+    if (length(scale) == 1L) v <- v * scale + offset
     if (out == "raw_f32") raws[[k]] <- writeBin(v, raw(), size = 4L)
     else if (nb > 1L) res[k, , ] <- matrix(v, nrow = y_size, byrow = TRUE)
     else single <- v

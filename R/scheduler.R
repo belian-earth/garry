@@ -451,11 +451,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                              wnode@resampling, src_nodata = snode@nodata)
         rpath <- vrt; rband <- 1L; rnodata <- snode@nodata
         roo <- character(0)
+        rsc <- snode@scale; rof <- snode@offset
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
         rband <- node@band; rnodata <- node@nodata
         roo <- node@open_options
+        rsc <- node@scale; rof <- node@offset
       }
       skey <- .key(s@members[[1L]])
       fspec <- fuse_of[[.key(s@id)]]
@@ -531,6 +533,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
+            sc <- rsc; of <- rof
             key <- sprintf("s%d_c%d", sid, jj)
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
                      store_mb = store_mb_read,
@@ -539,10 +542,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                 garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
                                               reg, open_options = oo,
                                               fuse = fs, read_raw = rr,
-                                              store_raw = sr),
+                                              store_raw = sr,
+                                              scale = sc, offset = of),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
                 oo = oo, reg = sprintf("r%d_%s", run_id, key), fs = fs,
-                rr = rr, sr = sr,
+                rr = rr, sr = sr, sc = sc, of = of,
                 .compute = prof)
             })
             task_stage_of[[key]] <- oid2
@@ -569,6 +573,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             sid <- s@id; rr2 <- r; cg <- s@chunks; core <- it[rr2, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
+            sc <- rsc; of <- rof
             key <- sprintf("s%d_r%d", sid, rr2)
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -586,10 +591,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                                               reg, parts = parts,
                                               open_options = oo,
                                               fuse = fs, read_raw = rr,
-                                              store_raw = sr),
+                                              store_raw = sr,
+                                              scale = sc, offset = of),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
                 k2 = k2, oo = oo, parts = parts, fs = fs,
-                rr = rr, sr = sr,
+                rr = rr, sr = sr, sc = sc, of = of,
                 reg = sprintf("r%d_%s", run_id, key),
                 .compute = prof)
             })

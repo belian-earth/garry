@@ -63,11 +63,20 @@ SourceNode <- S7::new_class(
     open_options = S7::class_character,
     # GDAL resampling used when the read reprojects/rescales onto the analysis
     # grid ("near" preserves exact values; the default, and forced for QA masks).
-    resampling   = S7::new_property(S7::class_character, default = "near")
+    resampling   = S7::new_property(S7::class_character, default = "near"),
+    # Band affine (v * scale + offset) applied inside the read kernel AFTER
+    # the nodata sentinel is promoted to NaN. Length 0 = absent; when active
+    # both are length 1 (offset 0 for pure scaling).
+    scale        = S7::new_property(S7::class_numeric, default = numeric(0)),
+    offset       = S7::new_property(S7::class_numeric, default = numeric(0))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L)
       return("`nodata` must be length 0 (absent) or 1")
+    if (length(self@scale) > 1L || length(self@offset) > 1L)
+      return("`scale`/`offset` must be length 0 (absent) or 1")
+    if (length(self@scale) != length(self@offset))
+      return("`scale` and `offset` must be both absent or both set")
     NULL
   }
 )

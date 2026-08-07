@@ -25,7 +25,8 @@ NULL
 # the spatial dims only.
 .exec_read_padded <- function(path, band, nodata, cg, core,
                               open_options = character(0),
-                              out = c("matrix", "raw_f32")) {
+                              out = c("matrix", "raw_f32"),
+                              scale = numeric(0), offset = numeric(0)) {
   out <- rlang::arg_match(out)
   H <- cg@halo
   nb <- length(band)
@@ -38,7 +39,8 @@ NULL
     .gdal_with_retry(function()
       gdal_read_window(path, band, w$x_off, w$y_off,
                        w$x_size, w$y_size, nodata = nodata,
-                       open_options = open_options, out = out),
+                       open_options = open_options, out = out,
+                       scale = scale, offset = offset),
       what = "read"),
     error = function(e) {
       if (!identical(garry_opt("read_fail"), "nodata")) stop(e)
@@ -629,12 +631,14 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
         rpath <- gdal_warp_vrt(snode@path, snode@band, wnode@target_grid,
                                wnode@resampling, src_nodata = snode@nodata)
         rband <- 1L; rnodata <- snode@nodata; roo <- character(0)
+        rsc <- snode@scale; rof <- snode@offset
         key <- .key(wnode@id)
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
         rband <- node@band; rnodata <- node@nodata
         roo <- node@open_options
+        rsc <- node@scale; rof <- node@offset
         key <- .key(node@id)
       }
       split_cg <- .exec_split_cg(plan, s)
@@ -642,7 +646,8 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
         out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
           stats::setNames(
             list(.exec_read_padded(rpath, rband, rnodata, s@chunks,
-                                   it[j, ], open_options = roo)), key)
+                                   it[j, ], open_options = roo,
+                                   scale = rsc, offset = rof)), key)
         })
       } else {
         # Coarse read, split into compute-chunk values on arrival.
@@ -654,7 +659,8 @@ execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL) {
         out[[s@id]] <- vector("list", nrow(its))
         for (r in seq_len(nrow(it))) {
           buf <- .exec_read_padded(rpath, rband, rnodata, s@chunks,
-                                   it[r, ], open_options = roo)
+                                   it[r, ], open_options = roo,
+                                   scale = rsc, offset = rof)
           rank3 <- length(dim(buf)) == 3L
           for (j in .exec_split_members(its, it[r, ])) {
             r0 <- its$y_off[[j]] - it$y_off[[r]]

@@ -13,7 +13,9 @@ SourceNode(
   nodata = integer(0),
   block_dim = integer(0),
   open_options = character(0),
-  resampling = "near"
+  resampling = "near",
+  scale = numeric(0),
+  offset = numeric(0)
 )
 }
 \arguments{

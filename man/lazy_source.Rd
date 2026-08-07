@@ -12,7 +12,9 @@ lazy_source(
   open_options = character(0),
   grid = NULL,
   block_dim = NULL,
-  resampling = "near"
+  resampling = "near",
+  scale = FALSE,
+  offset = NULL
 )
 }
 \arguments{
@@ -36,6 +38,17 @@ with \code{grid}; defaults to unconstrained.}
 \item{resampling}{GDAL resampling used when a read reprojects or rescales
 this source onto the analysis grid. \code{"near"} (default) preserves exact
 source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"}, ... to interpolate.}
+
+\item{scale}{Apply the band's scale/offset at read. \code{FALSE} (default)
+reads raw values. \code{TRUE} discovers the affine from the file's band
+metadata (the GDAL scale/offset QGIS applies) and every read returns
+\code{v * scale + offset}, applied after the nodata sentinel becomes NaN.
+A length-1 numeric supplies the scale explicitly (with \code{offset}),
+skipping discovery. Discovery only consults the file: STAC-side
+metadata is never read.}
+
+\item{offset}{Explicit additive offset used when \code{scale} is numeric;
+defaults to 0. Ignored when \code{scale} is logical.}
 }
 \value{
 A \code{LazyRaster}.

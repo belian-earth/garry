@@ -117,11 +117,26 @@ LazyDataset <- S7::new_class(
 #'   interpolating packed QA bits corrupts them. `"near"` (the default)
 #'   preserves exact source values; use `"bilinear"`, `"average"`, `"cubic"`,
 #'   ... to interpolate. Resample after the fact instead with [align()].
+#' @param scale Apply each value band's scale/offset at read. `FALSE`
+#'   (default) reads raw digital numbers. `TRUE` discovers the affine from
+#'   the assets' file metadata (the GDAL band scale/offset QGIS applies;
+#'   one asset per band is probed and the collection is assumed
+#'   homogeneous) and every read returns `v * scale + offset`, applied
+#'   after the nodata sentinel becomes NaN. A scalar or named numeric
+#'   (keyed by asset) supplies scales explicitly. Discovery only consults
+#'   the files themselves: STAC metadata is never read, so collections
+#'   whose files carry no scaling metadata (e.g. Planetary Computer
+#'   Sentinel-2 L2A) read raw and scale explicitly instead.
+#'   `mask_asset` is never scaled.
+#' @param offset Explicit additive offset(s) (scalar or named by asset)
+#'   used when `scale` is numeric; defaults to 0. Ignored when `scale` is
+#'   logical.
 #' @return A `LazyDataset`.
 #' @export
 lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
                          granularity = "day", sort_field = "datetime",
-                         nodata = NULL, lon = NULL, resampling = "near") {
+                         nodata = NULL, lon = NULL, resampling = "near",
+                         scale = FALSE, offset = NULL) {
   .assert_class(grid, GridSpec, "GridSpec")
   if (length(assets) < 1L)
     cli::cli_abort("{.arg assets} must name at least one asset.")
@@ -154,6 +169,42 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
     if (a %in% names(resampling)) unname(resampling[[a]]) else "near"
   }
 
+  # Per-asset read affine (TIFF metadata only). Discovery probes the GTI
+  # mosaic first (free: the grid probe below already opens it) and falls
+  # back to the asset's first item when GTI does not propagate the band
+  # scale/offset. One asset per band; the collection is assumed
+  # homogeneous (documented caveat, e.g. the S2 baseline-04 cutover).
+  resolve_affine <- function(a, meta) {
+    if (!is.null(mask_asset) && a %in% mask_asset)
+      return(list(scale = numeric(0), offset = numeric(0)))
+    pick <- function(x, default = NULL) {
+      if (is.null(x)) return(default)
+      if (!is.null(names(x)))
+        return(if (a %in% names(x)) unname(x[[a]]) else default)
+      unname(x[[1L]])
+    }
+    if (isFALSE(scale)) return(list(scale = numeric(0), offset = numeric(0)))
+    if (isTRUE(scale)) {
+      if (length(meta$scale) == 1L)
+        return(list(scale = meta$scale, offset = meta$offset))
+      probe <- gdal_grid_spec(sources$location[sources$asset == a][[1L]])
+      if (length(probe$scale) == 1L)
+        return(list(scale = probe$scale, offset = probe$offset))
+      cli::cli_inform(c(
+        "i" = "{.arg scale}: no scale/offset metadata on asset {.val {a}}; reading raw values."))
+      return(list(scale = numeric(0), offset = numeric(0)))
+    }
+    sc <- pick(scale)
+    if (is.null(sc)) return(list(scale = numeric(0), offset = numeric(0)))
+    of <- pick(offset, default = 0)
+    if (sc == 1 && of == 0)
+      return(list(scale = numeric(0), offset = numeric(0)))
+    list(scale = as.numeric(sc), offset = as.numeric(of))
+  }
+  if (!isFALSE(scale) && !isTRUE(scale) && !is.numeric(scale))
+    cli::cli_abort(
+      "{.arg scale} must be `FALSE`, `TRUE`, or numeric (scalar or named by asset).")
+
   graph <- graph_new()
   bands <- list()
   for (a in all_assets) {
@@ -161,6 +212,7 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
     meta <- gdal_grid_spec(paste0("GTI:", idx),
                            open_options = gti_open_options(grid))
     nd <- resolve_nodata(a, meta$nodata)
+    aff <- resolve_affine(a, meta)
     slices <- sort(unique(sources$slice[sources$asset == a]))
     rs <- resolve_resampling(a)
     layers <- lapply(slices, function(sl) {
@@ -168,7 +220,9 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
         paste0("GTI:", idx), graph = graph, nodata = nd,
         open_options = gti_open_options(
           grid, filter = sprintf("slice = '%s'", sl), sort_field = sort_field),
-        grid = meta$grid, block_dim = meta$block_dim, resampling = rs)
+        grid = meta$grid, block_dim = meta$block_dim, resampling = rs,
+        scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
+        offset = if (length(aff$offset) == 1L) aff$offset else NULL)
     })
     names(layers) <- slices
     bands[[a]] <- layers

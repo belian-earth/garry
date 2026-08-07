@@ -73,6 +73,22 @@ NULL
 # fn or chain must disqualify the plan (silently computing slice-1
 # semantics diverges from execute_plan).
 .cd_fn_sig <- function(fn) rlang::hash(serialize(.slim_fn(fn), NULL))
+
+# Per-band read affine for the gd cube path. All slices of a band must
+# share one scale/offset (the cube is uploaded and scaled as a unit);
+# heterogeneous slices make the fast path ineligible (caller returns
+# NULL and the plan falls through to the scheduler, which applies the
+# affine per read).
+.cd_slice_affine <- function(gg, ids) {
+  n1 <- gg(ids[[1L]])
+  aff <- list(scale = n1@scale, offset = n1@offset)
+  for (id in ids[-1L]) {
+    n <- gg(id)
+    if (!identical(n@scale, aff$scale) || !identical(n@offset, aff$offset))
+      return(NULL)
+  }
+  aff
+}
 .cd_chain_sig <- function(chain) {
   rlang::hash(lapply(chain, function(n) list(
     cls = class(n)[[1L]],
@@ -117,13 +133,22 @@ NULL
         NA_integer_ else w$src
     }, integer(1))
     if (anyNA(fmask_srcs)) return(NULL)
+    aff <- .cd_slice_affine(gg, band_srcs)
+    if (is.null(aff)) return(NULL)
+    # QA sources carry class codes; a scaled mask source is not replayable.
+    if (any(vapply(fmask_srcs, function(id) length(gg(id)@scale) == 1L,
+                   logical(1)))) return(NULL)
     list(band = band_srcs, fmask = fmask_srcs, F = first@fn,
-         mask_chain = m0$chain, halo = m0$halo, op = red@op, nan_rm = red@nan_rm)
+         mask_chain = m0$chain, halo = m0$halo, op = red@op, nan_rm = red@nan_rm,
+         affine = aff)
   } else if (S7::S7_inherits(first, SourceNode)) {
     if (!all(vapply(masked, function(id)
       S7::S7_inherits(gg(id), SourceNode), logical(1)))) return(NULL)
+    aff <- .cd_slice_affine(gg, as.integer(masked))
+    if (is.null(aff)) return(NULL)
     list(band = as.integer(masked), fmask = integer(0), F = NULL,
-         mask_chain = list(), halo = 0L, op = red@op, nan_rm = red@nan_rm)
+         mask_chain = list(), halo = 0L, op = red@op, nan_rm = red@nan_rm,
+         affine = aff)
   } else NULL
 }
 
@@ -186,6 +211,7 @@ NULL
       (n_bands == 1L || !isTRUE(garry_opt("gd_parallel")))) return(NULL)
   list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F, mask_chain = s1$mask_chain,
        halo = s1$halo, band_srcs = lapply(specs, function(s) s$band),
+       band_affine = lapply(specs, function(s) s$affine),
        fmask_srcs = s1$fmask, n_bands = n_bands,
        grid = sink@grid, device = sink@device)
 }
@@ -385,11 +411,15 @@ NULL
     F <- spec$F; chain <- spec$mask_chain; halo <- spec$halo
     op <- spec$op; nan_rm <- spec$nan_rm; nyy <- ny; nxx <- nx
     nb <- length(band_cubes)
+    affs <- spec$band_affine
     lean <- function(inp) {
       mask <- if (masked) .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
               else NULL
       lapply(seq_len(nb), function(b) {
-        m <- if (masked) F(inp[[b]], mask) else inp[[b]]
+        x <- inp[[b]]
+        if (length(affs[[b]]$scale) == 1L)
+          x <- x * affs[[b]]$scale + affs[[b]]$offset
+        m <- if (masked) F(x, mask) else x
         .apply_reduce(op, m, 1L, nan_rm)
       })
     }
@@ -511,7 +541,8 @@ NULL
       bi, proc.time()[["elapsed"]] - t0))
     if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
     while (length(inflight) >= cap) harvest()         # RAM cap: bound concurrency
-    jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]))
+    jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]),
+               affine = spec$band_affine[[bi]])
     res_p[[bi]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
                                 jb = jb, kb = Kb, .compute = next_cp())
     inflight <- c(inflight, bi)
@@ -588,6 +619,8 @@ NULL
     inputs <- lapply(gspec$input_nodes, function(id) {
       a <- g_upload_raw(readBin(info[[as.character(id)]]$bin, "raw",
                                 n = ny * nx * 4L), "f32", c(ny, nx), device = dev)
+      n <- graph_get(graph, id)
+      if (length(n@scale) == 1L) a <- a * n@scale + n@offset
       if (h > 0L) g_pad(a, h, NaN) else a          # radius-cell NaN edge boundary
     })
     res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(gspec$sink_out)]]
@@ -687,6 +720,7 @@ NULL
          spec = list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F,
                      mask_chain = s1$mask_chain, halo = s1$halo,
                      band_srcs = lapply(ss, function(s) s$band),
+                     band_affine = lapply(ss, function(s) s$affine),
                      fmask_srcs = s1$fmask, n_bands = length(ss),
                      grid = gsp$grid, device = gsp$device))
   })
