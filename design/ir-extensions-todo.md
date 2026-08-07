@@ -105,3 +105,32 @@ names via collect(band_names = <named list>)). All groups' reads enter
 one ready queue and drain under fetch-first priority. Measured on the
 Zurich 9-date materialise: 39 s (per-group loop, pulsing) -> 24.8 s
 (one plan, continuous drain). plan_only keeps the per-group loop.
+
+## 6. unscale = TRUE: discovered scale/offset applied at read (2026-08-07)
+
+GDAL rasters carry per-band scale/offset metadata (S2 L2A baseline-04:
+scale 0.0001, offset -0.1 in raster:bands terms; often absent from
+STAC metadata but present in the TIFF). Proposal, discussed and
+parked undecided: an explicit `unscale = TRUE` on lazy_source() /
+lazy_dataset() that reads GetScale/GetOffset at discovery (the D8
+nodata pattern) and fuses the affine into the read kernel when
+non-trivial. NOT auto-on: silent value rescaling is the value-space
+version of silent resampling. No memory cost in garry (unlike VRT
+unscale, which promotes to Float64): two flops/px inside the already-
+f32 fused read.
+
+Traps recorded:
+- Ordering: sentinel -> NaN BEFORE scaling (a scaled sentinel stops
+  matching).
+- Per-ITEM heterogeneity: the S2 baseline-04 cutover (2022-01) puts
+  different offsets inside one band's time stack. Plain sources
+  discover per slice and are fine; the STAC fast path probes ONE
+  asset per band against a declared grid, so v1 would assume
+  collection-homogeneous scaling and must document the caveat.
+- Per-slice maps with DIFFERING constants break .cd_fn_sig slice
+  homogeneity -> composite_direct fast path fragmentation; check
+  before shipping.
+
+Vignettes keep the explicit `(ds * 0.0001) - 0.1` arithmetic
+regardless: teaching that the offset exists is the point; the flag is
+sugar for those who know.
