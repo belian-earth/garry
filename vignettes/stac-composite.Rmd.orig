@@ -93,8 +93,16 @@ band, and the QA band is consumed.
 
 ```{r sc-mask}
 ds <- mask(ds, where = c(3, 8, 9, 10), open = 2, dilate = 3)
+ds <- (ds * 0.0001) - 0.1     # STAC raster metadata: scale, then offset
 ds
 ```
+
+The second line is the harmonisation step readers of the asset
+metadata will recognise: since processing baseline 04.00 (January
+2022), L2A digital numbers carry a +1000 offset ahead of the usual
+1/10000 scale (`raster:bands`: scale 0.0001, offset -0.1). Undo both
+once, at the source, and everything downstream (composites, spectral
+distances, the written file) is in physical surface reflectance.
 
 Everything so far is graph building. `draw()` shows the pipeline behind
 any one band:
@@ -105,19 +113,14 @@ draw(ds[["B04"]])
 
 ## Composite, route one: per-band median
 
-Start the daemon pools (a read fleet and a compute fleet, sized to the
-machine), and reduce every band's year to its median. `preview()`
-renders a stretched true-colour look without materialising the full
-composite.
+Reduce every band's year to its median. Still lazy: this names a
+computation.
 
-```{r sc-median, message = FALSE}
-garry_daemons()
+```{r sc-median-def}
 med <- reduce_over(ds, "median", over = "t", nan_rm = TRUE)
-preview(med, bands = c("B04", "B03", "B02"))
 ```
 
-A year of tides, boats, and salt harvests collapses into one clean
-image. But look closely at what "median" did: each band was reduced
+The catch hides in what "median" will do: each band reduces
 *independently*. A water pixel's red median might come from July, its
 green median from March, its NIR median from November. The composite
 spectrum at such a pixel is a chimera that no satellite ever measured,
@@ -135,28 +138,58 @@ Stack the per-band time stacks along `"band"` into a
 `(band, t, y, x)` cube, and reduce that over `"t"` with the
 `geomedian()` reducer; the band axis survives:
 
-```{r sc-geomedian, message = FALSE}
+```{r sc-geomedian-def}
 cube <- lazy_stack(
   list(B02 = ds[["B02"]], B03 = ds[["B03"]],
        B04 = ds[["B04"]], B08 = ds[["B08"]]),
   along = "band")
 gmed <- reduce_over(cube, geomedian(), over = "t")
-gm <- collect(gmed)                      # (y, x, band)
-preview(gm, bands = c(3, 2, 1))
+```
+
+Where do the two routes disagree? That question is *also* just more
+graph: subtract the composites band-wise, sum the squares over the
+band axis, and root it: a per-pixel spectral distance, in reflectance
+units.
+
+```{r sc-dist-def}
+dist <- sqrt(reduce_over((gmed - stack_bands(med))^2, "sum",
+                         over = "band"))
+```
+
+## One plan, three products
+
+Nothing has computed yet, and nothing has been read. Start the daemon
+pools (a read fleet and a compute fleet, sized to the machine) and
+collect all three in ONE multi-export plan. Both composites consume
+the same source stages, so every remote asset is fetched exactly once
+for all three products; each composite computes once, and the distance
+consumes them in-plan rather than recomputing them.
+
+```{r sc-collect, message = FALSE}
+garry_daemons()
+res <- collect(list(median = stack_bands(med), geomedian = gmed,
+                    distance = dist))
+```
+
+```{r sc-median, message = FALSE}
+preview(res$median, bands = c(3, 2, 1))
+```
+
+A year of tides, boats, and salt harvests collapses into one clean
+image.
+
+```{r sc-geomedian, message = FALSE}
+preview(res$geomedian, bands = c(3, 2, 1))
 ```
 
 Same scene, but now every pixel's spectrum is a genuine multivariate
 central tendency (solved by a fixed-iteration Weiszfeld scheme,
 compiled into the same chunked kernel machinery as everything else).
-Where does it matter? Map the spectral distance between the two
-composites:
+And the distance map shows where that mattered:
 
 ```{r sc-diff, fig.height = 4.6}
-m <- collect(med)                        # (y, x, band)
-d <- sqrt(apply((gm - m)^2, c(1, 2), sum))
-gis <- attr(m, "gis"); gis$dim <- c(dim(d), 1L)
-attr(d, "gis") <- gis                    # keep the result georeferenced
-preview(d, stretch = c(2, 98), main = "median vs geomedian spectral distance")
+preview(res$distance, stretch = c(2, 98),
+        main = "median vs geomedian spectral distance")
 ```
 
 Stable land is dark (the two composites agree); the ponds, the river
@@ -172,7 +205,10 @@ spectrum.
 
 `collect(path = )` streams the composite to a GeoTIFF chunk by chunk as
 results arrive, so the full raster never needs to sit in memory; band
-descriptions carry through.
+descriptions carry through. (This is a fresh plan, so it reads the
+scenes again; a workflow that keeps running plans over the same stack
+would checkpoint first with `materialise()`, as the OmniCloudMask
+vignette does.)
 
 ```{r sc-write}
 tif <- file.path(tempdir(), "salinas-geomedian.tif")
@@ -186,12 +222,14 @@ garry_daemons(0, 0)
 
 ## What actually ran
 
-One graph: 65 dates times 5 assets discovered and signed, each warped on
-read from its native UTM grid onto the analysis grid, SCL morphology,
-masking, and a multivariate reduction, planned into chunked stages,
-fused into compiled kernels, and executed across the daemon pools under
-a memory budget. On benchmark workloads this engine composites at parity
-with the Python ODC/dask stack. The next steps in the arc:
+One plan, three sinks: 65 dates times 5 assets discovered and signed,
+each warped on read from its native UTM grid onto the analysis grid,
+SCL morphology, masking, reflectance scaling, two composites and
+their spectral distance, planned into chunked stages, fused into
+compiled kernels, and executed across the daemon pools under a memory
+budget, with every remote asset fetched once. On
+benchmark workloads this engine composites at parity with the Python
+ODC/dask stack. The next steps in the arc:
 `vignette("time-series")` keeps the time axis instead of collapsing it,
 and the case-study vignettes (HLS harmonized PCA, AEF embeddings) build
 on the same dataset machinery.
