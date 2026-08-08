@@ -46,10 +46,6 @@ the band axis.
 
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   : Build a lazy dataset from a STAC source table.
-- [`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
-  : Read multi-band COGs into a lazy dataset via the cptkirk engine.
-- [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
-  : Dequantize Alpha Earth (AEF) embedding codes.
 - [`as_dataset()`](https://belian-earth.github.io/garry/reference/as_dataset.md)
   : Assemble a lazy dataset from existing rasters.
 - [`LazyDataset()`](https://belian-earth.github.io/garry/reference/LazyDataset.md)
@@ -62,6 +58,19 @@ the band axis.
   : Group a dataset's time slices into calendar periods.
 - [`stack_bands()`](https://belian-earth.github.io/garry/reference/stack_bands.md)
   : Collapse a dataset's bands into a single stacked raster.
+
+## Geo-embedding helpers
+
+Special operations for published geo-embedding products: the batched
+multi-band COG read (cptkirk) and the products’ quantiser decodes,
+written in the g\_\* vocabulary so they fuse onto the read.
+
+- [`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
+  : Read multi-band COGs into a lazy dataset via the cptkirk engine.
+- [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
+  : Dequantize Alpha Earth (AEF) embedding codes.
+- [`dequantize_esd()`](https://belian-earth.github.io/garry/reference/dequantize_esd.md)
+  : Dequantize Embedded Seamless Data (ESD) FSQ codes.
 
 ## Raster & dataset algebra
 
