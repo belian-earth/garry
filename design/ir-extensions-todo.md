@@ -412,3 +412,8 @@ the fetch window; total collect 67.7 s -> 48.5 s (fetch was also
 ~8 s faster on the after-run, so the tail delta is the honest
 apples-to-apples number). Local fixture tests: strips == whole-band
 byte-identical, repeat collect creates 0 new kernels.
+
+Benchmark (Hugh, 2026-08-08, benchmarks/compare.sh, 3-band HLS
+median B04/B03/B02, cpu): garry 22.05 s vs ODC 27.59 s -- 1.25x
+faster. Previously parity-to-slightly-behind (~1.0-1.2x of ODC);
+the closed drain is the differentiator.
