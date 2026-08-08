@@ -44,14 +44,19 @@ reference:
     The named multi-band, multi-time object; verbs apply across every band. Build from a STAC table or from rasters, mask from a QA band, collapse the band axis.
   contents:
   - lazy_dataset
-  - lazy_cog
-  - dequantize_aef
   - as_dataset
   - LazyDataset
   - mask
   - qa_bits
   - group_by_time
   - stack_bands
+- title: Geo-embedding helpers
+  desc: |
+    Special operations for published geo-embedding products: the batched multi-band COG read (cptkirk) and the products' quantiser decodes, written in the g_* vocabulary so they fuse onto the read.
+  contents:
+  - lazy_cog
+  - dequantize_aef
+  - dequantize_esd
 - title: Raster & dataset algebra
   desc: |
     Lazily build and transform rasters and datasets. Every verb adds IR nodes and returns a new lazy object; nothing reads or computes until collect().
