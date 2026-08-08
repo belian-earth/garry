@@ -7,6 +7,42 @@ test_that("dequantize_aef matches the reference decode on plain numerics", {
   expect_equal(dequantize_aef(x), ((x / 127.5)^2) * sign(x), tolerance = 1e-6)
 })
 
+test_that("dequantize_esd matches the reference FSQ decode over the full code range", {
+  levels <- c(8L, 8L, 8L, 5L, 5L, 5L)
+  basis <- cumprod(c(1, levels[-length(levels)]))
+  x <- as.numeric(0:(prod(levels) - 1L))            # every ESD code
+  for (j in seq_along(levels)) {
+    half <- levels[[j]] %/% 2
+    ref <- (((x %/% basis[[j]]) %% levels[[j]]) - half) / half
+    expect_equal(dequantize_esd(x, j), ref)
+  }
+  # non-default levels: any FSQ product decodes by passing its own vector
+  expect_equal(dequantize_esd(as.numeric(0:11), 2L, levels = c(3L, 4L)),
+               (((0:11) %/% 3) %% 4 - 2) / 2)
+  expect_true(is.nan(dequantize_esd(NaN, 1L)))       # nodata propagates (D8)
+  expect_error(dequantize_esd(x, 7L), "level")
+  expect_error(dequantize_esd(x, 0L), "level")
+})
+
+test_that("dequantize_esd decodes identically through a traced read", {
+  codes <- matrix(rep_len(c(0L, 1L, 4093L, 31999L, 63999L), 40L * 60L), 40L, 60L)
+  dir <- withr::local_tempdir("esd")
+  f <- file.path(dir, "esd.tif")
+  d <- gdalraster::create("GTiff", f, 60, 40, 1, "UInt16", return_obj = TRUE)
+  d$setGeoTransform(c(0, 10, 0, 400, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  d$write(1, 0, 0, 60, 40, as.integer(t(codes)))
+  d$close()
+  for (j in c(1L, 4L, 6L)) {
+    got <- collect(lazy_map(lazy_source(f),
+                            fn = function(x) dequantize_esd(x, j),
+                            dtype = "f32"),
+                   distributed = FALSE)
+    expect_equal(unclass(got), dequantize_esd(codes, j),
+                 tolerance = 1e-6, ignore_attr = TRUE)
+  }
+})
+
 test_that(".raw_bsq_vrt_xml describes a raw BSQ buffer GDAL reads with the sentinel", {
   nx <- 4L; ny <- 3L; nd <- -128L
   b1 <- rep(-100L, nx * ny); b1[[1]] <- nd
