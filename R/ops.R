@@ -146,6 +146,24 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   }
 }
 
+#' Construct a constant-filled AnvlArray on the device.
+#'
+#' The fill is represented in the program (no host buffer of `prod(dim)`
+#' elements is built or transferred), so it is the cheap way to make a
+#' large device array — e.g. warm-up dummies for kernel precompiles.
+#'
+#' @param value Scalar fill value.
+#' @param dim Integer dims, `[nr, nc]` or `[t, nr, nc]`.
+#' @param dtype garry dtype string (default `"f32"`).
+#' @param device Optional device (e.g. "cuda"); NULL uses the default.
+#' @return An `AnvlArray`.
+#' @export
+g_fill <- function(value, dim, dtype = "f32", device = NULL) {
+  .require_anvl()
+  if (is.null(device)) anvl::nv_fill(value, dim, dtype)
+  else anvl::nv_fill(value, dim, dtype, device = device)
+}
+
 #' Download an AnvlArray as a raw store payload.
 #'
 #' Row-major byte payload tagged with `gdim`/`gdt` (D20, extended to

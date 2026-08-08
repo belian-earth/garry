@@ -277,6 +277,17 @@
     default = TRUE, tier = "user",
     desc = "fan multi-band composite medians across the compute pool",
     check = .opt_flag()),
+  # Fetch-ordered pipeline: split each band's median into this many
+  # horizontal strips so the post-fetch drain spreads across the whole
+  # compute pool instead of leaving the last band's median on one
+  # daemon (the bins are row-major f32, the median is spatially
+  # pointwise, and the mask cube is already materialised, so strips
+  # need no halo and reassemble byte-identically). 0 = auto: one strip
+  # per compute daemon. 1 restores whole-band jobs.
+  gd_strips = list(
+    default = 0, tier = "tuning",
+    desc = "band-median strips in the fetch-ordered pipeline (0 = auto)",
+    check = .opt_num(min = 0)),
   # Pooled scheduler: /dev/shm headroom the store must leave free, in MB.
   # The mori store, the fetch cache and gdal-direct cubes all live on
   # tmpfs, whose pages are unreclaimable RAM; the budget's resident-byte

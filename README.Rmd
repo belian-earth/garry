@@ -20,6 +20,19 @@ knitr::opts_chunk$set(
 [![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 <!-- badges: end -->
 
+
+```{=gfm}
+> [!WARNING]
+> garry is experimental and under active development. The API changes
+> without deprecation: function signatures and behaviour may differ
+> between commits, and nothing here should be treated as stable yet.
+> Development and benchmarking happen on Linux; macOS is CI-tested but
+> less exercised, and there is a known issue with the fused execution
+> path on Apple Silicon. Performance and behaviour there are not yet
+> fully characterised.
+```
+
+
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
 raster computation as a graph and it runs it fast: chunked, distributed across
 processes, with the numeric kernels JIT-compiled to XLA (CPU or GPU).
@@ -36,9 +49,7 @@ processes, with the numeric kernels JIT-compiled to XLA (CPU or GPU).
   GDAL daemon pool, and runs the fused kernels through
   [anvl](https://github.com/r-xla/anvl) (XLA). On a three-band annual HLS
   composite it matches Python's ODC + dask on the same machine, in idiomatic R.
-- **GDAL-faithful.** IO is [gdalraster](https://cran.r-project.org/package=gdalraster);
-  grid math is [vaster](https://github.com/hypertidy/vaster). Results track what
-  GDAL would give you.
+- **GDAL-faithful.** IO is [gdalraster](https://cran.r-project.org/package=gdalraster).
 
 ## Scope
 
@@ -118,6 +129,7 @@ composite <- lazy_dataset(
   assets = c("B04", "B03", "B02", "B08"), 
   mask_asset = "Fmask",
   nodata = c(B04 = -9999, B03 = -9999, B02 = -9999, B08 = -9999, Fmask = 255),
+  scale = TRUE,   # apply each file's TIFF scale/offset tags on read -> reflectance
   resampling = "bilinear"
 ) |>
   mask(where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
@@ -141,15 +153,27 @@ draw(composite[["ndvi"]])    # the NDVI band's node tree
 preview(composite[["ndvi"]])   # single band -> colour ramp + colourbar
 
 # 5. Execute across the daemons. collect() returns a (y, x, band) array carrying
-#    a `gis` attribute (extent/CRS), so the result is self-describing; pass a
-#    `path=` to stream it straight to a GeoTIFF instead.
-a <- collect(composite, nodata = -9999)
+#    a `gis` attribute (extent/CRS), so the result is self-describing.
+a <- collect(composite)
 
 # preview() on a materialised array reads that `gis` attribute for real-world axes.
 preview(a)     # multi-band  -> RGB (first three bands)
 ```
 
+To write to disk instead, `write_tif()` runs the same plan but streams each
+chunk into a GeoTIFF as it lands, so nothing is ever held whole in memory.
+`dtype` and `scale` quantise the f32 reflectance back to int16 (half the file
+size, and the scale is written to the TIFF tags so readers recover real
+values); `cog = TRUE` finalises a Cloud-Optimised GeoTIFF.
+
+```{r write, eval = FALSE}
+tif <- file.path(tempdir(), "composite.tif")
+write_tif(composite, tif,
+          dtype = "i16", scale = 0.0001, nodata = -32768, cog = TRUE)
+```
+
 The same verbs work on a single raster. `lazy_source()` opens one COG or a GDAL
 mosaic; `lazy_map()` / `focal()` / `reduce_over()` build map-algebra graphs;
-`align()` reprojects onto a target grid; `collect()` runs it. See
+`align()` reprojects onto a target grid; `collect()` brings the result into R
+and `write_tif()` streams it to disk. See
 `benchmarks/compare.sh` for the back-to-back garry-vs-ODC benchmark.

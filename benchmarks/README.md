@@ -521,12 +521,13 @@ Correctness: garry's B04 vs vrtility's agrees at correlation 0.992
 resampling and per-day-slice vs per-item stacking).
 
 Remaining levers: trim the ~2.4 s of graph build + planner passes
-(S7 `@` and `%in%` dominate the profile), and the last band's
-compute tail (its XLA compile could in principle warm during the
-drain, but mirai cannot route tasks to specific daemons, so a warm
-task would displace a read for as long as it compiles - a net loss;
-measured reasoning in the phase 9b notes). Both are second-order
-next to the read drain, which is bandwidth-bound.
+(S7 `@` and `%in%` dominate the profile). The last band's compute
+tail was closed by the pipeline-tail work: width-1 compute profiles
+made per-daemon routing possible (retiring the "mirai cannot route
+tasks to specific daemons" objection recorded here previously), so
+the lean kernels now warm on the compute pool during the fetch
+window, are cached content-addressed across tasks, and each band's
+median strip-decomposes across the pool for the exposed drain.
 
 A mori-store lesson worth keeping: consumer-side RANGE subsetting of
 a mapped shared matrix materialises the whole window per input (R's

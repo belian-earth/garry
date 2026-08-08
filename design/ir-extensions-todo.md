@@ -359,3 +359,61 @@ Details to settle at implementation:
 - quantization/scale metadata: Zarr driver stores scale/offset as
   attributes? verify SetScale round-trips through the driver; if not,
   write _ARRAY_ATTRIBUTES/CF-style attrs explicitly.
+
+## 11. Composite pipeline post-fetch tail (2026-08-08) -- DONE 2026-08-08
+
+Observed on the README-scale HLS composite (Hugh, re-knitting the
+README): after the last fetch lands, 13-15 s of exposed work before
+collect() returns, identical with and without read-scaling (so not a
+scale-on-read regression). Instrumented breakdown: last-band median
+drain ~13 s, upper (ndvi) kernel 0.5 s, plan/materialise wrap ~5 s.
+
+Root causes (branch pipeline-tail):
+1. Every band median RECOMPILED its kernel: `g_jit` inline in
+   `.gd_compute_masked_band`/`.gd_compute_mask` builds a fresh pjrt
+   dispatcher per call (anvl's jit cache is keyed on input shapes and
+   lives INSIDE the JitFunction object; the function is never part of
+   the key), and the object was discarded after one call. `.gd_warm`
+   only woke the PJRT client (2x2 kernel).
+2. The last band's median was one whole-grid job on one width-1
+   daemon, dispatched only when the final fetch landed.
+
+Resolution:
+- `g_fill` op (ops.R, D9): device constants via `anvl::nv_fill`, no
+  host buffer -- warm-up dummies.
+- Content-addressed kernel cache: host ships a `ck` (hash of slimmed
+  F/op/nan_rm/affine/masked/device; mask kernel: chain sig + halo +
+  dims) and the daemon get-or-creates the JitFunction in
+  `.daemon_cache` (`.gd_cached_jit`); `.gd_lean_fn` rebuilds one
+  canonical closure for both the real task and the warm.
+- Strip decomposition: band medians split into equal-height row
+  strips (`.gd_strip_bounds`, <=2 shapes; `gd_strips` option, auto =
+  one per compute daemon). Bins are headerless row-major f32 so a
+  strip is a contiguous seek+read; the mask cube is materialised
+  before any band runs so strips need no halo; reassembly is raw
+  concatenation in y order -- byte-identical (test-gd-tail.R).
+- Real warm: `.gd_warm_pipeline` broadcast per width-1 compute
+  profile during the fetch window compiles each distinct ck at each
+  strip height on `g_fill` dummies, so no post-drain strip pays a
+  compile. This retires the phase 9b objection ("mirai cannot route
+  tasks to specific daemons") -- width-1 profiles made routing exact.
+
+Deliberately NOT done: no spill of strips onto idle read daemons
+(keeps the lean-reader design; revisit if the residual tail ever
+matters); the three single-process inline `g_jit` sites
+(whole-grid lean / gd_general / upper kernel) stay inline; the
+`.daemon_cache` >64 wholesale flush stays (separate item).
+
+Measured (README-scale live run: 44 slices, 1480x2536, 4 bands +
+ndvi, garry_daemons() auto pools, 6 strips/band): post-fetch tail
+13.4 s -> 3.65 s, with 0 post-warm XLA compiles (every strip hit a
+warmed kernel); pipeline compute sum 51.2 s fully overlapped with
+the fetch window; total collect 67.7 s -> 48.5 s (fetch was also
+~8 s faster on the after-run, so the tail delta is the honest
+apples-to-apples number). Local fixture tests: strips == whole-band
+byte-identical, repeat collect creates 0 new kernels.
+
+Benchmark (Hugh, 2026-08-08, benchmarks/compare.sh, 3-band HLS
+median B04/B03/B02, cpu): garry 22.05 s vs ODC 27.59 s -- 1.25x
+faster. Previously parity-to-slightly-behind (~1.0-1.2x of ODC);
+the closed drain is the differentiator.
