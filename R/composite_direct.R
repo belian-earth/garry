@@ -218,11 +218,25 @@ NULL
 
 
 
+# Uniform strip grid for the pipeline's band medians: equal ceiling-height
+# body strips plus one remainder, so at most two kernel shapes exist per
+# run (anvl's jit cache is shape-keyed). Bounds are c(y0, h), y0 0-based.
+.gd_strip_bounds <- function(ny, n_strips) {
+  ny <- as.integer(ny)
+  ns <- max(1L, min(as.integer(n_strips), ny))
+  if (ns == 1L) return(list(c(0L, ny)))
+  h <- as.integer(ceiling(ny / ns))
+  ns <- as.integer(ceiling(ny / h))
+  lapply(seq_len(ns) - 1L, function(i) c(i * h, min(h, ny - i * h)))
+}
+
 # Max concurrent band medians whose working sets fit the RAM budget. Each holds
 # ~3.5 cubes (band + shared mask + median scratch); cap so their combined
 # resident set stays under compute_ram_fraction of AVAILABLE RAM. Clamped to
 # [1, pool]; falls back to the full pool when RAM can't be read. This is what
 # lets garry_daemons() over-provision compute without OOM on a many-band job.
+# With strip decomposition, `ny` is the strip height and `pool` the strip-task
+# queue depth, so the cap admits proportionally more, smaller tasks.
 .gd_compute_cap <- function(n_slices, ny, nx, pool) {
   pool <- max(1L, as.integer(pool))
   per_task_mb <- 3.5 * n_slices * ny * nx * 4 / 1e6
@@ -493,11 +507,39 @@ NULL
   # the read pool), then the bands. All non-blocking.
   fmask_p <- if (masked) fetch(spec$fmask_srcs) else NULL
   band_p <- lapply(spec$band_srcs, fetch)
-  # Warm + attach the compute pool while the read pool fetches (hides cold init).
+  # Kernel identity for the lean band kernel: everything the traced
+  # closure closes over (slimmed F, op, nan_rm, affine, masked, device).
+  # Affine varies per band, so bands sharing an affine share a ck — and
+  # with it one JitFunction per daemon (see .gd_cached_jit): without the
+  # key, every band task rebuilt its dispatcher and recompiled.
+  Fs <- if (is.null(spec$F)) NULL else .slim_fn(spec$F)
+  base_sig <- rlang::hash(list(
+    fn = if (is.null(Fs)) NULL else serialize(Fs, NULL),
+    op = spec$op, nan_rm = spec$nan_rm, masked = masked, dev = spec$device))
+  band_ck <- vapply(seq_along(spec$band_srcs), function(bi)
+    rlang::hash(list(base_sig, spec$band_affine[[bi]])), "")
+
+  # Strip grid: spread each band's median across the pool so the exposed
+  # drain (the bands with no fetch left to hide behind) divides by the
+  # pool width instead of landing whole on one daemon.
+  ns_opt <- as.integer(garry_opt("gd_strips"))
+  bounds <- .gd_strip_bounds(ny, if (ns_opt >= 1L) ns_opt else max(1L, .comp_n()))
+  ns <- length(bounds)
+
+  # Warm + attach the compute pool while the read pool fetches: hide the
+  # XLA client cold init AND the lean kernels' compiles (one per distinct
+  # ck, executed per strip height on zero-byte g_fill dummies) inside the
+  # fetch window, so no post-drain strip pays a compile.
+  hs <- unique(vapply(bounds, `[[`, integer(1), 2L))
+  wsp <- unname(lapply(which(!duplicated(band_ck)), function(bi)
+    list(ck = band_ck[[bi]], F = Fs, op = spec$op, nan_rm = spec$nan_rm,
+         affine = spec$band_affine[[bi]], masked = masked, dev = spec$device,
+         n = length(spec$band_srcs[[bi]]), hs = hs, nx = nx)))
   for (p in comp_profs)
     mirai::everywhere({
-      suppressMessages(library(garry)); try(garry::.gd_warm(), silent = TRUE)
-    }, .compute = p)
+      suppressMessages(library(garry))
+      try(garry::.gd_warm_pipeline(sp), silent = TRUE)
+    }, sp = wsp, .compute = p)
 
   # Mask: once fmask lands, compute the cleaned cube on the compute pool while
   # the bands are still fetching. One mask .bin, read by every band median.
@@ -512,53 +554,85 @@ NULL
     Km <- list(fmask_bins = bin_of(spec$fmask_srcs), out_bin = mask_bin,
                chain = lapply(spec$mask_chain, function(n) {
                  n@fn <- .slim_fn(n@fn); n }),
-               halo = spec$halo, ny = ny, nx = nx, dev = spec$device)
+               halo = spec$halo, ny = ny, nx = nx, dev = spec$device,
+               ck = rlang::hash(list(chain = .cd_chain_sig(spec$mask_chain),
+                                     halo = spec$halo, ny = ny, nx = nx,
+                                     dev = spec$device)))
     mask_p <- mirai::mirai(garry::.gd_compute_mask(km), km = Km,
                            .compute = next_cp())
   }
 
-  # Per-band medians: wait each band's fetch, then dispatch its median (async)
-  # so it overlaps the remaining bands' fetches -- but never let more than `cap`
-  # run at once, so their combined working sets stay under the RAM budget (a
-  # generous / many-band pool then drains in memory-bounded waves, not a spike).
-  Kb <- list(F = if (is.null(spec$F)) NULL else .slim_fn(spec$F),
-             op = spec$op, nan_rm = spec$nan_rm, ny = ny, nx = nx,
+  # Per-band medians, strip-decomposed: wait each band's fetch, then dispatch
+  # its strips (async, round-robin across the profiles) so they overlap the
+  # remaining bands' fetches -- but never let more than `cap` strip tasks be
+  # in flight, so the executing working sets stay under the RAM budget (a
+  # generous / many-band pool then drains in memory-bounded waves, not a
+  # spike). Strips reassemble by raw concatenation in y order: the payloads
+  # are row-major f32, so the result is byte-identical to a whole-band job.
+  Kb <- list(F = Fs, op = spec$op, nan_rm = spec$nan_rm, ny = ny, nx = nx,
              dev = spec$device, mask_bin = if (masked) mask_bin else character(0))
   n_slices <- length(spec$band_srcs[[1L]])
-  cap <- .gd_compute_cap(n_slices, ny, nx, .comp_n())
-  if (progress && cap < length(spec$band_srcs))
-    cli::cli_inform(sprintf("[gdal-direct] compute in-flight capped at %d (RAM budget)", cap))
+  cap <- .gd_compute_cap(n_slices, bounds[[1L]][[2L]], nx,
+                         2L * max(1L, .comp_n()))
+  nb <- length(spec$band_srcs)
+  if (progress && cap < nb * ns)
+    cli::cli_inform(sprintf(
+      "[gdal-direct] compute in-flight capped at %d strip task(s) (RAM budget)", cap))
   mask_done <- !masked
-  res_p <- vector("list", length(spec$band_srcs))
-  res <- vector("list", length(spec$band_srcs))
-  inflight <- integer(0)                      # dispatched, not yet collected (FIFO)
+  res_p <- new.env(parent = emptyenv())
+  parts <- lapply(seq_len(nb), function(i) vector("list", ns))
+  got <- integer(nb)
+  res <- vector("list", nb)
+  t_comp <- 0; jit_creates <- 0L
+  inflight <- list()                          # dispatched, not yet collected (FIFO)
   harvest <- function() {
-    bi <- inflight[[1L]]; inflight <<- inflight[-1L]
-    v <- res_p[[bi]][]
+    it <- inflight[[1L]]; inflight <<- inflight[-1L]
+    v <- res_p[[it$key]][]
     if (inherits(v, "miraiError"))
-      cli::cli_abort(
-        "gdal-direct pipeline compute failed on band {bi}: {conditionMessage(v)}")
-    res[[bi]] <<- v
+      cli::cli_abort(paste0(
+        "gdal-direct pipeline compute failed on band {it$bi} strip {it$si}: ",
+        "{conditionMessage(v)}"))
+    t_comp <<- t_comp + (attr(v, "gd_t") %||% 0)
+    jit_creates <<- jit_creates + (attr(v, "gd_jit") %||% 0L)
+    attr(v, "gd_t") <- NULL; attr(v, "gd_jit") <- NULL
+    rm(list = it$key, envir = res_p)
+    parts[[it$bi]][[it$si]] <<- v
+    got[[it$bi]] <<- got[[it$bi]] + 1L
+    if (got[[it$bi]] == ns) {
+      res[[it$bi]] <<- if (ns == 1L) parts[[it$bi]][[1L]] else {
+        p <- do.call(c, lapply(parts[[it$bi]], function(x) {
+          attributes(x) <- NULL; x }))
+        attr(p, "gdim") <- c(ny, nx); attr(p, "gdt") <- "f32"
+        p
+      }
+      parts[[it$bi]] <<- list()
+    }
   }
-  for (bi in seq_along(spec$band_srcs)) {
+  for (bi in seq_len(nb)) {
     bres <- lapply(band_p[[bi]], function(h) h[])
     .gd_check_fetch(bres, sprintf("band %d", bi))
     if (progress) cli::cli_inform(sprintf(
       "[gdal-direct] band %d drained at %.2fs",
       bi, proc.time()[["elapsed"]] - t0))
     if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
-    while (length(inflight) >= cap) harvest()         # RAM cap: bound concurrency
-    jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]),
-               affine = spec$band_affine[[bi]])
-    res_p[[bi]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
-                                jb = jb, kb = Kb, .compute = next_cp())
-    inflight <- c(inflight, bi)
+    for (si in seq_len(ns)) {
+      while (length(inflight) >= cap) harvest()       # RAM cap: bound concurrency
+      jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]),
+                 affine = spec$band_affine[[bi]],
+                 rows = if (ns == 1L) NULL else bounds[[si]],
+                 ck = band_ck[[bi]])
+      key <- sprintf("b%d.s%d", bi, si)
+      res_p[[key]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
+                                   jb = jb, kb = Kb, .compute = next_cp())
+      inflight[[length(inflight) + 1L]] <- list(bi = bi, si = si, key = key)
+    }
   }
   if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
                                 proc.time()[["elapsed"]] - t0))
   while (length(inflight)) harvest()
-  if (progress) cli::cli_inform(sprintf("[gdal-direct] pipeline total=%.2fs",
-                                proc.time()[["elapsed"]] - t0))
+  if (progress) cli::cli_inform(sprintf(
+    "[gdal-direct] pipeline total=%.2fs (compute sum=%.2fs, %d strip/band, %d post-warm compile)",
+    proc.time()[["elapsed"]] - t0, t_comp, ns, jit_creates))
   res
 }
 

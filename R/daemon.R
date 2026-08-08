@@ -74,8 +74,8 @@ NULL
   # 2026-08-02: they previously escaped the hash, so .gd_daemon_prep's
   # skew check passed under skew).
   nms <- sort(c(ls(ns, all.names = TRUE, pattern = "^\\.daemon_"),
-                ".cd_fetch_warp", ".gd_warm", ".gd_compute_mask",
-                ".gd_compute_masked_band"))
+                ".cd_fetch_warp", ".gd_warm", ".gd_warm_pipeline",
+                ".gd_compute_mask", ".gd_compute_masked_band"))
   nms <- nms[vapply(nms, function(n)
     exists(n, envir = ns) && is.function(get(n, envir = ns)),
     logical(1))]
@@ -453,6 +453,89 @@ NULL
   invisible(TRUE)
 }
 
+# Pipeline JitFunction creations in this process (tests + progress lines).
+.gd_jit_stats <- new.env(parent = emptyenv())
+
+#' Daemon task body: pipeline JitFunctions created in this process so far.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#' @return Integer count.
+#' @keywords internal
+#' @export
+.daemon_jit_creates <- function() .gd_jit_stats$creates %||% 0L
+
+# Get-or-create a content-addressed JitFunction for a pipeline kernel.
+# The dispatcher cache anvl hangs off a JitFunction is keyed on input
+# shapes only, never the function, so an inline g_jit per task recompiles
+# every time; caching the JitFunction under a host-computed content key
+# (everything the traced closure closes over) is what lets same-kernel
+# tasks share one dispatcher and hit anvl's shape LRU. ck = NULL keeps
+# the inline behaviour.
+.gd_cached_jit <- function(ck, fn, dev) {
+  if (is.null(ck)) return(g_jit(fn, device = dev))
+  if (length(ls(.daemon_cache)) > 64L)
+    rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  jf <- .daemon_cache[[ck]]
+  if (is.null(jf)) {
+    jf <- g_jit(fn, device = dev)
+    .daemon_cache[[ck]] <- jf
+    .gd_jit_stats$creates <- (.gd_jit_stats$creates %||% 0L) + 1L
+  }
+  jf
+}
+
+# Rebuild the lean band kernel from a spec. Shared by the real task body
+# and the warm-up so both produce semantically identical closures for one
+# ck (the ck hashes exactly these ingredients: F, op, nan_rm, affine,
+# masked, device).
+.gd_lean_fn <- function(F, op, nan_rm, affine, masked) {
+  adj <- if (!is.null(affine) && length(affine$scale) == 1L) {
+    sc <- affine$scale; of <- affine$offset
+    function(x) x * sc + of
+  } else identity
+  if (masked) function(inp) .apply_reduce(op, F(adj(inp[[1L]]), inp[[2L]]), 1L, nan_rm)
+  else function(inp) .apply_reduce(op, adj(inp[[1L]]), 1L, nan_rm)
+}
+
+#' Daemon task body: pre-compile the pipeline lean kernels.
+#'
+#' Runs on each compute-pool daemon while the read pool owns the fetch
+#' drain: get-or-create each spec's JitFunction under the same `ck` the
+#' real band tasks use, then execute once per strip height on `g_fill`
+#' dummies (the fill is represented in the program — no host bytes move)
+#' so the XLA compile never lands on the post-fetch tail. Failures fall
+#' back to the plain client wake; warm-up is an optimisation, never a
+#' correctness dependency.
+#'
+#' Internal (exported only so mirai daemons can address it via `::`).
+#' @param specs List of kernel specs: `ck`, `F`, `op`, `nan_rm`,
+#'   `affine`, `masked`, `dev`, `n` slice count, `hs` strip heights, `nx`.
+#' @return `NULL`, invisibly.
+#' @keywords internal
+#' @export
+.gd_warm_pipeline <- function(specs) {
+  ok <- tryCatch({
+    .require_anvl()
+    for (sp in specs) {
+      dev <- .exec_device(sp$dev)
+      jf <- .gd_cached_jit(sp$ck, .gd_lean_fn(sp$F, sp$op, sp$nan_rm,
+                                              sp$affine, sp$masked), dev)
+      for (h in sp$hs) {
+        dims <- c(sp$n, h, sp$nx)
+        inputs <- if (sp$masked)
+          list(g_fill(0, dims, "f32", dev), g_fill(0, dims, "f32", dev))
+        else list(g_fill(0, dims, "f32", dev))
+        invisible(g_download_raw(jf(inputs)))
+        rm(inputs)
+      }
+    }
+    TRUE
+  }, error = function(e) FALSE)
+  if (!ok) try(.gd_warm(), silent = TRUE)
+  gc(FALSE)
+  invisible(NULL)
+}
+
 # Pipeline daemon task: replay the cleaned mask ONCE on the whole fmask cube
 # (morphology, cube-vectorised over time) and write the resulting f32 mask cube
 # to one .bin, so every band's median reads it instead of recomputing the
@@ -466,42 +549,66 @@ NULL
   fm <- g_upload_raw(
     do.call(c, lapply(k$fmask_bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))),
     "f32", c(n, k$ny, k$nx), device = dev)
-  cleaned <- g_jit(function(inp)
-    .gd_replay_mask(inp[[1L]], k$chain, k$halo, k$ny, k$nx), device = dev)(list(fm))
-  r <- g_download_raw(cleaned); attributes(r) <- NULL
+  chain <- k$chain; halo <- k$halo; nyy <- k$ny; nxx <- k$nx
+  jf <- .gd_cached_jit(k$ck, function(inp)
+    .gd_replay_mask(inp[[1L]], chain, halo, nyy, nxx), dev)
+  r <- g_download_raw(jf(list(fm))); attributes(r) <- NULL
   writeBin(r, k$out_bin)                       # whole cube, row-major f32
   invisible(TRUE)
 }
 
-# Pipeline daemon task: one band's median. Reads the band cube plus the shared
-# cleaned-mask cube (already morphology-processed by .gd_compute_mask), applies
-# the masked-apply fn F, and reduces over time -> (ny,nx) raw f32 payload. Runs
-# on the compute pool while later bands are still fetching.
+# Pipeline daemon task: one band's median (whole grid, or one horizontal
+# strip when `job$rows = c(y0, h)` is set — the bins are headerless
+# row-major f32, so a strip is a contiguous run at `y0*nx*4` per slice
+# and the median is spatially pointwise: no halo, byte-identical
+# reassembly). Reads the band cube plus the shared cleaned-mask cube
+# (already morphology-processed by .gd_compute_mask), applies the
+# masked-apply fn F, and reduces over time -> (h,nx) raw f32 payload.
+# Runs on the compute pool while later bands are still fetching. The
+# read affine (SourceNode scale/offset) is applied to the DN cube inside
+# the kernel so it sees what a scaled read would have produced.
 #' @keywords internal
 #' @export
 .gd_compute_masked_band <- function(job, k) {
   .require_anvl()
+  t0 <- proc.time()[["elapsed"]]
   dev <- .exec_device(k$dev)
   n <- length(job$band_bins)
+  nx <- k$nx
+  y0 <- if (is.null(job$rows)) 0L else job$rows[[1L]]
+  h <- if (is.null(job$rows)) k$ny else job$rows[[2L]]
+  strip <- h < k$ny
+  read_rows <- function(f, base_rows = 0) {
+    if (!strip && base_rows == 0) return(readBin(f, "raw", n = h * nx * 4L))
+    con <- file(f, "rb"); on.exit(close(con))
+    seek(con, (base_rows + as.numeric(y0)) * nx * 4)
+    readBin(con, "raw", n = h * nx * 4L)
+  }
   cube <- function(bins) g_upload_raw(
-    do.call(c, lapply(bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))),
-    "f32", c(length(bins), k$ny, k$nx), device = dev)
+    do.call(c, lapply(bins, read_rows)),
+    "f32", c(length(bins), h, nx), device = dev)
   band <- cube(job$band_bins)
   masked <- length(k$mask_bin) == 1L
-  # Read affine (SourceNode scale/offset), applied to the DN cube before the
-  # masked-apply so the kernel sees what a scaled read would have produced.
-  aff <- job$affine
-  adj <- if (!is.null(aff) && length(aff$scale) == 1L)
-    function(x) x * aff$scale + aff$offset else identity
-  if (masked) {
-    mask <- g_upload_raw(readBin(k$mask_bin, "raw", n = n * k$ny * k$nx * 4L),
-                         "f32", c(n, k$ny, k$nx), device = dev)
-    lean <- function(inp) .apply_reduce(k$op, k$F(adj(inp[[1L]]), inp[[2L]]), 1L, k$nan_rm)
-    g_download_raw(g_jit(lean, device = dev)(list(band, mask)))
+  created0 <- .gd_jit_stats$creates %||% 0L
+  jf <- .gd_cached_jit(job$ck, .gd_lean_fn(k$F, k$op, k$nan_rm,
+                                           job$affine, masked), dev)
+  out <- if (masked) {
+    mask_strip <- if (!strip) {
+      g_upload_raw(readBin(k$mask_bin, "raw", n = n * k$ny * nx * 4L),
+                   "f32", c(n, h, nx), device = dev)
+    } else {
+      # one seek per slice into the whole-grid mask cube
+      g_upload_raw(do.call(c, lapply(seq_len(n) - 1L, function(i)
+        read_rows(k$mask_bin, base_rows = as.numeric(i) * k$ny))),
+        "f32", c(n, h, nx), device = dev)
+    }
+    g_download_raw(jf(list(band, mask_strip)))
   } else {
-    lean <- function(inp) .apply_reduce(k$op, adj(inp[[1L]]), 1L, k$nan_rm)
-    g_download_raw(g_jit(lean, device = dev)(list(band)))
+    g_download_raw(jf(list(band)))
   }
+  attr(out, "gd_t") <- proc.time()[["elapsed"]] - t0
+  attr(out, "gd_jit") <- (.gd_jit_stats$creates %||% 0L) - created0
+  out
 }
 
 # One source's warp-on-read, run in a daemon: warp this slice's REMOTE item
