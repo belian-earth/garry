@@ -13,6 +13,8 @@ as_vaster_extent(x)
 Length-4 numeric in vaster order.
 }
 \description{
-garry: (xmin, ymin, xmax, ymax); vaster: (xmin, xmax, ymin, ymax).
-This helper is the ONLY sanctioned reorder point (decision D1).
+garry orders extents (xmin, ymin, xmax, ymax); vaster expects
+(xmin, xmax, ymin, ymax). This helper performs that reordering, so
+extents cross the package boundary in one place.
 }
+\keyword{internal}

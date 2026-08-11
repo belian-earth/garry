@@ -15,13 +15,16 @@ execute_plan_mirai(
 \arguments{
 \item{plan}{A \code{Plan}.}
 
-\item{path, nodata, band_names, wspec}{As in \code{execute_plan()}.}
+\item{path, nodata, band_names, wspec}{As in \code{\link[=execute_plan]{execute_plan()}}.}
 }
 \value{
-As \code{execute_plan()}.
+As \code{\link[=execute_plan]{execute_plan()}}.
 }
 \description{
-Requires \code{mirai::daemons()} to be set by the caller. Results are
-identical to \code{execute_plan()} (same plan, same kernels; the
-equivalence is gate-tested).
+Requires garry's daemon pools: call \code{\link[=garry_daemons]{garry_daemons()}} first (the
+function errors when the pools are not running). Results are
+identical to \code{\link[=execute_plan]{execute_plan()}} (same plan, same kernels).
+}
+\seealso{
+\code{\link[=collect]{collect()}}, \code{\link[=garry_daemons]{garry_daemons()}}
 }

@@ -29,8 +29,9 @@ the current carry and the step-\code{t} slice of \code{xs} (taken along dim 1
 with that unit axis dropped) and returns \code{list(carry = , out = )};
 the \code{out}s are stacked into \verb{(length, ...)} buffers. \code{reverse = TRUE}
 runs \code{t = length..1}, still reading and writing at position \code{t} (what
-an RTS backward pass needs). Traced values route to \code{anvl::nv_scan};
-plain R arrays take the pure-R oracle loop with identical semantics.
+a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+values route to \code{anvl::nv_scan}; plain R arrays take the pure-R
+reference implementation with identical semantics.
 }
 \details{
 The scanned axis must be dim 1 of every \code{xs} leaf (garry's canonical

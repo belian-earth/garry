@@ -27,3 +27,6 @@ Character vector of "KEY=VALUE" open options.
 \description{
 Build GTI open options pinning a target grid and slice filter.
 }
+\seealso{
+\code{\link[=gti_index_create]{gti_index_create()}}
+}

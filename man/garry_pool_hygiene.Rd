@@ -13,11 +13,15 @@ garry_pool_hygiene(deep = FALSE)
 Invisibly \code{NULL}.
 }
 \description{
-Broadcasts \code{\link[=.daemon_hygiene]{.daemon_hygiene()}} to every pool: return freed heap
-pages to the OS (glibc \code{malloc_trim}), and with \code{deep = TRUE} also
-evict the daemons' jit caches (forces recompiles on next use — ~1 s
-per map kernel, ~20 s per scan kernel; reserve for memory
-pressure). The scheduler already trims after every compute/write
-task and at run start; call this between pipeline phases when the
-fleet should idle lean.
+Asks every daemon in the pools to release caches and return freed
+heap pages to the operating system (glibc \code{malloc_trim}). With
+\code{deep = TRUE} the daemons' jit caches are also evicted, forcing
+recompiles on next use (roughly a second per map kernel, tens of
+seconds per scan kernel); reserve that for memory pressure. The
+scheduler already trims after every compute/write task and at run
+start; call this between pipeline phases when the fleet should idle
+lean.
+}
+\seealso{
+\code{\link[=garry_daemons]{garry_daemons()}}
 }

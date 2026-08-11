@@ -79,7 +79,7 @@ NULL
 #'   or a `stac_sources()`-style dataframe for the time-series form; or a COG path
 #'   / character vector of tiles (remote `http(s)://` or `/vsicurl/`) for the
 #'   single form.
-#' @param grid Target `GridSpec`.
+#' @param grid Target [GridSpec()].
 #' @param assets Asset names to read (dataframe form; a band each).
 #' @param bands Source band indices (single-COG form; default: all).
 #' @param resampling GDAL resampling (default `"near"`, right for quantised
@@ -414,9 +414,10 @@ lazy_cog <- function(sources, grid, assets = NULL, bands = NULL,
 #' Dequantize Alpha Earth (AEF) embedding codes.
 #'
 #' The AEF Int8 decode `((x / 127.5)^2) * sign(x)`: per-value, nonlinear, sign-
-#' preserving, mapping the code range `[-127, 127]` to ~`[-1, 1]`. Written in the
-#' `g_*` vocabulary so it fuses onto the read as a garry map (pass to
-#' [lazy_cog()] `dequant =`) -- on the device, not a separate decode pass.
+#' preserving, mapping the code range `[-127, 127]` to ~`[-1, 1]`. Written in
+#' the `g_*` vocabulary, so applying it with [lazy_map()] after [lazy_cog()]
+#' fuses the decode onto the read, on the device rather than as a separate
+#' decode pass.
 #'
 #' @param x Int8 codes (traced array or plain numeric).
 #' @return The dequantized values, same shape as `x`.
@@ -441,13 +442,10 @@ dequantize_aef <- function(x) {
 #'
 #' Written in the `g_*` vocabulary so it fuses onto the read as a garry map
 #' (one [lazy_map()] per band and level) -- on the device, not a separate
-#' decode pass. Truncation toward zero is the double-cast idiom
-#' `g_cast(g_cast(z, "i32"), "f32")` (XLA convert semantics); all
-#' arithmetic is exact in f32 because codes are integers below
-#' `prod(levels)` (64000 for the ESD default, well under 2^24). NaN
-#' (nodata, D8) is re-masked explicitly after the decode: casting NaN to
-#' an integer is undefined, so propagation through the casts cannot be
-#' relied on.
+#' decode pass. Integer division truncates toward zero; all arithmetic is
+#' exact in f32 because codes are integers below `prod(levels)` (64000 for
+#' the ESD default, well under 2^24). NaN nodata is re-masked explicitly
+#' after the decode, so nodata pixels stay NaN in the output.
 #'
 #' The default `levels` matches the ESD upstream quantiser (12 monthly
 #' uint16 bands x 6 levels = 72 embedding channels). Any FSQ-packed

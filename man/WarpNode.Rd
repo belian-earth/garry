@@ -2,8 +2,8 @@
 % Please edit documentation in R/node.R
 \name{WarpNode}
 \alias{WarpNode}
-\title{Lazy resample/reproject to a target grid. Output of \code{align()}. Barrier.
-At execution time this materialises as a gdalraster VRT warp.}
+\title{Lazy resample/reproject to a target grid. Created by \code{\link[=align]{align()}}.
+Barrier. At execution time this materialises as a gdalraster VRT warp.}
 \usage{
 WarpNode(
   id = integer(0),
@@ -28,6 +28,6 @@ WarpNode(
 A \code{WarpNode}.
 }
 \description{
-Lazy resample/reproject to a target grid. Output of \code{align()}. Barrier.
-At execution time this materialises as a gdalraster VRT warp.
+Lazy resample/reproject to a target grid. Created by \code{\link[=align]{align()}}.
+Barrier. At execution time this materialises as a gdalraster VRT warp.
 }

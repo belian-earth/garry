@@ -21,8 +21,8 @@ gdal_warp_vrt(src_path, band, target_grid, resampling, src_nodata = numeric(0))
 Path to the VRT file (in \code{tempdir()}).
 }
 \description{
-Delegates every pixel of cross-CRS math to the GDAL warper (decision
-D5): \code{-te}/\code{-ts} pin the output grid exactly to \code{target_grid}.
+Delegates every pixel of cross-CRS math to the GDAL warper:
+\code{-te}/\code{-ts} pin the output grid exactly to \code{target_grid}.
 Float targets without a source nodata get \verb{-dstnodata nan} so area
-outside the source footprint reads as NaN, not 0 (D8).
+outside the source footprint reads as NaN, not 0.
 }

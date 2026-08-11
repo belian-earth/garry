@@ -21,3 +21,14 @@ The assigned integer id.
 Add a node. \code{ctor} is an S7 node constructor; \code{...} are its properties
 (the \code{id} property is assigned here and passed automatically).
 }
+\seealso{
+Other graph functions:
+\code{\link[=Graph]{Graph()}},
+\code{\link[=graph_get]{graph_get()}},
+\code{\link[=graph_ids]{graph_ids()}},
+\code{\link[=graph_import]{graph_import()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_replace]{graph_replace()}},
+\code{\link[=graph_toposort]{graph_toposort()}}
+}
+\concept{graph functions}

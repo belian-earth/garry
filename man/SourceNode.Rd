@@ -46,7 +46,8 @@ inside the read kernel after sentinel -> NaN (see \code{\link[=lazy_source]{lazy
 A \code{SourceNode}.
 }
 \description{
-A declared \code{nodata} on an integer source promotes the source's output
-dtype to f32 so NaN can carry nodata downstream (decision D8); the
-executor rewrites \code{value == nodata} to NaN at read time.
+Created by \code{\link[=lazy_source]{lazy_source()}}. A declared \code{nodata} on an integer source
+promotes the source's output dtype to f32 so NaN can carry nodata
+downstream; the executor rewrites \code{value == nodata} to NaN at read
+time.
 }

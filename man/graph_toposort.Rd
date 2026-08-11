@@ -15,3 +15,14 @@ Integer node ids in topological order.
 \description{
 Topological sort of all node ids. Errors on cycles.
 }
+\seealso{
+Other graph functions:
+\code{\link[=Graph]{Graph()}},
+\code{\link[=graph_add]{graph_add()}},
+\code{\link[=graph_get]{graph_get()}},
+\code{\link[=graph_ids]{graph_ids()}},
+\code{\link[=graph_import]{graph_import()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_replace]{graph_replace()}}
+}
+\concept{graph functions}

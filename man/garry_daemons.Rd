@@ -13,26 +13,24 @@ garry_daemons(
 )
 }
 \arguments{
-\item{read}{Read-pool daemon count; \code{NULL} (default) uses logical
-cores. \code{0} tears the pool down.}
+\item{read}{Read-pool daemon count; \code{NULL} (default) uses all
+logical cores. \code{0} tears the pool down.}
 
-\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses TWO
-with half-machine affinity masks. After the placement pass fuses
-kernel fleets onto the readers, the compute pool's residual
-workloads (scans, big fused reductions) are compile-bound: every
-daemon that runs a scan task pays its multi-GB kernel compile, so
-width multiplies compiles without adding admitted concurrency.
-Larger pools are SAFE at any width (per-daemon masks, byte
-admission, cold-kernel slow start, scan-compile surcharge) and pay
-off for non-fusable fleet workloads (~2x measured for matmul
-fleets at 10 x 2-CPU daemons); they are an explicit choice, not
-the default. \code{0} tears down.}
+\item{compute}{Compute-pool daemon count; \code{NULL} (default) uses a
+third of the logical cores, capped at 8 with a floor of 2 (2 on
+CUDA: concurrent clients share one card). The compute pool's
+residual workloads (scans, big fused reductions) are
+compile-bound: every daemon that runs a scan task pays its
+kernel compile, so width multiplies compiles without adding
+admitted concurrency. Larger pools are SAFE at any width
+(per-daemon affinity masks and byte admission) and pay off for
+fleets of independent non-fusable tasks; they are an explicit
+choice, not the default. \code{0} tears down.}
 
 \item{read_handles}{Open-handle cache depth on read daemons.
 \code{NULL} (default) uses \code{garry_opt("read_handles")}. Depth 1 suits
 per-slice mosaics that are rarely revisited (every open warped
-mosaic pins warper and connection memory; measured ~15 MB/daemon
-saved at no wall cost on the benchmark); plans revisiting a few
+mosaic pins warper and connection memory); plans revisiting a few
 local multi-band files across many windows want a depth covering
 the interleaved file count, since closing a dataset discards its
 GDAL block cache.}
@@ -56,13 +54,13 @@ daemon is pinned to a disjoint slice of the machine at creation
 narrow rather than all-cores; the scheduler's live-RAM byte budgets
 decide how many tasks are actually in flight; excess daemons idle
 lean. Called with no arguments it sizes the pools to the machine:
-\code{read} = logical cores capped at 8 (past cores/2 readers the k=2
-affinity floor oversubscribes the machine; 8 was measured fastest
-at scale) and \code{compute} = cores/3 capped at 8, floor 2 (the routed
-width sweep's sweet spot; CUDA keeps 2 — concurrent clients share
-one card). \code{collect(distributed = TRUE)} detects the pools
-automatically and pre-compiles stage kernels at run start
-(\code{garry_opt("jit_warmup")}) — scan kernels included, targeted at
+\code{read} = all logical cores (remote fetch is latency-bound, so a
+wide read pool keeps the network drain full) and \code{compute} = a
+third of the logical cores, capped at 8 with a floor of 2; on CUDA
+the compute pool is 2, since concurrent clients share one card.
+\code{collect(distributed = TRUE)} detects the pools automatically and
+pre-compiles stage kernels at run start
+(\code{garry_opt("jit_warmup")}), scan kernels included, targeted at
 the \code{garry_opt("scan_profiles")} designated profiles only.
 }
 \details{
@@ -80,4 +78,7 @@ host's own GDAL config (that would hide local sidecars for the
 caller's reads); call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself to tune host-side
 discovery. \verb{MALLOC_*} is only-if-unset, and \code{gdal_config = FALSE}
 skips the GDAL settings entirely.
+}
+\seealso{
+\code{\link[=garry_daemons_set]{garry_daemons_set()}}, \code{\link[=garry_pool_hygiene]{garry_pool_hygiene()}}, \code{\link[=collect]{collect()}}
 }

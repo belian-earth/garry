@@ -19,18 +19,18 @@ lazy_stac_stack(
 \arguments{
 \item{sources}{A \code{stac_sources()} table.}
 
-\item{grid}{Target \code{GridSpec} for every slice.}
+\item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every slice.}
 
 \item{asset}{Asset name to stack.}
 
-\item{granularity}{Slice granularity (see \code{stac_time_slices()}).}
+\item{granularity}{Slice granularity (see \code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
 \item{sort_field}{Index field ordering overlaps within a slice.}
 
 \item{nodata}{Optional nodata override passed to each slice source.}
 
 \item{lon}{Longitude for \code{granularity = "solar_day"} (see
-\code{stac_time_slices()}).}
+\code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
 \item{scale, offset}{Read affine, as in \code{\link[=lazy_source]{lazy_source()}}: \code{FALSE}
 (default) reads raw values, \code{TRUE} discovers the file's band
@@ -42,8 +42,28 @@ A list: \code{stack} (\code{LazyRaster}), \code{slices} (character),
 \code{index} (path).
 }
 \description{
-Builds a GTI index for \code{asset}, then opens one mosaic per time slice
-pinned to \code{grid} (mixed source CRS is fine: the GTI driver
-reprojects per tile) and stacks them along \code{t}. Overlaps within a
-slice resolve by ascending \code{sort_field} (highest drawn on top).
+Builds a GTI (GDAL Tile Index; see \code{\link[=stac_gti_index]{stac_gti_index()}}) index for
+\code{asset}, then opens one mosaic per time slice pinned to \code{grid}
+(mixed source CRS is fine: the GTI driver reprojects per tile) and
+stacks them along \code{t}. Overlaps within a slice resolve by ascending
+\code{sort_field} (highest drawn on top).
 }
+\seealso{
+\code{\link[=collect]{collect()}} to materialise the stack; \code{\link[=lazy_dataset]{lazy_dataset()}}, the
+higher-level multi-band interface most users want.
+
+Other stac helpers:
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

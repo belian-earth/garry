@@ -20,17 +20,21 @@ A \code{LazyRaster}, or a \code{LazyDataset} when given one.
 }
 \description{
 \code{fn} receives one traced array per input raster and returns one
-array; it runs fused inside the surrounding XLA stage. Write it with
-plain arithmetic and the \verb{g_*} vocabulary (\code{g_ifelse}, \code{g_bitand},
-\code{g_cast}, ...). Inputs must share a grid (\code{align()} first otherwise);
-graphs auto-merge (D6).
+array; it runs fused with adjacent operations in one compiled
+kernel. Write it with plain arithmetic and the \verb{g_*} vocabulary
+(\code{\link[=g_ifelse]{g_ifelse()}}, \code{\link[=g_bitand]{g_bitand()}}, \code{\link[=g_cast]{g_cast()}}, ...). Inputs must share a
+grid (\code{\link[=align]{align()}} first otherwise); rasters on different graphs merge
+automatically.
 }
 \details{
-The output dtype defaults to the promoted input dtype (D3); pass
+The output dtype defaults to the promoted input dtype; pass
 \code{dtype} when \code{fn} changes the value domain, e.g. \code{"f32"} for a mask
 that introduces NaN over an integer band.
 
 Over a \code{LazyDataset}, \code{fn} is applied to every value band (a single dataset
 input only); \code{bands} restricts which bands, and non-selected bands pass
 through unchanged.
+}
+\seealso{
+\code{\link[=collect]{collect()}}
 }

@@ -13,12 +13,31 @@ stac_sources(items, assets = NULL)
 \item{assets}{Optional character vector restricting assets.}
 }
 \value{
-A data.frame.
+A data.frame with one row per item x asset and columns
+\code{item_id}, \code{asset}, \code{location} (GDAL-readable href), \code{datetime},
+\code{cloud_cover}, and the footprint columns \code{xmin}, \code{ymin}, \code{xmax},
+\code{ymax} (EPSG:4326, from the item bbox), sorted by datetime, item
+and asset.
 }
 \description{
-One row per item x asset: \code{location} (GDAL-readable href), \code{asset},
-\code{datetime}, \code{cloud_cover}, footprint columns (\code{xmin}..\code{ymax}, EPSG:
-4326 from the item bbox), and \code{item_id}. This table is the single
-interface between discovery and the mosaic layer; filters below
-operate on it in plain R.
+One row per item x asset. The result is a plain data frame: the
+\verb{stac_filter_*} helpers operate on it in ordinary R, and
+\code{\link[=lazy_dataset]{lazy_dataset()}} / \code{\link[=lazy_stac_stack]{lazy_stac_stack()}} consume it to build lazy
+mosaics.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

@@ -10,10 +10,12 @@ qa_bits(bits)
 \item{bits}{Integer bit positions (0-based) that mark a pixel as bad.}
 }
 \value{
-A function of one traced array.
+A predicate function of one array, returning a 0/1 mask:
+pass it as \code{\link[=mask]{mask()}}'s \code{where}, or apply it directly with
+\code{\link[=lazy_map]{lazy_map()}}.
 }
 \description{
-Returns a predicate \verb{\\(f) ...} for \code{mask()}'s \code{where} argument that flags a
+Returns a predicate \verb{\\(f) ...} for \code{\link[=mask]{mask()}}'s \code{where} argument that flags a
 pixel bad when any of the given bits is set. Nodata pixels are treated as
 clear (matching the QA-fill convention). Use for packed-flag QA bands (HLS
 Fmask, Landsat QA_PIXEL) where a value list cannot express the test;

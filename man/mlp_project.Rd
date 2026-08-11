@@ -30,9 +30,8 @@ layer (hidden layers are ReLU).}
 \item{qa_plane}{Optional 1-based index of a QA plane riding as the
 LAST plane of the input cube (must equal \code{n_in + 1}). Predictions
 where the QA value is nodata (or below \code{qa_floor}) are NaN.
-Carrying QA inside the cube keeps the whole predict a single
-coalesced read, which is what makes the chain fusable onto the
-read daemons.}
+Carrying QA inside the cube lets the whole prediction run as a
+single read with no separate masking pass.}
 
 \item{qa_floor}{Optional minimum QA value; below it the prediction
 is NaN. Only used with \code{qa_plane}.}
@@ -42,7 +41,7 @@ A function \code{fn(x, dims)} suitable for \code{\link[=reduce_over]{reduce_over
 \code{over = "band"}.
 }
 \description{
-Returns an anvl reducer \code{fn(x, dims)} for
+Returns a reducer function \code{fn(x, dims)} for
 \code{reduce_over(cube, fn, over = "band")}: standardises the band vector
 (optional), then applies dense layers \verb{act(W_l x + b_l)} with ReLU
 between layers and \code{output_activation} on the last, yielding one

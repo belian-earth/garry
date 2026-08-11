@@ -9,8 +9,9 @@ chunk_window_with_halo(cg, ...)
 \arguments{
 \item{cg}{A \code{ChunkGrid}.}
 
-\item{...}{Method arguments: \code{x_off}, \code{y_off}, \code{x_size}, \code{y_size}, the
-0-based unpadded chunk window.}
+\item{...}{Passed to methods. The \code{ChunkGrid} method takes the
+0-based unpadded chunk window in pixels: \code{x_off}, \code{y_off},
+\code{x_size}, \code{y_size}.}
 }
 \value{
 A list with the padded window and per-side pads.

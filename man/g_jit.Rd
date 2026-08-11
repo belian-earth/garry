@@ -18,3 +18,4 @@ A compiled function (anvl \code{JitFunction}).
 \description{
 JIT-compile a stage closure via anvl (executor bridge).
 }
+\keyword{internal}

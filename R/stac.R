@@ -27,8 +27,9 @@ NULL
 
 #' Query a STAC API and return the item collection.
 #'
-#' Thin port of vrtility's `stac_query()`: GET with POST fallback,
-#' full pagination via `rstac::items_fetch()`.
+#' Searches the collection with a GET request, falling back to POST when
+#' the API rejects GET, and fetches every page of results via
+#' `rstac::items_fetch()`.
 #'
 #' @param bbox Length-4 numeric, EPSG:4326 (xmin, ymin, xmax, ymax).
 #' @param stac_source STAC API root URL.
@@ -36,6 +37,9 @@ NULL
 #' @param start_date,end_date Dates (any lubridate-parseable form).
 #' @param limit Page size requested from the API.
 #' @return An rstac `doc_items` object.
+#' @seealso [stac_sign_mpc()], [stac_sources()], and [lazy_dataset()] as
+#'   the usual next steps.
+#' @family stac helpers
 #' @export
 stac_query <- function(bbox, stac_source, collection, start_date, end_date,
                        limit = 999) {
@@ -71,6 +75,7 @@ stac_query <- function(bbox, stac_source, collection, start_date, end_date,
 #' @param subscription_key Optional MPC subscription key (defaults to the
 #'   `MPC_TOKEN` environment variable). Not required for public data.
 #' @return `items` with every asset href signed.
+#' @family stac helpers
 #' @export
 stac_sign_mpc <- function(items,
                           subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)) {
@@ -182,16 +187,20 @@ stac_sign_mpc <- function(items,
 
 #' Rectangularise STAC items into a source table.
 #'
-#' One row per item x asset: `location` (GDAL-readable href), `asset`,
-#' `datetime`, `cloud_cover`, footprint columns (`xmin`..`ymax`, EPSG:
-#' 4326 from the item bbox), and `item_id`. This table is the single
-#' interface between discovery and the mosaic layer; filters below
-#' operate on it in plain R.
+#' One row per item x asset. The result is a plain data frame: the
+#' `stac_filter_*` helpers operate on it in ordinary R, and
+#' [lazy_dataset()] / [lazy_stac_stack()] consume it to build lazy
+#' mosaics.
 #'
 #' @param items An rstac `doc_items` object (or any list with the same
 #'   `features` structure).
 #' @param assets Optional character vector restricting assets.
-#' @return A data.frame.
+#' @return A data.frame with one row per item x asset and columns
+#'   `item_id`, `asset`, `location` (GDAL-readable href), `datetime`,
+#'   `cloud_cover`, and the footprint columns `xmin`, `ymin`, `xmax`,
+#'   `ymax` (EPSG:4326, from the item bbox), sorted by datetime, item
+#'   and asset.
+#' @family stac helpers
 #' @export
 stac_sources <- function(items, assets = NULL) {
   feats <- items$features
@@ -219,10 +228,11 @@ stac_sources <- function(items, assets = NULL) {
 
 #' Filter a source table by maximum cloud cover.
 #'
-#' @param sources A `stac_sources()` table.
-#' @param max_cloud_cover Keep rows strictly below this percentage
-#'   (rows with unknown cloud cover are kept).
-#' @return The filtered table.
+#' @param sources A STAC `doc_items` or a `stac_sources()` data frame.
+#' @param max_cloud_cover Keep items strictly below this percentage
+#'   (items with unknown cloud cover are kept).
+#' @return The filtered `doc_items` / data frame.
+#' @family stac helpers
 #' @export
 stac_filter_cloud <- function(sources, max_cloud_cover) {
   if (inherits(sources, "doc_items")) {
@@ -247,6 +257,7 @@ stac_filter_cloud <- function(sources, max_cloud_cover) {
 #'   (STAC bboxes are lon/lat).
 #' @param min_coverage Minimum AOI-overlap fraction to keep an item (0-1).
 #' @return The filtered `doc_items` / data frame.
+#' @family stac helpers
 #' @export
 stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
   stopifnot(length(bbox) == 4L, min_coverage >= 0, min_coverage <= 1)
@@ -274,6 +285,7 @@ stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
 #' @param sources A STAC `doc_items`.
 #' @param orbit_state One or more of `"descending"`, `"ascending"`.
 #' @return The filtered `doc_items`.
+#' @family stac helpers
 #' @export
 stac_filter_orbit <- function(sources,
                               orbit_state = c("descending", "ascending")) {
@@ -298,6 +310,7 @@ stac_filter_orbit <- function(sources,
 #' @param sources A STAC `doc_items` or a `stac_sources()` data frame.
 #' @param assets Asset names to keep.
 #' @return The filtered `doc_items` / data frame.
+#' @family stac helpers
 #' @export
 stac_filter_assets <- function(sources, assets) {
   if (inherits(sources, "doc_items")) {
@@ -322,10 +335,11 @@ stac_filter_assets <- function(sources, assets) {
 #'
 #' Duplicate items are a known Planetary Computer quirk; equality uses
 #' the footprint rounded to 4 decimal places plus the datetime, per
-#' asset (vrtility's rule).
+#' asset.
 #'
-#' @param sources A `stac_sources()` table.
-#' @return The deduplicated table.
+#' @param sources A STAC `doc_items` or a `stac_sources()` data frame.
+#' @return The deduplicated `doc_items` / data frame.
+#' @family stac helpers
 #' @export
 stac_drop_duplicates <- function(sources) {
   if (inherits(sources, "doc_items")) {
@@ -345,23 +359,24 @@ stac_drop_duplicates <- function(sources) {
 #' Group acquisitions into time slices.
 #'
 #' Adds a `slice` column (the datetime truncated to `granularity`);
-#' tiles sharing a slice mosaic together in `lazy_stac_stack()`.
+#' tiles sharing a slice mosaic together in [lazy_stac_stack()].
 #'
 #' `"day"` truncates the UTC datetime: one satellite overpass that
 #' crosses local midnight in UTC terms splits into two slices.
-#' `"solar_day"` instead shifts each timestamp by the local solar
-#' offset (`lon` degrees x 240 s, the odc-stac rule) before taking the
-#' date, so acquisitions group by the local day of the overpass; the
-#' two agree everywhere except within ~an overpass of the UTC date
-#' line at `lon`.
+#' `"solar_day"` instead shifts each timestamp by a longitude-dependent
+#' solar-time offset of `lon` degrees x 240 s (as used by odc-stac)
+#' before taking the date, so acquisitions group by the local day of
+#' the overpass; the two agree everywhere except within ~an overpass
+#' of the UTC date line at `lon`.
 #'
 #' @param sources A `stac_sources()` table.
 #' @param granularity "day", "month", "exact", or "solar_day".
 #' @param lon Longitude (degrees, WGS84) whose solar time defines
-#'   `"solar_day"` — use the centre of the analysis area. Defaults to
+#'   `"solar_day"`: use the centre of the analysis area. Defaults to
 #'   the circular mean of the source footprint centres (safe across
 #'   the antimeridian).
 #' @return The table with a `slice` column.
+#' @family stac helpers
 #' @export
 stac_time_slices <- function(sources, granularity = c("day", "month",
                                                       "exact",
@@ -405,6 +420,7 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
 #' @param drop_unmapped Drop assets not named in `mapping` (default `TRUE`)? When
 #'   `FALSE`, unmapped assets pass through unchanged.
 #' @return The table with a rewritten `asset` column.
+#' @family stac helpers
 #' @export
 stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
   if (!is.character(mapping) || is.null(names(mapping)) || anyNA(names(mapping)))
@@ -450,6 +466,7 @@ stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
 #'
 #' @param ... Two or more `stac_sources()` tables (or a single list of them).
 #' @return One combined table.
+#' @family stac helpers
 #' @export
 stac_merge <- function(...) {
   tabs <- list(...)
@@ -495,17 +512,22 @@ stac_merge <- function(...) {
 
 #' Write a source table as a GTI index for one asset.
 #'
-#' Footprints are stored in `crs` (transform them from the table's
-#' EPSG:4326 bboxes), so the index layer SRS matches the grid the GTI
-#' dataset will be pinned to: exact culling geometry, no SRS_BEHAVIOR
-#' juggling, works from GDAL 3.10 up.
+#' A GTI index is a vector layer of raster footprints read by GDAL's
+#' GTI (GDAL Tile Index) raster driver, available from GDAL 3.10, which
+#' mosaics the indexed rasters on the fly. Footprints are stored in
+#' `crs` (transformed from the table's EPSG:4326 bboxes), so the index
+#' layer SRS matches the grid the GTI dataset will be pinned to and the
+#' culling geometry is exact. Most users reach this via [lazy_dataset()]
+#' or [lazy_stac_stack()], which build the index internally, and rarely
+#' call it directly.
 #'
 #' @param sources A `stac_sources()` table with a `slice` column (see
-#'   `stac_time_slices()`).
+#'   [stac_time_slices()]).
 #' @param asset Which asset's rows to index.
 #' @param path Index path; defaults to a tempfile.
 #' @param crs CRS for the index footprints (use the target grid's CRS).
 #' @return The index path, invisibly.
+#' @family stac helpers
 #' @export
 stac_gti_index <- function(sources, asset,
                            path = tempfile(fileext = ".gti.fgb"),
@@ -536,25 +558,29 @@ stac_gti_index <- function(sources, asset,
 
 #' Lazy time-sliced stack of one STAC asset on a target grid.
 #'
-#' Builds a GTI index for `asset`, then opens one mosaic per time slice
-#' pinned to `grid` (mixed source CRS is fine: the GTI driver
-#' reprojects per tile) and stacks them along `t`. Overlaps within a
-#' slice resolve by ascending `sort_field` (highest drawn on top).
+#' Builds a GTI (GDAL Tile Index; see [stac_gti_index()]) index for
+#' `asset`, then opens one mosaic per time slice pinned to `grid`
+#' (mixed source CRS is fine: the GTI driver reprojects per tile) and
+#' stacks them along `t`. Overlaps within a slice resolve by ascending
+#' `sort_field` (highest drawn on top).
 #'
 #' @param sources A `stac_sources()` table.
-#' @param grid Target `GridSpec` for every slice.
+#' @param grid Target [GridSpec()] for every slice.
 #' @param asset Asset name to stack.
-#' @param granularity Slice granularity (see `stac_time_slices()`).
+#' @param granularity Slice granularity (see [stac_time_slices()]).
 #' @param sort_field Index field ordering overlaps within a slice.
 #' @param nodata Optional nodata override passed to each slice source.
 #' @param lon Longitude for `granularity = "solar_day"` (see
-#'   `stac_time_slices()`).
+#'   [stac_time_slices()]).
 #' @param scale,offset Read affine, as in [lazy_source()]: `FALSE`
 #'   (default) reads raw values, `TRUE` discovers the file's band
 #'   scale/offset (probing the mosaic, then the first item), a numeric
 #'   supplies it explicitly.
 #' @return A list: `stack` (`LazyRaster`), `slices` (character),
 #'   `index` (path).
+#' @seealso [collect()] to materialise the stack; [lazy_dataset()], the
+#'   higher-level multi-band interface most users want.
+#' @family stac helpers
 #' @export
 lazy_stac_stack <- function(sources, grid, asset,
                             granularity = "day",

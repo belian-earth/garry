@@ -2,7 +2,7 @@
 % Please edit documentation in R/executor.R
 \name{execute_plan}
 \alias{execute_plan}
-\title{Execute a Plan on the anvl backend (single-threaded).}
+\title{Execute a Plan on the anvl backend (single process).}
 \usage{
 execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL, wspec = NULL)
 }
@@ -27,9 +27,14 @@ affine applied per chunk at the sink boundary) and \code{options}
 The sink stage's value (matrix for raster sinks, scalar for
 global reductions), or \code{path} invisibly when writing. When
 \code{options(garry.exec_stats = TRUE)}, in-memory results carry a
-\code{garry_exec_stats} attribute with the distinct input shapes
-submitted per stage (kernel-cache accounting).
+\code{garry_exec_stats} attribute recording the distinct input shapes
+submitted per stage.
 }
 \description{
-Execute a Plan on the anvl backend (single-threaded).
+Runs every stage of a \code{\link[=plan_lazy]{plan_lazy()}} plan in the current R session.
+\code{\link[=collect]{collect()}} is the normal user entry point; call this directly only
+when executing a plan by hand.
+}
+\seealso{
+\code{\link[=collect]{collect()}}, \code{\link[=execute_plan_mirai]{execute_plan_mirai()}}, \code{\link[=plan_lazy]{plan_lazy()}}
 }

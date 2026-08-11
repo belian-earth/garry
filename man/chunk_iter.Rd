@@ -17,8 +17,8 @@ A data frame with one row per chunk.
 \description{
 Returns a data frame of (ix, iy, x_off, y_off, x_size, y_size, shape_id)
 for every chunk. Offsets are 0-based. Sizes are clipped at the grid
-edge. \code{shape_id} classifies each chunk as "interior", "right",
-"bottom", or "corner" — a regular chunk grid produces at most these
-four distinct shapes (decision D4: no pad-to-uniform; the executor's
-kernel cache sees <= 4 shapes per stage).
+edge: edge chunks are smaller, never padded to a uniform size.
+\code{shape_id} classifies each chunk as "interior", "right", "bottom",
+or "corner"; a regular chunk grid produces at most these four
+distinct shapes.
 }

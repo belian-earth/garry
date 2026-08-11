@@ -66,7 +66,8 @@
 #' @param iters Weiszfeld iterations (fixed, unrolled).
 #' @param eps Distance regulariser (guards the weight at zero distance).
 #' @return A reducer `fn(x, dims)` for [reduce_over()].
-#' @seealso [medoid()], [reduce_over()]
+#' @seealso [medoid()], [reduce_over()]; [band_project()] and
+#'   [mlp_project()] for projections over the surviving band axis.
 #' @export
 geomedian <- function(iters = 12L, eps = 1e-7) {
   iters <- as.integer(iters)
@@ -82,9 +83,9 @@ geomedian <- function(iters = 12L, eps = 1e-7) {
 #'
 #' Returns a custom reducer for [reduce_over()] computing, per pixel,
 #' the *observed* band-vector nearest the [geomedian()]: a composite
-#' whose every pixel is a real spectrum from a real date (the
-#' odc/hdstats medoid construction). Use it when downstream analysis
-#' must not see synthetic spectra at all.
+#' whose every pixel is a real spectrum from a real date, following the
+#' medoid construction of the Open Data Cube's hdstats package. Use it
+#' when downstream analysis must not see synthetic spectra at all.
 #'
 #' Ties (several dates equally near) average; timesteps with any NaN
 #' band are never selected; pixels with no valid timestep return NaN.
@@ -93,7 +94,8 @@ geomedian <- function(iters = 12L, eps = 1e-7) {
 #'
 #' @inheritParams geomedian
 #' @return A reducer `fn(x, dims)` for [reduce_over()].
-#' @seealso [geomedian()], [reduce_over()]
+#' @seealso [geomedian()], [reduce_over()]; [band_project()] and
+#'   [mlp_project()] for projections over the surviving band axis.
 #' @export
 medoid <- function(iters = 12L, eps = 1e-7) {
   iters <- as.integer(iters)

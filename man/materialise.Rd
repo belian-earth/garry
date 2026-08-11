@@ -35,7 +35,7 @@ cubes.
 \description{
 The checkpoint verb (dbplyr's \code{compute()} for rasters): execute the
 current graph, write the results to local raw-BSQ cubes (\code{.vrt} +
-\code{.bin}, the format any GDAL tool reads and garry re-reads ~9x faster
+\code{.bin}, a format any GDAL tool reads and garry re-reads much faster
 than tiled GeoTIFF), and return the SAME KIND of lazy object rebuilt
 over the local files. Everything downstream continues unchanged;
 nothing upstream (network reads, warps, masking, model inference)
@@ -46,9 +46,9 @@ A \code{LazyDataset} writes one multiband cube per time slice through a
 single multi-sink plan (all slices' reads drain together), carrying
 band names, slice dates, and the \code{mask_asset} into the rebuilt
 dataset; ragged bands (a band missing some slices) survive. A
-\code{LazyRaster} writes one cube and reopens it, which is also the
-sanctioned route around the v1 "cannot warp a computed raster" rule:
-\code{align(materialise(x, dir), grid)}.
+\code{LazyRaster} writes one cube and reopens it. A computed raster
+cannot be warped directly, so materialise-then-rewarp is the
+supported route: \code{align(materialise(x, dir), grid)}.
 
 Files land at \verb{dir/name-<slice>.vrt} (dataset) or \code{dir/name.vrt}
 (raster). Existing files are refused unless \code{overwrite = TRUE}:
@@ -61,4 +61,8 @@ reusing stale pixels is the failure mode a checkpoint must not have.
 so repeated interactive re-runs accumulate until the session ends.
 For large cubes, or to keep or reuse a checkpoint, give a real
 directory (note some systems mount \verb{/tmp} in RAM).
+}
+\seealso{
+\code{\link[=collect]{collect()}} to execute and return the result in the R
+session; \code{\link[=write_tif]{write_tif()}} to execute and stream to a GeoTIFF.
 }

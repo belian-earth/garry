@@ -35,6 +35,10 @@
 
 #' Read tensors from a safetensors file.
 #'
+#' safetensors (<https://github.com/huggingface/safetensors>) is the
+#' simple tensor serialisation format used across the machine-learning
+#' ecosystem, typically for model weights.
+#'
 #' Returns a named list of R arrays indexed exactly like the source
 #' torch tensors (`x[i, j, ...]` agrees elementwise): the row-major
 #' payload is reshaped through the reversed dims and `aperm`ed back.
@@ -45,6 +49,8 @@
 #' @param names Optional character vector restricting which tensors to
 #'   read (default: all F32 tensors).
 #' @return Named list of numeric arrays.
+#' @seealso [safetensors_ls()] to list a file's tensors without
+#'   reading data.
 #' @export
 safetensors_read <- function(path, names = NULL) {
   hdr <- .st_header(path)
@@ -75,6 +81,7 @@ safetensors_read <- function(path, names = NULL) {
 #'
 #' @param path Path to a `.safetensors` file.
 #' @return Data frame with `name`, `dtype`, `shape` (comma string).
+#' @seealso [safetensors_read()] to read the tensors.
 #' @export
 safetensors_ls <- function(path) {
   hdr <- .st_header(path)

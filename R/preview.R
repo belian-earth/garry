@@ -341,6 +341,8 @@ NULL
 #'   them transparent. Useful to make a mask's footprint explicit.
 #' @param ... Unused.
 #' @return `x`, invisibly.
+#' @seealso [draw()], which plots the pipeline rather than the data;
+#'   [collect()] to execute at full resolution.
 #' @export
 preview <- function(x, bands = NULL, max_px = NULL, stretch = c(2, 98),
                     col = grDevices::hcl.colors(64, "Viridis"),

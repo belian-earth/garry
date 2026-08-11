@@ -33,3 +33,7 @@ Integral array shaped like \code{a}.
 \description{
 Bitwise operations on integral arrays.
 }
+\seealso{
+\code{\link[=qa_bits]{qa_bits()}} and \code{\link[=mask]{mask()}} for the QA-masking verbs built on
+these ops.
+}

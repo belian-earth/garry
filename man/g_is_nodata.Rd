@@ -2,7 +2,7 @@
 % Please edit documentation in R/ops.R
 \name{g_is_nodata}
 \alias{g_is_nodata}
-\title{Is a value nodata (NaN under the D8 sentinel model)?}
+\title{Is a value nodata? NaN is the nodata sentinel.}
 \usage{
 g_is_nodata(x)
 }
@@ -13,5 +13,5 @@ g_is_nodata(x)
 Logical array.
 }
 \description{
-Is a value nodata (NaN under the D8 sentinel model)?
+Is a value nodata? NaN is the nodata sentinel.
 }

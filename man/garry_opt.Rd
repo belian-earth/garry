@@ -14,6 +14,8 @@ The option value.
 }
 \description{
 Looks up \code{getOption("garry.<name>")}, falling back to the package
-default. Unknown names error: constants must be registered in
-\code{.garry_defaults} so defaults live in one place.
+default. Unknown option names error.
+}
+\seealso{
+\code{\link[=garry_options]{garry_options()}}
 }

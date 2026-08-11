@@ -22,3 +22,19 @@ Keeps items whose bounding box covers at least \code{min_coverage} of the AOI
 \code{bbox} (fraction of the AOI area, from a planar bbox overlap -- a fast proxy,
 not geodesic). Works on a STAC \code{doc_items} or a \code{stac_sources()} table.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

@@ -17,3 +17,14 @@ The \code{Node}, or \code{NULL} if absent.
 \description{
 Look up a node by id.
 }
+\seealso{
+Other graph functions:
+\code{\link[=Graph]{Graph()}},
+\code{\link[=graph_add]{graph_add()}},
+\code{\link[=graph_ids]{graph_ids()}},
+\code{\link[=graph_import]{graph_import()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_replace]{graph_replace()}},
+\code{\link[=graph_toposort]{graph_toposort()}}
+}
+\concept{graph functions}

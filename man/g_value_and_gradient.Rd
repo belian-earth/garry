@@ -16,5 +16,6 @@ differentiation target.}
 A function returning \verb{list(value, grad$<wrt>)} (jit-compiled).
 }
 \description{
-Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
+User code should call \code{\link[=lazy_value_and_grad]{lazy_value_and_grad()}} instead.
 }
+\keyword{internal}

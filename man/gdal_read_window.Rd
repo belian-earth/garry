@@ -21,7 +21,8 @@ gdal_read_window(
 \arguments{
 \item{path}{Path or VSI URL readable by GDAL.}
 
-\item{band}{1-based band index.}
+\item{band}{1-based band index, or a vector of them for a multi-band
+read in one pass.}
 
 \item{x_off, y_off, x_size, y_size}{0-based pixel window.}
 
@@ -29,18 +30,23 @@ gdal_read_window(
 
 \item{open_options}{GDAL open options ("KEY=VALUE").}
 
-\item{out}{Output form: a \verb{[y, x]} \code{"matrix"} (default), or a raw f32
-store value (\code{"raw_f32"}) for the distributed store path.}
+\item{out}{Output form: \code{"matrix"} (default) returns an R numeric
+result; \code{"raw_f32"} returns the pixels packed as a raw row-major
+f32 payload, avoiding a numeric copy when the result feeds a
+binary store or another process.}
 
 \item{scale, offset}{Length-0 (absent) or length-1 band affine: values
 become \code{v * scale + offset} after the nodata sentinel is promoted
 to NaN, so sentinels never scale.}
 }
 \value{
-A numeric \verb{y_size x x_size} matrix.
+With \code{out = "matrix"}: a numeric \verb{y_size x x_size} matrix for
+a single band, or a \verb{(band, y, x)} numeric array when \code{band} is a
+vector. With \code{out = "raw_f32"}: a raw row-major f32 payload (band
+planes contiguous when \code{band} is a vector).
 }
 \description{
-Returns a \verb{[y, x]} matrix (row 1 = northernmost). Offsets are 0-based
+Returns the window with row 1 = northernmost. Offsets are 0-based
 pixel coordinates. If \code{nodata} is supplied, matching cells (and any
-file-level NA) are rewritten to NaN (D8) and the result is numeric.
+file-level NA) are rewritten to NaN and the result is numeric.
 }

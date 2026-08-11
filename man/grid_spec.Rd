@@ -28,3 +28,8 @@ Give the pixel grid either directly as \code{dims} (nx, ny) or as \code{res} (pi
 size), from which \code{dims} is derived and the \code{extent} snapped to a whole number
 of pixels. Exactly one of the two.
 }
+\seealso{
+\code{\link[=grid_from_bbox]{grid_from_bbox()}} and \code{\link[=grid_from_src]{grid_from_src()}}, the higher-level
+constructors that derive a grid from an area of interest;
+\code{\link[=GridSpec]{GridSpec()}}, the underlying class constructor.
+}

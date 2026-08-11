@@ -17,9 +17,8 @@ fill_gaps(x, method = c("ffill", "bfill", "linear"), over = "t")
 The filled object, same class as \code{x}.
 }
 \description{
-The temporal gap-filling verbs xarray spells \code{ffill}/\code{bfill}/
-\code{interpolate_na}, expressed on garry's own IR as \code{\link[=scan_over]{scan_over()}}
-bodies (documented here rather than left as folklore):
+Temporal gap-filling (the verbs xarray spells \code{ffill}/\code{bfill}/
+\code{interpolate_na}), implemented as \code{\link[=scan_over]{scan_over()}} bodies:
 \itemize{
 \item \code{"ffill"} carries the last valid value forward;
 \item \code{"bfill"} carries the next valid value backward;
@@ -32,3 +31,4 @@ falling back to ffill/bfill at the ends.
 Works on a \verb{(t, y, x)} \code{LazyRaster} cube or per band of a
 \code{LazyDataset}. All-nodata pixels stay NaN.
 }
+\concept{time series smoothers}

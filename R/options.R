@@ -408,11 +408,11 @@
 #' Read a garry policy option.
 #'
 #' Looks up `getOption("garry.<name>")`, falling back to the package
-#' default. Unknown names error: constants must be registered in
-#' `.garry_defaults` so defaults live in one place.
+#' default. Unknown option names error.
 #'
 #' @param name Option name without the `garry.` prefix.
 #' @return The option value.
+#' @seealso [garry_options()]
 #' @export
 garry_opt <- function(name) {
   if (!name %in% names(.garry_defaults))
@@ -428,12 +428,12 @@ garry_opt <- function(name) {
 #' per option with its tier (`user` day-one switches, `tuning`
 #' budgets/targets, `calibration` cost-model constants), package
 #' default, current session value and a one-line description. Values are
-#' validated against the same registry at execute entry
-#' (`.garry_opt_check()`).
+#' validated against the same registry when execution starts.
 #'
 #' @return A data.frame with columns `option`, `tier`, `default`,
 #'   `current`, `set` (is the session overriding the default?) and
 #'   `description`.
+#' @seealso [garry_opt()]
 #' @export
 garry_options <- function() {
   fmt <- function(v) if (is.null(v)) "NULL" else paste(format(v), collapse = ",")

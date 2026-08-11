@@ -149,12 +149,15 @@ NULL
 #' Value and gradient of a scalar LazyRaster loss wrt a focal kernel.
 #'
 #' `loss` must be a scalar pipeline (global `sum` or `mean` reduction)
-#' containing `wrt`, a `focal_kernel()` raster whose weights are the
-#' parameters. Executes chunk by chunk (gradients compose by linearity)
-#' with the mask-multiply nodata rewrite (D15).
+#' containing `wrt`, a [focal_kernel()] raster whose weights are the
+#' parameters. Executes chunk by chunk (gradients compose by linearity).
+#' Nodata is handled by a mask-multiply rewrite: nodata cells are
+#' zero-substituted in the inputs, a validity mask is carried through
+#' the pipeline, and the loss reduces over valid cells only, so
+#' gradients are never poisoned by NaN.
 #'
 #' @param loss Scalar `LazyRaster` (reduced over x and y).
-#' @param wrt The `focal_kernel()` LazyRaster to differentiate against.
+#' @param wrt The [focal_kernel()] LazyRaster to differentiate against.
 #' @param weights Optional kernel matrix overriding the weights stored
 #'   in `wrt` (used by optimisation loops to avoid rebuilding graphs).
 #' @return `list(value = <scalar>, grad = <kernel-shaped matrix>)`.

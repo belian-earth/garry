@@ -21,8 +21,10 @@ Reads every band of \code{src} and writes garry's raw cube format:
 band-sequential f32/f64 planes in a \code{.bin}, described by a
 \code{VRTRawRasterBand} VRT that carries the georeference. Any GDAL
 consumer reads the VRT normally; garry's reader recognises the shape
-and reads the bin directly (measured ~9x on a 73-band cube — GDAL's
-tile walk costs ~2.2 s per 482 MB window regardless of compression,
-the raw read 0.24 s). Use it once on pipeline intermediates that are
+and reads the bin directly, which is many times faster than walking
+the tiled GeoTIFF. Use it once on pipeline intermediates that are
 read many times (per-year context cubes, prediction stacks).
+}
+\seealso{
+\code{\link[=gdal_create_output]{gdal_create_output()}}
 }

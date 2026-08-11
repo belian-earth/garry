@@ -25,3 +25,6 @@ columns. All other columns become index fields (numeric -> Real,
 otherwise String); a \code{datetime} column enables per-slice FILTERs and
 SORT_FIELD ordering.
 }
+\seealso{
+\code{\link[=gti_open_options]{gti_open_options()}}
+}

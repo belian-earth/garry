@@ -7,7 +7,7 @@
 is_barrier(node, ...)
 }
 \arguments{
-\item{node}{An IR \code{Node}.}
+\item{node}{An intermediate representation (IR) \code{Node}.}
 
 \item{...}{Passed to methods.}
 }
@@ -15,5 +15,6 @@ is_barrier(node, ...)
 \code{TRUE} or \code{FALSE}.
 }
 \description{
-Does this node force a stage boundary?
+Part of the extension API for authors of new node classes; not
+needed for ordinary use of the package.
 }

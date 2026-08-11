@@ -45,6 +45,7 @@
 #' @param device Optional device override (e.g. "cuda"); NULL uses the
 #'   anvl default device.
 #' @return A compiled function (anvl `JitFunction`).
+#' @keywords internal
 #' @export
 g_jit <- function(f, device = NULL) {
   .require_anvl()
@@ -53,10 +54,13 @@ g_jit <- function(f, device = NULL) {
 
 #' Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
 #'
+#' User code should call [lazy_value_and_grad()] instead.
+#'
 #' @param f Function returning a scalar float; first argument is the
 #'   differentiation target.
 #' @param wrt Name of the argument to differentiate with respect to.
 #' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
+#' @keywords internal
 #' @export
 g_value_and_gradient <- function(f, wrt) {
   .require_anvl()
@@ -71,8 +75,8 @@ g_value_and_gradient <- function(f, wrt) {
 
 #' Upload an R array to an AnvlArray of the given garry dtype.
 #'
-#' Unsigned dtypes upload via a wider signed carrier (see
-#' `.anvl_upload_dtype`): anvl cannot construct them from R numerics.
+#' Unsigned dtypes upload via a wider signed carrier: anvl cannot
+#' construct them from R numerics.
 #'
 #' @param x R array/matrix.
 #' @param dtype garry dtype string (anvl-aligned).
@@ -127,14 +131,15 @@ g_download <- function(x) {
 #' Upload a raw byte payload to an AnvlArray.
 #'
 #' `bytes` holds `prod(dim)` elements of `dtype` in ROW-major element
-#' order (D19): one memcpy to the device, no double conversion, and no
+#' order: one memcpy to the device, no double conversion, and no
 #' XLA relayout (row-major matches the default layout).
 #'
 #' @param bytes Raw vector (native little-endian payload).
-#' @param dtype garry dtype string (f32 on the 12c path).
+#' @param dtype garry dtype string (typically `"f32"`).
 #' @param dim Integer dims, `[nr, nc]` or `[t, nr, nc]`.
 #' @param device Optional device (e.g. "cuda"); NULL uses the default.
 #' @return An `AnvlArray`.
+#' @keywords internal
 #' @export
 g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   .require_anvl()
@@ -166,12 +171,13 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 
 #' Download an AnvlArray as a raw store payload.
 #'
-#' Row-major byte payload tagged with `gdim`/`gdt` (D20, extended to
-#' f64 by design/f64-store.md); no double materialisation. Raw f64 is
-#' bit-identical to the doubles path.
+#' Row-major byte payload tagged with `gdim`/`gdt` attributes; no
+#' double materialisation. Raw f64 is bit-identical to the doubles
+#' path.
 #'
 #' @param x `AnvlArray` (f32 or f64).
 #' @return Raw vector with `gdim` and `gdt` attributes.
+#' @keywords internal
 #' @export
 g_download_raw <- function(x) {
   .require_anvl()
@@ -208,7 +214,7 @@ g_ifelse <- function(cond, yes, no) {
   ifelse(cond, yes, no)
 }
 
-#' Is a value nodata (NaN under the D8 sentinel model)?
+#' Is a value nodata? NaN is the nodata sentinel.
 #'
 #' @param x Numeric array.
 #' @return Logical array.
@@ -244,8 +250,8 @@ g_pad <- function(x, h, value = 0) {
 #' Shifted slice of a padded matrix (the stencil building block).
 #'
 #' Given `xpad = g_pad(x, h)`, returns the view of `x`'s shape offset by
-#' (`dy`, `dx`) pixels, `dy`/`dx` in `[-h, h]`. Rows are y, columns are x
-#' (decision D13 orientation).
+#' (`dy`, `dx`) pixels, `dy`/`dx` in `[-h, h]`. Rows are y, columns are
+#' x.
 #'
 #' @param xpad Padded matrix.
 #' @param dy,dx Integer offsets in pixels.
@@ -271,10 +277,11 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
   do.call(`[`, c(list(xpad), idx, list(drop = FALSE)))
 }
 
-#' Cast to a garry dtype (oracle: value semantics only).
+#' Cast to a garry dtype.
 #'
-#' Float targets keep double storage; integer targets truncate toward
-#' zero; `pred` maps nonzero to TRUE.
+#' Integer targets truncate toward zero; `pred` maps nonzero to TRUE.
+#' On plain R arrays the cast changes value semantics only (storage
+#' stays double).
 #'
 #' @param x Numeric array.
 #' @param dtype Target dtype string.
@@ -296,8 +303,8 @@ g_cast <- function(x, dtype) {
 
 #' Stack same-shaped arrays along a new leading axis.
 #'
-#' `(y, x)` matrices stack into a `(t, y, x)` cube (decision D17
-#' layout); `(t, y, x)` cubes stack into a `(k, t, y, x)` hyper-cube
+#' `(y, x)` matrices stack into a `(t, y, x)` cube;
+#' `(t, y, x)` cubes stack into a `(k, t, y, x)` hyper-cube
 #' (e.g. a rolling window's shifted copies, reduced over dim 1).
 #'
 #' @param values List of same-shaped arrays.
@@ -386,8 +393,9 @@ g_index_scalar <- function(v, i) {
 #' with that unit axis dropped) and returns `list(carry = , out = )`;
 #' the `out`s are stacked into `(length, ...)` buffers. `reverse = TRUE`
 #' runs `t = length..1`, still reading and writing at position `t` (what
-#' an RTS backward pass needs). Traced values route to `anvl::nv_scan`;
-#' plain R arrays take the pure-R oracle loop with identical semantics.
+#' a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+#' values route to `anvl::nv_scan`; plain R arrays take the pure-R
+#' reference implementation with identical semantics.
 #'
 #' The scanned axis must be dim 1 of every `xs` leaf (garry's canonical
 #' layout puts the scanned non-spatial axis first); bodies scanning a
@@ -531,7 +539,7 @@ g_rep_t <- function(x, n) {
 #' The rank-general sibling of [g_rep_t()]: expands `x` with a new axis
 #' of `n` copies at position `axis`, so a reduced statistic broadcasts
 #' back against the array it came from (base R arrays do not broadcast,
-#' so the untraced oracle needs the copies materialised; traced, this is
+#' so the untraced path materialises the copies; traced, this is
 #' a free `broadcast_to`).
 #'
 #' @param x Array (traced or plain).
@@ -594,7 +602,12 @@ g_expand <- function(x, axis, n) {
 
 .nan_filter <- function(v, nan_rm) if (nan_rm) v[!is.na(v)] else v
 
-#' Reductions over array margins (pure-R oracle semantics).
+#' Reductions over array margins.
+#'
+#' With `nan_rm = TRUE`, a slice that is entirely NaN reduces to the
+#' reduction's identity value: `g_sum` gives 0, `g_min` gives `Inf`,
+#' `g_max` gives `-Inf`, and `g_mean` / `g_median` give NaN. `g_count`
+#' counts non-NaN values, so an all-NaN slice gives 0.
 #'
 #' @param x Numeric array.
 #' @param dims Integer margins to reduce, or NULL for all.
@@ -705,6 +718,8 @@ g_count <- function(x, dims = NULL) {
 #' @param a,b Integral arrays (or scalar `b`); recycled like base R.
 #' @param n Shift amount in bits.
 #' @return Integral array shaped like `a`.
+#' @seealso [qa_bits()] and [mask()] for the QA-masking verbs built on
+#'   these ops.
 #' @name g-bitwise
 NULL
 
@@ -770,7 +785,7 @@ g_shiftr <- function(a, n) {
 #' bias are plain R arrays; traced they enter the kernel as constants
 #' uploaded once at compile.
 #'
-#' The oracle branch is an im2col matmul: correct at any size, meant
+#' The plain-R branch is an im2col matmul: correct at any size, meant
 #' for tests, not throughput.
 #'
 #' @param x `(C_in, H, W)` array (traced or plain).

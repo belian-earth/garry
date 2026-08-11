@@ -8,7 +8,7 @@ NULL
 #' To stream the result to a file instead, use [write_tif()]; to
 #' checkpoint to local cubes and stay lazy, use [materialise()].
 #' `plan_only = TRUE` runs the planner passes and returns the `Plan`
-#' without executing: the permanent introspection path.
+#' without executing, for inspection.
 #'
 #' @param x A `LazyRaster`, a `LazyDataset` (its bands are assembled along
 #'   the band axis via `stack_bands()` first), a named list of lazy rasters
@@ -164,12 +164,16 @@ as_terra <- function(x) {
 
 #' Which execution route did the last `collect()` take?
 #'
-#' The distributed `collect()` silently picks between the
-#' composite-direct fast path, the reduce-decomposition path and the
-#' staged scheduler (in that order); single-threaded runs use the
-#' in-process executor. The chosen route is recorded per `collect()`
-#' call so equivalence tests and pipelines can assert a plan did not
-#' silently change route.
+#' A diagnostics helper. The distributed `collect()` picks its execution
+#' route automatically, and this reports the route the last call took,
+#' so pipelines can log it or assert a plan has not changed route.
+#' The values are:
+#'
+#' - `"composite_direct"`: the specialised masked-composite executor;
+#' - `"gd_reduce"`: the general reduce-decomposition executor;
+#' - `"scheduler"`: the general distributed scheduler;
+#' - `"single"`: the in-process single-threaded executor
+#'   (`distributed = FALSE`).
 #'
 #' @return `"composite_direct"`, `"gd_reduce"`, `"scheduler"` or
 #'   `"single"`; `NULL` before any `collect()` in the session.

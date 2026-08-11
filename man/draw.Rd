@@ -17,7 +17,11 @@ draw(x, ...)
 \description{
 Prints a terminal visual of the computation a lazy object will run, before
 any reading or compute happens. A \code{LazyDataset} draws as its step pipeline
-(source, mask, reduce, ...); a \code{LazyRaster} draws as its IR tree, with
-structurally identical sibling branches folded to a single \code{xN} branch so a
-large composite graph stays readable.
+(source, mask, reduce, ...); a \code{LazyRaster} draws as its intermediate
+representation (IR) tree, with structurally identical sibling branches
+folded to a single \code{xN} branch so a large composite graph stays readable.
+}
+\seealso{
+\code{\link[=preview]{preview()}}, which plots the data rather than the pipeline;
+\code{\link[=plan_dot]{plan_dot()}} for a Graphviz rendering of the execution plan.
 }

@@ -9,7 +9,7 @@ lazy_value_and_grad(loss, wrt, weights = NULL)
 \arguments{
 \item{loss}{Scalar \code{LazyRaster} (reduced over x and y).}
 
-\item{wrt}{The \code{focal_kernel()} LazyRaster to differentiate against.}
+\item{wrt}{The \code{\link[=focal_kernel]{focal_kernel()}} LazyRaster to differentiate against.}
 
 \item{weights}{Optional kernel matrix overriding the weights stored
 in \code{wrt} (used by optimisation loops to avoid rebuilding graphs).}
@@ -19,7 +19,10 @@ in \code{wrt} (used by optimisation loops to avoid rebuilding graphs).}
 }
 \description{
 \code{loss} must be a scalar pipeline (global \code{sum} or \code{mean} reduction)
-containing \code{wrt}, a \code{focal_kernel()} raster whose weights are the
-parameters. Executes chunk by chunk (gradients compose by linearity)
-with the mask-multiply nodata rewrite (D15).
+containing \code{wrt}, a \code{\link[=focal_kernel]{focal_kernel()}} raster whose weights are the
+parameters. Executes chunk by chunk (gradients compose by linearity).
+Nodata is handled by a mask-multiply rewrite: nodata cells are
+zero-substituted in the inputs, a validity mask is carried through
+the pipeline, and the loss reduces over valid cells only, so
+gradients are never poisoned by NaN.
 }

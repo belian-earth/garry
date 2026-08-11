@@ -3,7 +3,8 @@
 \name{FocalNode}
 \alias{FocalNode}
 \title{Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is one
-of "constant", "reflect", "nearest", "wrap", "none".}
+of "constant", "reflect", "nearest", "wrap", "none". Created by
+\code{\link[=focal]{focal()}}.}
 \usage{
 FocalNode(
   id = integer(0),
@@ -30,12 +31,13 @@ FocalNode(
 
 \item{weights}{Optional linear kernel, flattened row-major over
 (dy, dx), length (2*radius+1)^2. When present the op is the
-weighted sum and is differentiable wrt the weights (Phase 6).}
+weighted sum and is differentiable wrt the weights.}
 }
 \value{
 A \code{FocalNode}.
 }
 \description{
 Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is one
-of "constant", "reflect", "nearest", "wrap", "none".
+of "constant", "reflect", "nearest", "wrap", "none". Created by
+\code{\link[=focal]{focal()}}.
 }

@@ -398,7 +398,7 @@ NULL
 }
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
-#' @keywords internal
+#' @noRd
 .execute_composite_direct <- function(plan, spec, path = NULL, nodata = NULL,
                                       band_names = NULL, wspec = NULL) {
   .require_anvl()
@@ -457,7 +457,7 @@ NULL
 #' pool while the bands download; then dispatch each band's median as its fetch
 #' lands, so band B's median runs while later bands are still fetching. Only the
 #' last band's median is exposed after the drain. Requires a garry_daemons split.
-#' @keywords internal
+#' @noRd
 .execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL,
                                         band_names = NULL, wspec = NULL) {
   .require_anvl()
@@ -649,7 +649,7 @@ NULL
 # ---------------------------------------------------------------------------
 
 #' Recognise any warp-on-read-replayable plan and lift its whole IR, or NULL.
-#' @keywords internal
+#' @noRd
 .gd_spec <- function(plan) {
   if (!isTRUE(garry_opt("composite_direct"))) return(NULL)
   if (!.g_has_raw_upload()) return(NULL)
@@ -683,7 +683,7 @@ NULL
 }
 
 #' Execute any warp-on-read plan via whole-IR replay in one jit.
-#' @keywords internal
+#' @noRd
 .execute_gd_general <- function(plan, gspec, path = NULL, nodata = NULL,
                                 band_names = NULL, wspec = NULL) {
   .require_anvl()
@@ -762,7 +762,7 @@ NULL
 #' reduce is not composite-reducible, or when the upper IR does not close over
 #' the leaf reduces (a node consuming a raw source alongside a reduce -> the
 #' scheduler). `.gd_spec` gates fetchability and the node-type whitelist.
-#' @keywords internal
+#' @noRd
 .gd_decompose <- function(plan) {
   gsp <- .gd_spec(plan)                       # fetchable GTI + Source/Map/Focal/Stack/Reduce
   if (is.null(gsp)) return(NULL)
@@ -819,7 +819,7 @@ NULL
 
 #' Execute a reduce-decomposable plan: overlap-compute the leaf reduces, then
 #' run the upper IR on the materialised results.
-#' @keywords internal
+#' @noRd
 .execute_gd_reduce <- function(plan, decomp, path = NULL, nodata = NULL,
                                band_names = NULL, wspec = NULL) {
   .require_anvl()

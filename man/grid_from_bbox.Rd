@@ -49,3 +49,7 @@ rather than an EPSG code.
 # An equal-area 30 m grid over a small AOI.
 g <- grid_from_bbox(c(144.13, -7.725, 144.47, -7.475), res = 30)
 }
+\seealso{
+\code{\link[=grid_from_src]{grid_from_src()}} to build a grid from a raster or vector
+source; \code{\link[=grid_spec]{grid_spec()}} to build one from an explicit extent.
+}

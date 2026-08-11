@@ -16,7 +16,7 @@ stac_time_slices(
 \item{granularity}{"day", "month", "exact", or "solar_day".}
 
 \item{lon}{Longitude (degrees, WGS84) whose solar time defines
-\code{"solar_day"} — use the centre of the analysis area. Defaults to
+\code{"solar_day"}: use the centre of the analysis area. Defaults to
 the circular mean of the source footprint centres (safe across
 the antimeridian).}
 }
@@ -25,14 +25,30 @@ The table with a \code{slice} column.
 }
 \description{
 Adds a \code{slice} column (the datetime truncated to \code{granularity});
-tiles sharing a slice mosaic together in \code{lazy_stac_stack()}.
+tiles sharing a slice mosaic together in \code{\link[=lazy_stac_stack]{lazy_stac_stack()}}.
 }
 \details{
 \code{"day"} truncates the UTC datetime: one satellite overpass that
 crosses local midnight in UTC terms splits into two slices.
-\code{"solar_day"} instead shifts each timestamp by the local solar
-offset (\code{lon} degrees x 240 s, the odc-stac rule) before taking the
-date, so acquisitions group by the local day of the overpass; the
-two agree everywhere except within ~an overpass of the UTC date
-line at \code{lon}.
+\code{"solar_day"} instead shifts each timestamp by a longitude-dependent
+solar-time offset of \code{lon} degrees x 240 s (as used by odc-stac)
+before taking the date, so acquisitions group by the local day of
+the overpass; the two agree everywhere except within ~an overpass
+of the UTC date line at \code{lon}.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}}
+}
+\concept{stac helpers}

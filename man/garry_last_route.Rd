@@ -11,10 +11,17 @@ garry_last_route()
 \code{"single"}; \code{NULL} before any \code{collect()} in the session.
 }
 \description{
-The distributed \code{collect()} silently picks between the
-composite-direct fast path, the reduce-decomposition path and the
-staged scheduler (in that order); single-threaded runs use the
-in-process executor. The chosen route is recorded per \code{collect()}
-call so equivalence tests and pipelines can assert a plan did not
-silently change route.
+A diagnostics helper. The distributed \code{collect()} picks its execution
+route automatically, and this reports the route the last call took,
+so pipelines can log it or assert a plan has not changed route.
+The values are:
+}
+\details{
+\itemize{
+\item \code{"composite_direct"}: the specialised masked-composite executor;
+\item \code{"gd_reduce"}: the general reduce-decomposition executor;
+\item \code{"scheduler"}: the general distributed scheduler;
+\item \code{"single"}: the in-process single-threaded executor
+(\code{distributed = FALSE}).
+}
 }

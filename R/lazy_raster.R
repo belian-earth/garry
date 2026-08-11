@@ -9,9 +9,13 @@ NULL
 # return new LazyRasters sharing the graph. Users never see the IR.
 # ---------------------------------------------------------------------------
 
-#' Lazy raster array.
+#' Lazy raster array (single band stack).
 #'
-#' @param graph The shared IR `Graph`.
+#' Users obtain one via [lazy_source()], [lazy_cog()], or [lazy_dataset()]
+#' band access, and materialise it with [collect()]; the constructor itself
+#' is rarely called directly.
+#'
+#' @param graph The shared intermediate representation (IR) `Graph`.
 #' @param node_id Integer id of this raster's node.
 #' @param grid Cached `GridSpec` for fast dim/crs access.
 #' @return A `LazyRaster`.
@@ -48,19 +52,18 @@ S7::method(res, LazyRaster) <- function(x) res(x@grid)
 #' Grid, dtype, native block size, and file nodata come from GDAL via
 #' the adapter (`gdal_grid_spec()`). A user-supplied `nodata` overrides
 #' the file's. An integer source with nodata is promoted to f32 so NaN
-#' can carry nodata downstream (decision D8); the sentinel-to-NaN
-#' rewrite happens at read time in the adapter.
+#' can carry nodata downstream; the sentinel-to-NaN rewrite happens at
+#' read time in the adapter.
 #'
 #' Passing `grid` skips the GDAL open entirely: no metadata is read
 #' until execution. Use it when the dataset's grid is known by
 #' construction, e.g. GTI mosaics pinned to a target grid via
-#' `gti_open_options()`, where opening every time slice just to
-#' rediscover the grid costs a remote COG header fetch per slice
-#' (measured: ~0.1 s each, serial, on the host). `grid` must describe
-#' the dataset exactly as `path` + `open_options` open it, including
-#' the source dtype; it is trusted, not checked. With `grid` given,
-#' file nodata is NOT consulted (pass `nodata` explicitly if the
-#' source has a sentinel).
+#' [gti_open_options()], where opening every time slice just to
+#' rediscover the grid costs a serial remote COG header fetch per
+#' slice. `grid` must describe the dataset exactly as `path` +
+#' `open_options` open it, including the source dtype; it is trusted,
+#' not checked. With `grid` given, file nodata is NOT consulted (pass
+#' `nodata` explicitly if the source has a sentinel).
 #'
 #' @param path Path or VSI URL readable by GDAL.
 #' @param band 1-based band index.
@@ -85,6 +88,7 @@ S7::method(res, LazyRaster) <- function(x) res(x@grid)
 #' @param offset Explicit additive offset used when `scale` is numeric;
 #'   defaults to 0. Ignored when `scale` is logical.
 #' @return A `LazyRaster`.
+#' @seealso [collect()], [lazy_dataset()]
 #' @export
 lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
                         open_options = character(0), grid = NULL,
@@ -157,12 +161,13 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
 #' Elementwise map over one or more aligned rasters.
 #'
 #' `fn` receives one traced array per input raster and returns one
-#' array; it runs fused inside the surrounding XLA stage. Write it with
-#' plain arithmetic and the `g_*` vocabulary (`g_ifelse`, `g_bitand`,
-#' `g_cast`, ...). Inputs must share a grid (`align()` first otherwise);
-#' graphs auto-merge (D6).
+#' array; it runs fused with adjacent operations in one compiled
+#' kernel. Write it with plain arithmetic and the `g_*` vocabulary
+#' ([g_ifelse()], [g_bitand()], [g_cast()], ...). Inputs must share a
+#' grid ([align()] first otherwise); rasters on different graphs merge
+#' automatically.
 #'
-#' The output dtype defaults to the promoted input dtype (D3); pass
+#' The output dtype defaults to the promoted input dtype; pass
 #' `dtype` when `fn` changes the value domain, e.g. `"f32"` for a mask
 #' that introduces NaN over an integer band.
 #'
@@ -175,6 +180,7 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
 #' @param dtype Optional output dtype override.
 #' @param bands `LazyDataset` only: bands to map over (default: all value bands).
 #' @return A `LazyRaster`, or a `LazyDataset` when given one.
+#' @seealso [collect()]
 #' @export
 lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   xs <- list(...)
@@ -215,10 +221,14 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
 
 #' Stack aligned rasters along a new outer dim (default time).
 #'
-#' All layers must share the spatial grid (align first otherwise);
+#' All layers must share the spatial grid ([align()] first otherwise);
 #' dtypes promote to a common type. Chunks carry the stack as
-#' (t, y, x) arrays (decision D17); temporal reductions
+#' (t, y, x) arrays; temporal reductions
 #' (`reduce_over(x, "median", "t")`) then run chunk-locally.
+#'
+#' Element names of `xs` become labels on the new axis (slice dates on
+#' `t`, band names on `band`), used by [time_sel()] / [band_sel()] for
+#' label selection; an unnamed list leaves the axis unlabelled.
 #'
 #' @param xs List of `LazyRaster`s on one grid.
 #' @param along Name of the new dim ("t" or "band").
@@ -469,14 +479,12 @@ for (op_name in c("^", "%%")) {
 #'
 #' `fn` receives a LIST of (2r+1)^2 shifted arrays, row-major over
 #' (dy, dx) offsets, and returns one array: the whole neighbourhood is
-#' processed vectorised across every pixel at once. This convention is
-#' what lets the same closure run under the pure-R oracle and under
-#' anvl's jit() (D10/D14). Example, a 3x3 sum:
-#' `function(sh) Reduce("+", sh)`.
+#' processed vectorised across every pixel at once. Write `fn` with
+#' plain arithmetic and the `g_*` vocabulary ([g_ifelse()], [g_cast()],
+#' ...). Example, a 3x3 sum: `function(sh) Reduce("+", sh)`.
 #'
-#' Cells beyond the raster edge are NaN (nodata) — v1 supports only this
-#' `boundary = "nodata"` policy; reflect/wrap remain unimplemented
-#' (deliberately deferred, not scheduled).
+#' Cells beyond the raster edge are NaN (nodata): v1 supports only this
+#' `boundary = "nodata"` policy; reflect/wrap are not implemented.
 #'
 #' Over a `LazyDataset`, the stencil is applied to every value band per slice;
 #' `bands` restricts which bands.
@@ -484,11 +492,13 @@ for (op_name in c("^", "%%")) {
 #' @param x        LazyRaster, or a `LazyDataset`.
 #' @param fn       Function over the list of shifted arrays (see above).
 #' @param radius   Halo in pixels (mandatory: the footprint cannot be
-#'                 inferred from `fn`; decision D14).
+#'                 inferred from `fn`).
 #' @param boundary Boundary policy; only "nodata" in v1.
 #' @param bands    `LazyDataset` only: bands to apply to (default: all value
 #'                 bands).
-#'
+#' @return A `LazyRaster` on the same grid as `x`, or a `LazyDataset`
+#'   when given one.
+#' @seealso [focal_kernel()], [bilateral_focal()], [shrink_footprint()]
 #' @export
 focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset))
@@ -536,14 +546,15 @@ shrink_footprint <- function(x, radius = 1L, bands = NULL) {
 
 #' Whole-window model op (advanced): apply `fn` to the raw padded chunk.
 #'
-#' The escape hatch behind model-inference verbs such as `ocm_mask()`:
+#' The escape hatch behind model-inference verbs such as [ocm_mask()]:
 #' where [focal()] materialises a shift list (unusable beyond small
 #' radii), a patch op hands `fn` the raw window carrying `radius` halo
 #' cells per side and crops the contaminated ring off the result. `fn`
 #' must be size-preserving on the last two (spatial) dims, derive every
 #' size from its input's shape, be written in the `g_*` vocabulary, and
 #' reduce the leading band axis to `out_bands` channels (0 = a plain
-#' 2D result). Not differentiable.
+#' 2D result). Not differentiable. [ocm_model()]-based cloud-mask
+#' prediction is the in-package example of its use.
 #'
 #' `kernel_id` stands in for `fn` in kernel signatures: give two calls
 #' the same id ONLY if their fns are interchangeable (same weights,
@@ -595,16 +606,16 @@ lazy_patch <- function(x, fn, radius, out_bands = 0L, dtype = "f32",
 #' within regions of similar value and stops at sharp transitions. Use
 #' as `focal(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
 #'
-#' Semantics match `rustyfilters::rf_bilateral(edge = "shrink",
-#' na_policy = "omit")`: a NaN centre stays NaN; NaN neighbours (and the
-#' NaN halo garry pads outside the raster) drop out of the weighted
-#' mean. `sigma_r` must be supplied: the parameter-free per-band default
+#' A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
+#' outside the raster) drop out of the weighted mean (the semantics of
+#' `rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")`).
+#' `sigma_r` must be supplied: the parameter-free per-band default
 #' (the band's own sd) is a whole-raster statistic, so compute it in a
 #' separate reduce pass (or reuse fitted values) and pass it in.
 #'
 #' @param sigma_r Range Gaussian standard deviation (data units).
 #' @param sigma_d Spatial Gaussian standard deviation in pixels
-#'   (default 1, hutan's `(window - 1) / 2` for a 3x3 window).
+#'   (default 1, matching the default 3x3 window).
 #' @param radius Window radius the body is built for; must match the
 #'   `radius` passed to [focal()] (default 1 = 3x3).
 #' @return A focal body `fn(shifts)` for [focal()].
@@ -664,21 +675,29 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 
 #' Reduction over named dims.
 #'
-#' `op` is a reduction name (see `.reduce_ops`), not a function: the
-#' planner needs op identity for algebraic decomposition (D12) and dtype
-#' rules. `nan_rm = TRUE` (the default) skips nodata, matching R's
-#' `na.rm = TRUE` under the NaN-sentinel model (D8).
+#' `op` is a reduction name, not a function: the planner needs op
+#' identity for algebraic decomposition and dtype rules. `nan_rm = TRUE`
+#' (the default) skips nodata, matching R's `na.rm = TRUE` under the
+#' NaN nodata sentinel.
 #'
 #' Over a `LazyDataset`, each band is reduced independently (over `"t"`: stack
 #' the band's slices and collapse time to a composite); `bands` restricts which
 #' bands. `over = "band"` collapses the band axis, returning a `LazyRaster`.
 #'
 #' @param x A `LazyRaster`, or a `LazyDataset`.
-#' @param op Reduction name, e.g. `"mean"`, or a custom anvl reducer `fn(x, dims)`.
+#' @param op Reduction name: one of `"sum"`, `"mean"`, `"min"`, `"max"`,
+#'   `"prod"`, `"median"`, `"quantile"`, `"sd"`, `"var"`, `"count"`,
+#'   `"any"`, `"all"`. Alternatively a custom reducer: a function
+#'   `fn(x, dims)` written in the `g_*` vocabulary that collapses the
+#'   margins `dims` (e.g. a per-pixel model fit over time).
 #' @param over Names of dims to reduce over (subset of `names(dims)`).
 #' @param nan_rm Skip NaN (nodata) values?
 #' @param bands `LazyDataset` only: bands to reduce (default: all bands).
 #' @return A `LazyRaster` on the reduced grid, or a `LazyDataset` when given one.
+#' @seealso [geomedian()] and [medoid()] for multivariate time
+#'   composites; [band_project()] and [mlp_project()] for band-axis
+#'   models; [group_by_time()] for calendar-grouped reduction;
+#'   [scan_over()] for order-preserving passes.
 #' @export
 reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
   if (S7::S7_inherits(x, LazyDatasetGroups))
@@ -813,9 +832,9 @@ band_project <- function(weights, center = NULL) {
 #' Linear focal op with an explicit kernel (differentiable).
 #'
 #' The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
-#' weighted sum over the window. Unlike `focal()` with an arbitrary
+#' weighted sum over the window. Unlike [focal()] with an arbitrary
 #' `fn`, a kernel focal is differentiable with respect to its weights:
-#' pass the returned LazyRaster as `wrt` to `lazy_value_and_grad()`.
+#' pass the returned LazyRaster as `wrt` to [lazy_value_and_grad()].
 #'
 #' @param x A `LazyRaster`.
 #' @param weights Square odd-sided numeric matrix, rows = dy, cols = dx.
@@ -845,17 +864,17 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 
 #' Lazily resample/reproject onto a target grid.
 #'
-#' Injects a WarpNode (a barrier, executed as a GDAL VRT warp in Phase
-#' 4b). Alignment stays explicit: binary ops never auto-resample.
+#' Inserts an explicit warp step, executed as a GDAL VRT warp.
+#' Alignment stays explicit: binary ops never auto-resample.
 #'
 #' Paste fast path: when `x` is already exactly on the target grid
 #' (same CRS, transform, extent and dims; `grid_equal()`), `align()`
-#' is a no-op returning `x` — reads stay plain windowed reads, with no
+#' is a no-op returning `x`: reads stay plain windowed reads, with no
 #' warp barrier splitting the plan. This is the single-CRS-zone
 #' workflow: pin the analysis grid to the sources' native grid and
-#' nothing warps. Unlike odc-stac's `ttol`, only EXACT equality
-#' pastes: a sub-pixel-shifted paste silently moves every pixel up to
-#' half a cell, so near-misses warp.
+#' nothing warps. Only EXACT equality pastes (unlike odc-stac's
+#' tolerance-based `ttol`): a sub-pixel-shifted paste would silently
+#' move every pixel by up to half a cell, so near-misses warp.
 #'
 #' @param x A `LazyRaster`.
 #' @param to Target grid: a `GridSpec` or another `LazyRaster`.

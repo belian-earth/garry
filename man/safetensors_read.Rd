@@ -16,9 +16,18 @@ read (default: all F32 tensors).}
 Named list of numeric arrays.
 }
 \description{
+safetensors (\url{https://github.com/huggingface/safetensors}) is the
+simple tensor serialisation format used across the machine-learning
+ecosystem, typically for model weights.
+}
+\details{
 Returns a named list of R arrays indexed exactly like the source
 torch tensors (\code{x[i, j, ...]} agrees elementwise): the row-major
 payload is reshaped through the reversed dims and \code{aperm}ed back.
 F32 tensors only; others (e.g. I64 \code{num_batches_tracked}) are
 silently dropped. A 0-d tensor becomes a length-1 vector.
+}
+\seealso{
+\code{\link[=safetensors_ls]{safetensors_ls()}} to list a file's tensors without
+reading data.
 }

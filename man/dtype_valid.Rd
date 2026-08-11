@@ -2,7 +2,7 @@
 % Please edit documentation in R/grid.R
 \name{dtype_valid}
 \alias{dtype_valid}
-\title{Is \code{dtype} a member of garry's (anvl-aligned) dtype vocabulary?}
+\title{Is \code{dtype} a member of garry's dtype vocabulary?}
 \usage{
 dtype_valid(dtype)
 }
@@ -13,5 +13,7 @@ dtype_valid(dtype)
 \code{TRUE} or \code{FALSE}.
 }
 \description{
-Is \code{dtype} a member of garry's (anvl-aligned) dtype vocabulary?
+The valid dtype strings are \code{"f32"}, \code{"f64"}, \code{"i8"}, \code{"i16"},
+\code{"i32"}, \code{"i64"}, \code{"u8"}, \code{"u16"}, \code{"u32"}, \code{"u64"}, and \code{"pred"}
+(a boolean/predicate type).
 }

@@ -30,11 +30,14 @@ implementation to float precision (logits agree to ~1e-6), and the
 compiled kernel is about twice as fast as torch on CPU, more on a GPU.
 
 The weights belong to the OmniCloudMask authors and are not shipped
-with garry: `ocm_model()` reads them from the Python package's download
-cache or any directory you point it at (see `?ocm_load_weights`).
+with garry: download them once with `ocm_fetch_weights()` (about 58 MB,
+hash-verified) and `ocm_model()` finds them automatically. It can also
+read the Python package's download cache or any directory you point it
+at (see `?ocm_load_weights`).
 
 This vignette reproduces the classic OmniCloudMask demonstration
-(vrtility's OCM article) on garry: Zurich in spring, with scenes up to
+(after the OCM article in the vrtility package) on garry: Zurich in
+spring, with scenes up to
 80% cloud deliberately included, comparing OmniCloudMask against
 Sentinel-2's scene classification (SCL) all the way to the composite.
 
@@ -70,7 +73,7 @@ masking routes, per-date looks, and two composites. Rather than pull
 the pixels from the Planetary Computer each time, checkpoint the
 warped stack locally: `materialise()` executes the graph into garry's
 raw-BSQ cube format (one multiband `.vrt` + `.bin` per date, readable
-by any GDAL tool and re-read by garry about 9x faster than tiled
+by any GDAL tool and re-read by garry much faster than tiled
 GeoTIFF) through ONE plan, and returns the same lazy dataset rebuilt
 over the local files with band names, slice dates, and the
 `mask_asset` intact. By default the cubes land in a unique

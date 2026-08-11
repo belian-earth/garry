@@ -604,7 +604,11 @@ NULL
   .exec_assemble(chunks, it, sink@grid, sink_pad)
 }
 
-#' Execute a Plan on the anvl backend (single-threaded).
+#' Execute a Plan on the anvl backend (single process).
+#'
+#' Runs every stage of a [plan_lazy()] plan in the current R session.
+#' [collect()] is the normal user entry point; call this directly only
+#' when executing a plan by hand.
 #'
 #' @param plan A `Plan`.
 #' @param path Optional GTiff destination: the sink raster is written
@@ -620,8 +624,9 @@ NULL
 #' @return The sink stage's value (matrix for raster sinks, scalar for
 #'   global reductions), or `path` invisibly when writing. When
 #'   `options(garry.exec_stats = TRUE)`, in-memory results carry a
-#'   `garry_exec_stats` attribute with the distinct input shapes
-#'   submitted per stage (kernel-cache accounting).
+#'   `garry_exec_stats` attribute recording the distinct input shapes
+#'   submitted per stage.
+#' @seealso [collect()], [execute_plan_mirai()], [plan_lazy()]
 #' @export
 execute_plan <- function(plan, path = NULL, nodata = NULL, band_names = NULL,
                          wspec = NULL) {

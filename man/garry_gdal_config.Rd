@@ -10,13 +10,15 @@ garry_gdal_config()
 Invisibly \code{NULL}.
 }
 \description{
-Sets the GDAL config options the composite / warp-on-read path and
-cloud-optimised remote reads want: HTTP multiplexing over HTTP/2, the
-odc-stac retry cadence and timeouts, a capped block cache (GDAL
+Sets the GDAL config options garry's internal warp readers and
+cloud-optimised remote reads want: HTTP multiplexing over HTTP/2,
+automatic retries with backoff on transient HTTP errors plus request
+timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 defaults to 5\% of RAM \emph{per process}, which many daemons would
 multiply), single-range COG-header ingest, a skipped directory scan
-and a raster-extension vsicurl allowlist for fast remote opens, and the MEM
-driver open gate the direct warp needs. \code{garry_daemons()} calls this
+and a raster-extension vsicurl allowlist for fast remote opens, and
+permission to open MEM-driver datasets, which garry's internal warp
+readers require. \code{garry_daemons()} calls this
 on every read daemon automatically; call it yourself for host-side
 discovery reads or when you drive \code{mirai::daemons()} directly. Each
 option is set via \code{set_config_option}, so a value you set afterwards

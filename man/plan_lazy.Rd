@@ -7,11 +7,19 @@
 plan_lazy(x)
 }
 \arguments{
-\item{x}{A \code{LazyRaster}.}
+\item{x}{A \code{LazyRaster}, or a named list of them (multi-export: one
+graph, one execution, several sinks).}
 }
 \value{
 A \code{Plan}.
 }
 \description{
-Plan a LazyRaster: run all planner passes and export a Plan.
+Runs the full planner pass pipeline and returns a \code{Plan}: the
+pipeline's operations fused into schedulable stages over a chunk
+grid, ready for an executor. \code{\link[=collect]{collect()}} calls this internally, so
+most code never needs it directly; it is useful for inspecting a
+pipeline with \code{\link[=plan_dot]{plan_dot()}} or executing a plan by hand.
+}
+\seealso{
+\code{\link[=execute_plan]{execute_plan()}}, \code{\link[=plan_dot]{plan_dot()}}
 }

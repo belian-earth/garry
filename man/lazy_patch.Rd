@@ -36,14 +36,15 @@ lazy_patch(
 A \code{LazyRaster} on the spatial grid (plus \code{out_bands} bands).
 }
 \description{
-The escape hatch behind model-inference verbs such as \code{ocm_mask()}:
+The escape hatch behind model-inference verbs such as \code{\link[=ocm_mask]{ocm_mask()}}:
 where \code{\link[=focal]{focal()}} materialises a shift list (unusable beyond small
 radii), a patch op hands \code{fn} the raw window carrying \code{radius} halo
 cells per side and crops the contaminated ring off the result. \code{fn}
 must be size-preserving on the last two (spatial) dims, derive every
 size from its input's shape, be written in the \verb{g_*} vocabulary, and
 reduce the leading band axis to \code{out_bands} channels (0 = a plain
-2D result). Not differentiable.
+2D result). Not differentiable. \code{\link[=ocm_model]{ocm_model()}}-based cloud-mask
+prediction is the in-package example of its use.
 }
 \details{
 \code{kernel_id} stands in for \code{fn} in kernel signatures: give two calls

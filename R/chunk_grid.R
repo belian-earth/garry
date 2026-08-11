@@ -54,10 +54,10 @@ snap_to_blocks <- function(chunk_dim, block_dim) {
 #'
 #' Returns a data frame of (ix, iy, x_off, y_off, x_size, y_size, shape_id)
 #' for every chunk. Offsets are 0-based. Sizes are clipped at the grid
-#' edge. `shape_id` classifies each chunk as "interior", "right",
-#' "bottom", or "corner" — a regular chunk grid produces at most these
-#' four distinct shapes (decision D4: no pad-to-uniform; the executor's
-#' kernel cache sees <= 4 shapes per stage).
+#' edge: edge chunks are smaller, never padded to a uniform size.
+#' `shape_id` classifies each chunk as "interior", "right", "bottom",
+#' or "corner"; a regular chunk grid produces at most these four
+#' distinct shapes.
 #'
 #' @param cg A `ChunkGrid`.
 #' @param ... Passed to methods.
@@ -101,8 +101,9 @@ S7::method(chunk_iter, ChunkGrid) <- function(cg) {
 #' unpadded output.
 #'
 #' @param cg A `ChunkGrid`.
-#' @param ... Method arguments: `x_off`, `y_off`, `x_size`, `y_size`, the
-#'   0-based unpadded chunk window.
+#' @param ... Passed to methods. The `ChunkGrid` method takes the
+#'   0-based unpadded chunk window in pixels: `x_off`, `y_off`,
+#'   `x_size`, `y_size`.
 #' @return A list with the padded window and per-side pads.
 #' @export
 chunk_window_with_halo <- S7::new_generic("chunk_window_with_halo", "cg")

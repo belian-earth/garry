@@ -34,7 +34,14 @@ NULL
 #' @param kind One of "source_read", "compute", "reduce_partial",
 #'   "reduce_combine", "warp".
 #' @param members IR node ids composed into this stage (ascending = topo).
-#' @param fn The composed stage closure (see calling conventions).
+#' @param fn The composed stage closure. For "compute" stages it is
+#'   called as `fn(inputs)` with a list of chunk arrays in
+#'   `input_nodes` order, each padded to the stage halo, and returns
+#'   the chunk-core array; a "reduce_partial" stage returns a named
+#'   list of per-chunk partials and "reduce_combine" combines those
+#'   lists into the final value; for "source_read" and "warp" stages
+#'   `fn` is the identity (the executor and the GDAL warper supply the
+#'   values).
 #' @param halo Halo radius in pixels the stage requires on its inputs.
 #' @param grid Output `GridSpec` of the stage.
 #' @param chunks `ChunkGrid` partitioning the stage's output.
@@ -43,10 +50,10 @@ NULL
 #' @param input_nodes IR node ids whose values `fn` receives, in order.
 #' @param exports Member node ids `fn` returns, ascending (consumed by
 #'   other stages, plus the stage tail).
-#' @param out_pad Spatial padding the stage's chunks are computed with
-#'   (D22): consumers needing a halo on this stage's exports receive it
-#'   as a recomputed ring instead of a materialise-first refusal.
-#'   Inputs arrive padded to `halo + out_pad`.
+#' @param out_pad Spatial padding rings the stage's chunks are computed
+#'   with: consumers needing a halo on this stage's exports receive it
+#'   as a ring of recomputed cells rather than requiring the stage to
+#'   materialise first. Inputs arrive padded to `halo + out_pad`.
 #' @param export_pads Integer vector parallel to `exports`: the padding
 #'   each export value carries (post-focal exports carry less than
 #'   pre-focal ones). Empty means all zero.

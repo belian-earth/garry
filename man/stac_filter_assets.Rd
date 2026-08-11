@@ -21,3 +21,19 @@ assets you keep get a token (MPC returns every band plus thumbnails and
 rendered previews). Items left with none of the requested assets are dropped.
 Polymorphic: a STAC \code{doc_items} or a \code{stac_sources()} table.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

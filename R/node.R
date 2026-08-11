@@ -35,9 +35,10 @@ Node <- S7::new_class(
 
 #' A GDAL-readable source: path + band + optional nodata sentinel.
 #'
-#' A declared `nodata` on an integer source promotes the source's output
-#' dtype to f32 so NaN can carry nodata downstream (decision D8); the
-#' executor rewrites `value == nodata` to NaN at read time.
+#' Created by [lazy_source()]. A declared `nodata` on an integer source
+#' promotes the source's output dtype to f32 so NaN can carry nodata
+#' downstream; the executor rewrites `value == nodata` to NaN at read
+#' time.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -85,7 +86,7 @@ SourceNode <- S7::new_class(
 
 #' Elementwise map. `fn` is an R function over scalars/arrays; it will be
 #' composed with neighbouring fusable nodes and wrapped in `anvl::jit()`
-#' at plan time.
+#' at plan time. Created by [lazy_map()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -102,7 +103,8 @@ MapNode <- S7::new_class(
 )
 
 #' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one
-#' of "constant", "reflect", "nearest", "wrap", "none".
+#' of "constant", "reflect", "nearest", "wrap", "none". Created by
+#' [focal()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -112,7 +114,7 @@ MapNode <- S7::new_class(
 #' @param boundary Boundary policy.
 #' @param weights Optional linear kernel, flattened row-major over
 #'   (dy, dx), length (2*radius+1)^2. When present the op is the
-#'   weighted sum and is differentiable wrt the weights (Phase 6).
+#'   weighted sum and is differentiable wrt the weights.
 #' @return A `FocalNode`.
 #' @export
 FocalNode <- S7::new_class(
@@ -135,8 +137,10 @@ FocalNode <- S7::new_class(
 
 #' Reduction over named dims. Barrier: forces materialisation of its inputs.
 #'
-#' `op` is normally a name from `.reduce_ops`: the planner needs op
-#' identity to decide algebraic decomposition (D12) and output dtype, and
+#' Created by [reduce_over()]. `op` is normally one of the named
+#' reductions "sum", "mean", "min", "max", "prod", "median",
+#' "quantile", "sd", "var", "count", "any", "all": the planner needs op
+#' identity to decide algebraic decomposition and output dtype, and
 #' the executor maps it to the ops vocabulary. A CUSTOM reducer may
 #' instead be supplied as `fn` (a length-1 list holding an anvl function
 #' `fn(x, dims)` that collapses `dims`), with `op = "custom"`; the
@@ -147,7 +151,8 @@ FocalNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param op Reduction name, e.g. "mean" (see `.reduce_ops`), or "custom".
+#' @param op Reduction name, e.g. "mean" (one of the names above), or
+#'   "custom".
 #' @param over Names of dims to reduce over.
 #' @param nan_rm Skip NaN (nodata) values? (Named ops only; a custom `fn`
 #'   handles NaN itself.)
@@ -178,16 +183,18 @@ ReduceNode <- S7::new_class(
 
 #' Scan along a named dim, preserving it. Barrier over `over`.
 #'
-#' The missing IR shape between `MapNode` and `ReduceNode`: carry state
-#' sequentially along one non-spatial axis while emitting a same-length
-#' series (Kalman smoothers, EWMA, IIR filters, cumulative ops). The
-#' output grid is the parent grid unchanged (the scanned axis survives),
-#' optionally with a dtype override.
+#' Created by [scan_over()]. The IR shape between `MapNode` and
+#' `ReduceNode`: carry state sequentially along one non-spatial axis
+#' while emitting a same-length series (Kalman smoothers, EWMA, IIR
+#' filters, cumulative ops). The output grid is the parent grid
+#' unchanged (the scanned axis survives), optionally with a dtype
+#' override.
 #'
 #' The body kernel is `fn(xs, margin) -> y`: `xs` is the LIST of parent
 #' chunk values (length >= 1; multi-parent scans read several cubes in
-#' lockstep), `margin` is the scanned axis position from `.dim_margins`,
-#' and `y` has the same shape as `xs[[1]]`. Inside, the body uses
+#' lockstep), `margin` is the 1-based position of the scanned axis in
+#' the chunk's dimension order (outer dims first, then y, x), and `y`
+#' has the same shape as `xs[[1]]`. Inside, the body uses
 #' `g_scan()` to carry state along `margin`; everything else in the
 #' chunk (the spatial axes) is batched through the carry. Like a custom
 #' reducer, a scan cannot be decomposed across spatial chunks, so it is
@@ -235,8 +242,8 @@ ScanNode <- S7::new_class(
   }
 )
 
-#' Lazy resample/reproject to a target grid. Output of `align()`. Barrier.
-#' At execution time this materialises as a gdalraster VRT warp.
+#' Lazy resample/reproject to a target grid. Created by [align()].
+#' Barrier. At execution time this materialises as a gdalraster VRT warp.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -254,7 +261,8 @@ WarpNode <- S7::new_class(
   )
 )
 
-#' Combine inputs along a named dim (e.g. time).
+#' Combine inputs along a named dim (e.g. time). Created by
+#' [lazy_stack()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -293,7 +301,7 @@ FusedNode <- S7::new_class(
 
 #' Whole-window model op: fn over the raw padded chunk. Halo-consuming.
 #'
-#' The stencil shape for kernels whose spatial context is far beyond a
+#' Created by [lazy_patch()]. The stencil shape for kernels whose spatial context is far beyond a
 #' shift-list focal (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
 #' receives the parent's value carrying at least `radius` halo cells per
 #' side (a `(C, H, W)` cube, traced or plain) and returns a
@@ -304,8 +312,11 @@ FusedNode <- S7::new_class(
 #' else 3 with a leading band axis of length `out_bands`.
 #'
 #' `kernel_id` is the content identity of the closed-over model (weights
-#' + configuration): the scheduler hashes it INSTEAD of serializing `fn`
-#' (a model closure can carry tens of MB). `bytes_px` / `flops_px` are
+#' + configuration): it stands in for `fn` in kernel signatures, so `fn`
+#' itself is never serialised or hashed (a model closure can carry tens
+#' of MB). Two nodes with equal `kernel_id` are treated as the same
+#' kernel, so `kernel_id` must change whenever the model content
+#' changes. `bytes_px` / `flops_px` are
 #' planner cost hints per CORE pixel; they price chunk sizing, memory
 #' admission, and placement, which cannot introspect an arbitrary model
 #' closure.

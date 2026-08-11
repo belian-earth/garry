@@ -18,7 +18,7 @@ A \code{LazyRaster}.
 }
 \description{
 The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
-weighted sum over the window. Unlike \code{focal()} with an arbitrary
+weighted sum over the window. Unlike \code{\link[=focal]{focal()}} with an arbitrary
 \code{fn}, a kernel focal is differentiable with respect to its weights:
-pass the returned LazyRaster as \code{wrt} to \code{lazy_value_and_grad()}.
+pass the returned LazyRaster as \code{wrt} to \code{\link[=lazy_value_and_grad]{lazy_value_and_grad()}}.
 }

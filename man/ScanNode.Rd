@@ -33,17 +33,19 @@ ScanNode(
 A \code{ScanNode}.
 }
 \description{
-The missing IR shape between \code{MapNode} and \code{ReduceNode}: carry state
-sequentially along one non-spatial axis while emitting a same-length
-series (Kalman smoothers, EWMA, IIR filters, cumulative ops). The
-output grid is the parent grid unchanged (the scanned axis survives),
-optionally with a dtype override.
+Created by \code{\link[=scan_over]{scan_over()}}. The IR shape between \code{MapNode} and
+\code{ReduceNode}: carry state sequentially along one non-spatial axis
+while emitting a same-length series (Kalman smoothers, EWMA, IIR
+filters, cumulative ops). The output grid is the parent grid
+unchanged (the scanned axis survives), optionally with a dtype
+override.
 }
 \details{
 The body kernel is \code{fn(xs, margin) -> y}: \code{xs} is the LIST of parent
 chunk values (length >= 1; multi-parent scans read several cubes in
-lockstep), \code{margin} is the scanned axis position from \code{.dim_margins},
-and \code{y} has the same shape as \code{xs[[1]]}. Inside, the body uses
+lockstep), \code{margin} is the 1-based position of the scanned axis in
+the chunk's dimension order (outer dims first, then y, x), and \code{y}
+has the same shape as \code{xs[[1]]}. Inside, the body uses
 \code{g_scan()} to carry state along \code{margin}; everything else in the
 chunk (the spatial axes) is batched through the carry. Like a custom
 reducer, a scan cannot be decomposed across spatial chunks, so it is

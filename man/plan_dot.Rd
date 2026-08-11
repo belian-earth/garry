@@ -7,11 +7,14 @@
 plan_dot(plan)
 }
 \arguments{
-\item{plan}{A \code{Plan}.}
+\item{plan}{A \code{Plan}, from \code{\link[=plan_lazy]{plan_lazy()}}.}
 }
 \value{
 A single DOT string.
 }
 \description{
-Render a Plan as DOT (Graphviz) text.
+A \code{Plan} is obtained from \code{\link[=plan_lazy]{plan_lazy()}}.
+}
+\seealso{
+\code{\link[=draw]{draw()}}, the user-facing pipeline visualisation.
 }

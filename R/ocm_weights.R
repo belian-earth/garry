@@ -193,19 +193,37 @@
   regnety  = "44bccacce24f4ddd4ba08eaa763c2d04",
   edgenext = "8556cbea5e7b14b2de2e2a9f6d784331")
 
-#' Download the OmniCloudMask v4 model weights.
+#' OmniCloudMask model weights
 #'
-#' Fetches garry's mirror of the official OmniCloudMask v4 weights (two
-#' safetensors files, ~58 MB total, unmodified from upstream; MIT
-#' licensed by DPIRD-DMA, see the release's NOTICE.md for attribution
-#' and citation) into a per-user data directory, verifying each file's
-#' content hash. Idempotent: files already present and intact are not
-#' re-downloaded. [ocm_model()] finds this directory automatically.
+#' `ocm_fetch_weights()` downloads garry's mirror of the official
+#' OmniCloudMask v4 weights (two safetensors files, about 58 MB total,
+#' unmodified from upstream; MIT licensed by DPIRD-DMA, see the
+#' release's `NOTICE.md` for attribution and citation) into a per-user
+#' data directory, verifying each file's content hash. It is
+#' idempotent: files already present and intact are not re-downloaded.
+#' [ocm_model()] finds this directory automatically, so most users need
+#' nothing beyond a one-off `ocm_fetch_weights()`.
 #'
-#' @param dir Destination directory (default:
-#'   `tools::R_user_dir("garry", "data")/ocm-v4`).
+#' `ocm_load_weights()` is the lower-level loader `ocm_model()` uses:
+#' it reads the safetensors state dicts, folds batch norms into their
+#' convolutions, and returns the nested weight lists the native forward
+#' pass consumes. Results are cached as an `.rds` under
+#' `tools::R_user_dir("garry", "cache")`, keyed by the content hash of
+#' the weight files. Call it directly only to point at a non-standard
+#' weights directory, for example the Python package's download cache
+#' (`~/.local/share/omnicloudmask/<version>/`).
+#'
+#' @param dir For `ocm_fetch_weights()`: destination directory
+#'   (default: `tools::R_user_dir("garry", "data")/ocm-v4`). For
+#'   `ocm_load_weights()`: directory containing the OCM v4
+#'   `.safetensors` files.
 #' @param quiet Suppress progress output.
-#' @return The weights directory, invisibly.
+#' @return `ocm_fetch_weights()` returns the weights directory,
+#'   invisibly. `ocm_load_weights()` returns a list with `weights` (one
+#'   entry per model), `kernel_id`, and `paths`.
+#' @seealso [ocm_model()], [ocm_mask()] and [ocm_predict()] for running
+#'   the model; [safetensors_read()] for the underlying file format.
+#' @rdname ocm_weights
 #' @export
 ocm_fetch_weights <- function(dir = NULL, quiet = FALSE) {
   dir <- dir %||% file.path(tools::R_user_dir("garry", "data"), "ocm-v4")
@@ -237,23 +255,9 @@ ocm_fetch_weights <- function(dir = NULL, quiet = FALSE) {
   invisible(dir)
 }
 
-#' Load and fold OmniCloudMask weights.
-#'
-#' Reads the OCM v4 safetensors state dicts, folds batch norms into
-#' their convolutions, and returns the nested weight lists the native
-#' forward pass consumes, cached as an `.rds` under
-#' `tools::R_user_dir("garry", "cache")` keyed by the content hash of
-#' the weight files (the same hash is the model's jit-cache identity).
-#'
-#' Weights are not distributed with garry: point `dir` at a directory
-#' holding the official OmniCloudMask model files (for example the
-#' Python package's download cache,
-#' `~/.local/share/omnicloudmask/<version>/`).
-#'
-#' @param dir Directory containing the OCM v4 `.safetensors` files.
 #' @param models Which ensemble members to load
 #'   (`"regnety"`, `"edgenext"`).
-#' @return List with `weights` (per model), `kernel_id`, `paths`.
+#' @rdname ocm_weights
 #' @export
 ocm_load_weights <- function(dir, models = c("regnety", "edgenext")) {
   models <- match.arg(models, several.ok = TRUE)

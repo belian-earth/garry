@@ -17,7 +17,7 @@ gdal_write_window(
 )
 }
 \arguments{
-\item{ds}{Open dataset from \code{gdal_create_output()}.}
+\item{ds}{Open dataset from \code{\link[=gdal_create_output]{gdal_create_output()}}.}
 
 \item{x_off, y_off}{0-based destination offsets.}
 
@@ -38,6 +38,6 @@ the quantized value range.}
 Invisibly, \code{NULL}.
 }
 \description{
-NaN cells demote to \code{nodata} when given (D8 reversed at the sink);
+NaN cells are converted back to the sink \code{nodata} value when given;
 writing NaN into an integer band without a sentinel is an error.
 }

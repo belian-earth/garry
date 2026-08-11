@@ -16,6 +16,8 @@ The registry surface for the flat \verb{garry.*} option namespace: one row
 per option with its tier (\code{user} day-one switches, \code{tuning}
 budgets/targets, \code{calibration} cost-model constants), package
 default, current session value and a one-line description. Values are
-validated against the same registry at execute entry
-(\code{.garry_opt_check()}).
+validated against the same registry when execution starts.
+}
+\seealso{
+\code{\link[=garry_opt]{garry_opt()}}
 }

@@ -21,7 +21,8 @@ ReduceNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{op}{Reduction name, e.g. "mean" (see \code{.reduce_ops}), or "custom".}
+\item{op}{Reduction name, e.g. "mean" (one of the names above), or
+"custom".}
 
 \item{over}{Names of dims to reduce over.}
 
@@ -35,8 +36,10 @@ reducer \code{fn(x, dims)}.}
 A \code{ReduceNode}.
 }
 \description{
-\code{op} is normally a name from \code{.reduce_ops}: the planner needs op
-identity to decide algebraic decomposition (D12) and output dtype, and
+Created by \code{\link[=reduce_over]{reduce_over()}}. \code{op} is normally one of the named
+reductions "sum", "mean", "min", "max", "prod", "median",
+"quantile", "sd", "var", "count", "any", "all": the planner needs op
+identity to decide algebraic decomposition and output dtype, and
 the executor maps it to the ops vocabulary. A CUSTOM reducer may
 instead be supplied as \code{fn} (a length-1 list holding an anvl function
 \code{fn(x, dims)} that collapses \code{dims}), with \code{op = "custom"}; the

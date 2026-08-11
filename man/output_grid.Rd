@@ -7,7 +7,7 @@
 output_grid(node, ...)
 }
 \arguments{
-\item{node}{An IR \code{Node}.}
+\item{node}{An intermediate representation (IR) \code{Node}.}
 
 \item{...}{Method arguments: \code{parent_grids}, a list of parent \code{GridSpec}s.}
 }
@@ -15,6 +15,8 @@ output_grid(node, ...)
 The node's output \code{GridSpec}.
 }
 \description{
-Default: first parent's grid (elementwise, focal, stack). Ops that
-change the grid override (Warp, Reduce).
+Part of the extension API for authors of new node classes; not
+needed for ordinary use of the package. Default: first parent's grid
+(elementwise, focal, stack). Ops that change the grid override
+(Warp, Reduce).
 }

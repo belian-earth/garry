@@ -4,8 +4,11 @@ NULL
 
 #' Render a Plan as DOT (Graphviz) text.
 #'
-#' @param plan A `Plan`.
+#' A `Plan` is obtained from [plan_lazy()].
+#'
+#' @param plan A `Plan`, from [plan_lazy()].
 #' @return A single DOT string.
+#' @seealso [draw()], the user-facing pipeline visualisation.
 #' @export
 plan_dot <- function(plan) {
   shape <- c(source_read = "cylinder", compute = "box",

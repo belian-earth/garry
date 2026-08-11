@@ -315,13 +315,13 @@ NULL
 #' narrow rather than all-cores; the scheduler's live-RAM byte budgets
 #' decide how many tasks are actually in flight; excess daemons idle
 #' lean. Called with no arguments it sizes the pools to the machine:
-#' `read` = logical cores capped at 8 (past cores/2 readers the k=2
-#' affinity floor oversubscribes the machine; 8 was measured fastest
-#' at scale) and `compute` = cores/3 capped at 8, floor 2 (the routed
-#' width sweep's sweet spot; CUDA keeps 2 — concurrent clients share
-#' one card). `collect(distributed = TRUE)` detects the pools
-#' automatically and pre-compiles stage kernels at run start
-#' (`garry_opt("jit_warmup")`) — scan kernels included, targeted at
+#' `read` = all logical cores (remote fetch is latency-bound, so a
+#' wide read pool keeps the network drain full) and `compute` = a
+#' third of the logical cores, capped at 8 with a floor of 2; on CUDA
+#' the compute pool is 2, since concurrent clients share one card.
+#' `collect(distributed = TRUE)` detects the pools automatically and
+#' pre-compiles stage kernels at run start
+#' (`garry_opt("jit_warmup")`), scan kernels included, targeted at
 #' the `garry_opt("scan_profiles")` designated profiles only.
 #'
 #' You should not need to tune these. The cases for overriding: a
@@ -339,24 +339,22 @@ NULL
 #' discovery. `MALLOC_*` is only-if-unset, and `gdal_config = FALSE`
 #' skips the GDAL settings entirely.
 #'
-#' @param read Read-pool daemon count; `NULL` (default) uses logical
-#'   cores. `0` tears the pool down.
-#' @param compute Compute-pool daemon count; `NULL` (default) uses TWO
-#'   with half-machine affinity masks. After the placement pass fuses
-#'   kernel fleets onto the readers, the compute pool's residual
-#'   workloads (scans, big fused reductions) are compile-bound: every
-#'   daemon that runs a scan task pays its multi-GB kernel compile, so
-#'   width multiplies compiles without adding admitted concurrency.
-#'   Larger pools are SAFE at any width (per-daemon masks, byte
-#'   admission, cold-kernel slow start, scan-compile surcharge) and pay
-#'   off for non-fusable fleet workloads (~2x measured for matmul
-#'   fleets at 10 x 2-CPU daemons); they are an explicit choice, not
-#'   the default. `0` tears down.
+#' @param read Read-pool daemon count; `NULL` (default) uses all
+#'   logical cores. `0` tears the pool down.
+#' @param compute Compute-pool daemon count; `NULL` (default) uses a
+#'   third of the logical cores, capped at 8 with a floor of 2 (2 on
+#'   CUDA: concurrent clients share one card). The compute pool's
+#'   residual workloads (scans, big fused reductions) are
+#'   compile-bound: every daemon that runs a scan task pays its
+#'   kernel compile, so width multiplies compiles without adding
+#'   admitted concurrency. Larger pools are SAFE at any width
+#'   (per-daemon affinity masks and byte admission) and pay off for
+#'   fleets of independent non-fusable tasks; they are an explicit
+#'   choice, not the default. `0` tears down.
 #' @param read_handles Open-handle cache depth on read daemons.
 #'   `NULL` (default) uses `garry_opt("read_handles")`. Depth 1 suits
 #'   per-slice mosaics that are rarely revisited (every open warped
-#'   mosaic pins warper and connection memory; measured ~15 MB/daemon
-#'   saved at no wall cost on the benchmark); plans revisiting a few
+#'   mosaic pins warper and connection memory); plans revisiting a few
 #'   local multi-band files across many windows want a depth covering
 #'   the interleaved file count, since closing a dataset discards its
 #'   GDAL block cache.
@@ -365,6 +363,7 @@ NULL
 #'   untouched (e.g. when mixing local multi-file reads).
 #' @param ... Passed to `mirai::daemons()` for both pools.
 #' @return Invisibly, `list(read =, compute =)`.
+#' @seealso [garry_daemons_set()], [garry_pool_hygiene()], [collect()]
 #' @export
 garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
                           gdal_config = TRUE, ...) {
@@ -464,16 +463,18 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
 
 #' Reclaim daemon memory across the pools.
 #'
-#' Broadcasts [.daemon_hygiene()] to every pool: return freed heap
-#' pages to the OS (glibc `malloc_trim`), and with `deep = TRUE` also
-#' evict the daemons' jit caches (forces recompiles on next use — ~1 s
-#' per map kernel, ~20 s per scan kernel; reserve for memory
-#' pressure). The scheduler already trims after every compute/write
-#' task and at run start; call this between pipeline phases when the
-#' fleet should idle lean.
+#' Asks every daemon in the pools to release caches and return freed
+#' heap pages to the operating system (glibc `malloc_trim`). With
+#' `deep = TRUE` the daemons' jit caches are also evicted, forcing
+#' recompiles on next use (roughly a second per map kernel, tens of
+#' seconds per scan kernel); reserve that for memory pressure. The
+#' scheduler already trims after every compute/write task and at run
+#' start; call this between pipeline phases when the fleet should idle
+#' lean.
 #'
 #' @param deep Also evict the jit caches?
 #' @return Invisibly `NULL`.
+#' @seealso [garry_daemons()]
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
   .pool_broadcast(quote(garry::.daemon_hygiene(deep = d)),
@@ -485,8 +486,8 @@ garry_pool_hygiene <- function(deep = FALSE) {
 
 #' Are the garry daemon pools running?
 #'
-#' `TRUE` when both mirai pools created by [garry_daemons()] (`garry_read` and
-#' `garry_compute`) have daemons. This is the default for the `distributed`
+#' `TRUE` when the read and compute daemon pools created by
+#' [garry_daemons()] are running. This is the default for the `distributed`
 #' argument of [collect()], so `collect(x)` uses the pools when they are up and
 #' runs single-threaded otherwise. Mirrors `mirai::daemons_set()`.
 #'

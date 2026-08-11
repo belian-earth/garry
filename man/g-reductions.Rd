@@ -8,7 +8,7 @@
 \alias{g_max}
 \alias{g_median}
 \alias{g_count}
-\title{Reductions over array margins (pure-R oracle semantics).}
+\title{Reductions over array margins.}
 \usage{
 g_sum(x, dims = NULL, nan_rm = FALSE)
 
@@ -33,5 +33,8 @@ g_count(x, dims = NULL)
 Reduced array (margins in \code{dims} dropped) or scalar.
 }
 \description{
-Reductions over array margins (pure-R oracle semantics).
+With \code{nan_rm = TRUE}, a slice that is entirely NaN reduces to the
+reduction's identity value: \code{g_sum} gives 0, \code{g_min} gives \code{Inf},
+\code{g_max} gives \code{-Inf}, and \code{g_mean} / \code{g_median} give NaN. \code{g_count}
+counts non-NaN values, so an all-NaN slice gives 0.
 }

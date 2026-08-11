@@ -37,6 +37,6 @@ bias are plain R arrays; traced they enter the kernel as constants
 uploaded once at compile.
 }
 \details{
-The oracle branch is an im2col matmul: correct at any size, meant
+The plain-R branch is an im2col matmul: correct at any size, meant
 for tests, not throughput.
 }

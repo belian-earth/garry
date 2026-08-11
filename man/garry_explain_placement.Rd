@@ -26,7 +26,7 @@ A data.frame with columns \code{source}, \code{compute}, \code{bands},
 \code{reason}.
 }
 \description{
-Runs the placement pass (see \code{design/placement-cost-pass.md}) over
+Runs the placement pass over
 the plan the same way \code{collect(distributed = TRUE)} would, and
 returns its decision table: one row per fusable source -> compute
 chain with the decision, the modelled costs (cost mode), and the
@@ -34,4 +34,7 @@ reason. Placement depends on runtime resources, so pool widths are
 read from the live \code{\link[=garry_daemons]{garry_daemons()}} pools when present; pass
 \code{read} / \code{compute} to ask "what would the pass do with this
 topology" without daemons running.
+}
+\seealso{
+\code{\link[=garry_options]{garry_options()}}, \code{\link[=garry_task_report]{garry_task_report()}}
 }
