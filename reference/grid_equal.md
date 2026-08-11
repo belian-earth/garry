@@ -21,3 +21,8 @@ grid_equal(a, b, tol = 1e-09)
 ## Value
 
 `TRUE` or `FALSE`.
+
+## See also
+
+[`grid_diff()`](https://belian-earth.github.io/garry/reference/grid_diff.md),
+which describes how two grids differ.

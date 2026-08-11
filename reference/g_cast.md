@@ -1,7 +1,8 @@
-# Cast to a garry dtype (oracle: value semantics only).
+# Cast to a garry dtype.
 
-Float targets keep double storage; integer targets truncate toward zero;
-`pred` maps nonzero to TRUE.
+Integer targets truncate toward zero; `pred` maps nonzero to TRUE. On
+plain R arrays the cast changes value semantics only (storage stays
+double).
 
 ## Usage
 

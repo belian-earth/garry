@@ -31,3 +31,19 @@ stac_sign_mpc(items, subscription_key = Sys.getenv("MPC_TOKEN", unset = NA))
 ## Value
 
 `items` with every asset href signed.
+
+## See also
+
+Other stac helpers:
+[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
+[`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
+[`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
+[`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),
+[`stac_filter_coverage()`](https://belian-earth.github.io/garry/reference/stac_filter_coverage.md),
+[`stac_filter_orbit()`](https://belian-earth.github.io/garry/reference/stac_filter_orbit.md),
+[`stac_gti_index()`](https://belian-earth.github.io/garry/reference/stac_gti_index.md),
+[`stac_merge()`](https://belian-earth.github.io/garry/reference/stac_merge.md),
+[`stac_query()`](https://belian-earth.github.io/garry/reference/stac_query.md),
+[`stac_rename_assets()`](https://belian-earth.github.io/garry/reference/stac_rename_assets.md),
+[`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md),
+[`stac_time_slices()`](https://belian-earth.github.io/garry/reference/stac_time_slices.md)

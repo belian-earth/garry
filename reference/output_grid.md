@@ -1,7 +1,9 @@
 # Compute the output grid given this node and its parents' grids.
 
-Default: first parent's grid (elementwise, focal, stack). Ops that
-change the grid override (Warp, Reduce).
+Part of the extension API for authors of new node classes; not needed
+for ordinary use of the package. Default: first parent's grid
+(elementwise, focal, stack). Ops that change the grid override (Warp,
+Reduce).
 
 ## Usage
 
@@ -13,7 +15,7 @@ output_grid(node, ...)
 
 - node:
 
-  An IR `Node`.
+  An intermediate representation (IR) `Node`.
 
 - ...:
 

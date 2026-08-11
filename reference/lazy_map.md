@@ -1,11 +1,14 @@
 # Elementwise map over one or more aligned rasters.
 
 `fn` receives one traced array per input raster and returns one array;
-it runs fused inside the surrounding XLA stage. Write it with plain
-arithmetic and the `g_*` vocabulary (`g_ifelse`, `g_bitand`, `g_cast`,
+it runs fused with adjacent operations in one compiled kernel. Write it
+with plain arithmetic and the `g_*` vocabulary
+([`g_ifelse()`](https://belian-earth.github.io/garry/reference/g_ifelse.md),
+[`g_bitand()`](https://belian-earth.github.io/garry/reference/g-bitwise.md),
+[`g_cast()`](https://belian-earth.github.io/garry/reference/g_cast.md),
 ...). Inputs must share a grid
 ([`align()`](https://belian-earth.github.io/garry/reference/align.md)
-first otherwise); graphs auto-merge (D6).
+first otherwise); rasters on different graphs merge automatically.
 
 ## Usage
 
@@ -37,10 +40,14 @@ A `LazyRaster`, or a `LazyDataset` when given one.
 
 ## Details
 
-The output dtype defaults to the promoted input dtype (D3); pass `dtype`
-when `fn` changes the value domain, e.g. `"f32"` for a mask that
-introduces NaN over an integer band.
+The output dtype defaults to the promoted input dtype; pass `dtype` when
+`fn` changes the value domain, e.g. `"f32"` for a mask that introduces
+NaN over an integer band.
 
 Over a `LazyDataset`, `fn` is applied to every value band (a single
 dataset input only); `bands` restricts which bands, and non-selected
 bands pass through unchanged.
+
+## See also
+
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)

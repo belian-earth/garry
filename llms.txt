@@ -58,7 +58,7 @@ for multivariate compositing,
 and
 [`hampel_smooth()`](https://belian-earth.github.io/garry/reference/hampel_smooth.md)
 for time series,
-[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm_mask.md)
+[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md)
 for learned cloud masking. Each is an ordinary composition in the same
 public vocabulary available to every user (a reducer body, a scan body,
 a focal or model kernel) with no privileged access to the engine, so
@@ -264,8 +264,8 @@ Turn a STAC search into grid-pinned lazy rasters. Entry point for remote
 ## Datasets
 
 The named multi-band, multi-time object; verbs apply across every band.
-Build from a STAC table or from rasters, mask from a QA band, collapse
-the band axis.
+Build from a STAC table or from rasters, then select, stack, and
+collapse.
 
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   : Build a lazy dataset from a STAC source table.
@@ -273,20 +273,67 @@ the band axis.
   : Assemble a lazy dataset from existing rasters.
 - [`LazyDataset()`](https://belian-earth.github.io/garry/reference/LazyDataset.md)
   : A named, multi-band, multi-time lazy dataset.
+- [`stack_bands()`](https://belian-earth.github.io/garry/reference/stack_bands.md)
+  : Collapse a dataset's bands into a single stacked raster.
+- [`band_sel()`](https://belian-earth.github.io/garry/reference/band_sel.md)
+  : Select bands of a stacked raster by label.
+- [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
+  : Select time slices of a stacked raster by label.
+
+## Masking & cloud removal
+
+Mask value bands from a QA band or from a pre-trained cloud model. The
+ocm\_\* functions run the OmniCloudMask segmentation model natively (no
+Python) to derive cloud/shadow masks from red, green, and NIR bands.
+
 - [`mask()`](https://belian-earth.github.io/garry/reference/mask.md) :
   Mask a dataset from a QA band.
 - [`qa_bits()`](https://belian-earth.github.io/garry/reference/qa_bits.md)
   : Build a QA-bitmask predicate.
+- [`ocm_model()`](https://belian-earth.github.io/garry/reference/ocm.md)
+  [`ocm_predict()`](https://belian-earth.github.io/garry/reference/ocm.md)
+  [`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md)
+  : Cloud and shadow masking with OmniCloudMask
+- [`ocm_fetch_weights()`](https://belian-earth.github.io/garry/reference/ocm_weights.md)
+  [`ocm_load_weights()`](https://belian-earth.github.io/garry/reference/ocm_weights.md)
+  : OmniCloudMask model weights
+- [`shrink_footprint()`](https://belian-earth.github.io/garry/reference/shrink_footprint.md)
+  : Shrink the valid-data footprint by a pixel margin.
+
+## Time series & compositing
+
+Collapse or smooth the time axis: calendar grouping, multivariate
+composites, gap filling, and per-pixel smoothers.
+
 - [`group_by_time()`](https://belian-earth.github.io/garry/reference/group_by_time.md)
   : Group a dataset's time slices into calendar periods.
-- [`stack_bands()`](https://belian-earth.github.io/garry/reference/stack_bands.md)
-  : Collapse a dataset's bands into a single stacked raster.
 
-## Geo-embedding helpers
+- [`geomedian()`](https://belian-earth.github.io/garry/reference/geomedian.md)
+  : Geometric median reducer over time (multivariate).
+
+- [`medoid()`](https://belian-earth.github.io/garry/reference/medoid.md)
+  : Medoid reducer over time (multivariate).
+
+- [`fill_gaps()`](https://belian-earth.github.io/garry/reference/fill_gaps.md)
+  : Fill nodata gaps along the time axis.
+
+- [`hampel_smooth()`](https://belian-earth.github.io/garry/reference/hampel_smooth.md)
+  : Hampel filter a stack over its time axis.
+
+- [`kalman_smooth()`](https://belian-earth.github.io/garry/reference/kalman_smooth.md)
+  : Smooth a stack with a local-linear-trend Kalman smoother.
+
+- [`kalman_llt()`](https://belian-earth.github.io/garry/reference/kalman_llt.md)
+  :
+
+  Kalman local-linear-trend smoother body for
+  [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md).
+
+## Geo-embeddings & model weights
 
 Special operations for published geo-embedding products: the batched
-multi-band COG read (cptkirk) and the products’ quantiser decodes,
-written in the g\_\* vocabulary so they fuse onto the read.
+multi-band COG read (via the cptkirk engine), the products’ quantiser
+decodes, and safetensors weight IO.
 
 - [`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
   : Read multi-band COGs into a lazy dataset via the cptkirk engine.
@@ -294,6 +341,10 @@ written in the g\_\* vocabulary so they fuse onto the read.
   : Dequantize Alpha Earth (AEF) embedding codes.
 - [`dequantize_esd()`](https://belian-earth.github.io/garry/reference/dequantize_esd.md)
   : Dequantize Embedded Seamless Data (ESD) FSQ codes.
+- [`safetensors_read()`](https://belian-earth.github.io/garry/reference/safetensors_read.md)
+  : Read tensors from a safetensors file.
+- [`safetensors_ls()`](https://belian-earth.github.io/garry/reference/safetensors_ls.md)
+  : List tensor names, dtypes, and shapes without reading data.
 
 ## Raster & dataset algebra
 
@@ -331,6 +382,11 @@ collect().
 - [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
   : Scan along an axis, keeping it (temporal recursions).
 
+- [`lazy_patch()`](https://belian-earth.github.io/garry/reference/lazy_patch.md)
+  :
+
+  Whole-window model op (advanced): apply `fn` to the raw padded chunk.
+
 - [`align()`](https://belian-earth.github.io/garry/reference/align.md) :
   Lazily resample/reproject onto a target grid.
 
@@ -344,12 +400,46 @@ Plan, distribute across daemons, and write the result.
   : Execute a lazy raster and stream it to a GeoTIFF.
 - [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
   : Materialise a lazy object locally and stay lazy.
+- [`as_terra()`](https://belian-earth.github.io/garry/reference/as_terra.md)
+  : Convert a collected result to a terra SpatRaster.
 - [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
   : Set up split mirai daemon pools for distributed execution.
+- [`garry_daemons_set()`](https://belian-earth.github.io/garry/reference/garry_daemons_set.md)
+  : Are the garry daemon pools running?
+- [`garry_pool_hygiene()`](https://belian-earth.github.io/garry/reference/garry_pool_hygiene.md)
+  : Reclaim daemon memory across the pools.
 - [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
   : Apply garry's default GDAL configuration for remote COG reads.
 - [`garry_opt()`](https://belian-earth.github.io/garry/reference/garry_opt.md)
   : Read a garry policy option.
+- [`garry_options()`](https://belian-earth.github.io/garry/reference/garry_options.md)
+  : List every garry option: default, current value, tier, description.
+
+## Diagnostics & visualisation
+
+Inspect data and understand what an execution did: quick plots, pipeline
+drawings, and run reports.
+
+- [`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
+  : Preview a lazy object, a collected array, or a raster file.
+
+- [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) :
+  Draw the pipeline of a lazy object.
+
+- [`garry_last_route()`](https://belian-earth.github.io/garry/reference/garry_last_route.md)
+  :
+
+  Which execution route did the last
+  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+  take?
+
+- [`garry_task_report()`](https://belian-earth.github.io/garry/reference/garry_task_report.md)
+  :
+
+  Summarise a `garry.task_log` CSV.
+
+- [`garry_explain_placement()`](https://belian-earth.github.io/garry/reference/garry_explain_placement.md)
+  : Explain the scheduler's placement decisions for a computation.
 
 ## Grids & spatial helpers
 
@@ -358,6 +448,12 @@ Define and interrogate the analysis grid; dtype rules.
 - [`grid_spec()`](https://belian-earth.github.io/garry/reference/grid_spec.md)
   : Convenience constructor: derive the transform from extent + dims (or
   res).
+
+- [`grid_from_bbox()`](https://belian-earth.github.io/garry/reference/grid_from_bbox.md)
+  : Build an analysis grid from a lon/lat bounding box.
+
+- [`grid_from_src()`](https://belian-earth.github.io/garry/reference/grid_from_src.md)
+  : Build an analysis grid from a raster or vector source.
 
 - [`gdal_grid_spec()`](https://belian-earth.github.io/garry/reference/gdal_grid_spec.md)
   : Inspect a GDAL source and build its GridSpec (plus read metadata).
@@ -369,11 +465,11 @@ Define and interrogate the analysis grid; dtype rules.
   [`res()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
   : Grid extent and resolution accessors.
 
-- [`as_vaster_extent()`](https://belian-earth.github.io/garry/reference/as_vaster_extent.md)
-  : Reorder a garry extent for vaster calls.
-
 - [`grid_equal()`](https://belian-earth.github.io/garry/reference/grid_equal.md)
   : Structural equality of two grids (geometry only, not dtype).
+
+- [`grid_diff()`](https://belian-earth.github.io/garry/reference/grid_diff.md)
+  : Describe how two grids differ.
 
 - [`crs_equal()`](https://belian-earth.github.io/garry/reference/crs_equal.md)
   : Are two CRS strings the same reference system?
@@ -381,7 +477,7 @@ Define and interrogate the analysis grid; dtype rules.
 - [`dtype_valid()`](https://belian-earth.github.io/garry/reference/dtype_valid.md)
   :
 
-  Is `dtype` a member of garry's (anvl-aligned) dtype vocabulary?
+  Is `dtype` a member of garry's dtype vocabulary?
 
 - [`dtype_promote()`](https://belian-earth.github.io/garry/reference/dtype_promote.md)
   : Promote two dtypes for a binary operation.
@@ -395,8 +491,8 @@ Define and interrogate the analysis grid; dtype rules.
 ## anvl compute vocabulary
 
 The g\_\* traced-array ops for writing map/focal/reducer functions.
-These run fused inside an XLA stage under both the pure-R oracle and
-PJRT.
+These run fused inside an XLA stage under both the pure-R reference
+implementation and PJRT.
 
 - [`g_ifelse()`](https://belian-earth.github.io/garry/reference/g_ifelse.md)
   :
@@ -404,14 +500,20 @@ PJRT.
   Elementwise select: `yes` where `cond`, else `no`.
 
 - [`g_is_nodata()`](https://belian-earth.github.io/garry/reference/g_is_nodata.md)
-  : Is a value nodata (NaN under the D8 sentinel model)?
+  : Is a value nodata? NaN is the nodata sentinel.
 
 - [`g_cast()`](https://belian-earth.github.io/garry/reference/g_cast.md)
-  : Cast to a garry dtype (oracle: value semantics only).
+  : Cast to a garry dtype.
+
+- [`g_fill()`](https://belian-earth.github.io/garry/reference/g_fill.md)
+  : Construct a constant-filled AnvlArray on the device.
 
 - [`g_pad()`](https://belian-earth.github.io/garry/reference/g_pad.md) :
 
   Pad a matrix by `h` cells on every side with `value`.
+
+- [`g_pad_rb()`](https://belian-earth.github.io/garry/reference/g_pad_rb.md)
+  : Pad the bottom/right edges of the last two dims.
 
 - [`g_shift_slice()`](https://belian-earth.github.io/garry/reference/g_shift_slice.md)
   : Shifted slice of a padded matrix (the stencil building block).
@@ -427,6 +529,24 @@ PJRT.
 - [`g_scan()`](https://belian-earth.github.io/garry/reference/g_scan.md)
   : Scan: carry state along dim 1, emitting per-step outputs.
 
+- [`g_slice_t()`](https://belian-earth.github.io/garry/reference/g_slice_t.md)
+  : Static range slice along dim 1 (the scanned axis).
+
+- [`g_concat_t()`](https://belian-earth.github.io/garry/reference/g_concat_t.md)
+  : Concatenate along dim 1 (the scanned axis).
+
+- [`g_rep_t()`](https://belian-earth.github.io/garry/reference/g_rep_t.md)
+  : Replicate a (y, x) plane along a new leading axis.
+
+- [`g_expand()`](https://belian-earth.github.io/garry/reference/g_expand.md)
+  : Insert a broadcast axis at an arbitrary position.
+
+- [`g_squeeze1()`](https://belian-earth.github.io/garry/reference/g_squeeze1.md)
+  : Drop a leading unit axis.
+
+- [`g_transpose()`](https://belian-earth.github.io/garry/reference/g_transpose.md)
+  : Transpose an array (general permutation).
+
 - [`g_bitand()`](https://belian-earth.github.io/garry/reference/g-bitwise.md)
   [`g_bitor()`](https://belian-earth.github.io/garry/reference/g-bitwise.md)
   [`g_bitxor()`](https://belian-earth.github.io/garry/reference/g-bitwise.md)
@@ -441,13 +561,19 @@ PJRT.
   [`g_max()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
   [`g_median()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
   [`g_count()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
-  : Reductions over array margins (pure-R oracle semantics).
+  : Reductions over array margins.
+
+- [`g_erf()`](https://belian-earth.github.io/garry/reference/g_erf.md) :
+  Error function (exact GELU building block).
+
+- [`g_conv2d()`](https://belian-earth.github.io/garry/reference/g_conv2d.md)
+  : 2D convolution over a (C, H, W) chunk.
+
+- [`g_upsample2x()`](https://belian-earth.github.io/garry/reference/g_upsample2x.md)
+  : Nearest-neighbour 2x upsample of a (C, H, W) chunk.
 
 - [`g_broadcast_arrays()`](https://belian-earth.github.io/garry/reference/g_broadcast_arrays.md)
   : Broadcast arrays to a common shape (compute vocabulary).
-
-- [`g_jit()`](https://belian-earth.github.io/garry/reference/g_jit.md) :
-  JIT-compile a stage closure via anvl (executor bridge).
 
 - [`g_upload()`](https://belian-earth.github.io/garry/reference/g_upload.md)
   : Upload an R array to an AnvlArray of the given garry dtype.
@@ -455,43 +581,44 @@ PJRT.
 - [`g_download()`](https://belian-earth.github.io/garry/reference/g_download.md)
   : Download an AnvlArray (or a nested list of them) to R arrays.
 
-- [`g_upload_raw()`](https://belian-earth.github.io/garry/reference/g_upload_raw.md)
-  : Upload a raw byte payload to an AnvlArray.
-
-- [`g_download_raw()`](https://belian-earth.github.io/garry/reference/g_download_raw.md)
-  : Download an AnvlArray as a raw store payload.
-
-- [`g_value_and_gradient()`](https://belian-earth.github.io/garry/reference/g_value_and_gradient.md)
-  : Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
-
 - [`lazy_value_and_grad()`](https://belian-earth.github.io/garry/reference/lazy_value_and_grad.md)
   : Value and gradient of a scalar LazyRaster loss wrt a focal kernel.
 
 ## GDAL adapter (low-level IO)
 
-Direct windowed read/write, warp, and GTI index construction. Used by
-the cube layer; exposed for bespoke IO.
+Direct windowed read/write, warp, staging, and GTI index construction.
+Used by the cube layer; exposed for bespoke IO.
 
 - [`gdal_read_window()`](https://belian-earth.github.io/garry/reference/gdal_read_window.md)
   : Read a window from a GDAL source as a garry-oriented matrix.
+
 - [`gdal_write_window()`](https://belian-earth.github.io/garry/reference/gdal_write_window.md)
   : Write a garry-oriented matrix into an open output dataset.
+
 - [`gdal_create_output()`](https://belian-earth.github.io/garry/reference/gdal_create_output.md)
   : Create an output raster for a grid.
+
 - [`gdal_warp_vrt()`](https://belian-earth.github.io/garry/reference/gdal_warp_vrt.md)
   : Build a warped VRT of a source onto an exact target grid.
+
+- [`stage_raw_cube()`](https://belian-earth.github.io/garry/reference/stage_raw_cube.md)
+  :
+
+  Stage a GDAL raster as a raw-BSQ cube (`.bin` + sibling `.vrt`).
+
 - [`gti_index_create()`](https://belian-earth.github.io/garry/reference/gti_index_create.md)
   : Create a GTI tile index layer from a source table.
+
 - [`gti_open_options()`](https://belian-earth.github.io/garry/reference/gti_open_options.md)
   : Build GTI open options pinning a target grid and slice filter.
 
 ## IR & planner (extension API)
 
 The intermediate representation and planner. Needed only to build on the
-IR directly (custom nodes, alternate executors) — not for normal use.
+IR directly (custom nodes, alternate executors) – not for normal use.
 
 - [`LazyRaster()`](https://belian-earth.github.io/garry/reference/LazyRaster.md)
-  : Lazy raster array.
+  : Lazy raster array (single band stack).
 
 - [`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md)
   : Spatial grid specification.
@@ -520,13 +647,15 @@ IR directly (custom nodes, alternate executors) — not for normal use.
   Elementwise map. `fn` is an R function over scalars/arrays; it will be
   composed with neighbouring fusable nodes and wrapped in
   [`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) at
-  plan time.
+  plan time. Created by
+  [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).
 
 - [`FocalNode()`](https://belian-earth.github.io/garry/reference/FocalNode.md)
   :
 
   Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one
-  of "constant", "reflect", "nearest", "wrap", "none".
+  of "constant", "reflect", "nearest", "wrap", "none". Created by
+  [`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
 
 - [`ReduceNode()`](https://belian-earth.github.io/garry/reference/ReduceNode.md)
   : Reduction over named dims. Barrier: forces materialisation of its
@@ -540,12 +669,15 @@ IR directly (custom nodes, alternate executors) — not for normal use.
 - [`WarpNode()`](https://belian-earth.github.io/garry/reference/WarpNode.md)
   :
 
-  Lazy resample/reproject to a target grid. Output of
+  Lazy resample/reproject to a target grid. Created by
   [`align()`](https://belian-earth.github.io/garry/reference/align.md).
   Barrier. At execution time this materialises as a gdalraster VRT warp.
 
 - [`StackNode()`](https://belian-earth.github.io/garry/reference/StackNode.md)
-  : Combine inputs along a named dim (e.g. time).
+  :
+
+  Combine inputs along a named dim (e.g. time). Created by
+  [`lazy_stack()`](https://belian-earth.github.io/garry/reference/lazy_stack.md).
 
 - [`FusedNode()`](https://belian-earth.github.io/garry/reference/FusedNode.md)
   :
@@ -554,6 +686,9 @@ IR directly (custom nodes, alternate executors) — not for normal use.
   from its members; ready for
   [`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) at
   execution time.
+
+- [`PatchNode()`](https://belian-earth.github.io/garry/reference/PatchNode.md)
+  : Whole-window model op: fn over the raw padded chunk. Halo-consuming.
 
 - [`graph_new()`](https://belian-earth.github.io/garry/reference/graph_new.md)
   : Create an empty graph.
@@ -568,7 +703,7 @@ IR directly (custom nodes, alternate executors) — not for normal use.
   : Look up a node by id.
 
 - [`graph_ids()`](https://belian-earth.github.io/garry/reference/graph_ids.md)
-  : All node ids in the graph, in insertion order.
+  : All node ids in the graph, in ascending id order.
 
 - [`graph_toposort()`](https://belian-earth.github.io/garry/reference/graph_toposort.md)
   : Topological sort of all node ids. Errors on cycles.
@@ -588,7 +723,7 @@ IR directly (custom nodes, alternate executors) — not for normal use.
   : Render a Plan as DOT (Graphviz) text.
 
 - [`execute_plan()`](https://belian-earth.github.io/garry/reference/execute_plan.md)
-  : Execute a Plan on the anvl backend (single-threaded).
+  : Execute a Plan on the anvl backend (single process).
 
 - [`execute_plan_mirai()`](https://belian-earth.github.io/garry/reference/execute_plan_mirai.md)
   : Execute a Plan across mirai daemons.

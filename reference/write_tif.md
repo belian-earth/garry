@@ -32,8 +32,9 @@ write_tif(
 
   A `LazyRaster`, a `LazyDataset` (bands assembled along the band axis),
   a named list of lazy rasters (multi-export: one plan, one file per
-  sink), or a `LazyDatasetGroups` (one file per group via a `{group}`
-  placeholder in `path`).
+  sink), or a `LazyDatasetGroups` (the result of
+  [`group_by_time()`](https://belian-earth.github.io/garry/reference/group_by_time.md);
+  one file per group via a `{group}` placeholder in `path`).
 
 - path:
 
@@ -103,3 +104,10 @@ copy-only by design: overviews precede full-res data). The extra
 sequential pass is the trade every COG producer makes; the temporary
 file is removed even on failure, so `path` never holds a half-written
 COG.
+
+## See also
+
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+to return the result in the R session;
+[`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
+to checkpoint to local cubes and stay lazy.

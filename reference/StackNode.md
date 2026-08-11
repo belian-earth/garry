@@ -1,6 +1,7 @@
-# Combine inputs along a named dim (e.g. time).
+# Combine inputs along a named dim (e.g. time). Created by [`lazy_stack()`](https://belian-earth.github.io/garry/reference/lazy_stack.md).
 
-Combine inputs along a named dim (e.g. time).
+Combine inputs along a named dim (e.g. time). Created by
+[`lazy_stack()`](https://belian-earth.github.io/garry/reference/lazy_stack.md).
 
 ## Usage
 

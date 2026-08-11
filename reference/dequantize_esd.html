@@ -86,13 +86,10 @@ rescales to roughly <code>[-1, 1]</code>:</p>
       v_j = (c_j - \lfloor L_j/2 \rfloor) / \lfloor L_j/2 \rfloor$$</p>
 <p>Written in the <code>g_*</code> vocabulary so it fuses onto the read as a garry map
 (one <code><a href="lazy_map.html">lazy_map()</a></code> per band and level) – on the device, not a separate
-decode pass. Truncation toward zero is the double-cast idiom
-<code>g_cast(g_cast(z, "i32"), "f32")</code> (XLA convert semantics); all
-arithmetic is exact in f32 because codes are integers below
-<code>prod(levels)</code> (64000 for the ESD default, well under 2^24). NaN
-(nodata, D8) is re-masked explicitly after the decode: casting NaN to
-an integer is undefined, so propagation through the casts cannot be
-relied on.</p>
+decode pass. Integer division truncates toward zero; all arithmetic is
+exact in f32 because codes are integers below <code>prod(levels)</code> (64000 for
+the ESD default, well under 2^24). NaN nodata is re-masked explicitly
+after the decode, so nodata pixels stay NaN in the output.</p>
 <p>The default <code>levels</code> matches the ESD upstream quantiser (12 monthly
 uint16 bands x 6 levels = 72 embedding channels). Any FSQ-packed
 product decodes by passing its own <code>levels</code>.</p>

@@ -78,8 +78,9 @@ so the full raster never sits in memory. Returns the path invisibly;
 <dl><dt id="arg-x">x<a class="anchor" aria-label="anchor" href="#arg-x"></a></dt>
 <dd><p>A <code>LazyRaster</code>, a <code>LazyDataset</code> (bands assembled along the
 band axis), a named list of lazy rasters (multi-export: one plan,
-one file per sink), or a <code>LazyDatasetGroups</code> (one file per group via
-a <code>{group}</code> placeholder in <code>path</code>).</p></dd>
+one file per sink), or a <code>LazyDatasetGroups</code> (the result of
+<code><a href="group_by_time.html">group_by_time()</a></code>; one file per group via a <code>{group}</code> placeholder
+in <code>path</code>).</p></dd>
 
 
 <dt id="arg-path">path<a class="anchor" aria-label="anchor" href="#arg-path"></a></dt>
@@ -148,6 +149,11 @@ copy-only by design: overviews precede full-res data). The extra
 sequential pass is the trade every COG producer makes; the temporary
 file is removed even on failure, so <code>path</code> never holds a half-written
 COG.</p>
+    </div>
+    <div class="section level2">
+    <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>
+    <div class="dont-index"><p><code><a href="collect.html">collect()</a></code> to return the result in the R session;
+<code><a href="materialise.html">materialise()</a></code> to checkpoint to local cubes and stay lazy.</p></div>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

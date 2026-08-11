@@ -1,9 +1,9 @@
 # Fill nodata gaps along the time axis.
 
-The temporal gap-filling verbs xarray spells `ffill`/`bfill`/
-`interpolate_na`, expressed on garry's own IR as
+Temporal gap-filling (the verbs xarray spells `ffill`/`bfill`/
+`interpolate_na`), implemented as
 [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
-bodies (documented here rather than left as folklore):
+bodies:
 
 - `"ffill"` carries the last valid value forward;
 

@@ -58,7 +58,7 @@ for multivariate compositing,
 and
 [`hampel_smooth()`](https://belian-earth.github.io/garry/reference/hampel_smooth.md)
 for time series,
-[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm_mask.md)
+[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md)
 for learned cloud masking. Each is an ordinary composition in the same
 public vocabulary available to every user (a reducer body, a scan body,
 a focal or model kernel) with no privileged access to the engine, so

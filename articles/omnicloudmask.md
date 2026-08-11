@@ -16,16 +16,19 @@ implementation to float precision (logits agree to ~1e-6), and the
 compiled kernel is about twice as fast as torch on CPU, more on a GPU.
 
 The weights belong to the OmniCloudMask authors and are not shipped with
-garry:
-[`ocm_model()`](https://belian-earth.github.io/garry/reference/ocm_model.md)
-reads them from the Python package’s download cache or any directory you
-point it at (see
-[`?ocm_load_weights`](https://belian-earth.github.io/garry/reference/ocm_load_weights.md)).
+garry: download them once with
+[`ocm_fetch_weights()`](https://belian-earth.github.io/garry/reference/ocm_weights.md)
+(about 58 MB, hash-verified) and
+[`ocm_model()`](https://belian-earth.github.io/garry/reference/ocm.md)
+finds them automatically. It can also read the Python package’s download
+cache or any directory you point it at (see
+[`?ocm_load_weights`](https://belian-earth.github.io/garry/reference/ocm_weights.md)).
 
-This vignette reproduces the classic OmniCloudMask demonstration
-(vrtility’s OCM article) on garry: Zurich in spring, with scenes up to
-80% cloud deliberately included, comparing OmniCloudMask against
-Sentinel-2’s scene classification (SCL) all the way to the composite.
+This vignette reproduces the classic OmniCloudMask demonstration (after
+the OCM article in the vrtility package) on garry: Zurich in spring,
+with scenes up to 80% cloud deliberately included, comparing
+OmniCloudMask against Sentinel-2’s scene classification (SCL) all the
+way to the composite.
 
 ## A deliberately awful stack of scenes
 
@@ -63,12 +66,11 @@ stack locally:
 [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
 executes the graph into garry’s raw-BSQ cube format (one multiband
 `.vrt` + `.bin` per date, readable by any GDAL tool and re-read by garry
-about 9x faster than tiled GeoTIFF) through ONE plan, and returns the
-same lazy dataset rebuilt over the local files with band names, slice
-dates, and the `mask_asset` intact. By default the cubes land in a
-unique session-temporary directory, announced as it runs; give `dir` a
-real path to keep or reuse them. From here on, nothing touches the
-network.
+much faster than tiled GeoTIFF) through ONE plan, and returns the same
+lazy dataset rebuilt over the local files with band names, slice dates,
+and the `mask_asset` intact. By default the cubes land in a unique
+session-temporary directory, announced as it runs; give `dir` a real
+path to keep or reuse them. From here on, nothing touches the network.
 
 ``` r
 
@@ -122,7 +124,7 @@ m
 
 Pick one properly cloudy date and put the scene, its SCL band, and the
 OmniCloudMask classes side by side.
-[`ocm_predict()`](https://belian-earth.github.io/garry/reference/ocm_predict.md)
+[`ocm_predict()`](https://belian-earth.github.io/garry/reference/ocm.md)
 is lazy like every garry verb: the class raster below is a graph node
 until something collects it.
 
@@ -170,7 +172,7 @@ scl_masked <- mask(ds, where = c(0, 1, 2, 3, 8, 9, 10, 11))
 ```
 
 Route two:
-[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm_mask.md)
+[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md)
 derives the OmniCloudMask class band from three of the dataset’s own
 bands, per time slice, and masks with it through exactly the same
 machinery. We drop SCL first (the model replaces it).

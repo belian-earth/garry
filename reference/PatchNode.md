@@ -1,5 +1,7 @@
 # Whole-window model op: fn over the raw padded chunk. Halo-consuming.
 
+Created by
+[`lazy_patch()`](https://belian-earth.github.io/garry/reference/lazy_patch.md).
 The stencil shape for kernels whose spatial context is far beyond a
 shift-list focal (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
 receives the parent's value carrying at least `radius` halo cells per
@@ -78,8 +80,10 @@ A `PatchNode`.
 
 `kernel_id` is the content identity of the closed-over model (weights
 
-- configuration): the scheduler hashes it INSTEAD of serializing `fn` (a
-  model closure can carry tens of MB). `bytes_px` / `flops_px` are
-  planner cost hints per CORE pixel; they price chunk sizing, memory
-  admission, and placement, which cannot introspect an arbitrary model
-  closure.
+- configuration): it stands in for `fn` in kernel signatures, so `fn`
+  itself is never serialised or hashed (a model closure can carry tens
+  of MB). Two nodes with equal `kernel_id` are treated as the same
+  kernel, so `kernel_id` must change whenever the model content changes.
+  `bytes_px` / `flops_px` are planner cost hints per CORE pixel; they
+  price chunk sizing, memory admission, and placement, which cannot
+  introspect an arbitrary model closure.

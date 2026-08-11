@@ -1,6 +1,6 @@
 # Promote two dtypes for a binary operation.
 
-XLA-style rules, locked by decision D3:
+The promotion rules:
 
 - float dominates: float op int/uint/pred keeps the float type;
 

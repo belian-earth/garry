@@ -75,7 +75,7 @@ as <code>focal(x, fn = bilateral_focal(sigma_r), radius = 1L)</code>.</p>
 
 <dt id="arg-sigma-d">sigma_d<a class="anchor" aria-label="anchor" href="#arg-sigma-d"></a></dt>
 <dd><p>Spatial Gaussian standard deviation in pixels
-(default 1, hutan's <code>(window - 1) / 2</code> for a 3x3 window).</p></dd>
+(default 1, matching the default 3x3 window).</p></dd>
 
 
 <dt id="arg-radius">radius<a class="anchor" aria-label="anchor" href="#arg-radius"></a></dt>
@@ -89,9 +89,10 @@ as <code>focal(x, fn = bilateral_focal(sigma_r), radius = 1L)</code>.</p>
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
-    <p>Semantics match <code>rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")</code>: a NaN centre stays NaN; NaN neighbours (and the
-NaN halo garry pads outside the raster) drop out of the weighted
-mean. <code>sigma_r</code> must be supplied: the parameter-free per-band default
+    <p>A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
+outside the raster) drop out of the weighted mean (the semantics of
+<code>rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")</code>).
+<code>sigma_r</code> must be supplied: the parameter-free per-band default
 (the band's own sd) is a whole-raster statistic, so compute it in a
 separate reduce pass (or reuse fitted values) and pass it in.</p>
     </div>

@@ -1,8 +1,7 @@
 # Shifted slice of a padded matrix (the stencil building block).
 
 Given `xpad = g_pad(x, h)`, returns the view of `x`'s shape offset by
-(`dy`, `dx`) pixels, `dy`/`dx` in `[-h, h]`. Rows are y, columns are x
-(decision D13 orientation).
+(`dy`, `dx`) pixels, `dy`/`dx` in `[-h, h]`. Rows are y, columns are x.
 
 ## Usage
 

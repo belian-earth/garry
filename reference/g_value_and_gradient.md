@@ -1,6 +1,8 @@
 # Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
 
-Reverse-mode value-and-gradient of a scalar-loss closure (bridge).
+User code should call
+[`lazy_value_and_grad()`](https://belian-earth.github.io/garry/reference/lazy_value_and_grad.md)
+instead.
 
 ## Usage
 

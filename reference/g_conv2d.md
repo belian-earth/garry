@@ -50,5 +50,5 @@ g_conv2d(
 
 ## Details
 
-The oracle branch is an im2col matmul: correct at any size, meant for
+The plain-R branch is an im2col matmul: correct at any size, meant for
 tests, not throughput.

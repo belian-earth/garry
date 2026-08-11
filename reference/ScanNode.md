@@ -1,6 +1,8 @@
 # Scan along a named dim, preserving it. Barrier over `over`.
 
-The missing IR shape between `MapNode` and `ReduceNode`: carry state
+Created by
+[`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md).
+The IR shape between `MapNode` and `ReduceNode`: carry state
 sequentially along one non-spatial axis while emitting a same-length
 series (Kalman smoothers, EWMA, IIR filters, cumulative ops). The output
 grid is the parent grid unchanged (the scanned axis survives),
@@ -59,8 +61,9 @@ A `ScanNode`.
 
 The body kernel is `fn(xs, margin) -> y`: `xs` is the LIST of parent
 chunk values (length \>= 1; multi-parent scans read several cubes in
-lockstep), `margin` is the scanned axis position from `.dim_margins`,
-and `y` has the same shape as `xs[[1]]`. Inside, the body uses
+lockstep), `margin` is the 1-based position of the scanned axis in the
+chunk's dimension order (outer dims first, then y, x), and `y` has the
+same shape as `xs[[1]]`. Inside, the body uses
 [`g_scan()`](https://belian-earth.github.io/garry/reference/g_scan.md)
 to carry state along `margin`; everything else in the chunk (the spatial
 axes) is batched through the carry. Like a custom reducer, a scan cannot

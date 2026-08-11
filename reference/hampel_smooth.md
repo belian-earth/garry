@@ -49,10 +49,9 @@ the series ends. `t0 = 0` degenerates to a rolling median. With
 identical is 0, so any deviating centre is replaced; this is inherent to
 the Hampel construction.
 
-Runs through
-[`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md),
-so it plans, fuses, and distributes like any other kernel, and applies
-per band over a `LazyDataset`.
+Like every garry verb it is lazy (nothing computes until
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)),
+and it applies per band over a `LazyDataset`.
 
 ## See also
 

@@ -19,8 +19,8 @@ chunk_window_with_halo(cg, ...)
 
 - ...:
 
-  Method arguments: `x_off`, `y_off`, `x_size`, `y_size`, the 0-based
-  unpadded chunk window.
+  Passed to methods. The `ChunkGrid` method takes the 0-based unpadded
+  chunk window in pixels: `x_off`, `y_off`, `x_size`, `y_size`.
 
 ## Value
 

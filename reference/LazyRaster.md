@@ -1,6 +1,13 @@
-# Lazy raster array.
+# Lazy raster array (single band stack).
 
-Lazy raster array.
+Users obtain one via
+[`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md),
+[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md),
+or
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
+band access, and materialise it with
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md);
+the constructor itself is rarely called directly.
 
 ## Usage
 
@@ -12,7 +19,7 @@ LazyRaster(graph = Graph(), node_id = integer(0), grid = GridSpec())
 
 - graph:
 
-  The shared IR `Graph`.
+  The shared intermediate representation (IR) `Graph`.
 
 - node_id:
 

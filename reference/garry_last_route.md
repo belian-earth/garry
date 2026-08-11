@@ -1,14 +1,10 @@
 # Which execution route did the last `collect()` take?
 
-The distributed
+A diagnostics helper. The distributed
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
-silently picks between the composite-direct fast path, the
-reduce-decomposition path and the staged scheduler (in that order);
-single-threaded runs use the in-process executor. The chosen route is
-recorded per
-[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
-call so equivalence tests and pipelines can assert a plan did not
-silently change route.
+picks its execution route automatically, and this reports the route the
+last call took, so pipelines can log it or assert a plan has not changed
+route. The values are:
 
 ## Usage
 
@@ -22,3 +18,14 @@ garry_last_route()
 before any
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 in the session.
+
+## Details
+
+- `"composite_direct"`: the specialised masked-composite executor;
+
+- `"gd_reduce"`: the general reduce-decomposition executor;
+
+- `"scheduler"`: the general distributed scheduler;
+
+- `"single"`: the in-process single-threaded executor
+  (`distributed = FALSE`).

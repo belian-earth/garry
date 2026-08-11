@@ -1,6 +1,6 @@
 # An MLP band reducer (predict a trained network across the raster).
 
-Returns an anvl reducer `fn(x, dims)` for
+Returns a reducer function `fn(x, dims)` for
 `reduce_over(cube, fn, over = "band")`: standardises the band vector
 (optional), then applies dense layers `act(W_l x + b_l)` with ReLU
 between layers and `output_activation` on the last, yielding one value
@@ -48,9 +48,9 @@ mlp_project(
 
   Optional 1-based index of a QA plane riding as the LAST plane of the
   input cube (must equal `n_in + 1`). Predictions where the QA value is
-  nodata (or below `qa_floor`) are NaN. Carrying QA inside the cube
-  keeps the whole predict a single coalesced read, which is what makes
-  the chain fusable onto the read daemons.
+  nodata (or below `qa_floor`) are NaN. Carrying QA inside the cube lets
+  the whole prediction run as a single read with no separate masking
+  pass.
 
 - qa_floor:
 

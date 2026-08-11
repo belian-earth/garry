@@ -1,8 +1,7 @@
 # Read a garry policy option.
 
 Looks up `getOption("garry.<name>")`, falling back to the package
-default. Unknown names error: constants must be registered in
-`.garry_defaults` so defaults live in one place.
+default. Unknown option names error.
 
 ## Usage
 
@@ -19,3 +18,7 @@ garry_opt(name)
 ## Value
 
 The option value.
+
+## See also
+
+[`garry_options()`](https://belian-earth.github.io/garry/reference/garry_options.md)

@@ -1,8 +1,10 @@
 # A GDAL-readable source: path + band + optional nodata sentinel.
 
+Created by
+[`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md).
 A declared `nodata` on an integer source promotes the source's output
-dtype to f32 so NaN can carry nodata downstream (decision D8); the
-executor rewrites `value == nodata` to NaN at read time.
+dtype to f32 so NaN can carry nodata downstream; the executor rewrites
+`value == nodata` to NaN at read time.
 
 ## Usage
 

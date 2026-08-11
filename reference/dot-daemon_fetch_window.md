@@ -1,12 +1,12 @@
 # Daemon task body: fetch one item-asset's target-window bytes to a local file.
 
-The fetch half of the phase 12 fetch/assemble split: a plain
+The fetch half of the fetch/assemble split: a plain
 `gdal_translate -srcwin` of the window intersecting the target extent
 (plus a warp-kernel margin), remote COG to local tmpfs, native dtype and
-blocks — no warp, no mosaic on the remote path. On failure with
+blocks; no warp, no mosaic on the remote path. On failure with
 `garry.read_fail = "nodata"`, writes a small all-nodata placeholder
 covering the window so the local mosaic reads a hole instead of erroring
-(Int16 when a nodata sentinel is declared, Byte 255 otherwise — the HLS
+(Int16 when a nodata sentinel is declared, Byte 255 otherwise, the HLS
 QA convention).
 
 ## Usage

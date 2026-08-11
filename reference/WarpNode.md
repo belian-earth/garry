@@ -1,6 +1,6 @@
-# Lazy resample/reproject to a target grid. Output of `align()`. Barrier. At execution time this materialises as a gdalraster VRT warp.
+# Lazy resample/reproject to a target grid. Created by [`align()`](https://belian-earth.github.io/garry/reference/align.md). Barrier. At execution time this materialises as a gdalraster VRT warp.
 
-Lazy resample/reproject to a target grid. Output of
+Lazy resample/reproject to a target grid. Created by
 [`align()`](https://belian-earth.github.io/garry/reference/align.md).
 Barrier. At execution time this materialises as a gdalraster VRT warp.
 

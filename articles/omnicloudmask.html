@@ -84,14 +84,15 @@ reference implementation to float precision (logits agree to ~1e-6), and
 the compiled kernel is about twice as fast as torch on CPU, more on a
 GPU.</p>
 <p>The weights belong to the OmniCloudMask authors and are not shipped
-with garry: <code><a href="../reference/ocm_model.html">ocm_model()</a></code> reads them from the Python
-package’s download cache or any directory you point it at (see
-<code><a href="../reference/ocm_load_weights.html">?ocm_load_weights</a></code>).</p>
+with garry: download them once with <code><a href="../reference/ocm_weights.html">ocm_fetch_weights()</a></code>
+(about 58 MB, hash-verified) and <code><a href="../reference/ocm.html">ocm_model()</a></code> finds them
+automatically. It can also read the Python package’s download cache or
+any directory you point it at (see <code><a href="../reference/ocm_weights.html">?ocm_load_weights</a></code>).</p>
 <p>This vignette reproduces the classic OmniCloudMask demonstration
-(vrtility’s OCM article) on garry: Zurich in spring, with scenes up to
-80% cloud deliberately included, comparing OmniCloudMask against
-Sentinel-2’s scene classification (SCL) all the way to the
-composite.</p>
+(after the OCM article in the vrtility package) on garry: Zurich in
+spring, with scenes up to 80% cloud deliberately included, comparing
+OmniCloudMask against Sentinel-2’s scene classification (SCL) all the
+way to the composite.</p>
 <div class="section level2">
 <h2 id="a-deliberately-awful-stack-of-scenes">A deliberately awful stack of scenes<a class="anchor" aria-label="anchor" href="#a-deliberately-awful-stack-of-scenes"></a>
 </h2>
@@ -127,12 +128,12 @@ pixels from the Planetary Computer each time, checkpoint the warped
 stack locally: <code><a href="../reference/materialise.html">materialise()</a></code> executes the graph into
 garry’s raw-BSQ cube format (one multiband <code>.vrt</code> +
 <code>.bin</code> per date, readable by any GDAL tool and re-read by
-garry about 9x faster than tiled GeoTIFF) through ONE plan, and returns
-the same lazy dataset rebuilt over the local files with band names,
-slice dates, and the <code>mask_asset</code> intact. By default the
-cubes land in a unique session-temporary directory, announced as it
-runs; give <code>dir</code> a real path to keep or reuse them. From here
-on, nothing touches the network.</p>
+garry much faster than tiled GeoTIFF) through ONE plan, and returns the
+same lazy dataset rebuilt over the local files with band names, slice
+dates, and the <code>mask_asset</code> intact. By default the cubes land
+in a unique session-temporary directory, announced as it runs; give
+<code>dir</code> a real path to keep or reuse them. From here on,
+nothing touches the network.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">ds</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/materialise.html">materialise</a></span><span class="op">(</span><span class="va">remote</span><span class="op">)</span></span>
 <span><span class="co">#&gt; materialising to '/tmp/RtmpgupY8G/materialise-1129e222133090'</span></span>
@@ -153,7 +154,7 @@ on, nothing touches the network.</p>
 datasets, and every per-slice masking stage below shares one compiled
 kernel.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">m</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/ocm_model.html">ocm_model</a></span><span class="op">(</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="va">m</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/ocm.html">ocm_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span><span class="va">m</span></span>
 <span><span class="co">#&gt; $fn</span></span>
 <span><span class="co">#&gt; function (x) </span></span>
@@ -179,7 +180,7 @@ kernel.</p>
 <span><span class="co">#&gt; attr(,"class")</span></span>
 <span><span class="co">#&gt; [1] "garry_ocm_model"</span></span></code></pre></div>
 <p>Pick one properly cloudy date and put the scene, its SCL band, and
-the OmniCloudMask classes side by side. <code><a href="../reference/ocm_predict.html">ocm_predict()</a></code> is
+the OmniCloudMask classes side by side. <code><a href="../reference/ocm.html">ocm_predict()</a></code> is
 lazy like every garry verb: the class raster below is a graph node until
 something collects it.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
@@ -187,7 +188,7 @@ something collects it.</p>
 <span><span class="va">i</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/match.html" class="external-link">match</a></span><span class="op">(</span><span class="st">"2024-05-25"</span>, <span class="va">dates</span><span class="op">)</span>          <span class="co"># cumulus towers + hard shadows</span></span>
 <span></span>
 <span><span class="va">slice</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">band</span><span class="op">)</span> <span class="fu"><a href="../reference/time_sel.html">time_sel</a></span><span class="op">(</span><span class="va">ds</span><span class="op">[[</span><span class="va">band</span><span class="op">]</span><span class="op">]</span>, <span class="va">i</span><span class="op">)</span></span>
-<span><span class="va">cls</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/ocm_predict.html">ocm_predict</a></span><span class="op">(</span><span class="fu">slice</span><span class="op">(</span><span class="st">"B04"</span><span class="op">)</span>, <span class="fu">slice</span><span class="op">(</span><span class="st">"B03"</span><span class="op">)</span>, <span class="fu">slice</span><span class="op">(</span><span class="st">"B08"</span><span class="op">)</span>, model <span class="op">=</span> <span class="va">m</span><span class="op">)</span></span>
+<span><span class="va">cls</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/ocm.html">ocm_predict</a></span><span class="op">(</span><span class="fu">slice</span><span class="op">(</span><span class="st">"B04"</span><span class="op">)</span>, <span class="fu">slice</span><span class="op">(</span><span class="st">"B03"</span><span class="op">)</span>, <span class="fu">slice</span><span class="op">(</span><span class="st">"B08"</span><span class="op">)</span>, model <span class="op">=</span> <span class="va">m</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">rgb_i</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="fu"><a href="../reference/lazy_stack.html">lazy_stack</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="fu">slice</span><span class="op">(</span><span class="st">"B04"</span><span class="op">)</span>, <span class="fu">slice</span><span class="op">(</span><span class="st">"B03"</span><span class="op">)</span>, <span class="fu">slice</span><span class="op">(</span><span class="st">"B02"</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>                            along <span class="op">=</span> <span class="st">"band"</span><span class="op">)</span><span class="op">)</span></span>
@@ -218,13 +219,13 @@ value set is everything SCL considers not-usable: nodata, defective,
 shadows, clouds, cirrus, snow).</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">scl_masked</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/mask.html">mask</a></span><span class="op">(</span><span class="va">ds</span>, where <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">1</span>, <span class="fl">2</span>, <span class="fl">3</span>, <span class="fl">8</span>, <span class="fl">9</span>, <span class="fl">10</span>, <span class="fl">11</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
-<p>Route two: <code><a href="../reference/ocm_mask.html">ocm_mask()</a></code> derives the OmniCloudMask class
+<p>Route two: <code><a href="../reference/ocm.html">ocm_mask()</a></code> derives the OmniCloudMask class
 band from three of the dataset’s own bands, per time slice, and masks
 with it through exactly the same machinery. We drop SCL first (the model
 replaces it).</p>
 <div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">ocm_masked</span> <span class="op">&lt;-</span> <span class="va">ds</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"B02"</span>, <span class="st">"B03"</span>, <span class="st">"B04"</span>, <span class="st">"B08"</span><span class="op">)</span><span class="op">]</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="../reference/ocm_mask.html">ocm_mask</a></span><span class="op">(</span>red <span class="op">=</span> <span class="st">"B04"</span>, green <span class="op">=</span> <span class="st">"B03"</span>, nir <span class="op">=</span> <span class="st">"B08"</span>, model <span class="op">=</span> <span class="va">m</span><span class="op">)</span></span></code></pre></div>
+<span>  <span class="fu"><a href="../reference/ocm.html">ocm_mask</a></span><span class="op">(</span>red <span class="op">=</span> <span class="st">"B04"</span>, green <span class="op">=</span> <span class="st">"B03"</span>, nir <span class="op">=</span> <span class="st">"B08"</span>, model <span class="op">=</span> <span class="va">m</span><span class="op">)</span></span></code></pre></div>
 <p>Same date, both masks applied, masked pixels in orange
 (<code><a href="../reference/preview.html">preview()</a></code>’s <code>na_col</code> makes the mask footprint
 explicit):</p>

@@ -1,6 +1,6 @@
-# Is a value nodata (NaN under the D8 sentinel model)?
+# Is a value nodata? NaN is the nodata sentinel.
 
-Is a value nodata (NaN under the D8 sentinel model)?
+Is a value nodata? NaN is the nodata sentinel.
 
 ## Usage
 

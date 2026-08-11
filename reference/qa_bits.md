@@ -22,4 +22,7 @@ qa_bits(bits)
 
 ## Value
 
-A function of one traced array.
+A predicate function of one array, returning a 0/1 mask: pass it as
+[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)'s
+`where`, or apply it directly with
+[`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).

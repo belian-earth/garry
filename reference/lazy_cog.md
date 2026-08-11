@@ -38,7 +38,8 @@ lazy_cog(
 
 - grid:
 
-  Target `GridSpec`.
+  Target
+  [`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md).
 
 - assets:
 

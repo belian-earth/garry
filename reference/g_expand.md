@@ -4,8 +4,8 @@ The rank-general sibling of
 [`g_rep_t()`](https://belian-earth.github.io/garry/reference/g_rep_t.md):
 expands `x` with a new axis of `n` copies at position `axis`, so a
 reduced statistic broadcasts back against the array it came from (base R
-arrays do not broadcast, so the untraced oracle needs the copies
-materialised; traced, this is a free `broadcast_to`).
+arrays do not broadcast, so the untraced path materialises the copies;
+traced, this is a free `broadcast_to`).
 
 ## Usage
 

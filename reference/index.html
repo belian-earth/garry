@@ -149,7 +149,7 @@
       </dl></div><div class="section level2">
       <h2 id="datasets">Datasets<a class="anchor" aria-label="anchor" href="#datasets"></a></h2>
 
-      <div class="section-desc"><p>The named multi-band, multi-time object; verbs apply across every band. Build from a STAC table or from rasters, mask from a QA band, collapse the band axis.</p></div>
+      <div class="section-desc"><p>The named multi-band, multi-time object; verbs apply across every band. Build from a STAC table or from rasters, then select, stack, and collapse.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -179,6 +179,36 @@
 
         <dt>
 
+          <code><a href="stack_bands.html">stack_bands()</a></code>
+
+        </dt>
+        <dd>Collapse a dataset's bands into a single stacked raster.</dd>
+
+        <dt>
+
+          <code><a href="band_sel.html">band_sel()</a></code>
+
+        </dt>
+        <dd>Select bands of a stacked raster by label.</dd>
+
+        <dt>
+
+          <code><a href="time_sel.html">time_sel()</a></code>
+
+        </dt>
+        <dd>Select time slices of a stacked raster by label.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="masking-cloud-removal">Masking &amp; cloud removal<a class="anchor" aria-label="anchor" href="#masking-cloud-removal"></a></h2>
+
+      <div class="section-desc"><p>Mask value bands from a QA band or from a pre-trained cloud model. The ocm_* functions run the OmniCloudMask segmentation model natively (no Python) to derive cloud/shadow masks from red, green, and NIR bands.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
           <code><a href="mask.html">mask()</a></code>
 
         </dt>
@@ -193,6 +223,36 @@
 
         <dt>
 
+          <code><a href="ocm.html">ocm_model()</a></code> <code><a href="ocm.html">ocm_predict()</a></code> <code><a href="ocm.html">ocm_mask()</a></code>
+
+        </dt>
+        <dd>Cloud and shadow masking with OmniCloudMask</dd>
+
+        <dt>
+
+          <code><a href="ocm_weights.html">ocm_fetch_weights()</a></code> <code><a href="ocm_weights.html">ocm_load_weights()</a></code>
+
+        </dt>
+        <dd>OmniCloudMask model weights</dd>
+
+        <dt>
+
+          <code><a href="shrink_footprint.html">shrink_footprint()</a></code>
+
+        </dt>
+        <dd>Shrink the valid-data footprint by a pixel margin.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="time-series-compositing">Time series &amp; compositing<a class="anchor" aria-label="anchor" href="#time-series-compositing"></a></h2>
+
+      <div class="section-desc"><p>Collapse or smooth the time axis: calendar grouping, multivariate composites, gap filling, and per-pixel smoothers.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
           <code><a href="group_by_time.html">group_by_time()</a></code>
 
         </dt>
@@ -200,14 +260,49 @@
 
         <dt>
 
-          <code><a href="stack_bands.html">stack_bands()</a></code>
+          <code><a href="geomedian.html">geomedian()</a></code>
 
         </dt>
-        <dd>Collapse a dataset's bands into a single stacked raster.</dd>
-      </dl></div><div class="section level2">
-      <h2 id="geo-embedding-helpers">Geo-embedding helpers<a class="anchor" aria-label="anchor" href="#geo-embedding-helpers"></a></h2>
+        <dd>Geometric median reducer over time (multivariate).</dd>
 
-      <div class="section-desc"><p>Special operations for published geo-embedding products: the batched multi-band COG read (cptkirk) and the products’ quantiser decodes, written in the g_* vocabulary so they fuse onto the read.</p></div>
+        <dt>
+
+          <code><a href="medoid.html">medoid()</a></code>
+
+        </dt>
+        <dd>Medoid reducer over time (multivariate).</dd>
+
+        <dt>
+
+          <code><a href="fill_gaps.html">fill_gaps()</a></code>
+
+        </dt>
+        <dd>Fill nodata gaps along the time axis.</dd>
+
+        <dt>
+
+          <code><a href="hampel_smooth.html">hampel_smooth()</a></code>
+
+        </dt>
+        <dd>Hampel filter a stack over its time axis.</dd>
+
+        <dt>
+
+          <code><a href="kalman_smooth.html">kalman_smooth()</a></code>
+
+        </dt>
+        <dd>Smooth a stack with a local-linear-trend Kalman smoother.</dd>
+
+        <dt>
+
+          <code><a href="kalman_llt.html">kalman_llt()</a></code>
+
+        </dt>
+        <dd>Kalman local-linear-trend smoother body for <code><a href="../reference/scan_over.html">scan_over()</a></code>.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="geo-embeddings-model-weights">Geo-embeddings &amp; model weights<a class="anchor" aria-label="anchor" href="#geo-embeddings-model-weights"></a></h2>
+
+      <div class="section-desc"><p>Special operations for published geo-embedding products: the batched multi-band COG read (via the cptkirk engine), the products’ quantiser decodes, and safetensors weight IO.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -234,6 +329,20 @@
 
         </dt>
         <dd>Dequantize Embedded Seamless Data (ESD) FSQ codes.</dd>
+
+        <dt>
+
+          <code><a href="safetensors_read.html">safetensors_read()</a></code>
+
+        </dt>
+        <dd>Read tensors from a safetensors file.</dd>
+
+        <dt>
+
+          <code><a href="safetensors_ls.html">safetensors_ls()</a></code>
+
+        </dt>
+        <dd>List tensor names, dtypes, and shapes without reading data.</dd>
       </dl></div><div class="section level2">
       <h2 id="raster-dataset-algebra">Raster &amp; dataset algebra<a class="anchor" aria-label="anchor" href="#raster-dataset-algebra"></a></h2>
 
@@ -309,6 +418,13 @@
 
         <dt>
 
+          <code><a href="lazy_patch.html">lazy_patch()</a></code>
+
+        </dt>
+        <dd>Whole-window model op (advanced): apply <code>fn</code> to the raw padded chunk.</dd>
+
+        <dt>
+
           <code><a href="align.html">align()</a></code>
 
         </dt>
@@ -346,10 +462,31 @@
 
         <dt>
 
+          <code><a href="as_terra.html">as_terra()</a></code>
+
+        </dt>
+        <dd>Convert a collected result to a terra SpatRaster.</dd>
+
+        <dt>
+
           <code><a href="garry_daemons.html">garry_daemons()</a></code>
 
         </dt>
         <dd>Set up split mirai daemon pools for distributed execution.</dd>
+
+        <dt>
+
+          <code><a href="garry_daemons_set.html">garry_daemons_set()</a></code>
+
+        </dt>
+        <dd>Are the garry daemon pools running?</dd>
+
+        <dt>
+
+          <code><a href="garry_pool_hygiene.html">garry_pool_hygiene()</a></code>
+
+        </dt>
+        <dd>Reclaim daemon memory across the pools.</dd>
 
         <dt>
 
@@ -364,6 +501,57 @@
 
         </dt>
         <dd>Read a garry policy option.</dd>
+
+        <dt>
+
+          <code><a href="garry_options.html">garry_options()</a></code>
+
+        </dt>
+        <dd>List every garry option: default, current value, tier, description.</dd>
+      </dl></div><div class="section level2">
+      <h2 id="diagnostics-visualisation">Diagnostics &amp; visualisation<a class="anchor" aria-label="anchor" href="#diagnostics-visualisation"></a></h2>
+
+      <div class="section-desc"><p>Inspect data and understand what an execution did: quick plots, pipeline drawings, and run reports.</p></div>
+
+      <dl></dl></div><div class="section level2">
+
+
+
+
+      <dl><dt>
+
+          <code><a href="preview.html">preview()</a></code>
+
+        </dt>
+        <dd>Preview a lazy object, a collected array, or a raster file.</dd>
+
+        <dt>
+
+          <code><a href="draw.html">draw()</a></code>
+
+        </dt>
+        <dd>Draw the pipeline of a lazy object.</dd>
+
+        <dt>
+
+          <code><a href="garry_last_route.html">garry_last_route()</a></code>
+
+        </dt>
+        <dd>Which execution route did the last <code><a href="../reference/collect.html">collect()</a></code> take?</dd>
+
+        <dt>
+
+          <code><a href="garry_task_report.html">garry_task_report()</a></code>
+
+        </dt>
+        <dd>Summarise a <code>garry.task_log</code> CSV.</dd>
+
+        <dt>
+
+          <code><a href="garry_explain_placement.html">garry_explain_placement()</a></code>
+
+        </dt>
+        <dd>Explain the scheduler's placement decisions for a computation.</dd>
       </dl></div><div class="section level2">
       <h2 id="grids-spatial-helpers">Grids &amp; spatial helpers<a class="anchor" aria-label="anchor" href="#grids-spatial-helpers"></a></h2>
 
@@ -383,6 +571,20 @@
 
         <dt>
 
+          <code><a href="grid_from_bbox.html">grid_from_bbox()</a></code>
+
+        </dt>
+        <dd>Build an analysis grid from a lon/lat bounding box.</dd>
+
+        <dt>
+
+          <code><a href="grid_from_src.html">grid_from_src()</a></code>
+
+        </dt>
+        <dd>Build an analysis grid from a raster or vector source.</dd>
+
+        <dt>
+
           <code><a href="gdal_grid_spec.html">gdal_grid_spec()</a></code>
 
         </dt>
@@ -397,17 +599,17 @@
 
         <dt>
 
-          <code><a href="as_vaster_extent.html">as_vaster_extent()</a></code>
-
-        </dt>
-        <dd>Reorder a garry extent for vaster calls.</dd>
-
-        <dt>
-
           <code><a href="grid_equal.html">grid_equal()</a></code>
 
         </dt>
         <dd>Structural equality of two grids (geometry only, not dtype).</dd>
+
+        <dt>
+
+          <code><a href="grid_diff.html">grid_diff()</a></code>
+
+        </dt>
+        <dd>Describe how two grids differ.</dd>
 
         <dt>
 
@@ -421,7 +623,7 @@
           <code><a href="dtype_valid.html">dtype_valid()</a></code>
 
         </dt>
-        <dd>Is <code>dtype</code> a member of garry's (anvl-aligned) dtype vocabulary?</dd>
+        <dd>Is <code>dtype</code> a member of garry's dtype vocabulary?</dd>
 
         <dt>
 
@@ -446,7 +648,7 @@
       </dl></div><div class="section level2">
       <h2 id="anvl-compute-vocabulary">anvl compute vocabulary<a class="anchor" aria-label="anchor" href="#anvl-compute-vocabulary"></a></h2>
 
-      <div class="section-desc"><p>The g_* traced-array ops for writing map/focal/reducer functions. These run fused inside an XLA stage under both the pure-R oracle and PJRT.</p></div>
+      <div class="section-desc"><p>The g_* traced-array ops for writing map/focal/reducer functions. These run fused inside an XLA stage under both the pure-R reference implementation and PJRT.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -465,14 +667,21 @@
           <code><a href="g_is_nodata.html">g_is_nodata()</a></code>
 
         </dt>
-        <dd>Is a value nodata (NaN under the D8 sentinel model)?</dd>
+        <dd>Is a value nodata? NaN is the nodata sentinel.</dd>
 
         <dt>
 
           <code><a href="g_cast.html">g_cast()</a></code>
 
         </dt>
-        <dd>Cast to a garry dtype (oracle: value semantics only).</dd>
+        <dd>Cast to a garry dtype.</dd>
+
+        <dt>
+
+          <code><a href="g_fill.html">g_fill()</a></code>
+
+        </dt>
+        <dd>Construct a constant-filled AnvlArray on the device.</dd>
 
         <dt>
 
@@ -480,6 +689,13 @@
 
         </dt>
         <dd>Pad a matrix by <code>h</code> cells on every side with <code>value</code>.</dd>
+
+        <dt>
+
+          <code><a href="g_pad_rb.html">g_pad_rb()</a></code>
+
+        </dt>
+        <dd>Pad the bottom/right edges of the last two dims.</dd>
 
         <dt>
 
@@ -511,6 +727,48 @@
 
         <dt>
 
+          <code><a href="g_slice_t.html">g_slice_t()</a></code>
+
+        </dt>
+        <dd>Static range slice along dim 1 (the scanned axis).</dd>
+
+        <dt>
+
+          <code><a href="g_concat_t.html">g_concat_t()</a></code>
+
+        </dt>
+        <dd>Concatenate along dim 1 (the scanned axis).</dd>
+
+        <dt>
+
+          <code><a href="g_rep_t.html">g_rep_t()</a></code>
+
+        </dt>
+        <dd>Replicate a (y, x) plane along a new leading axis.</dd>
+
+        <dt>
+
+          <code><a href="g_expand.html">g_expand()</a></code>
+
+        </dt>
+        <dd>Insert a broadcast axis at an arbitrary position.</dd>
+
+        <dt>
+
+          <code><a href="g_squeeze1.html">g_squeeze1()</a></code>
+
+        </dt>
+        <dd>Drop a leading unit axis.</dd>
+
+        <dt>
+
+          <code><a href="g_transpose.html">g_transpose()</a></code>
+
+        </dt>
+        <dd>Transpose an array (general permutation).</dd>
+
+        <dt>
+
           <code><a href="g-bitwise.html">g_bitand()</a></code> <code><a href="g-bitwise.html">g_bitor()</a></code> <code><a href="g-bitwise.html">g_bitxor()</a></code> <code><a href="g-bitwise.html">g_bitnot()</a></code> <code><a href="g-bitwise.html">g_shiftl()</a></code> <code><a href="g-bitwise.html">g_shiftr()</a></code>
 
         </dt>
@@ -521,7 +779,28 @@
           <code><a href="g-reductions.html">g_sum()</a></code> <code><a href="g-reductions.html">g_mean()</a></code> <code><a href="g-reductions.html">g_min()</a></code> <code><a href="g-reductions.html">g_max()</a></code> <code><a href="g-reductions.html">g_median()</a></code> <code><a href="g-reductions.html">g_count()</a></code>
 
         </dt>
-        <dd>Reductions over array margins (pure-R oracle semantics).</dd>
+        <dd>Reductions over array margins.</dd>
+
+        <dt>
+
+          <code><a href="g_erf.html">g_erf()</a></code>
+
+        </dt>
+        <dd>Error function (exact GELU building block).</dd>
+
+        <dt>
+
+          <code><a href="g_conv2d.html">g_conv2d()</a></code>
+
+        </dt>
+        <dd>2D convolution over a (C, H, W) chunk.</dd>
+
+        <dt>
+
+          <code><a href="g_upsample2x.html">g_upsample2x()</a></code>
+
+        </dt>
+        <dd>Nearest-neighbour 2x upsample of a (C, H, W) chunk.</dd>
 
         <dt>
 
@@ -529,13 +808,6 @@
 
         </dt>
         <dd>Broadcast arrays to a common shape (compute vocabulary).</dd>
-
-        <dt>
-
-          <code><a href="g_jit.html">g_jit()</a></code>
-
-        </dt>
-        <dd>JIT-compile a stage closure via anvl (executor bridge).</dd>
 
         <dt>
 
@@ -553,27 +825,6 @@
 
         <dt>
 
-          <code><a href="g_upload_raw.html">g_upload_raw()</a></code>
-
-        </dt>
-        <dd>Upload a raw byte payload to an AnvlArray.</dd>
-
-        <dt>
-
-          <code><a href="g_download_raw.html">g_download_raw()</a></code>
-
-        </dt>
-        <dd>Download an AnvlArray as a raw store payload.</dd>
-
-        <dt>
-
-          <code><a href="g_value_and_gradient.html">g_value_and_gradient()</a></code>
-
-        </dt>
-        <dd>Reverse-mode value-and-gradient of a scalar-loss closure (bridge).</dd>
-
-        <dt>
-
           <code><a href="lazy_value_and_grad.html">lazy_value_and_grad()</a></code>
 
         </dt>
@@ -581,7 +832,7 @@
       </dl></div><div class="section level2">
       <h2 id="gdal-adapter-low-level-io-">GDAL adapter (low-level IO)<a class="anchor" aria-label="anchor" href="#gdal-adapter-low-level-io-"></a></h2>
 
-      <div class="section-desc"><p>Direct windowed read/write, warp, and GTI index construction. Used by the cube layer; exposed for bespoke IO.</p></div>
+      <div class="section-desc"><p>Direct windowed read/write, warp, staging, and GTI index construction. Used by the cube layer; exposed for bespoke IO.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -618,6 +869,13 @@
 
         <dt>
 
+          <code><a href="stage_raw_cube.html">stage_raw_cube()</a></code>
+
+        </dt>
+        <dd>Stage a GDAL raster as a raw-BSQ cube (<code>.bin</code> + sibling <code>.vrt</code>).</dd>
+
+        <dt>
+
           <code><a href="gti_index_create.html">gti_index_create()</a></code>
 
         </dt>
@@ -632,7 +890,7 @@
       </dl></div><div class="section level2">
       <h2 id="ir-planner-extension-api-">IR &amp; planner (extension API)<a class="anchor" aria-label="anchor" href="#ir-planner-extension-api-"></a></h2>
 
-      <div class="section-desc"><p>The intermediate representation and planner. Needed only to build on the IR directly (custom nodes, alternate executors) — not for normal use.</p></div>
+      <div class="section-desc"><p>The intermediate representation and planner. Needed only to build on the IR directly (custom nodes, alternate executors) – not for normal use.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -644,7 +902,7 @@
           <code><a href="LazyRaster.html">LazyRaster()</a></code>
 
         </dt>
-        <dd>Lazy raster array.</dd>
+        <dd>Lazy raster array (single band stack).</dd>
 
         <dt>
 
@@ -700,14 +958,14 @@
           <code><a href="MapNode.html">MapNode()</a></code>
 
         </dt>
-        <dd>Elementwise map. <code>fn</code> is an R function over scalars/arrays; it will be composed with neighbouring fusable nodes and wrapped in <code><a href="https://r-xla.github.io/anvl/reference/jit.html" class="external-link">anvl::jit()</a></code> at plan time.</dd>
+        <dd>Elementwise map. <code>fn</code> is an R function over scalars/arrays; it will be composed with neighbouring fusable nodes and wrapped in <code><a href="https://r-xla.github.io/anvl/reference/jit.html" class="external-link">anvl::jit()</a></code> at plan time. Created by <code><a href="../reference/lazy_map.html">lazy_map()</a></code>.</dd>
 
         <dt>
 
           <code><a href="FocalNode.html">FocalNode()</a></code>
 
         </dt>
-        <dd>Focal (stencil) op. <code>radius</code> is the halo in pixels; <code>boundary</code> is one of "constant", "reflect", "nearest", "wrap", "none".</dd>
+        <dd>Focal (stencil) op. <code>radius</code> is the halo in pixels; <code>boundary</code> is one of "constant", "reflect", "nearest", "wrap", "none". Created by <code><a href="../reference/focal.html">focal()</a></code>.</dd>
 
         <dt>
 
@@ -728,14 +986,14 @@
           <code><a href="WarpNode.html">WarpNode()</a></code>
 
         </dt>
-        <dd>Lazy resample/reproject to a target grid. Output of <code><a href="../reference/align.html">align()</a></code>. Barrier. At execution time this materialises as a gdalraster VRT warp.</dd>
+        <dd>Lazy resample/reproject to a target grid. Created by <code><a href="../reference/align.html">align()</a></code>. Barrier. At execution time this materialises as a gdalraster VRT warp.</dd>
 
         <dt>
 
           <code><a href="StackNode.html">StackNode()</a></code>
 
         </dt>
-        <dd>Combine inputs along a named dim (e.g. time).</dd>
+        <dd>Combine inputs along a named dim (e.g. time). Created by <code><a href="../reference/lazy_stack.html">lazy_stack()</a></code>.</dd>
 
         <dt>
 
@@ -743,6 +1001,13 @@
 
         </dt>
         <dd>Output of the composition pass. Holds a composed R function assembled from its members; ready for <code><a href="https://r-xla.github.io/anvl/reference/jit.html" class="external-link">anvl::jit()</a></code> at execution time.</dd>
+
+        <dt>
+
+          <code><a href="PatchNode.html">PatchNode()</a></code>
+
+        </dt>
+        <dd>Whole-window model op: fn over the raw padded chunk. Halo-consuming.</dd>
 
         <dt>
 
@@ -770,7 +1035,7 @@
           <code><a href="graph_ids.html">graph_ids()</a></code>
 
         </dt>
-        <dd>All node ids in the graph, in insertion order.</dd>
+        <dd>All node ids in the graph, in ascending id order.</dd>
 
         <dt>
 
@@ -812,7 +1077,7 @@
           <code><a href="execute_plan.html">execute_plan()</a></code>
 
         </dt>
-        <dd>Execute a Plan on the anvl backend (single-threaded).</dd>
+        <dd>Execute a Plan on the anvl backend (single process).</dd>
 
         <dt>
 

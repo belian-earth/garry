@@ -17,3 +17,8 @@ safetensors_ls(path)
 ## Value
 
 Data frame with `name`, `dtype`, `shape` (comma string).
+
+## See also
+
+[`safetensors_read()`](https://belian-earth.github.io/garry/reference/safetensors_read.md)
+to read the tensors.

@@ -79,3 +79,10 @@ the device (or `max_px`); a `LazyDataset`/`LazyRaster` is re-planned at
 a coarse resolution so it fetches only what the preview shows
 (grid-pinned sources only; otherwise it collects at full resolution and
 decimates).
+
+## See also
+
+[`draw()`](https://belian-earth.github.io/garry/reference/draw.md),
+which plots the pipeline rather than the data;
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+to execute at full resolution.

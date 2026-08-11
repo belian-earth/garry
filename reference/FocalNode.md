@@ -1,7 +1,8 @@
-# Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one of "constant", "reflect", "nearest", "wrap", "none".
+# Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one of "constant", "reflect", "nearest", "wrap", "none". Created by [`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
 
 Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one of
-"constant", "reflect", "nearest", "wrap", "none".
+"constant", "reflect", "nearest", "wrap", "none". Created by
+[`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
 
 ## Usage
 
@@ -48,7 +49,7 @@ FocalNode(
 
   Optional linear kernel, flattened row-major over (dy, dx), length
   (2\*radius+1)^2. When present the op is the weighted sum and is
-  differentiable wrt the weights (Phase 6).
+  differentiable wrt the weights.
 
 ## Value
 

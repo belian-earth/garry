@@ -6,14 +6,16 @@ cells per side and crops the contaminated ring off the result. fn
 must be size-preserving on the last two (spatial) dims, derive every
 size from its input's shape, be written in the g_* vocabulary, and
 reduce the leading band axis to out_bands channels (0 = a plain
-2D result). Not differentiable."><meta property="og:description" content="The escape hatch behind model-inference verbs such as ocm_mask():
+2D result). Not differentiable. ocm_model()-based cloud-mask
+prediction is the in-package example of its use."><meta property="og:description" content="The escape hatch behind model-inference verbs such as ocm_mask():
 where focal() materialises a shift list (unusable beyond small
 radii), a patch op hands fn the raw window carrying radius halo
 cells per side and crops the contaminated ring off the result. fn
 must be size-preserving on the last two (spatial) dims, derive every
 size from its input's shape, be written in the g_* vocabulary, and
 reduce the leading band axis to out_bands channels (0 = a plain
-2D result). Not differentiable."></head><body>
+2D result). Not differentiable. ocm_model()-based cloud-mask
+prediction is the in-package example of its use."></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
 
@@ -56,14 +58,15 @@ reduce the leading band axis to out_bands channels (0 = a plain
     </div>
 
     <div class="ref-description section level2">
-    <p>The escape hatch behind model-inference verbs such as <code><a href="ocm_mask.html">ocm_mask()</a></code>:
+    <p>The escape hatch behind model-inference verbs such as <code><a href="ocm.html">ocm_mask()</a></code>:
 where <code><a href="focal.html">focal()</a></code> materialises a shift list (unusable beyond small
 radii), a patch op hands <code>fn</code> the raw window carrying <code>radius</code> halo
 cells per side and crops the contaminated ring off the result. <code>fn</code>
 must be size-preserving on the last two (spatial) dims, derive every
 size from its input's shape, be written in the <code>g_*</code> vocabulary, and
 reduce the leading band axis to <code>out_bands</code> channels (0 = a plain
-2D result). Not differentiable.</p>
+2D result). Not differentiable. <code><a href="ocm.html">ocm_model()</a></code>-based cloud-mask
+prediction is the in-package example of its use.</p>
     </div>
 
     <div class="section level2">

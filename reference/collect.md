@@ -6,7 +6,7 @@ stream the result to a file instead, use
 to checkpoint to local cubes and stay lazy, use
 [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md).
 `plan_only = TRUE` runs the planner passes and returns the `Plan`
-without executing: the permanent introspection path.
+without executing, for inspection.
 
 ## Usage
 

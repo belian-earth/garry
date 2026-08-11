@@ -1,9 +1,11 @@
 # Lazy time-sliced stack of one STAC asset on a target grid.
 
-Builds a GTI index for `asset`, then opens one mosaic per time slice
-pinned to `grid` (mixed source CRS is fine: the GTI driver reprojects
-per tile) and stacks them along `t`. Overlaps within a slice resolve by
-ascending `sort_field` (highest drawn on top).
+Builds a GTI (GDAL Tile Index; see
+[`stac_gti_index()`](https://belian-earth.github.io/garry/reference/stac_gti_index.md))
+index for `asset`, then opens one mosaic per time slice pinned to `grid`
+(mixed source CRS is fine: the GTI driver reprojects per tile) and
+stacks them along `t`. Overlaps within a slice resolve by ascending
+`sort_field` (highest drawn on top).
 
 ## Usage
 
@@ -31,7 +33,9 @@ lazy_stac_stack(
 
 - grid:
 
-  Target `GridSpec` for every slice.
+  Target
+  [`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md)
+  for every slice.
 
 - asset:
 
@@ -66,3 +70,24 @@ lazy_stac_stack(
 ## Value
 
 A list: `stack` (`LazyRaster`), `slices` (character), `index` (path).
+
+## See also
+
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+to materialise the stack;
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md),
+the higher-level multi-band interface most users want.
+
+Other stac helpers:
+[`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
+[`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
+[`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),
+[`stac_filter_coverage()`](https://belian-earth.github.io/garry/reference/stac_filter_coverage.md),
+[`stac_filter_orbit()`](https://belian-earth.github.io/garry/reference/stac_filter_orbit.md),
+[`stac_gti_index()`](https://belian-earth.github.io/garry/reference/stac_gti_index.md),
+[`stac_merge()`](https://belian-earth.github.io/garry/reference/stac_merge.md),
+[`stac_query()`](https://belian-earth.github.io/garry/reference/stac_query.md),
+[`stac_rename_assets()`](https://belian-earth.github.io/garry/reference/stac_rename_assets.md),
+[`stac_sign_mpc()`](https://belian-earth.github.io/garry/reference/stac_sign_mpc.md),
+[`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md),
+[`stac_time_slices()`](https://belian-earth.github.io/garry/reference/stac_time_slices.md)

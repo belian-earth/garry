@@ -4,8 +4,10 @@
 containing `wrt`, a
 [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md)
 raster whose weights are the parameters. Executes chunk by chunk
-(gradients compose by linearity) with the mask-multiply nodata rewrite
-(D15).
+(gradients compose by linearity). Nodata is handled by a mask-multiply
+rewrite: nodata cells are zero-substituted in the inputs, a validity
+mask is carried through the pipeline, and the loss reduces over valid
+cells only, so gradients are never poisoned by NaN.
 
 ## Usage
 

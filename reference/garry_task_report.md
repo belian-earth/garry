@@ -1,13 +1,13 @@
 # Summarise a `garry.task_log` CSV.
 
-Converts the distributed scheduler's task log (option `garry.task_log`;
-schema `time,event,key,pool,slot,mb,store_mb,ready`) from a developer
-trace into an operator report: per-stage task counts and run/queue-wait
-quantiles, maximum concurrency, the drain vs host-tail split, and the
-peak measured (per-daemon anon RSS) vs modelled (in-flight + resident)
-memory. Every diagnosis in the design history parsed this CSV ad hoc;
-this locks the schema and answers the standing "where did the time and
-memory go".
+Summarises the task log CSV the distributed scheduler writes when the
+`garry.task_log` option is set (see
+[`garry_options()`](https://belian-earth.github.io/garry/reference/garry_options.md);
+schema `time,event,key,pool,slot,mb,store_mb,ready`): per-stage task
+counts and run/queue-wait quantiles, maximum concurrency, the drain vs
+host-tail split, and the peak measured (per-daemon anonymous RSS) vs
+modelled (in-flight + resident) memory. It answers "where did the time
+and memory go" for a distributed run.
 
 ## Usage
 

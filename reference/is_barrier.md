@@ -1,6 +1,7 @@
 # Does this node force a stage boundary?
 
-Does this node force a stage boundary?
+Part of the extension API for authors of new node classes; not needed
+for ordinary use of the package.
 
 ## Usage
 
@@ -12,7 +13,7 @@ is_barrier(node, ...)
 
 - node:
 
-  An IR `Node`.
+  An intermediate representation (IR) `Node`.
 
 - ...:
 

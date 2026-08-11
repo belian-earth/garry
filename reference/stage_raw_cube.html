@@ -3,16 +3,14 @@
 band-sequential f32/f64 planes in a .bin, described by a
 VRTRawRasterBand VRT that carries the georeference. Any GDAL
 consumer reads the VRT normally; garry's reader recognises the shape
-and reads the bin directly (measured ~9x on a 73-band cube — GDAL's
-tile walk costs ~2.2 s per 482 MB window regardless of compression,
-the raw read 0.24 s). Use it once on pipeline intermediates that are
+and reads the bin directly, which is many times faster than walking
+the tiled GeoTIFF. Use it once on pipeline intermediates that are
 read many times (per-year context cubes, prediction stacks)."><meta property="og:description" content="Reads every band of src and writes garry's raw cube format:
 band-sequential f32/f64 planes in a .bin, described by a
 VRTRawRasterBand VRT that carries the georeference. Any GDAL
 consumer reads the VRT normally; garry's reader recognises the shape
-and reads the bin directly (measured ~9x on a 73-band cube — GDAL's
-tile walk costs ~2.2 s per 482 MB window regardless of compression,
-the raw read 0.24 s). Use it once on pipeline intermediates that are
+and reads the bin directly, which is many times faster than walking
+the tiled GeoTIFF. Use it once on pipeline intermediates that are
 read many times (per-year context cubes, prediction stacks)."></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
@@ -60,9 +58,8 @@ read many times (per-year context cubes, prediction stacks)."></head><body>
 band-sequential f32/f64 planes in a <code>.bin</code>, described by a
 <code>VRTRawRasterBand</code> VRT that carries the georeference. Any GDAL
 consumer reads the VRT normally; garry's reader recognises the shape
-and reads the bin directly (measured ~9x on a 73-band cube — GDAL's
-tile walk costs ~2.2 s per 482 MB window regardless of compression,
-the raw read 0.24 s). Use it once on pipeline intermediates that are
+and reads the bin directly, which is many times faster than walking
+the tiled GeoTIFF. Use it once on pipeline intermediates that are
 read many times (per-year context cubes, prediction stacks).</p>
     </div>
 
@@ -90,6 +87,10 @@ read many times (per-year context cubes, prediction stacks).</p>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p><code>dst_vrt</code>, invisibly.</p>
+    </div>
+    <div class="section level2">
+    <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>
+    <div class="dont-index"><p><code><a href="gdal_create_output.html">gdal_create_output()</a></code></p></div>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

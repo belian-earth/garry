@@ -38,12 +38,12 @@ mask(
     the set), for categorical QA such as Sentinel-2 SCL, e.g.
     `c(0, 1, 2, 3, 8, 9, 10, 11)`;
 
-  - `qa_bits(bits)` -\> a bitmask test (bad if any listed bit is set),
-    for packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g.
-    `qa_bits(0:3)`;
+  - [`qa_bits()`](https://belian-earth.github.io/garry/reference/qa_bits.md)
+    -\> a bitmask test (bad if any listed bit is set), for packed flags
+    such as HLS Fmask / Landsat QA_PIXEL, e.g. `qa_bits(0:3)`;
 
-  - a function `\(f) ...` -\> a raw anvl predicate returning a 0/1 (or
-    logical) mask.
+  - a function `\(f) ...` -\> a predicate returning a 0/1 (or logical)
+    mask, written in the `g_*` vocabulary.
 
 - open:
 

@@ -43,4 +43,8 @@ survives.
 ## See also
 
 [`medoid()`](https://belian-earth.github.io/garry/reference/medoid.md),
-[`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
+[`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md);
+[`band_project()`](https://belian-earth.github.io/garry/reference/band_project.md)
+and
+[`mlp_project()`](https://belian-earth.github.io/garry/reference/mlp_project.md)
+for projections over the surviving band axis.

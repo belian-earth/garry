@@ -1,13 +1,16 @@
 # Reduction over named dims. Barrier: forces materialisation of its inputs.
 
-`op` is normally a name from `.reduce_ops`: the planner needs op
-identity to decide algebraic decomposition (D12) and output dtype, and
-the executor maps it to the ops vocabulary. A CUSTOM reducer may instead
-be supplied as `fn` (a length-1 list holding an anvl function
-`fn(x, dims)` that collapses `dims`), with `op = "custom"`; the executor
-calls it directly. A custom reducer cannot be decomposed across spatial
-chunks, so it is supported over the `t`/`band` axes (each spatial chunk
-holds the full axis), not over `x`/`y`.
+Created by
+[`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md).
+`op` is normally one of the named reductions "sum", "mean", "min",
+"max", "prod", "median", "quantile", "sd", "var", "count", "any", "all":
+the planner needs op identity to decide algebraic decomposition and
+output dtype, and the executor maps it to the ops vocabulary. A CUSTOM
+reducer may instead be supplied as `fn` (a length-1 list holding an anvl
+function `fn(x, dims)` that collapses `dims`), with `op = "custom"`; the
+executor calls it directly. A custom reducer cannot be decomposed across
+spatial chunks, so it is supported over the `t`/`band` axes (each
+spatial chunk holds the full axis), not over `x`/`y`.
 
 ## Usage
 
@@ -40,7 +43,7 @@ ReduceNode(
 
 - op:
 
-  Reduction name, e.g. "mean" (see `.reduce_ops`), or "custom".
+  Reduction name, e.g. "mean" (one of the names above), or "custom".
 
 - over:
 

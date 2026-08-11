@@ -4,8 +4,8 @@ Grid, dtype, native block size, and file nodata come from GDAL via the
 adapter
 ([`gdal_grid_spec()`](https://belian-earth.github.io/garry/reference/gdal_grid_spec.md)).
 A user-supplied `nodata` overrides the file's. An integer source with
-nodata is promoted to f32 so NaN can carry nodata downstream (decision
-D8); the sentinel-to-NaN rewrite happens at read time in the adapter.
+nodata is promoted to f32 so NaN can carry nodata downstream; the
+sentinel-to-NaN rewrite happens at read time in the adapter.
 
 ## Usage
 
@@ -89,8 +89,12 @@ execution. Use it when the dataset's grid is known by construction, e.g.
 GTI mosaics pinned to a target grid via
 [`gti_open_options()`](https://belian-earth.github.io/garry/reference/gti_open_options.md),
 where opening every time slice just to rediscover the grid costs a
-remote COG header fetch per slice (measured: ~0.1 s each, serial, on the
-host). `grid` must describe the dataset exactly as `path` +
-`open_options` open it, including the source dtype; it is trusted, not
-checked. With `grid` given, file nodata is NOT consulted (pass `nodata`
-explicitly if the source has a sentinel).
+serial remote COG header fetch per slice. `grid` must describe the
+dataset exactly as `path` + `open_options` open it, including the source
+dtype; it is trusted, not checked. With `grid` given, file nodata is NOT
+consulted (pass `nodata` explicitly if the source has a sentinel).
+
+## See also
+
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)

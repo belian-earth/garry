@@ -21,8 +21,8 @@ bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 
 - sigma_d:
 
-  Spatial Gaussian standard deviation in pixels (default 1, hutan's
-  `(window - 1) / 2` for a 3x3 window).
+  Spatial Gaussian standard deviation in pixels (default 1, matching the
+  default 3x3 window).
 
 - radius:
 
@@ -37,10 +37,9 @@ A focal body `fn(shifts)` for
 
 ## Details
 
-Semantics match
-`rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")`: a NaN
-centre stays NaN; NaN neighbours (and the NaN halo garry pads outside
-the raster) drop out of the weighted mean. `sigma_r` must be supplied:
-the parameter-free per-band default (the band's own sd) is a
-whole-raster statistic, so compute it in a separate reduce pass (or
-reuse fitted values) and pass it in.
+A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
+outside the raster) drop out of the weighted mean (the semantics of
+`rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")`).
+`sigma_r` must be supplied: the parameter-free per-band default (the
+band's own sd) is a whole-raster statistic, so compute it in a separate
+reduce pass (or reuse fitted values) and pass it in.

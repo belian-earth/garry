@@ -7,10 +7,11 @@ step `t`, `body(carry, x)` gets the current carry and the step-`t` slice
 of `xs` (taken along dim 1 with that unit axis dropped) and returns
 `list(carry = , out = )`; the `out`s are stacked into `(length, ...)`
 buffers. `reverse = TRUE` runs `t = length..1`, still reading and
-writing at position `t` (what an RTS backward pass needs). Traced values
-route to
+writing at position `t` (what a backward smoothing pass needs, e.g.
+Rauch-Tung-Striebel). Traced values route to
 [`anvl::nv_scan`](https://r-xla.github.io/anvl/reference/nv_scan.html);
-plain R arrays take the pure-R oracle loop with identical semantics.
+plain R arrays take the pure-R reference implementation with identical
+semantics.
 
 ## Usage
 

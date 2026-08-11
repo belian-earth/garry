@@ -61,6 +61,13 @@ A `GridSpec`.
 Remote sources are read via HTTP range requests (header only), so this
 does not download the whole file.
 
+## See also
+
+[`grid_from_bbox()`](https://belian-earth.github.io/garry/reference/grid_from_bbox.md)
+to build a grid from a lon/lat bounding box;
+[`grid_spec()`](https://belian-earth.github.io/garry/reference/grid_spec.md)
+to build one from an explicit extent.
+
 ## Examples
 
 ``` r

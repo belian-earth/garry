@@ -1,13 +1,16 @@
 # Kalman local-linear-trend smoother body for [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md).
 
 Returns a scan body `fn(xs, margin)` computing the smoothed level mean
-(or its standard error) of a per-pixel local-linear-trend Kalman
-filter + RTS smoother over the `t` axis, batched over the chunk's
-pixels. Use with `scan_over(x, kalman_llt(...), direction = "bidir")`;
-`x` is the observation stack, optionally `list(x, r)` with `r` a
-per-year relative observation-variance stack
-(`Var(v_t) = sigma_obs^2 * r_t`; `r` must be finite wherever `y` is
-observed).
+(or its standard error) of a per-pixel local-linear-trend Kalman filter
+with a Rauch-Tung-Striebel smoothing pass over the `t` axis, batched
+over the chunk's pixels. This is the low-level building block; most
+users want
+[`kalman_smooth()`](https://belian-earth.github.io/garry/reference/kalman_smooth.md),
+which wraps it. Use with
+`scan_over(x, kalman_llt(...), direction = "bidir")`; `x` is the
+observation stack, optionally `list(x, r)` with `r` a per-year relative
+observation-variance stack (`Var(v_t) = sigma_obs^2 * r_t`; `r` must be
+finite wherever `y` is observed).
 
 ## Usage
 
@@ -62,17 +65,13 @@ A scan body `fn(xs, margin)` for
 
 ## Details
 
-Hyperparameters are fixed R scalars, fitted off-raster (e.g. hutan's
-marginal-likelihood MLE) and closed over as f64 constants. Pixels with
-fewer than 3 valid observations return all-NaN (matching hutan).
-Initialisation is the large-variance diffuse approximation
-`P1 = kappa * I`; see the file header for the f64/kappa rationale.
-
-`output = "mean"` and `output = "sd"` are separate scan bodies (one
-export per node); the smoother recomputes per node, which is noise at T
-~ 15 next to IO.
+Hyperparameters are fixed scalars, fitted outside the raster pipeline
+(for example by marginal-likelihood MLE on sampled pixel series). Pixels
+with fewer than 3 valid observations return all-NaN. Initialisation is
+the large-variance diffuse approximation `P1 = kappa * I`.
 
 ## See also
 
+[`kalman_smooth()`](https://belian-earth.github.io/garry/reference/kalman_smooth.md),
 [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md),
 [`g_scan()`](https://belian-earth.github.io/garry/reference/g_scan.md)

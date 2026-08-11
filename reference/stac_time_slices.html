@@ -71,7 +71,7 @@ tiles sharing a slice mosaic together in <code><a href="lazy_stac_stack.html">la
 
 <dt id="arg-lon">lon<a class="anchor" aria-label="anchor" href="#arg-lon"></a></dt>
 <dd><p>Longitude (degrees, WGS84) whose solar time defines
-<code>"solar_day"</code> — use the centre of the analysis area. Defaults to
+<code>"solar_day"</code>: use the centre of the analysis area. Defaults to
 the circular mean of the source footprint centres (safe across
 the antimeridian).</p></dd>
 
@@ -84,11 +84,27 @@ the antimeridian).</p></dd>
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p><code>"day"</code> truncates the UTC datetime: one satellite overpass that
 crosses local midnight in UTC terms splits into two slices.
-<code>"solar_day"</code> instead shifts each timestamp by the local solar
-offset (<code>lon</code> degrees x 240 s, the odc-stac rule) before taking the
-date, so acquisitions group by the local day of the overpass; the
-two agree everywhere except within ~an overpass of the UTC date
-line at <code>lon</code>.</p>
+<code>"solar_day"</code> instead shifts each timestamp by a longitude-dependent
+solar-time offset of <code>lon</code> degrees x 240 s (as used by odc-stac)
+before taking the date, so acquisitions group by the local day of
+the overpass; the two agree everywhere except within ~an overpass
+of the UTC date line at <code>lon</code>.</p>
+    </div>
+    <div class="section level2">
+    <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>
+    <div class="dont-index"><p>Other stac helpers:
+<code><a href="lazy_stac_stack.html">lazy_stac_stack()</a></code>,
+<code><a href="stac_drop_duplicates.html">stac_drop_duplicates()</a></code>,
+<code><a href="stac_filter_assets.html">stac_filter_assets()</a></code>,
+<code><a href="stac_filter_cloud.html">stac_filter_cloud()</a></code>,
+<code><a href="stac_filter_coverage.html">stac_filter_coverage()</a></code>,
+<code><a href="stac_filter_orbit.html">stac_filter_orbit()</a></code>,
+<code><a href="stac_gti_index.html">stac_gti_index()</a></code>,
+<code><a href="stac_merge.html">stac_merge()</a></code>,
+<code><a href="stac_query.html">stac_query()</a></code>,
+<code><a href="stac_rename_assets.html">stac_rename_assets()</a></code>,
+<code><a href="stac_sign_mpc.html">stac_sign_mpc()</a></code>,
+<code><a href="stac_sources.html">stac_sources()</a></code></p></div>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

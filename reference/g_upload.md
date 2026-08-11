@@ -1,7 +1,7 @@
 # Upload an R array to an AnvlArray of the given garry dtype.
 
-Unsigned dtypes upload via a wider signed carrier (see
-`.anvl_upload_dtype`): anvl cannot construct them from R numerics.
+Unsigned dtypes upload via a wider signed carrier: anvl cannot construct
+them from R numerics.
 
 ## Usage
 

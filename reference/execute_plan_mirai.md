@@ -1,10 +1,11 @@
 # Execute a Plan across mirai daemons.
 
-Requires
-[`mirai::daemons()`](https://mirai.r-lib.org/reference/daemons.html) to
-be set by the caller. Results are identical to
+Requires garry's daemon pools: call
+[`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
+first (the function errors when the pools are not running). Results are
+identical to
 [`execute_plan()`](https://belian-earth.github.io/garry/reference/execute_plan.md)
-(same plan, same kernels; the equivalence is gate-tested).
+(same plan, same kernels).
 
 ## Usage
 
@@ -33,3 +34,8 @@ execute_plan_mirai(
 
 As
 [`execute_plan()`](https://belian-earth.github.io/garry/reference/execute_plan.md).
+
+## See also
+
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
+[`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)

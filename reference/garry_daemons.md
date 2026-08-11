@@ -8,15 +8,14 @@ disjoint slice of the machine at creation
 (`garry_opt("pool_affinity")`), so an XLA client created anywhere is
 narrow rather than all-cores; the scheduler's live-RAM byte budgets
 decide how many tasks are actually in flight; excess daemons idle lean.
-Called with no arguments it sizes the pools to the machine: `read` =
-logical cores capped at 8 (past cores/2 readers the k=2 affinity floor
-oversubscribes the machine; 8 was measured fastest at scale) and
-`compute` = cores/3 capped at 8, floor 2 (the routed width sweep's sweet
-spot; CUDA keeps 2 — concurrent clients share one card).
-`collect(distributed = TRUE)` detects the pools automatically and
-pre-compiles stage kernels at run start (`garry_opt("jit_warmup")`) —
-scan kernels included, targeted at the `garry_opt("scan_profiles")`
-designated profiles only.
+Called with no arguments it sizes the pools to the machine: `read` = all
+logical cores (remote fetch is latency-bound, so a wide read pool keeps
+the network drain full) and `compute` = a third of the logical cores,
+capped at 8 with a floor of 2; on CUDA the compute pool is 2, since
+concurrent clients share one card. `collect(distributed = TRUE)` detects
+the pools automatically and pre-compiles stage kernels at run start
+(`garry_opt("jit_warmup")`), scan kernels included, targeted at the
+`garry_opt("scan_profiles")` designated profiles only.
 
 ## Usage
 
@@ -34,29 +33,27 @@ garry_daemons(
 
 - read:
 
-  Read-pool daemon count; `NULL` (default) uses logical cores. `0` tears
-  the pool down.
+  Read-pool daemon count; `NULL` (default) uses all logical cores. `0`
+  tears the pool down.
 
 - compute:
 
-  Compute-pool daemon count; `NULL` (default) uses TWO with half-machine
-  affinity masks. After the placement pass fuses kernel fleets onto the
-  readers, the compute pool's residual workloads (scans, big fused
-  reductions) are compile-bound: every daemon that runs a scan task pays
-  its multi-GB kernel compile, so width multiplies compiles without
+  Compute-pool daemon count; `NULL` (default) uses a third of the
+  logical cores, capped at 8 with a floor of 2 (2 on CUDA: concurrent
+  clients share one card). The compute pool's residual workloads (scans,
+  big fused reductions) are compile-bound: every daemon that runs a scan
+  task pays its kernel compile, so width multiplies compiles without
   adding admitted concurrency. Larger pools are SAFE at any width
-  (per-daemon masks, byte admission, cold-kernel slow start,
-  scan-compile surcharge) and pay off for non-fusable fleet workloads
-  (~2x measured for matmul fleets at 10 x 2-CPU daemons); they are an
-  explicit choice, not the default. `0` tears down.
+  (per-daemon affinity masks and byte admission) and pay off for fleets
+  of independent non-fusable tasks; they are an explicit choice, not the
+  default. `0` tears down.
 
 - read_handles:
 
   Open-handle cache depth on read daemons. `NULL` (default) uses
   `garry_opt("read_handles")`. Depth 1 suits per-slice mosaics that are
   rarely revisited (every open warped mosaic pins warper and connection
-  memory; measured ~15 MB/daemon saved at no wall cost on the
-  benchmark); plans revisiting a few local multi-band files across many
+  memory); plans revisiting a few local multi-band files across many
   windows want a depth covering the interleaved file count, since
   closing a dataset discards its GDAL block cache.
 
@@ -95,3 +92,9 @@ runs on every read daemon. Neither touches the host's own GDAL config
 [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
 yourself to tune host-side discovery. `MALLOC_*` is only-if-unset, and
 `gdal_config = FALSE` skips the GDAL settings entirely.
+
+## See also
+
+[`garry_daemons_set()`](https://belian-earth.github.io/garry/reference/garry_daemons_set.md),
+[`garry_pool_hygiene()`](https://belian-earth.github.io/garry/reference/garry_pool_hygiene.md),
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)

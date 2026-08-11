@@ -2,7 +2,8 @@
 
 One band per asset, each a time-sliced GTI mosaic pinned to `grid`
 (mixed source CRS is fine; the GTI driver reprojects per tile). All
-bands share one IR graph, so a mask defined once (see
+bands share one intermediate representation (IR) graph, so a mask
+defined once (see
 [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)) is
 computed once and dedup'd across bands, and
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
@@ -38,7 +39,9 @@ lazy_dataset(
 
 - grid:
 
-  Target `GridSpec` for every band.
+  Target
+  [`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md)
+  for every band.
 
 - assets:
 
@@ -103,3 +106,9 @@ lazy_dataset(
 ## Value
 
 A `LazyDataset`.
+
+## See also
+
+[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md),
+[`group_by_time()`](https://belian-earth.github.io/garry/reference/group_by_time.md),
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)

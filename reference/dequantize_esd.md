@@ -38,14 +38,11 @@ L_j/2 \rfloor) / \lfloor L_j/2 \rfloor\$\$
 Written in the `g_*` vocabulary so it fuses onto the read as a garry map
 (one
 [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
-per band and level) – on the device, not a separate decode pass.
-Truncation toward zero is the double-cast idiom
-`g_cast(g_cast(z, "i32"), "f32")` (XLA convert semantics); all
-arithmetic is exact in f32 because codes are integers below
-`prod(levels)` (64000 for the ESD default, well under 2^24). NaN
-(nodata, D8) is re-masked explicitly after the decode: casting NaN to an
-integer is undefined, so propagation through the casts cannot be relied
-on.
+per band and level) – on the device, not a separate decode pass. Integer
+division truncates toward zero; all arithmetic is exact in f32 because
+codes are integers below `prod(levels)` (64000 for the ESD default, well
+under 2^24). NaN nodata is re-masked explicitly after the decode, so
+nodata pixels stay NaN in the output.
 
 The default `levels` matches the ESD upstream quantiser (12 monthly
 uint16 bands x 6 levels = 72 embedding channels). Any FSQ-packed product

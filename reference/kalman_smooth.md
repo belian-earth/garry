@@ -1,6 +1,8 @@
-# Smooth a stack with the LLT Kalman smoother (mean + sd pair).
+# Smooth a stack with a local-linear-trend Kalman smoother.
 
-Convenience wrapper: one
+Fits a per-pixel local-linear-trend Kalman filter and smoother over the
+time axis and returns the smoothed level (and optionally its standard
+error). Convenience wrapper: one
 [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
 per requested output, sharing one
 [`kalman_llt()`](https://belian-earth.github.io/garry/reference/kalman_llt.md)
@@ -54,3 +56,12 @@ kalman_smooth(
 ## Value
 
 A named list of lazy objects, one per requested output.
+
+## See also
+
+[`hampel_smooth()`](https://belian-earth.github.io/garry/reference/hampel_smooth.md)
+for outlier removal,
+[`fill_gaps()`](https://belian-earth.github.io/garry/reference/fill_gaps.md)
+for simple gap filling,
+[`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
+for custom scans.

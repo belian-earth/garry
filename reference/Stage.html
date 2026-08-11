@@ -82,7 +82,14 @@
 
 
 <dt id="arg-fn">fn<a class="anchor" aria-label="anchor" href="#arg-fn"></a></dt>
-<dd><p>The composed stage closure (see calling conventions).</p></dd>
+<dd><p>The composed stage closure. For "compute" stages it is
+called as <code>fn(inputs)</code> with a list of chunk arrays in
+<code>input_nodes</code> order, each padded to the stage halo, and returns
+the chunk-core array; a "reduce_partial" stage returns a named
+list of per-chunk partials and "reduce_combine" combines those
+lists into the final value; for "source_read" and "warp" stages
+<code>fn</code> is the identity (the executor and the GDAL warper supply the
+values).</p></dd>
 
 
 <dt id="arg-halo">halo<a class="anchor" aria-label="anchor" href="#arg-halo"></a></dt>
@@ -115,10 +122,10 @@ other stages, plus the stage tail).</p></dd>
 
 
 <dt id="arg-out-pad">out_pad<a class="anchor" aria-label="anchor" href="#arg-out-pad"></a></dt>
-<dd><p>Spatial padding the stage's chunks are computed with
-(D22): consumers needing a halo on this stage's exports receive it
-as a recomputed ring instead of a materialise-first refusal.
-Inputs arrive padded to <code>halo + out_pad</code>.</p></dd>
+<dd><p>Spatial padding rings the stage's chunks are computed
+with: consumers needing a halo on this stage's exports receive it
+as a ring of recomputed cells rather than requiring the stage to
+materialise first. Inputs arrive padded to <code>halo + out_pad</code>.</p></dd>
 
 
 <dt id="arg-export-pads">export_pads<a class="anchor" aria-label="anchor" href="#arg-export-pads"></a></dt>

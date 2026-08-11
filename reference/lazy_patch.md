@@ -1,7 +1,7 @@
 # Whole-window model op (advanced): apply `fn` to the raw padded chunk.
 
 The escape hatch behind model-inference verbs such as
-[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm_mask.md):
+[`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md):
 where
 [`focal()`](https://belian-earth.github.io/garry/reference/focal.md)
 materialises a shift list (unusable beyond small radii), a patch op
@@ -11,6 +11,8 @@ on the last two (spatial) dims, derive every size from its input's
 shape, be written in the `g_*` vocabulary, and reduce the leading band
 axis to `out_bands` channels (0 = a plain 2D result). Not
 differentiable.
+[`ocm_model()`](https://belian-earth.github.io/garry/reference/ocm.md)-based
+cloud-mask prediction is the in-package example of its use.
 
 ## Usage
 

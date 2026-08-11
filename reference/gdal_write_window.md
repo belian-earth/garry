@@ -1,6 +1,6 @@
 # Write a garry-oriented matrix into an open output dataset.
 
-NaN cells demote to `nodata` when given (D8 reversed at the sink);
+NaN cells are converted back to the sink `nodata` value when given;
 writing NaN into an integer band without a sentinel is an error.
 
 ## Usage

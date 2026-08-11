@@ -1,8 +1,8 @@
 # Read a window from a GDAL source as a garry-oriented matrix.
 
-Returns a `[y, x]` matrix (row 1 = northernmost). Offsets are 0-based
-pixel coordinates. If `nodata` is supplied, matching cells (and any
-file-level NA) are rewritten to NaN (D8) and the result is numeric.
+Returns the window with row 1 = northernmost. Offsets are 0-based pixel
+coordinates. If `nodata` is supplied, matching cells (and any file-level
+NA) are rewritten to NaN and the result is numeric.
 
 ## Usage
 
@@ -30,7 +30,8 @@ gdal_read_window(
 
 - band:
 
-  1-based band index.
+  1-based band index, or a vector of them for a multi-band read in one
+  pass.
 
 - x_off, y_off, x_size, y_size:
 
@@ -46,8 +47,10 @@ gdal_read_window(
 
 - out:
 
-  Output form: a `[y, x]` `"matrix"` (default), or a raw f32 store value
-  (`"raw_f32"`) for the distributed store path.
+  Output form: `"matrix"` (default) returns an R numeric result;
+  `"raw_f32"` returns the pixels packed as a raw row-major f32 payload,
+  avoiding a numeric copy when the result feeds a binary store or
+  another process.
 
 - scale, offset:
 
@@ -57,4 +60,7 @@ gdal_read_window(
 
 ## Value
 
-A numeric `y_size x x_size` matrix.
+With `out = "matrix"`: a numeric `y_size x x_size` matrix for a single
+band, or a `(band, y, x)` numeric array when `band` is a vector. With
+`out = "raw_f32"`: a raw row-major f32 payload (band planes contiguous
+when `band` is a vector).

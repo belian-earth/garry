@@ -1,9 +1,8 @@
 # Are the garry daemon pools running?
 
-`TRUE` when both mirai pools created by
+`TRUE` when the read and compute daemon pools created by
 [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
-(`garry_read` and `garry_compute`) have daemons. This is the default for
-the `distributed` argument of
+are running. This is the default for the `distributed` argument of
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
 so `collect(x)` uses the pools when they are up and runs single-threaded
 otherwise. Mirrors

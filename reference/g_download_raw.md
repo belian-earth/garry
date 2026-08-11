@@ -1,8 +1,7 @@
 # Download an AnvlArray as a raw store payload.
 
-Row-major byte payload tagged with `gdim`/`gdt` (D20, extended to f64 by
-design/f64-store.md); no double materialisation. Raw f64 is
-bit-identical to the doubles path.
+Row-major byte payload tagged with `gdim`/`gdt` attributes; no double
+materialisation. Raw f64 is bit-identical to the doubles path.
 
 ## Usage
 

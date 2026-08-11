@@ -1,12 +1,13 @@
 # A named, multi-band, multi-time lazy dataset.
 
 The dataset holds one entry per band; each entry is a list of
-per-time-slice `LazyRaster`s on a shared grid and IR graph. Build one
-with
+per-time-slice `LazyRaster`s on a shared grid and intermediate
+representation (IR) graph. Construct one with
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 (from a STAC source table) or
 [`as_dataset()`](https://belian-earth.github.io/garry/reference/as_dataset.md)
-(from `LazyRaster`s you already have). Apply
+(from `LazyRaster`s you already have) rather than calling this class
+constructor directly. Apply
 [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md),
 [`focal()`](https://belian-earth.github.io/garry/reference/focal.md),
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
@@ -43,7 +44,7 @@ LazyDataset(
 
 - steps:
 
-  Display-only pipeline log (list of `.step()`s), shown by
+  Internal display-only pipeline log, shown by
   [`draw()`](https://belian-earth.github.io/garry/reference/draw.md);
   does not affect execution.
 

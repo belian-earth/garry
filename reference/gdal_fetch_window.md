@@ -1,8 +1,8 @@
 # Copy one source's target-window bytes to a local file.
 
-The fetch half of the phase 12 fetch/assemble split: a plain
+The fetch half of the fetch/assemble split: a plain
 `gdal_translate -srcwin` of the window intersecting `ext` (plus a
-warp-kernel `margin` in source pixels), native dtype and blocks — no
+warp-kernel `margin` in source pixels), native dtype and blocks; no
 warp, no mosaic on the remote path.
 
 ## Usage

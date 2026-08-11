@@ -33,3 +33,7 @@ gti_open_options(
 ## Value
 
 Character vector of "KEY=VALUE" open options.
+
+## See also
+
+[`gti_index_create()`](https://belian-earth.github.io/garry/reference/gti_index_create.md)

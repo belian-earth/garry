@@ -38,3 +38,13 @@ grid_spec(crs, extent, dims = NULL, dtype = "f32", res = NULL)
 ## Value
 
 A `GridSpec`.
+
+## See also
+
+[`grid_from_bbox()`](https://belian-earth.github.io/garry/reference/grid_from_bbox.md)
+and
+[`grid_from_src()`](https://belian-earth.github.io/garry/reference/grid_from_src.md),
+the higher-level constructors that derive a grid from an area of
+interest;
+[`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md),
+the underlying class constructor.

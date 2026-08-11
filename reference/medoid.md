@@ -4,9 +4,10 @@ Returns a custom reducer for
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
 computing, per pixel, the *observed* band-vector nearest the
 [`geomedian()`](https://belian-earth.github.io/garry/reference/geomedian.md):
-a composite whose every pixel is a real spectrum from a real date (the
-odc/hdstats medoid construction). Use it when downstream analysis must
-not see synthetic spectra at all.
+a composite whose every pixel is a real spectrum from a real date,
+following the medoid construction of the Open Data Cube's hdstats
+package. Use it when downstream analysis must not see synthetic spectra
+at all.
 
 ## Usage
 
@@ -40,4 +41,8 @@ a `(band, t, y, x)` cube reduced over `"t"`.
 ## See also
 
 [`geomedian()`](https://belian-earth.github.io/garry/reference/geomedian.md),
-[`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
+[`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md);
+[`band_project()`](https://belian-earth.github.io/garry/reference/band_project.md)
+and
+[`mlp_project()`](https://belian-earth.github.io/garry/reference/mlp_project.md)
+for projections over the surviving band axis.

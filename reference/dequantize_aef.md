@@ -2,10 +2,12 @@
 
 The AEF Int8 decode `((x / 127.5)^2) * sign(x)`: per-value, nonlinear,
 sign- preserving, mapping the code range `[-127, 127]` to ~`[-1, 1]`.
-Written in the `g_*` vocabulary so it fuses onto the read as a garry map
-(pass to
+Written in the `g_*` vocabulary, so applying it with
+[`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
+after
 [`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
-`dequant =`) – on the device, not a separate decode pass.
+fuses the decode onto the read, on the device rather than as a separate
+decode pass.
 
 ## Usage
 

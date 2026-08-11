@@ -31,3 +31,9 @@ g_shiftr(a, n)
 ## Value
 
 Integral array shaped like `a`.
+
+## See also
+
+[`qa_bits()`](https://belian-earth.github.io/garry/reference/qa_bits.md)
+and [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)
+for the QA-masking verbs built on these ops.

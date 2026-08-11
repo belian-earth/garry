@@ -39,7 +39,13 @@ Stage(
 
 - fn:
 
-  The composed stage closure (see calling conventions).
+  The composed stage closure. For "compute" stages it is called as
+  `fn(inputs)` with a list of chunk arrays in `input_nodes` order, each
+  padded to the stage halo, and returns the chunk-core array; a
+  "reduce_partial" stage returns a named list of per-chunk partials and
+  "reduce_combine" combines those lists into the final value; for
+  "source_read" and "warp" stages `fn` is the identity (the executor and
+  the GDAL warper supply the values).
 
 - halo:
 
@@ -72,10 +78,10 @@ Stage(
 
 - out_pad:
 
-  Spatial padding the stage's chunks are computed with (D22): consumers
-  needing a halo on this stage's exports receive it as a recomputed ring
-  instead of a materialise-first refusal. Inputs arrive padded to
-  `halo + out_pad`.
+  Spatial padding rings the stage's chunks are computed with: consumers
+  needing a halo on this stage's exports receive it as a ring of
+  recomputed cells rather than requiring the stage to materialise first.
+  Inputs arrive padded to `halo + out_pad`.
 
 - export_pads:
 

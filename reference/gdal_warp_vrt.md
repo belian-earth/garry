@@ -1,9 +1,9 @@
 # Build a warped VRT of a source onto an exact target grid.
 
-Delegates every pixel of cross-CRS math to the GDAL warper (decision
-D5): `-te`/`-ts` pin the output grid exactly to `target_grid`. Float
-targets without a source nodata get `-dstnodata nan` so area outside the
-source footprint reads as NaN, not 0 (D8).
+Delegates every pixel of cross-CRS math to the GDAL warper: `-te`/`-ts`
+pin the output grid exactly to `target_grid`. Float targets without a
+source nodata get `-dstnodata nan` so area outside the source footprint
+reads as NaN, not 0.
 
 ## Usage
 

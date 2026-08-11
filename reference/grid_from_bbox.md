@@ -60,6 +60,13 @@ edges as standard parallels. Centred projections are bespoke (no EPSG
 code), so a grid's CRS may print as its projection name rather than an
 EPSG code.
 
+## See also
+
+[`grid_from_src()`](https://belian-earth.github.io/garry/reference/grid_from_src.md)
+to build a grid from a raster or vector source;
+[`grid_spec()`](https://belian-earth.github.io/garry/reference/grid_spec.md)
+to build one from an explicit extent.
+
 ## Examples
 
 ``` r

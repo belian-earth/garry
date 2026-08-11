@@ -33,3 +33,7 @@ gti_index_create(entries, path, crs, layer = "index")
 ## Value
 
 `path`, invisibly.
+
+## See also
+
+[`gti_open_options()`](https://belian-earth.github.io/garry/reference/gti_open_options.md)

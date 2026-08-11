@@ -4,9 +4,8 @@ Reads every band of `src` and writes garry's raw cube format:
 band-sequential f32/f64 planes in a `.bin`, described by a
 `VRTRawRasterBand` VRT that carries the georeference. Any GDAL consumer
 reads the VRT normally; garry's reader recognises the shape and reads
-the bin directly (measured ~9x on a 73-band cube — GDAL's tile walk
-costs ~2.2 s per 482 MB window regardless of compression, the raw read
-0.24 s). Use it once on pipeline intermediates that are read many times
+the bin directly, which is many times faster than walking the tiled
+GeoTIFF. Use it once on pipeline intermediates that are read many times
 (per-year context cubes, prediction stacks).
 
 ## Usage
@@ -32,3 +31,7 @@ stage_raw_cube(src, dst_vrt, slab_rows = 512L)
 ## Value
 
 `dst_vrt`, invisibly.
+
+## See also
+
+[`gdal_create_output()`](https://belian-earth.github.io/garry/reference/gdal_create_output.md)

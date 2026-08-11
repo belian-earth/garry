@@ -23,3 +23,7 @@ as_dataset(bands, mask_asset = NULL)
 ## Value
 
 A `LazyDataset`.
+
+## See also
+
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)

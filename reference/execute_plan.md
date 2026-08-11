@@ -1,6 +1,11 @@
-# Execute a Plan on the anvl backend (single-threaded).
+# Execute a Plan on the anvl backend (single process).
 
-Execute a Plan on the anvl backend (single-threaded).
+Runs every stage of a
+[`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md)
+plan in the current R session.
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+is the normal user entry point; call this directly only when executing a
+plan by hand.
 
 ## Usage
 
@@ -42,5 +47,11 @@ execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL, wspec = NULL)
 The sink stage's value (matrix for raster sinks, scalar for global
 reductions), or `path` invisibly when writing. When
 `options(garry.exec_stats = TRUE)`, in-memory results carry a
-`garry_exec_stats` attribute with the distinct input shapes submitted
-per stage (kernel-cache accounting).
+`garry_exec_stats` attribute recording the distinct input shapes
+submitted per stage.
+
+## See also
+
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
+[`execute_plan_mirai()`](https://belian-earth.github.io/garry/reference/execute_plan_mirai.md),
+[`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md)

@@ -84,10 +84,10 @@ across all value bands.</p>
 <dd><p>The removal predicate (mask where TRUE). One of:</p><ul><li><p>a numeric vector -&gt; value membership (bad if the pixel value is in the
 set), for categorical QA such as Sentinel-2 SCL,
 e.g. <code>c(0, 1, 2, 3, 8, 9, 10, 11)</code>;</p></li>
-<li><p><code>qa_bits(bits)</code> -&gt; a bitmask test (bad if any listed bit is set), for
+<li><p><code><a href="qa_bits.html">qa_bits()</a></code> -&gt; a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. <code>qa_bits(0:3)</code>;</p></li>
-<li><p>a function <code>\(f) ...</code> -&gt; a raw anvl predicate returning a 0/1 (or logical)
-mask.</p></li>
+<li><p>a function <code>\(f) ...</code> -&gt; a predicate returning a 0/1 (or logical)
+mask, written in the <code>g_*</code> vocabulary.</p></li>
 </ul></dd>
 
 
