@@ -4,7 +4,7 @@
 \alias{MapNode}
 \title{Elementwise map. \code{fn} is an R function over scalars/arrays; it will be
 composed with neighbouring fusable nodes and wrapped in \code{anvl::jit()}
-at plan time.}
+at plan time. Created by \code{\link[=lazy_map]{lazy_map()}}.}
 \usage{
 MapNode(
   id = integer(0),
@@ -28,5 +28,5 @@ A \code{MapNode}.
 \description{
 Elementwise map. \code{fn} is an R function over scalars/arrays; it will be
 composed with neighbouring fusable nodes and wrapped in \code{anvl::jit()}
-at plan time.
+at plan time. Created by \code{\link[=lazy_map]{lazy_map()}}.
 }

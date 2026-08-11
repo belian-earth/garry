@@ -25,10 +25,10 @@ mask(
 \item a numeric vector -> value membership (bad if the pixel value is in the
 set), for categorical QA such as Sentinel-2 SCL,
 e.g. \code{c(0, 1, 2, 3, 8, 9, 10, 11)};
-\item \code{qa_bits(bits)} -> a bitmask test (bad if any listed bit is set), for
+\item \code{\link[=qa_bits]{qa_bits()}} -> a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. \code{qa_bits(0:3)};
-\item a function \verb{\\(f) ...} -> a raw anvl predicate returning a 0/1 (or logical)
-mask.
+\item a function \verb{\\(f) ...} -> a predicate returning a 0/1 (or logical)
+mask, written in the \verb{g_*} vocabulary.
 }}
 
 \item{open}{Opening radius (despeckle): erosion then dilation at this radius,

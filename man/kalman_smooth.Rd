@@ -2,7 +2,7 @@
 % Please edit documentation in R/scan_kalman.R
 \name{kalman_smooth}
 \alias{kalman_smooth}
-\title{Smooth a stack with the LLT Kalman smoother (mean + sd pair).}
+\title{Smooth a stack with a local-linear-trend Kalman smoother.}
 \usage{
 kalman_smooth(
   x,
@@ -35,6 +35,12 @@ same grid (\code{Var(v_t) = sigma_obs^2 * obs_var_t}).}
 A named list of lazy objects, one per requested output.
 }
 \description{
-Convenience wrapper: one \code{\link[=scan_over]{scan_over()}} per requested output, sharing
-one \code{\link[=kalman_llt]{kalman_llt()}} parameterisation.
+Fits a per-pixel local-linear-trend Kalman filter and smoother over
+the time axis and returns the smoothed level (and optionally its
+standard error). Convenience wrapper: one \code{\link[=scan_over]{scan_over()}} per
+requested output, sharing one \code{\link[=kalman_llt]{kalman_llt()}} parameterisation.
+}
+\seealso{
+\code{\link[=hampel_smooth]{hampel_smooth()}} for outlier removal, \code{\link[=fill_gaps]{fill_gaps()}} for
+simple gap filling, \code{\link[=scan_over]{scan_over()}} for custom scans.
 }

@@ -18,7 +18,7 @@ NULL
 #'
 #' The checkpoint verb (dbplyr's `compute()` for rasters): execute the
 #' current graph, write the results to local raw-BSQ cubes (`.vrt` +
-#' `.bin`, the format any GDAL tool reads and garry re-reads ~9x faster
+#' `.bin`, a format any GDAL tool reads and garry re-reads much faster
 #' than tiled GeoTIFF), and return the SAME KIND of lazy object rebuilt
 #' over the local files. Everything downstream continues unchanged;
 #' nothing upstream (network reads, warps, masking, model inference)
@@ -28,9 +28,9 @@ NULL
 #' single multi-sink plan (all slices' reads drain together), carrying
 #' band names, slice dates, and the `mask_asset` into the rebuilt
 #' dataset; ragged bands (a band missing some slices) survive. A
-#' `LazyRaster` writes one cube and reopens it, which is also the
-#' sanctioned route around the v1 "cannot warp a computed raster" rule:
-#' `align(materialise(x, dir), grid)`.
+#' `LazyRaster` writes one cube and reopens it. A computed raster
+#' cannot be warped directly, so materialise-then-rewarp is the
+#' supported route: `align(materialise(x, dir), grid)`.
 #'
 #' Files land at `dir/name-<slice>.vrt` (dataset) or `dir/name.vrt`
 #' (raster). Existing files are refused unless `overwrite = TRUE`:
@@ -54,6 +54,8 @@ NULL
 #' @param distributed As in [collect()].
 #' @return A lazy object of the same class as `x`, reading the local
 #'   cubes.
+#' @seealso [collect()] to execute and return the result in the R
+#'   session; [write_tif()] to execute and stream to a GeoTIFF.
 #' @export
 materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
                         overwrite = FALSE,

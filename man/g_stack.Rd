@@ -13,7 +13,7 @@ g_stack(values)
 A \verb{length(values) x dim(values[[1]])} array.
 }
 \description{
-\verb{(y, x)} matrices stack into a \verb{(t, y, x)} cube (decision D17
-layout); \verb{(t, y, x)} cubes stack into a \verb{(k, t, y, x)} hyper-cube
+\verb{(y, x)} matrices stack into a \verb{(t, y, x)} cube;
+\verb{(t, y, x)} cubes stack into a \verb{(k, t, y, x)} hyper-cube
 (e.g. a rolling window's shifted copies, reduced over dim 1).
 }

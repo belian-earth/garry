@@ -77,6 +77,8 @@ NULL
 #' @examples
 #' # An equal-area 30 m grid over a small AOI.
 #' g <- grid_from_bbox(c(144.13, -7.725, 144.47, -7.475), res = 30)
+#' @seealso [grid_from_src()] to build a grid from a raster or vector
+#'   source; [grid_spec()] to build one from an explicit extent.
 #' @export
 grid_from_bbox <- function(bbox, res,
                            projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
@@ -104,17 +106,19 @@ grid_from_bbox <- function(bbox, res,
 #'   COG onto a 30 m grid while preserving its geometry.
 #' * **Vector** (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
 #'   so a projected CRS is chosen for it and the grid is built exactly as
-#'   `grid_from_bbox()` does, honouring `projection`/`ellps`.
+#'   [grid_from_bbox()] does, honouring `projection`/`ellps`.
 #'
 #' Remote sources are read via HTTP range requests (header only), so this does
 #' not download the whole file.
 #'
 #' @param x Path or URL to a raster or vector source.
 #' @param res Target resolution. For a raster, in the source's native CRS units;
-#'   for a vector, in the chosen projected CRS units (see `grid_from_bbox()`).
+#'   for a vector, in the chosen projected CRS units (see [grid_from_bbox()]).
 #' @param projection,ellps Vector sources only; ignored for rasters.
-#' @param buffer,dtype As in `grid_from_bbox()`.
+#' @param buffer,dtype As in [grid_from_bbox()].
 #' @return A `GridSpec`.
+#' @seealso [grid_from_bbox()] to build a grid from a lon/lat bounding
+#'   box; [grid_spec()] to build one from an explicit extent.
 #' @examples
 #' \dontrun{
 #' # Vector footprint -> equal-area 30 m grid.

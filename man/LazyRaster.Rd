@@ -2,12 +2,12 @@
 % Please edit documentation in R/lazy_raster.R
 \name{LazyRaster}
 \alias{LazyRaster}
-\title{Lazy raster array.}
+\title{Lazy raster array (single band stack).}
 \usage{
 LazyRaster(graph = Graph(), node_id = integer(0), grid = GridSpec())
 }
 \arguments{
-\item{graph}{The shared IR \code{Graph}.}
+\item{graph}{The shared intermediate representation (IR) \code{Graph}.}
 
 \item{node_id}{Integer id of this raster's node.}
 
@@ -17,5 +17,7 @@ LazyRaster(graph = Graph(), node_id = integer(0), grid = GridSpec())
 A \code{LazyRaster}.
 }
 \description{
-Lazy raster array.
+Users obtain one via \code{\link[=lazy_source]{lazy_source()}}, \code{\link[=lazy_cog]{lazy_cog()}}, or \code{\link[=lazy_dataset]{lazy_dataset()}}
+band access, and materialise it with \code{\link[=collect]{collect()}}; the constructor itself
+is rarely called directly.
 }

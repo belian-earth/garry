@@ -143,21 +143,27 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 
 #' Read a window from a GDAL source as a garry-oriented matrix.
 #'
-#' Returns a `[y, x]` matrix (row 1 = northernmost). Offsets are 0-based
+#' Returns the window with row 1 = northernmost. Offsets are 0-based
 #' pixel coordinates. If `nodata` is supplied, matching cells (and any
-#' file-level NA) are rewritten to NaN (D8) and the result is numeric.
+#' file-level NA) are rewritten to NaN and the result is numeric.
 #'
 #' @param path Path or VSI URL readable by GDAL.
-#' @param band 1-based band index.
+#' @param band 1-based band index, or a vector of them for a multi-band
+#'   read in one pass.
 #' @param x_off,y_off,x_size,y_size 0-based pixel window.
 #' @param nodata Length-0 or length-1 sentinel to promote to NaN.
 #' @param open_options GDAL open options ("KEY=VALUE").
-#' @param out Output form: a `[y, x]` `"matrix"` (default), or a raw f32
-#'   store value (`"raw_f32"`) for the distributed store path.
+#' @param out Output form: `"matrix"` (default) returns an R numeric
+#'   result; `"raw_f32"` returns the pixels packed as a raw row-major
+#'   f32 payload, avoiding a numeric copy when the result feeds a
+#'   binary store or another process.
 #' @param scale,offset Length-0 (absent) or length-1 band affine: values
 #'   become `v * scale + offset` after the nodata sentinel is promoted
 #'   to NaN, so sentinels never scale.
-#' @return A numeric `y_size x x_size` matrix.
+#' @return With `out = "matrix"`: a numeric `y_size x x_size` matrix for
+#'   a single band, or a `(band, y, x)` numeric array when `band` is a
+#'   vector. With `out = "raw_f32"`: a raw row-major f32 payload (band
+#'   planes contiguous when `band` is a vector).
 #' @export
 gdal_read_window <- function(path, band, x_off, y_off, x_size, y_size,
                              nodata = numeric(0),
@@ -287,15 +293,15 @@ gdal_open_update <- function(path) {
 #' band-sequential f32/f64 planes in a `.bin`, described by a
 #' `VRTRawRasterBand` VRT that carries the georeference. Any GDAL
 #' consumer reads the VRT normally; garry's reader recognises the shape
-#' and reads the bin directly (measured ~9x on a 73-band cube — GDAL's
-#' tile walk costs ~2.2 s per 482 MB window regardless of compression,
-#' the raw read 0.24 s). Use it once on pipeline intermediates that are
+#' and reads the bin directly, which is many times faster than walking
+#' the tiled GeoTIFF. Use it once on pipeline intermediates that are
 #' read many times (per-year context cubes, prediction stacks).
 #'
 #' @param src Source path readable by GDAL.
 #' @param dst_vrt Destination `.vrt` path (the `.bin` lands beside it).
 #' @param slab_rows Rows per read/write slab (memory bound).
 #' @return `dst_vrt`, invisibly.
+#' @seealso [gdal_create_output()]
 #' @export
 stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   if (!grepl("\\.vrt$", dst_vrt, ignore.case = TRUE))
@@ -497,10 +503,10 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 
 #' Build a warped VRT of a source onto an exact target grid.
 #'
-#' Delegates every pixel of cross-CRS math to the GDAL warper (decision
-#' D5): `-te`/`-ts` pin the output grid exactly to `target_grid`.
+#' Delegates every pixel of cross-CRS math to the GDAL warper:
+#' `-te`/`-ts` pin the output grid exactly to `target_grid`.
 #' Float targets without a source nodata get `-dstnodata nan` so area
-#' outside the source footprint reads as NaN, not 0 (D8).
+#' outside the source footprint reads as NaN, not 0.
 #'
 #' @param src_path Source path/VSI URL.
 #' @param band 1-based source band (the VRT has this single band).
@@ -650,10 +656,10 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
 
 #' Write a garry-oriented matrix into an open output dataset.
 #'
-#' NaN cells demote to `nodata` when given (D8 reversed at the sink);
+#' NaN cells are converted back to the sink `nodata` value when given;
 #' writing NaN into an integer band without a sentinel is an error.
 #'
-#' @param ds Open dataset from `gdal_create_output()`.
+#' @param ds Open dataset from [gdal_create_output()].
 #' @param x_off,y_off 0-based destination offsets.
 #' @param m `[y, x]` matrix.
 #' @param dtype Output dtype (for the NaN check).
@@ -753,13 +759,15 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
 
 #' Apply garry's default GDAL configuration for remote COG reads.
 #'
-#' Sets the GDAL config options the composite / warp-on-read path and
-#' cloud-optimised remote reads want: HTTP multiplexing over HTTP/2, the
-#' odc-stac retry cadence and timeouts, a capped block cache (GDAL
+#' Sets the GDAL config options garry's internal warp readers and
+#' cloud-optimised remote reads want: HTTP multiplexing over HTTP/2,
+#' automatic retries with backoff on transient HTTP errors plus request
+#' timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 #' defaults to 5% of RAM *per process*, which many daemons would
 #' multiply), single-range COG-header ingest, a skipped directory scan
-#' and a raster-extension vsicurl allowlist for fast remote opens, and the MEM
-#' driver open gate the direct warp needs. `garry_daemons()` calls this
+#' and a raster-extension vsicurl allowlist for fast remote opens, and
+#' permission to open MEM-driver datasets, which garry's internal warp
+#' readers require. `garry_daemons()` calls this
 #' on every read daemon automatically; call it yourself for host-side
 #' discovery reads or when you drive `mirai::daemons()` directly. Each
 #' option is set via `set_config_option`, so a value you set afterwards
@@ -810,6 +818,7 @@ garry_gdal_config <- function() {
 #' @param crs CRS of the index geometries (any GDAL-interpretable form).
 #' @param layer Layer name.
 #' @return `path`, invisibly.
+#' @seealso [gti_open_options()]
 #' @export
 gti_index_create <- function(entries, path, crs, layer = "index") {
   stopifnot(is.data.frame(entries), "location" %in% names(entries))
@@ -853,9 +862,9 @@ gti_index_create <- function(entries, path, crs, layer = "index") {
 
 #' Copy one source's target-window bytes to a local file.
 #'
-#' The fetch half of the phase 12 fetch/assemble split: a plain
+#' The fetch half of the fetch/assemble split: a plain
 #' `gdal_translate -srcwin` of the window intersecting `ext` (plus a
-#' warp-kernel `margin` in source pixels), native dtype and blocks —
+#' warp-kernel `margin` in source pixels), native dtype and blocks;
 #' no warp, no mosaic on the remote path.
 #'
 #' @param location Source path/URL.
@@ -939,6 +948,7 @@ gdal_nodata_window <- function(out_file, ext, crs,
 #' @param sort_field,sort_asc Optional deterministic overlap ordering
 #'   (highest value on top when ascending).
 #' @return Character vector of "KEY=VALUE" open options.
+#' @seealso [gti_index_create()]
 #' @export
 gti_open_options <- function(grid = NULL, filter = NULL,
                              sort_field = NULL, sort_asc = TRUE) {

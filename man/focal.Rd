@@ -12,26 +12,31 @@ focal(x, fn, radius, boundary = "nodata", bands = NULL)
 \item{fn}{Function over the list of shifted arrays (see above).}
 
 \item{radius}{Halo in pixels (mandatory: the footprint cannot be
-inferred from \code{fn}; decision D14).}
+inferred from \code{fn}).}
 
 \item{boundary}{Boundary policy; only "nodata" in v1.}
 
 \item{bands}{\code{LazyDataset} only: bands to apply to (default: all value
 bands).}
 }
+\value{
+A \code{LazyRaster} on the same grid as \code{x}, or a \code{LazyDataset}
+when given one.
+}
 \description{
 \code{fn} receives a LIST of (2r+1)^2 shifted arrays, row-major over
 (dy, dx) offsets, and returns one array: the whole neighbourhood is
-processed vectorised across every pixel at once. This convention is
-what lets the same closure run under the pure-R oracle and under
-anvl's jit() (D10/D14). Example, a 3x3 sum:
-\code{function(sh) Reduce("+", sh)}.
+processed vectorised across every pixel at once. Write \code{fn} with
+plain arithmetic and the \verb{g_*} vocabulary (\code{\link[=g_ifelse]{g_ifelse()}}, \code{\link[=g_cast]{g_cast()}},
+...). Example, a 3x3 sum: \code{function(sh) Reduce("+", sh)}.
 }
 \details{
-Cells beyond the raster edge are NaN (nodata) — v1 supports only this
-\code{boundary = "nodata"} policy; reflect/wrap remain unimplemented
-(deliberately deferred, not scheduled).
+Cells beyond the raster edge are NaN (nodata): v1 supports only this
+\code{boundary = "nodata"} policy; reflect/wrap are not implemented.
 
 Over a \code{LazyDataset}, the stencil is applied to every value band per slice;
 \code{bands} restricts which bands.
+}
+\seealso{
+\code{\link[=focal_kernel]{focal_kernel()}}, \code{\link[=bilateral_focal]{bilateral_focal()}}, \code{\link[=shrink_footprint]{shrink_footprint()}}
 }

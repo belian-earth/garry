@@ -21,8 +21,9 @@ write_tif(
 \arguments{
 \item{x}{A \code{LazyRaster}, a \code{LazyDataset} (bands assembled along the
 band axis), a named list of lazy rasters (multi-export: one plan,
-one file per sink), or a \code{LazyDatasetGroups} (one file per group via
-a \code{{group}} placeholder in \code{path}).}
+one file per sink), or a \code{LazyDatasetGroups} (the result of
+\code{\link[=group_by_time]{group_by_time()}}; one file per group via a \code{{group}} placeholder
+in \code{path}).}
 
 \item{path}{Destination path. For a named-list input: a directory
 (files named \verb{<sink>.tif}) or a named character vector keyed by sink.}
@@ -77,4 +78,8 @@ copy-only by design: overviews precede full-res data). The extra
 sequential pass is the trade every COG producer makes; the temporary
 file is removed even on failure, so \code{path} never holds a half-written
 COG.
+}
+\seealso{
+\code{\link[=collect]{collect()}} to return the result in the R session;
+\code{\link[=materialise]{materialise()}} to checkpoint to local cubes and stay lazy.
 }

@@ -20,6 +20,6 @@ An \verb{out_nrow x out_ncol} matrix.
 }
 \description{
 Given \code{xpad = g_pad(x, h)}, returns the view of \code{x}'s shape offset by
-(\code{dy}, \code{dx}) pixels, \code{dy}/\code{dx} in \verb{[-h, h]}. Rows are y, columns are x
-(decision D13 orientation).
+(\code{dy}, \code{dx}) pixels, \code{dy}/\code{dx} in \verb{[-h, h]}. Rows are y, columns are
+x.
 }

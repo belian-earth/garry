@@ -13,7 +13,7 @@ stac_gti_index(
 }
 \arguments{
 \item{sources}{A \code{stac_sources()} table with a \code{slice} column (see
-\code{stac_time_slices()}).}
+\code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
 \item{asset}{Which asset's rows to index.}
 
@@ -25,8 +25,28 @@ stac_gti_index(
 The index path, invisibly.
 }
 \description{
-Footprints are stored in \code{crs} (transform them from the table's
-EPSG:4326 bboxes), so the index layer SRS matches the grid the GTI
-dataset will be pinned to: exact culling geometry, no SRS_BEHAVIOR
-juggling, works from GDAL 3.10 up.
+A GTI index is a vector layer of raster footprints read by GDAL's
+GTI (GDAL Tile Index) raster driver, available from GDAL 3.10, which
+mosaics the indexed rasters on the fly. Footprints are stored in
+\code{crs} (transformed from the table's EPSG:4326 bboxes), so the index
+layer SRS matches the grid the GTI dataset will be pinned to and the
+culling geometry is exact. Most users reach this via \code{\link[=lazy_dataset]{lazy_dataset()}}
+or \code{\link[=lazy_stac_stack]{lazy_stac_stack()}}, which build the index internally, and rarely
+call it directly.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

@@ -2,7 +2,8 @@
 % Please edit documentation in R/node.R
 \name{StackNode}
 \alias{StackNode}
-\title{Combine inputs along a named dim (e.g. time).}
+\title{Combine inputs along a named dim (e.g. time). Created by
+\code{\link[=lazy_stack]{lazy_stack()}}.}
 \usage{
 StackNode(
   id = integer(0),
@@ -24,5 +25,6 @@ StackNode(
 A \code{StackNode}.
 }
 \description{
-Combine inputs along a named dim (e.g. time).
+Combine inputs along a named dim (e.g. time). Created by
+\code{\link[=lazy_stack]{lazy_stack()}}.
 }

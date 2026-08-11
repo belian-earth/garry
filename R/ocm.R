@@ -25,32 +25,67 @@
   if (length(vers)) vers[[1L]] else fetched
 }
 
-#' Load the native OmniCloudMask model.
+#' Cloud and shadow masking with OmniCloudMask
 #'
-#' Builds the inference kernel for [ocm_predict()] / [ocm_mask()]: reads
-#' and folds the OCM v4 weights (cached; see [ocm_load_weights()]),
-#' closes the forward pass over them, and prices the kernel for the
-#' planner. The result is reusable across any number of scenes and
-#' datasets; all per-slice stages sharing one model collapse to a
-#' single compiled kernel per daemon.
+#' Native (no-Python) implementation of the OmniCloudMask v4 cloud and
+#' shadow segmentation model, which predicts per-pixel classes from
+#' red, green, and NIR reflectance at 10-50 m resolution. Three
+#' functions cover the workflow:
 #'
+#' * `ocm_model()` loads the pre-trained weights (see
+#'   [ocm_fetch_weights()]) and builds the reusable inference kernel.
+#'   One model object serves any number of scenes and datasets; all
+#'   stages sharing a model compile to a single kernel per worker.
+#' * `ocm_predict()` runs the model over three band `LazyRaster`s and
+#'   returns the class band as a new `LazyRaster`. Like every garry
+#'   verb it is lazy: nothing reads or computes until [collect()].
+#' * `ocm_mask()` is the one-step verb for a `LazyDataset`: it derives
+#'   the class band from three of the dataset's bands for every time
+#'   slice, then masks every value band with it via [mask()]. The
+#'   derived class band is consumed by the masking, exactly like a QA
+#'   `mask_asset`.
+#'
+#' Predicted classes are 0 (clear), 1 (thick cloud), 2 (thin cloud),
+#' and 3 (cloud shadow), with `NaN` wherever the input had nodata.
+#'
+#' @details
 #' `halo` is the overlap margin each chunk recomputes so that chunk
 #' seams carry full spatial context (OmniCloudMask itself blends
 #' overlapping patches; garry crops instead). The per-window
 #' normalisation makes results inherently window-dependent, exactly as
-#' OCM's are patch-dependent, so expect class agreement with the Python
-#' implementation, not bit identity, except in the single-chunk case.
+#' OmniCloudMask's are patch-dependent, so expect class agreement with
+#' the Python implementation, not bit identity, except in the
+#' single-chunk case.
 #'
-#' @param weights_dir Directory with the OCM v4 safetensors files;
-#'   default: `GARRY_OCM_WEIGHTS`, else the newest version under the
-#'   Python package's cache (`~/.local/share/omnicloudmask`).
-#' @param models Ensemble members to run; the default matches OCM v4
-#'   exactly (both U-Nets, logits averaged). A single member is ~2x
-#'   faster at slightly lower accuracy.
+#' Weights are the OmniCloudMask authors'
+#' (<https://github.com/DPIRD-DMA/OmniCloudMask>) and are not
+#' distributed with garry; download them once with
+#' [ocm_fetch_weights()].
+#'
+#' @param weights_dir Directory with the OCM v4 safetensors files.
+#'   Defaults to the `GARRY_OCM_WEIGHTS` environment variable if set,
+#'   then the [ocm_fetch_weights()] download directory, then the newest
+#'   version under the Python package's cache
+#'   (`~/.local/share/omnicloudmask`).
+#' @param models Ensemble members to run; the default matches
+#'   OmniCloudMask v4 exactly (both U-Nets, logits averaged). A single
+#'   member is roughly twice as fast at slightly lower accuracy.
 #' @param halo Chunk overlap margin in pixels (multiple of 32
 #'   recommended).
-#' @return An `ocm_model` list: `fn`, `kernel_id`, `halo`, `bytes_px`,
-#'   `flops_px`, `models`.
+#' @return `ocm_model()` returns an `ocm_model` object; `ocm_predict()`
+#'   a class `LazyRaster` on the shared spatial grid; `ocm_mask()` the
+#'   masked `LazyDataset` (class band consumed).
+#' @seealso [ocm_fetch_weights()] to download the weights; [mask()] and
+#'   [qa_bits()] for masking from an existing QA band;
+#'   `vignette("omnicloudmask", package = "garry")` for a worked
+#'   example.
+#' @examples
+#' \dontrun{
+#' ocm_fetch_weights()  # once per machine
+#' ds <- ds |> ocm_mask(red = "B04", green = "B03", nir = "B8A")
+#' composite <- ds |> reduce_over("time", "median") |> collect()
+#' }
+#' @rdname ocm
 #' @export
 ocm_model <- function(weights_dir = NULL,
                       models = c("regnety", "edgenext"), halo = 128L) {
@@ -90,37 +125,21 @@ ocm_model <- function(weights_dir = NULL,
              bytes_px = model$bytes_px, flops_px = model$flops_px)
 }
 
-#' Predict OmniCloudMask classes, natively.
-#'
-#' Runs the OCM U-Net over red/green/NIR `LazyRaster`s (same grid, same
-#' graph) and returns per-pixel classes (0 clear, 1 thick cloud, 2 thin
-#' cloud, 3 shadow; NaN at nodata) as a lazy raster: nothing computes
-#' until `collect()`. For datasets, [ocm_mask()] derives and applies the
-#' mask per slice in one call.
-#'
-#' @param red,green,nir Band `LazyRaster`s.
-#' @param model An [ocm_model()].
-#' @return A class `LazyRaster` on the spatial grid.
+#' @param red,green,nir For `ocm_predict()`: band `LazyRaster`s on the
+#'   same grid and graph. For `ocm_mask()`: names of the dataset bands
+#'   to predict from (e.g. `"B04"`, `"B03"`, `"B8A"`).
+#' @param model An `ocm_model` object, from `ocm_model()`.
+#' @rdname ocm
 #' @export
 ocm_predict <- function(red, green, nir, model = ocm_model()) {
   .ocm_predict_stack(red, green, nir, model)
 }
 
-#' Cloud/shadow mask a dataset with native OmniCloudMask.
-#'
-#' The one-step verb: derive the OCM class band from three of the
-#' dataset's bands per time slice, then [mask()] every value band with
-#' it (`where` selects the masked classes; morphology as in `mask()`).
-#' The derived band is consumed by the masking, exactly like a QA
-#' `mask_asset`.
-#'
 #' @param x A `LazyDataset` whose slices carry the three bands.
-#' @param red,green,nir Band names (e.g. `"B04"`, `"B03"`, `"B8A"`).
-#' @param model An [ocm_model()].
-#' @param where Classes to mask out (default thick + thin cloud +
-#'   shadow).
+#' @param where Classes to mask out (default thick cloud, thin cloud,
+#'   and shadow).
 #' @param open,dilate Morphological cleanup, as in [mask()].
-#' @return The masked `LazyDataset` (OCM band consumed).
+#' @rdname ocm
 #' @export
 ocm_mask <- function(x, red, green, nir, model = ocm_model(),
                      where = 1:3, open = 0L, dilate = 0L) {

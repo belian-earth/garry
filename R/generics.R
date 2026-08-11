@@ -10,7 +10,10 @@ NULL
 
 #' Halo radius required by this node from its inputs.
 #'
-#' @param node An IR `Node`.
+#' Part of the extension API for authors of new node classes; not
+#' needed for ordinary use of the package.
+#'
+#' @param node An intermediate representation (IR) `Node`.
 #' @param ... Passed to methods.
 #' @return Integer halo radius in pixels.
 #' @export
@@ -27,7 +30,10 @@ S7::method(required_halo, PatchNode)  <- function(node) node@radius
 
 #' Can this node be composed with fusable neighbours into a single kernel?
 #'
-#' @param node An IR `Node`.
+#' Part of the extension API for authors of new node classes; not
+#' needed for ordinary use of the package.
+#'
+#' @param node An intermediate representation (IR) `Node`.
 #' @param ... Passed to methods.
 #' @return `TRUE` or `FALSE`.
 #' @export
@@ -40,7 +46,10 @@ S7::method(fusable, Node)      <- function(node) FALSE   # default: barrier
 
 #' Does this node force a stage boundary?
 #'
-#' @param node An IR `Node`.
+#' Part of the extension API for authors of new node classes; not
+#' needed for ordinary use of the package.
+#'
+#' @param node An intermediate representation (IR) `Node`.
 #' @param ... Passed to methods.
 #' @return `TRUE` or `FALSE`.
 #' @export
@@ -52,10 +61,12 @@ S7::method(is_barrier, Node)       <- function(node) FALSE
 
 #' Compute the output grid given this node and its parents' grids.
 #'
-#' Default: first parent's grid (elementwise, focal, stack). Ops that
-#' change the grid override (Warp, Reduce).
+#' Part of the extension API for authors of new node classes; not
+#' needed for ordinary use of the package. Default: first parent's grid
+#' (elementwise, focal, stack). Ops that change the grid override
+#' (Warp, Reduce).
 #'
-#' @param node An IR `Node`.
+#' @param node An intermediate representation (IR) `Node`.
 #' @param ... Method arguments: `parent_grids`, a list of parent `GridSpec`s.
 #' @return The node's output `GridSpec`.
 #' @export

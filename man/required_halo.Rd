@@ -7,7 +7,7 @@
 required_halo(node, ...)
 }
 \arguments{
-\item{node}{An IR \code{Node}.}
+\item{node}{An intermediate representation (IR) \code{Node}.}
 
 \item{...}{Passed to methods.}
 }
@@ -15,5 +15,6 @@ required_halo(node, ...)
 Integer halo radius in pixels.
 }
 \description{
-Halo radius required by this node from its inputs.
+Part of the extension API for authors of new node classes; not
+needed for ordinary use of the package.
 }

@@ -20,17 +20,19 @@ NULL
 #' A named, multi-band, multi-time lazy dataset.
 #'
 #' The dataset holds one entry per band; each entry is a list of per-time-slice
-#' `LazyRaster`s on a shared grid and IR graph. Build one with `lazy_dataset()`
-#' (from a STAC source table) or `as_dataset()` (from `LazyRaster`s you already
-#' have). Apply `lazy_map()`, `focal()`, `reduce_over()` and `mask()` across all
-#' bands; index a single band with `ds[["B04"]]` or a sub-dataset with
-#' `ds[c("B04", "B03")]`; `collect()` to materialise.
+#' `LazyRaster`s on a shared grid and intermediate representation (IR) graph.
+#' Construct one with [lazy_dataset()] (from a STAC source table) or
+#' [as_dataset()] (from `LazyRaster`s you already have) rather than calling
+#' this class constructor directly. Apply [lazy_map()], [focal()],
+#' [reduce_over()] and [mask()] across all bands; index a single band with
+#' `ds[["B04"]]` or a sub-dataset with `ds[c("B04", "B03")]`; [collect()] to
+#' materialise.
 #'
 #' @param graph The shared IR `Graph`.
 #' @param bands Named list; each element is a list of per-slice `LazyRaster`s.
 #' @param mask_asset Length-0 or length-1 name of the QA/mask band, if any.
-#' @param steps Display-only pipeline log (list of `.step()`s), shown by
-#'   `draw()`; does not affect execution.
+#' @param steps Internal display-only pipeline log, shown by `draw()`; does
+#'   not affect execution.
 #' @return A `LazyDataset`.
 #' @export
 LazyDataset <- S7::new_class(
@@ -93,16 +95,17 @@ LazyDataset <- S7::new_class(
 #'
 #' One band per asset, each a time-sliced GTI mosaic pinned to `grid` (mixed
 #' source CRS is fine; the GTI driver reprojects per tile). All bands share one
-#' IR graph, so a mask defined once (see `mask()`) is computed once and dedup'd
-#' across bands, and `collect()` plans the whole dataset in one pass.
+#' intermediate representation (IR) graph, so a mask defined once (see
+#' [mask()]) is computed once and dedup'd across bands, and [collect()] plans
+#' the whole dataset in one pass.
 #'
 #' @param sources A STAC `doc_items` (from [stac_query()], optionally filtered)
 #'   or a `stac_sources()` table.
-#' @param grid Target `GridSpec` for every band.
+#' @param grid Target [GridSpec()] for every band.
 #' @param assets Character vector of value assets to load.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
-#'   alongside the value assets and used as the default `from` in `mask()`.
-#' @param granularity Time-slice granularity (see `stac_time_slices()`).
+#'   alongside the value assets and used as the default `from` in [mask()].
+#' @param granularity Time-slice granularity (see [stac_time_slices()]).
 #' @param sort_field Index field ordering overlaps within a slice.
 #' @param nodata Nodata handling: `NULL` (per-asset file metadata), a scalar
 #'   (applied to every asset), or a named numeric keyed by asset (unnamed assets
@@ -110,7 +113,7 @@ LazyDataset <- S7::new_class(
 #'   different sentinels, so the named form is typical, e.g.
 #'   `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
 #' @param lon Longitude for `granularity = "solar_day"` (see
-#'   `stac_time_slices()`).
+#'   [stac_time_slices()]).
 #' @param resampling GDAL resampling for the warp-on-read onto `grid`: a scalar
 #'   (every value band) or a named character keyed by asset (unnamed assets fall
 #'   back to `"near"`). `mask_asset` is always read `"near"` regardless, since
@@ -132,6 +135,7 @@ LazyDataset <- S7::new_class(
 #'   used when `scale` is numeric; defaults to 0. Ignored when `scale` is
 #'   logical.
 #' @return A `LazyDataset`.
+#' @seealso [lazy_cog()], [group_by_time()], [collect()]
 #' @export
 lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
                          granularity = "day", sort_field = "datetime",
@@ -244,6 +248,7 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
 #' @param bands A named list of `LazyRaster`s or lists of `LazyRaster`s.
 #' @param mask_asset Optional name of the QA/mask band within `bands`.
 #' @return A `LazyDataset`.
+#' @seealso [lazy_dataset()]
 #' @export
 as_dataset <- function(bands, mask_asset = NULL) {
   if (!is.list(bands) || length(bands) < 1L || is.null(names(bands)))
@@ -495,9 +500,8 @@ group_by_time <- function(x, by = "month") {
 
 #' Fill nodata gaps along the time axis.
 #'
-#' The temporal gap-filling verbs xarray spells `ffill`/`bfill`/
-#' `interpolate_na`, expressed on garry's own IR as [scan_over()]
-#' bodies (documented here rather than left as folklore):
+#' Temporal gap-filling (the verbs xarray spells `ffill`/`bfill`/
+#' `interpolate_na`), implemented as [scan_over()] bodies:
 #' * `"ffill"` carries the last valid value forward;
 #' * `"bfill"` carries the next valid value backward;
 #' * `"linear"` interpolates between the nearest valid neighbours
@@ -511,6 +515,7 @@ group_by_time <- function(x, by = "month") {
 #' @param method `"ffill"`, `"bfill"` or `"linear"`.
 #' @param over Axis to fill along (only `"t"` is meaningful today).
 #' @return The filled object, same class as `x`.
+#' @family time series smoothers
 #' @export
 fill_gaps <- function(x, method = c("ffill", "bfill", "linear"),
                       over = "t") {
@@ -604,7 +609,7 @@ stack_bands <- function(x) {
       "{.fn stack_bands} needs one layer per band.",
       "i" = "Reduce time first, e.g. {.code reduce_over(ds, \"median\", \"t\")}.",
       "i" = paste("Stacking bands over a time dimension (4D) is not yet",
-                  "supported (design/ir-extensions-todo.md #3).")))
+                  "supported.")))
   layers <- lapply(x@bands, function(b) b[[1L]])
   if (length(layers) == 1L) return(layers[[1L]])
   lazy_stack(layers, along = "band")
@@ -628,10 +633,10 @@ stack_bands <- function(x) {
 #'   * a numeric vector -> value membership (bad if the pixel value is in the
 #'     set), for categorical QA such as Sentinel-2 SCL,
 #'     e.g. `c(0, 1, 2, 3, 8, 9, 10, 11)`;
-#'   * `qa_bits(bits)` -> a bitmask test (bad if any listed bit is set), for
+#'   * [qa_bits()] -> a bitmask test (bad if any listed bit is set), for
 #'     packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. `qa_bits(0:3)`;
-#'   * a function `\(f) ...` -> a raw anvl predicate returning a 0/1 (or logical)
-#'     mask.
+#'   * a function `\(f) ...` -> a predicate returning a 0/1 (or logical)
+#'     mask, written in the `g_*` vocabulary.
 #' @param open Opening radius (despeckle): erosion then dilation at this radius,
 #'   removing isolated flagged pixels up to the radius. `0` skips it.
 #' @param dilate Dilation radius (buffer): grows the surviving bad regions
@@ -731,14 +736,16 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE,
 
 #' Build a QA-bitmask predicate.
 #'
-#' Returns a predicate `\(f) ...` for `mask()`'s `where` argument that flags a
+#' Returns a predicate `\(f) ...` for [mask()]'s `where` argument that flags a
 #' pixel bad when any of the given bits is set. Nodata pixels are treated as
 #' clear (matching the QA-fill convention). Use for packed-flag QA bands (HLS
 #' Fmask, Landsat QA_PIXEL) where a value list cannot express the test;
 #' categorical bands (Sentinel-2 SCL) use a plain value vector instead.
 #'
 #' @param bits Integer bit positions (0-based) that mark a pixel as bad.
-#' @return A function of one traced array.
+#' @return A predicate function of one array, returning a 0/1 mask:
+#'   pass it as [mask()]'s `where`, or apply it directly with
+#'   [lazy_map()].
 #' @export
 qa_bits <- function(bits) {
   m <- as.integer(sum(2^as.integer(bits)))

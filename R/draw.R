@@ -227,13 +227,15 @@ S7::method(print, LazyDatasetGroups) <- function(x, ...) {
 #'
 #' Prints a terminal visual of the computation a lazy object will run, before
 #' any reading or compute happens. A `LazyDataset` draws as its step pipeline
-#' (source, mask, reduce, ...); a `LazyRaster` draws as its IR tree, with
-#' structurally identical sibling branches folded to a single `xN` branch so a
-#' large composite graph stays readable.
+#' (source, mask, reduce, ...); a `LazyRaster` draws as its intermediate
+#' representation (IR) tree, with structurally identical sibling branches
+#' folded to a single `xN` branch so a large composite graph stays readable.
 #'
 #' @param x A `LazyRaster` or `LazyDataset`.
 #' @param ... Unused.
 #' @return `x`, invisibly.
+#' @seealso [preview()], which plots the data rather than the pipeline;
+#'   [plan_dot()] for a Graphviz rendering of the execution plan.
 #' @export
 draw <- S7::new_generic("draw", "x")
 

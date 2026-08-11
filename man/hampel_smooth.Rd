@@ -36,8 +36,8 @@ at the series ends. \code{t0 = 0} degenerates to a rolling median. With
 identical is 0, so any deviating centre is replaced; this is inherent
 to the Hampel construction.
 
-Runs through \code{\link[=scan_over]{scan_over()}}, so it plans, fuses, and distributes like
-any other kernel, and applies per band over a \code{LazyDataset}.
+Like every garry verb it is lazy (nothing computes until
+\code{\link[=collect]{collect()}}), and it applies per band over a \code{LazyDataset}.
 }
 \seealso{
 \code{\link[=kalman_smooth]{kalman_smooth()}}, \code{\link[=fill_gaps]{fill_gaps()}}, \code{\link[=scan_over]{scan_over()}}

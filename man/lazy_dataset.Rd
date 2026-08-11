@@ -22,14 +22,14 @@ lazy_dataset(
 \item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally filtered)
 or a \code{stac_sources()} table.}
 
-\item{grid}{Target \code{GridSpec} for every band.}
+\item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band.}
 
 \item{assets}{Character vector of value assets to load.}
 
 \item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}); loaded
-alongside the value assets and used as the default \code{from} in \code{mask()}.}
+alongside the value assets and used as the default \code{from} in \code{\link[=mask]{mask()}}.}
 
-\item{granularity}{Time-slice granularity (see \code{stac_time_slices()}).}
+\item{granularity}{Time-slice granularity (see \code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
 \item{sort_field}{Index field ordering overlaps within a slice.}
 
@@ -40,7 +40,7 @@ different sentinels, so the named form is typical, e.g.
 \code{c(B04 = -9999, B03 = -9999, Fmask = 255)}.}
 
 \item{lon}{Longitude for \code{granularity = "solar_day"} (see
-\code{stac_time_slices()}).}
+\code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
 \item{resampling}{GDAL resampling for the warp-on-read onto \code{grid}: a scalar
 (every value band) or a named character keyed by asset (unnamed assets fall
@@ -71,6 +71,10 @@ A \code{LazyDataset}.
 \description{
 One band per asset, each a time-sliced GTI mosaic pinned to \code{grid} (mixed
 source CRS is fine; the GTI driver reprojects per tile). All bands share one
-IR graph, so a mask defined once (see \code{mask()}) is computed once and dedup'd
-across bands, and \code{collect()} plans the whole dataset in one pass.
+intermediate representation (IR) graph, so a mask defined once (see
+\code{\link[=mask]{mask()}}) is computed once and dedup'd across bands, and \code{\link[=collect]{collect()}} plans
+the whole dataset in one pass.
+}
+\seealso{
+\code{\link[=lazy_cog]{lazy_cog()}}, \code{\link[=group_by_time]{group_by_time()}}, \code{\link[=collect]{collect()}}
 }

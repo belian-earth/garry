@@ -28,7 +28,14 @@ Stage(
 
 \item{members}{IR node ids composed into this stage (ascending = topo).}
 
-\item{fn}{The composed stage closure (see calling conventions).}
+\item{fn}{The composed stage closure. For "compute" stages it is
+called as \code{fn(inputs)} with a list of chunk arrays in
+\code{input_nodes} order, each padded to the stage halo, and returns
+the chunk-core array; a "reduce_partial" stage returns a named
+list of per-chunk partials and "reduce_combine" combines those
+lists into the final value; for "source_read" and "warp" stages
+\code{fn} is the identity (the executor and the GDAL warper supply the
+values).}
 
 \item{halo}{Halo radius in pixels the stage requires on its inputs.}
 
@@ -45,10 +52,10 @@ Stage(
 \item{exports}{Member node ids \code{fn} returns, ascending (consumed by
 other stages, plus the stage tail).}
 
-\item{out_pad}{Spatial padding the stage's chunks are computed with
-(D22): consumers needing a halo on this stage's exports receive it
-as a recomputed ring instead of a materialise-first refusal.
-Inputs arrive padded to \code{halo + out_pad}.}
+\item{out_pad}{Spatial padding rings the stage's chunks are computed
+with: consumers needing a halo on this stage's exports receive it
+as a ring of recomputed cells rather than requiring the stage to
+materialise first. Inputs arrive padded to \code{halo + out_pad}.}
 
 \item{export_pads}{Integer vector parallel to \code{exports}: the padding
 each export value carries (post-focal exports carry less than

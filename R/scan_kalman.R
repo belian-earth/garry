@@ -44,21 +44,19 @@
 #'
 #' Returns a scan body `fn(xs, margin)` computing the smoothed level mean
 #' (or its standard error) of a per-pixel local-linear-trend Kalman
-#' filter + RTS smoother over the `t` axis, batched over the chunk's
-#' pixels. Use with `scan_over(x, kalman_llt(...), direction = "bidir")`;
+#' filter with a Rauch-Tung-Striebel smoothing pass over the `t` axis,
+#' batched over the chunk's pixels. This is the low-level building
+#' block; most users want [kalman_smooth()], which wraps it. Use with
+#' `scan_over(x, kalman_llt(...), direction = "bidir")`;
 #' `x` is the observation stack, optionally `list(x, r)` with `r` a
 #' per-year relative observation-variance stack (`Var(v_t) =
 #' sigma_obs^2 * r_t`; `r` must be finite wherever `y` is observed).
 #'
-#' Hyperparameters are fixed R scalars, fitted off-raster (e.g. hutan's
-#' marginal-likelihood MLE) and closed over as f64 constants. Pixels
-#' with fewer than 3 valid observations return all-NaN (matching
-#' hutan). Initialisation is the large-variance diffuse approximation
-#' `P1 = kappa * I`; see the file header for the f64/kappa rationale.
-#'
-#' `output = "mean"` and `output = "sd"` are separate scan bodies (one
-#' export per node); the smoother recomputes per node, which is noise at
-#' T ~ 15 next to IO.
+#' Hyperparameters are fixed scalars, fitted outside the raster
+#' pipeline (for example by marginal-likelihood MLE on sampled pixel
+#' series). Pixels with fewer than 3 valid observations return
+#' all-NaN. Initialisation is the large-variance diffuse approximation
+#' `P1 = kappa * I`.
 #'
 #' @param sigma_lvl,sigma_slp,sigma_obs Noise standard deviations (level
 #'   disturbance, slope disturbance, observation).
@@ -71,7 +69,7 @@
 #' @param out_dtype Output dtype the body casts to (align with
 #'   `scan_over(dtype = )`; default `"f32"`).
 #' @return A scan body `fn(xs, margin)` for [scan_over()].
-#' @seealso [scan_over()], [g_scan()]
+#' @seealso [kalman_smooth()], [scan_over()], [g_scan()]
 #' @export
 kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
                        output = c("mean", "sd"),
@@ -260,10 +258,12 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
   }
 }
 
-#' Smooth a stack with the LLT Kalman smoother (mean + sd pair).
+#' Smooth a stack with a local-linear-trend Kalman smoother.
 #'
-#' Convenience wrapper: one [scan_over()] per requested output, sharing
-#' one [kalman_llt()] parameterisation.
+#' Fits a per-pixel local-linear-trend Kalman filter and smoother over
+#' the time axis and returns the smoothed level (and optionally its
+#' standard error). Convenience wrapper: one [scan_over()] per
+#' requested output, sharing one [kalman_llt()] parameterisation.
 #'
 #' @param x Observation stack (`LazyRaster` with a `t` axis), or a
 #'   `LazyDataset` (each band smoothed independently).
@@ -274,6 +274,8 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
 #' @inheritParams kalman_llt
 #' @param ... Passed to [kalman_llt()].
 #' @return A named list of lazy objects, one per requested output.
+#' @seealso [hampel_smooth()] for outlier removal, [fill_gaps()] for
+#'   simple gap filling, [scan_over()] for custom scans.
 #' @export
 kalman_smooth <- function(x, sigma_lvl, sigma_slp, sigma_obs = 1,
                           obs_var = NULL, outputs = c("mean", "sd"),

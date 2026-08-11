@@ -10,8 +10,8 @@ garry_daemons_set()
 A single logical.
 }
 \description{
-\code{TRUE} when both mirai pools created by \code{\link[=garry_daemons]{garry_daemons()}} (\code{garry_read} and
-\code{garry_compute}) have daemons. This is the default for the \code{distributed}
+\code{TRUE} when the read and compute daemon pools created by
+\code{\link[=garry_daemons]{garry_daemons()}} are running. This is the default for the \code{distributed}
 argument of \code{\link[=collect]{collect()}}, so \code{collect(x)} uses the pools when they are up and
 runs single-threaded otherwise. Mirrors \code{mirai::daemons_set()}.
 }

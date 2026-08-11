@@ -231,7 +231,7 @@ NULL
 
 #' Explain the scheduler's placement decisions for a computation.
 #'
-#' Runs the placement pass (see `design/placement-cost-pass.md`) over
+#' Runs the placement pass over
 #' the plan the same way `collect(distributed = TRUE)` would, and
 #' returns its decision table: one row per fusable source -> compute
 #' chain with the decision, the modelled costs (cost mode), and the
@@ -248,6 +248,7 @@ NULL
 #' @return A data.frame with columns `source`, `compute`, `bands`,
 #'   `flops_px`, `move_mb`, `cost_fuse_s`, `cost_mat_s`, `decision`,
 #'   `reason`.
+#' @seealso [garry_options()], [garry_task_report()]
 #' @export
 garry_explain_placement <- function(x, read = NULL, compute = NULL,
                                     mode = garry_opt("placement")) {

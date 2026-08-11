@@ -32,8 +32,9 @@ NULL
 #'
 #' @param x A `LazyRaster`, a `LazyDataset` (bands assembled along the
 #'   band axis), a named list of lazy rasters (multi-export: one plan,
-#'   one file per sink), or a `LazyDatasetGroups` (one file per group via
-#'   a `{group}` placeholder in `path`).
+#'   one file per sink), or a `LazyDatasetGroups` (the result of
+#'   [group_by_time()]; one file per group via a `{group}` placeholder
+#'   in `path`).
 #' @param path Destination path. For a named-list input: a directory
 #'   (files named `<sink>.tif`) or a named character vector keyed by sink.
 #' @param dtype Output dtype override (e.g. `"i16"`, `"u8"`); default
@@ -55,6 +56,8 @@ NULL
 #' @param distributed As in [collect()].
 #' @return The written path(s), invisibly (expanded per sink/group for
 #'   list, directory, and `{group}` forms).
+#' @seealso [collect()] to return the result in the R session;
+#'   [materialise()] to checkpoint to local cubes and stay lazy.
 #' @export
 write_tif <- function(x, path, dtype = NULL, scale = NULL, offset = NULL,
                       nodata = NULL, cog = FALSE, creation_options = NULL,

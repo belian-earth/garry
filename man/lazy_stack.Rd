@@ -15,8 +15,13 @@ lazy_stack(xs, along = "t")
 A \code{LazyRaster} with an extra dim.
 }
 \description{
-All layers must share the spatial grid (align first otherwise);
+All layers must share the spatial grid (\code{\link[=align]{align()}} first otherwise);
 dtypes promote to a common type. Chunks carry the stack as
-(t, y, x) arrays (decision D17); temporal reductions
+(t, y, x) arrays; temporal reductions
 (\code{reduce_over(x, "median", "t")}) then run chunk-locally.
+}
+\details{
+Element names of \code{xs} become labels on the new axis (slice dates on
+\code{t}, band names on \code{band}), used by \code{\link[=time_sel]{time_sel()}} / \code{\link[=band_sel]{band_sel()}} for
+label selection; an unnamed list leaves the axis unlabelled.
 }

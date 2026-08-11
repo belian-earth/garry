@@ -2,7 +2,7 @@
 % Please edit documentation in R/graph.R
 \name{graph_ids}
 \alias{graph_ids}
-\title{All node ids in the graph, in insertion order.}
+\title{All node ids in the graph, in ascending id order.}
 \usage{
 graph_ids(graph)
 }
@@ -10,8 +10,20 @@ graph_ids(graph)
 \item{graph}{A \code{Graph}.}
 }
 \value{
-Sorted integer vector of node ids.
+Integer vector of node ids, sorted ascending.
 }
 \description{
-All node ids in the graph, in insertion order.
+Ids are assigned sequentially by \code{\link[=graph_add]{graph_add()}} and never reordered,
+so ascending id order is also insertion order.
 }
+\seealso{
+Other graph functions:
+\code{\link[=Graph]{Graph()}},
+\code{\link[=graph_add]{graph_add()}},
+\code{\link[=graph_get]{graph_get()}},
+\code{\link[=graph_import]{graph_import()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_replace]{graph_replace()}},
+\code{\link[=graph_toposort]{graph_toposort()}}
+}
+\concept{graph functions}

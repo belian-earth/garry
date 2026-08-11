@@ -9,7 +9,11 @@ reduce_over(x, op, over, nan_rm = TRUE, bands = NULL)
 \arguments{
 \item{x}{A \code{LazyRaster}, or a \code{LazyDataset}.}
 
-\item{op}{Reduction name, e.g. \code{"mean"}, or a custom anvl reducer \code{fn(x, dims)}.}
+\item{op}{Reduction name: one of \code{"sum"}, \code{"mean"}, \code{"min"}, \code{"max"},
+\code{"prod"}, \code{"median"}, \code{"quantile"}, \code{"sd"}, \code{"var"}, \code{"count"},
+\code{"any"}, \code{"all"}. Alternatively a custom reducer: a function
+\code{fn(x, dims)} written in the \verb{g_*} vocabulary that collapses the
+margins \code{dims} (e.g. a per-pixel model fit over time).}
 
 \item{over}{Names of dims to reduce over (subset of \code{names(dims)}).}
 
@@ -21,13 +25,19 @@ reduce_over(x, op, over, nan_rm = TRUE, bands = NULL)
 A \code{LazyRaster} on the reduced grid, or a \code{LazyDataset} when given one.
 }
 \description{
-\code{op} is a reduction name (see \code{.reduce_ops}), not a function: the
-planner needs op identity for algebraic decomposition (D12) and dtype
-rules. \code{nan_rm = TRUE} (the default) skips nodata, matching R's
-\code{na.rm = TRUE} under the NaN-sentinel model (D8).
+\code{op} is a reduction name, not a function: the planner needs op
+identity for algebraic decomposition and dtype rules. \code{nan_rm = TRUE}
+(the default) skips nodata, matching R's \code{na.rm = TRUE} under the
+NaN nodata sentinel.
 }
 \details{
 Over a \code{LazyDataset}, each band is reduced independently (over \code{"t"}: stack
 the band's slices and collapse time to a composite); \code{bands} restricts which
 bands. \code{over = "band"} collapses the band axis, returning a \code{LazyRaster}.
+}
+\seealso{
+\code{\link[=geomedian]{geomedian()}} and \code{\link[=medoid]{medoid()}} for multivariate time
+composites; \code{\link[=band_project]{band_project()}} and \code{\link[=mlp_project]{mlp_project()}} for band-axis
+models; \code{\link[=group_by_time]{group_by_time()}} for calendar-grouped reduction;
+\code{\link[=scan_over]{scan_over()}} for order-preserving passes.
 }

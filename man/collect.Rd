@@ -35,5 +35,5 @@ Executes the plan and returns the result in the R session, always.
 To stream the result to a file instead, use \code{\link[=write_tif]{write_tif()}}; to
 checkpoint to local cubes and stay lazy, use \code{\link[=materialise]{materialise()}}.
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}
-without executing: the permanent introspection path.
+without executing, for inspection.
 }

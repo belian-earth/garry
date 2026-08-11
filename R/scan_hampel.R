@@ -52,8 +52,8 @@
 #' identical is 0, so any deviating centre is replaced; this is inherent
 #' to the Hampel construction.
 #'
-#' Runs through [scan_over()], so it plans, fuses, and distributes like
-#' any other kernel, and applies per band over a `LazyDataset`.
+#' Like every garry verb it is lazy (nothing computes until
+#' [collect()]), and it applies per band over a `LazyDataset`.
 #'
 #' @param x A `(t, y, x)` `LazyRaster`, or a `LazyDataset` (each band
 #'   filtered independently).

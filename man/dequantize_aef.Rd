@@ -14,7 +14,8 @@ The dequantized values, same shape as \code{x}.
 }
 \description{
 The AEF Int8 decode \code{((x / 127.5)^2) * sign(x)}: per-value, nonlinear, sign-
-preserving, mapping the code range \verb{[-127, 127]} to ~\verb{[-1, 1]}. Written in the
-\verb{g_*} vocabulary so it fuses onto the read as a garry map (pass to
-\code{\link[=lazy_cog]{lazy_cog()}} \verb{dequant =}) -- on the device, not a separate decode pass.
+preserving, mapping the code range \verb{[-127, 127]} to ~\verb{[-1, 1]}. Written in
+the \verb{g_*} vocabulary, so applying it with \code{\link[=lazy_map]{lazy_map()}} after \code{\link[=lazy_cog]{lazy_cog()}}
+fuses the decode onto the read, on the device rather than as a separate
+decode pass.
 }

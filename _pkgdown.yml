@@ -41,22 +41,46 @@ reference:
   - lazy_source
 - title: Datasets
   desc: |
-    The named multi-band, multi-time object; verbs apply across every band. Build from a STAC table or from rasters, mask from a QA band, collapse the band axis.
+    The named multi-band, multi-time object; verbs apply across every band. Build from a STAC table or from rasters, then select, stack, and collapse.
   contents:
   - lazy_dataset
   - as_dataset
   - LazyDataset
+  - stack_bands
+  - band_sel
+  - time_sel
+- title: Masking & cloud removal
+  desc: |
+    Mask value bands from a QA band or from a pre-trained cloud model. The ocm_* functions run the OmniCloudMask segmentation model natively (no Python) to derive cloud/shadow masks from red, green, and NIR bands.
+  contents:
   - mask
   - qa_bits
-  - group_by_time
-  - stack_bands
-- title: Geo-embedding helpers
+  - ocm_mask
+  - ocm_predict
+  - ocm_model
+  - ocm_fetch_weights
+  - ocm_load_weights
+  - shrink_footprint
+- title: Time series & compositing
   desc: |
-    Special operations for published geo-embedding products: the batched multi-band COG read (cptkirk) and the products' quantiser decodes, written in the g_* vocabulary so they fuse onto the read.
+    Collapse or smooth the time axis: calendar grouping, multivariate composites, gap filling, and per-pixel smoothers.
+  contents:
+  - group_by_time
+  - geomedian
+  - medoid
+  - fill_gaps
+  - hampel_smooth
+  - kalman_smooth
+  - kalman_llt
+- title: Geo-embeddings & model weights
+  desc: |
+    Special operations for published geo-embedding products: the batched multi-band COG read (via the cptkirk engine), the products' quantiser decodes, and safetensors weight IO.
   contents:
   - lazy_cog
   - dequantize_aef
   - dequantize_esd
+  - safetensors_read
+  - safetensors_ls
 - title: Raster & dataset algebra
   desc: |
     Lazily build and transform rasters and datasets. Every verb adds IR nodes and returns a new lazy object; nothing reads or computes until collect().
@@ -70,6 +94,7 @@ reference:
   - band_project
   - mlp_project
   - scan_over
+  - lazy_patch
   - align
 - title: Execution
   desc: Plan, distribute across daemons, and write the result.
@@ -77,21 +102,36 @@ reference:
   - collect
   - write_tif
   - materialise
+  - as_terra
   - garry_daemons
+  - garry_daemons_set
+  - garry_pool_hygiene
   - garry_gdal_config
   - garry_opt
+  - garry_options
+- title: Diagnostics & visualisation
+  desc: |
+    Inspect data and understand what an execution did: quick plots, pipeline drawings, and run reports.
+  contents:
+  - preview
+  - draw
+  - garry_last_route
+  - garry_task_report
+  - garry_explain_placement
 - title: Grids & spatial helpers
   desc: Define and interrogate the analysis grid; dtype rules.
   contents:
   - grid_spec
+  - grid_from_bbox
+  - grid_from_src
   - gdal_grid_spec
   - res
   - xmin
   - xmax
   - ymin
   - ymax
-  - as_vaster_extent
   - grid_equal
+  - grid_diff
   - crs_equal
   - dtype_valid
   - dtype_promote
@@ -99,16 +139,24 @@ reference:
   - output_grid
 - title: anvl compute vocabulary
   desc: |
-    The g_* traced-array ops for writing map/focal/reducer functions. These run fused inside an XLA stage under both the pure-R oracle and PJRT.
+    The g_* traced-array ops for writing map/focal/reducer functions. These run fused inside an XLA stage under both the pure-R reference implementation and PJRT.
   contents:
   - g_ifelse
   - g_is_nodata
   - g_cast
+  - g_fill
   - g_pad
+  - g_pad_rb
   - g_shift_slice
   - g_stack
   - g_index_scalar
   - g_scan
+  - g_slice_t
+  - g_concat_t
+  - g_rep_t
+  - g_expand
+  - g_squeeze1
+  - g_transpose
   - g_bitand
   - g_bitor
   - g_bitxor
@@ -120,28 +168,28 @@ reference:
   - g_min
   - g_max
   - g_median
-  - g_broadcast_arrays
   - g_count
-  - g_jit
+  - g_erf
+  - g_conv2d
+  - g_upsample2x
+  - g_broadcast_arrays
   - g_upload
   - g_download
-  - g_upload_raw
-  - g_download_raw
-  - g_value_and_gradient
   - lazy_value_and_grad
 - title: GDAL adapter (low-level IO)
   desc: |
-    Direct windowed read/write, warp, and GTI index construction. Used by the cube layer; exposed for bespoke IO.
+    Direct windowed read/write, warp, staging, and GTI index construction. Used by the cube layer; exposed for bespoke IO.
   contents:
   - gdal_read_window
   - gdal_write_window
   - gdal_create_output
   - gdal_warp_vrt
+  - stage_raw_cube
   - gti_index_create
   - gti_open_options
 - title: IR & planner (extension API)
   desc: |
-    The intermediate representation and planner. Needed only to build on the IR directly (custom nodes, alternate executors) — not for normal use.
+    The intermediate representation and planner. Needed only to build on the IR directly (custom nodes, alternate executors) -- not for normal use.
   contents:
   - LazyRaster
   - GridSpec
@@ -158,6 +206,7 @@ reference:
   - WarpNode
   - StackNode
   - FusedNode
+  - PatchNode
   - graph_new
   - graph_add
   - graph_get
@@ -177,8 +226,7 @@ reference:
   - cross_grid_window
 - title: internal
   desc: |
-    Exported only so mirai daemons can call them across the process boundary. Not public API; do not depend on these.
+    Exported only so mirai daemons can call them across the process boundary, or as low-level plumbing. Not public API; do not depend on these.
   contents:
   - has_keyword("internal")
   - starts_with(".")
-

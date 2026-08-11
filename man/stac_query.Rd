@@ -21,6 +21,26 @@ stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
 An rstac \code{doc_items} object.
 }
 \description{
-Thin port of vrtility's \code{stac_query()}: GET with POST fallback,
-full pagination via \code{rstac::items_fetch()}.
+Searches the collection with a GET request, falling back to POST when
+the API rejects GET, and fetches every page of results via
+\code{rstac::items_fetch()}.
 }
+\seealso{
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}}, \code{\link[=stac_sources]{stac_sources()}}, and \code{\link[=lazy_dataset]{lazy_dataset()}} as
+the usual next steps.
+
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

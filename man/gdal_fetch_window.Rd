@@ -20,9 +20,9 @@ gdal_fetch_window(location, out_file, ext, crs, margin = 8L, out_res = NULL)
 source unreadable.
 }
 \description{
-The fetch half of the phase 12 fetch/assemble split: a plain
+The fetch half of the fetch/assemble split: a plain
 \code{gdal_translate -srcwin} of the window intersecting \code{ext} (plus a
-warp-kernel \code{margin} in source pixels), native dtype and blocks —
+warp-kernel \code{margin} in source pixels), native dtype and blocks;
 no warp, no mosaic on the remote path.
 }
 \keyword{internal}

@@ -13,5 +13,17 @@ Graph(nodes = new.env(parent = emptyenv()))
 A \code{Graph}.
 }
 \description{
-Compute graph.
+The container for garry's IR nodes. \code{\link[=graph_new]{graph_new()}} is the
+constructor; nodes are added with \code{\link[=graph_add]{graph_add()}}.
 }
+\seealso{
+Other graph functions:
+\code{\link[=graph_add]{graph_add()}},
+\code{\link[=graph_get]{graph_get()}},
+\code{\link[=graph_ids]{graph_ids()}},
+\code{\link[=graph_import]{graph_import()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_replace]{graph_replace()}},
+\code{\link[=graph_toposort]{graph_toposort()}}
+}
+\concept{graph functions}

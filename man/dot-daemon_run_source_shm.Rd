@@ -39,9 +39,8 @@ The mori-store counterpart of \code{.daemon_run_source} and
 \code{.daemon_run_source_split}. Coarse reads share their per-compute-
 chunk parts as elements of one shared list: consumers extract their
 element zero-copy. (Consumer-side RANGE subsetting of a mapped
-matrix would materialise the whole window per input - measured as
-multi-GB of transient daemon heap on the benchmark - so the split
-happens producer-side here too.)
+matrix would materialise the whole window per input, a large
+transient allocation, so the split happens producer-side here too.)
 Internal (exported only so mirai daemons can address it via \code{::}).
 }
 \keyword{internal}

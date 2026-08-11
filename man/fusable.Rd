@@ -7,7 +7,7 @@
 fusable(node, ...)
 }
 \arguments{
-\item{node}{An IR \code{Node}.}
+\item{node}{An intermediate representation (IR) \code{Node}.}
 
 \item{...}{Passed to methods.}
 }
@@ -15,5 +15,6 @@ fusable(node, ...)
 \code{TRUE} or \code{FALSE}.
 }
 \description{
-Can this node be composed with fusable neighbours into a single kernel?
+Part of the extension API for authors of new node classes; not
+needed for ordinary use of the package.
 }

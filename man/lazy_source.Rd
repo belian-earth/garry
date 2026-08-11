@@ -57,18 +57,20 @@ A \code{LazyRaster}.
 Grid, dtype, native block size, and file nodata come from GDAL via
 the adapter (\code{gdal_grid_spec()}). A user-supplied \code{nodata} overrides
 the file's. An integer source with nodata is promoted to f32 so NaN
-can carry nodata downstream (decision D8); the sentinel-to-NaN
-rewrite happens at read time in the adapter.
+can carry nodata downstream; the sentinel-to-NaN rewrite happens at
+read time in the adapter.
 }
 \details{
 Passing \code{grid} skips the GDAL open entirely: no metadata is read
 until execution. Use it when the dataset's grid is known by
 construction, e.g. GTI mosaics pinned to a target grid via
-\code{gti_open_options()}, where opening every time slice just to
-rediscover the grid costs a remote COG header fetch per slice
-(measured: ~0.1 s each, serial, on the host). \code{grid} must describe
-the dataset exactly as \code{path} + \code{open_options} open it, including
-the source dtype; it is trusted, not checked. With \code{grid} given,
-file nodata is NOT consulted (pass \code{nodata} explicitly if the
-source has a sentinel).
+\code{\link[=gti_open_options]{gti_open_options()}}, where opening every time slice just to
+rediscover the grid costs a serial remote COG header fetch per
+slice. \code{grid} must describe the dataset exactly as \code{path} +
+\code{open_options} open it, including the source dtype; it is trusted,
+not checked. With \code{grid} given, file nodata is NOT consulted (pass
+\code{nodata} explicitly if the source has a sentinel).
+}
+\seealso{
+\code{\link[=collect]{collect()}}, \code{\link[=lazy_dataset]{lazy_dataset()}}
 }

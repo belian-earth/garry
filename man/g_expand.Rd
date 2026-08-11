@@ -20,6 +20,6 @@ Array of rank \code{length(dim(x)) + 1}.
 The rank-general sibling of \code{\link[=g_rep_t]{g_rep_t()}}: expands \code{x} with a new axis
 of \code{n} copies at position \code{axis}, so a reduced statistic broadcasts
 back against the array it came from (base R arrays do not broadcast,
-so the untraced oracle needs the copies materialised; traced, this is
+so the untraced path materialises the copies; traced, this is
 a free \code{broadcast_to}).
 }

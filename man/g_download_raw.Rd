@@ -13,7 +13,8 @@ g_download_raw(x)
 Raw vector with \code{gdim} and \code{gdt} attributes.
 }
 \description{
-Row-major byte payload tagged with \code{gdim}/\code{gdt} (D20, extended to
-f64 by design/f64-store.md); no double materialisation. Raw f64 is
-bit-identical to the doubles path.
+Row-major byte payload tagged with \code{gdim}/\code{gdt} attributes; no
+double materialisation. Raw f64 is bit-identical to the doubles
+path.
 }
+\keyword{internal}

@@ -9,7 +9,7 @@ g_upload_raw(bytes, dtype, dim, device = NULL)
 \arguments{
 \item{bytes}{Raw vector (native little-endian payload).}
 
-\item{dtype}{garry dtype string (f32 on the 12c path).}
+\item{dtype}{garry dtype string (typically \code{"f32"}).}
 
 \item{dim}{Integer dims, \verb{[nr, nc]} or \verb{[t, nr, nc]}.}
 
@@ -20,6 +20,7 @@ An \code{AnvlArray}.
 }
 \description{
 \code{bytes} holds \code{prod(dim)} elements of \code{dtype} in ROW-major element
-order (D19): one memcpy to the device, no double conversion, and no
+order: one memcpy to the device, no double conversion, and no
 XLA relayout (row-major matches the default layout).
 }
+\keyword{internal}

@@ -17,12 +17,11 @@ seconds), \code{max_concurrency}, \code{drain_s}, \code{host_tail_s},
 \code{peak_model_mb}, \code{peak_rss_mb}. Printed as a cli summary.
 }
 \description{
-Converts the distributed scheduler's task log (option
-\code{garry.task_log}; schema \verb{time,event,key,pool,slot,mb,store_mb,ready})
-from a developer trace into an operator report: per-stage task counts
+Summarises the task log CSV the distributed scheduler writes when
+the \code{garry.task_log} option is set (see \code{\link[=garry_options]{garry_options()}}; schema
+\verb{time,event,key,pool,slot,mb,store_mb,ready}): per-stage task counts
 and run/queue-wait quantiles, maximum concurrency, the drain vs
-host-tail split, and the peak measured (per-daemon anon RSS) vs
-modelled (in-flight + resident) memory. Every diagnosis in the design
-history parsed this CSV ad hoc; this locks the schema and answers the
-standing "where did the time and memory go".
+host-tail split, and the peak measured (per-daemon anonymous RSS) vs
+modelled (in-flight + resident) memory. It answers "where did the
+time and memory go" for a distributed run.
 }

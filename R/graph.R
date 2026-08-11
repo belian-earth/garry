@@ -12,8 +12,12 @@
 
 #' Compute graph.
 #'
+#' The container for garry's IR nodes. [graph_new()] is the
+#' constructor; nodes are added with [graph_add()].
+#'
 #' @param nodes Environment holding the node table and id counter.
 #' @return A `Graph`.
+#' @family graph functions
 #' @export
 Graph <- S7::new_class(
   "Graph",
@@ -25,6 +29,7 @@ Graph <- S7::new_class(
 #' Create an empty graph.
 #'
 #' @return A `Graph` with no nodes.
+#' @family graph functions
 #' @export
 graph_new <- function() {
   env <- new.env(parent = emptyenv(), hash = TRUE)
@@ -49,6 +54,7 @@ graph_new <- function() {
 #' @param ctor S7 node class constructor.
 #' @param ... Properties passed to `ctor`.
 #' @return The assigned integer id.
+#' @family graph functions
 #' @export
 graph_add <- function(graph, ctor, ...) {
   id   <- graph@nodes$.next_id
@@ -65,15 +71,20 @@ graph_add <- function(graph, ctor, ...) {
 #' @param graph A `Graph`.
 #' @param id Integer node id.
 #' @return The `Node`, or `NULL` if absent.
+#' @family graph functions
 #' @export
 graph_get <- function(graph, id) {
   graph@nodes[[.key(id)]]
 }
 
-#' All node ids in the graph, in insertion order.
+#' All node ids in the graph, in ascending id order.
+#'
+#' Ids are assigned sequentially by [graph_add()] and never reordered,
+#' so ascending id order is also insertion order.
 #'
 #' @param graph A `Graph`.
-#' @return Sorted integer vector of node ids.
+#' @return Integer vector of node ids, sorted ascending.
+#' @family graph functions
 #' @export
 graph_ids <- function(graph) {
   keys <- ls(graph@nodes, all.names = TRUE)
@@ -85,6 +96,7 @@ graph_ids <- function(graph) {
 #'
 #' @param graph A `Graph`.
 #' @return Integer node ids in topological order.
+#' @family graph functions
 #' @export
 graph_toposort <- function(graph) {
   ids <- graph_ids(graph)
@@ -122,6 +134,7 @@ graph_toposort <- function(graph) {
 #' @param id Integer id of the node to replace.
 #' @param node The replacement `Node`.
 #' @return The replacement node, invisibly.
+#' @family graph functions
 #' @export
 graph_replace <- function(graph, id, node) {
   old <- graph@nodes[[.key(id)]]
@@ -136,7 +149,7 @@ graph_replace <- function(graph, id, node) {
 #' Import the subgraph reachable from `root_id` in `src` into `dst`.
 #'
 #' Node ids are renumbered; a SourceNode identical in (path, band, nodata,
-#' grid, dtype) to one already in `dst` is deduplicated (decision D6).
+#' grid, dtype) to one already in `dst` is deduplicated.
 #' Graphs are append-only (rewrites swap nodes in place, ids never
 #' reorder), so ascending id order within the reachable set is a valid
 #' topological order.
@@ -145,6 +158,7 @@ graph_replace <- function(graph, id, node) {
 #' @param src Source `Graph`.
 #' @param root_id Id in `src` whose ancestry is imported.
 #' @return The id of the imported root in `dst`.
+#' @family graph functions
 #' @export
 graph_import <- function(dst, src, root_id) {
   if (identical(dst@nodes, src@nodes)) return(root_id)

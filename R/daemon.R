@@ -182,9 +182,8 @@ NULL
 #' `.daemon_run_source_split`. Coarse reads share their per-compute-
 #' chunk parts as elements of one shared list: consumers extract their
 #' element zero-copy. (Consumer-side RANGE subsetting of a mapped
-#' matrix would materialise the whole window per input - measured as
-#' multi-GB of transient daemon heap on the benchmark - so the split
-#' happens producer-side here too.)
+#' matrix would materialise the whole window per input, a large
+#' transient allocation, so the split happens producer-side here too.)
 #' Internal (exported only so mirai daemons can address it via `::`).
 #'
 #' @param path,band,nodata Source identity.
@@ -296,14 +295,14 @@ NULL
 #' Daemon task body: fetch one item-asset's target-window bytes to a
 #' local file.
 #'
-#' The fetch half of the phase 12 fetch/assemble split: a plain
+#' The fetch half of the fetch/assemble split: a plain
 #' `gdal_translate -srcwin` of the window intersecting the target
 #' extent (plus a warp-kernel margin), remote COG to local tmpfs,
-#' native dtype and blocks — no warp, no mosaic on the remote path.
+#' native dtype and blocks; no warp, no mosaic on the remote path.
 #' On failure with `garry.read_fail = "nodata"`, writes a small
 #' all-nodata placeholder covering the window so the local mosaic
 #' reads a hole instead of erroring (Int16 when a nodata sentinel is
-#' declared, Byte 255 otherwise — the HLS QA convention).
+#' declared, Byte 255 otherwise, the HLS QA convention).
 #'
 #' Internal (exported only so mirai daemons can address it via `::`).
 #'
@@ -405,7 +404,7 @@ NULL
 #' Runs on compute-pool daemons at run start (see `garry_daemons()`),
 #' while the read pool owns the network drain: fills the per-daemon
 #' jit cache and triggers one dummy execution per stage so the XLA
-#' compile (~0.9 s/stage measured) never lands on a tail chunk.
+#' compile never lands on a tail chunk.
 #' Get-or-create against the same cache keys the real tasks use;
 #' failures are swallowed (warm-up is an optimisation, never a
 #' correctness dependency).
@@ -444,6 +443,12 @@ NULL
 
 # Warm a daemon's XLA/PJRT client (one trivial jit) so the first real compute
 # task doesn't pay the ~3s cold init on the critical path.
+#' Daemon task body: warm this daemon's XLA/PJRT client.
+#'
+#' Runs one trivial jitted kernel so the first real compute task does
+#' not pay the cold client initialisation.
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
 #' @keywords internal
 #' @export
 .gd_warm <- function() {
@@ -540,6 +545,13 @@ NULL
 # (morphology, cube-vectorised over time) and write the resulting f32 mask cube
 # to one .bin, so every band's median reads it instead of recomputing the
 # morphology. Runs on the compute pool while the bands are still fetching.
+#' Daemon task body: compute the shared cleaned-mask cube.
+#'
+#' Replays the mask-cleaning morphology once over the whole QA cube and
+#' writes the resulting f32 mask cube to a file every band task reads,
+#' instead of recomputing the morphology per band.
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
 #' @keywords internal
 #' @export
 .gd_compute_mask <- function(k) {
@@ -567,6 +579,12 @@ NULL
 # Runs on the compute pool while later bands are still fetching. The
 # read affine (SourceNode scale/offset) is applied to the DN cube inside
 # the kernel so it sees what a scaled read would have produced.
+#' Daemon task body: reduce one band (or strip) under the shared mask.
+#'
+#' Reads a band cube plus the shared cleaned-mask cube, applies the
+#' masked-apply function and reduces over time to a raw f32 payload.
+#' Internal (exported only so mirai daemons can address it via `::`).
+#'
 #' @keywords internal
 #' @export
 .gd_compute_masked_band <- function(job, k) {

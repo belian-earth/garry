@@ -24,7 +24,7 @@ or a \code{stac_sources()}-style dataframe for the time-series form; or a COG pa
 / character vector of tiles (remote \verb{http(s)://} or \verb{/vsicurl/}) for the
 single form.}
 
-\item{grid}{Target \code{GridSpec}.}
+\item{grid}{Target \code{\link[=GridSpec]{GridSpec()}}.}
 
 \item{assets}{Asset names to read (dataframe form; a band each).}
 

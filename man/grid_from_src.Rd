@@ -17,11 +17,11 @@ grid_from_src(
 \item{x}{Path or URL to a raster or vector source.}
 
 \item{res}{Target resolution. For a raster, in the source's native CRS units;
-for a vector, in the chosen projected CRS units (see \code{grid_from_bbox()}).}
+for a vector, in the chosen projected CRS units (see \code{\link[=grid_from_bbox]{grid_from_bbox()}}).}
 
 \item{projection, ellps}{Vector sources only; ignored for rasters.}
 
-\item{buffer, dtype}{As in \code{grid_from_bbox()}.}
+\item{buffer, dtype}{As in \code{\link[=grid_from_bbox]{grid_from_bbox()}}.}
 }
 \value{
 A \code{GridSpec}.
@@ -40,7 +40,7 @@ distort it. Use this to coarsen a tile in place, e.g. read a 10 m embedding
 COG onto a 30 m grid while preserving its geometry.
 \item \strong{Vector} (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
 so a projected CRS is chosen for it and the grid is built exactly as
-\code{grid_from_bbox()} does, honouring \code{projection}/\code{ellps}.
+\code{\link[=grid_from_bbox]{grid_from_bbox()}} does, honouring \code{projection}/\code{ellps}.
 }
 
 Remote sources are read via HTTP range requests (header only), so this does
@@ -53,4 +53,8 @@ target <- grid_from_src("catchment.gpkg", res = 30)
 # Raster -> its own CRS/extent at 30 m.
 g <- grid_from_src("s3://.../embedding.tif", res = 30)
 }
+}
+\seealso{
+\code{\link[=grid_from_bbox]{grid_from_bbox()}} to build a grid from a lon/lat bounding
+box; \code{\link[=grid_spec]{grid_spec()}} to build one from an explicit extent.
 }

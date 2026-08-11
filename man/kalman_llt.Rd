@@ -39,22 +39,20 @@ A scan body \code{fn(xs, margin)} for \code{\link[=scan_over]{scan_over()}}.
 \description{
 Returns a scan body \code{fn(xs, margin)} computing the smoothed level mean
 (or its standard error) of a per-pixel local-linear-trend Kalman
-filter + RTS smoother over the \code{t} axis, batched over the chunk's
-pixels. Use with \code{scan_over(x, kalman_llt(...), direction = "bidir")};
+filter with a Rauch-Tung-Striebel smoothing pass over the \code{t} axis,
+batched over the chunk's pixels. This is the low-level building
+block; most users want \code{\link[=kalman_smooth]{kalman_smooth()}}, which wraps it. Use with
+\code{scan_over(x, kalman_llt(...), direction = "bidir")};
 \code{x} is the observation stack, optionally \code{list(x, r)} with \code{r} a
 per-year relative observation-variance stack (\code{Var(v_t) = sigma_obs^2 * r_t}; \code{r} must be finite wherever \code{y} is observed).
 }
 \details{
-Hyperparameters are fixed R scalars, fitted off-raster (e.g. hutan's
-marginal-likelihood MLE) and closed over as f64 constants. Pixels
-with fewer than 3 valid observations return all-NaN (matching
-hutan). Initialisation is the large-variance diffuse approximation
-\code{P1 = kappa * I}; see the file header for the f64/kappa rationale.
-
-\code{output = "mean"} and \code{output = "sd"} are separate scan bodies (one
-export per node); the smoother recomputes per node, which is noise at
-T ~ 15 next to IO.
+Hyperparameters are fixed scalars, fitted outside the raster
+pipeline (for example by marginal-likelihood MLE on sampled pixel
+series). Pixels with fewer than 3 valid observations return
+all-NaN. Initialisation is the large-variance diffuse approximation
+\code{P1 = kappa * I}.
 }
 \seealso{
-\code{\link[=scan_over]{scan_over()}}, \code{\link[=g_scan]{g_scan()}}
+\code{\link[=kalman_smooth]{kalman_smooth()}}, \code{\link[=scan_over]{scan_over()}}, \code{\link[=g_scan]{g_scan()}}
 }

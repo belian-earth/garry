@@ -17,9 +17,9 @@ A reducer \code{fn(x, dims)} for \code{\link[=reduce_over]{reduce_over()}}.
 \description{
 Returns a custom reducer for \code{\link[=reduce_over]{reduce_over()}} computing, per pixel,
 the \emph{observed} band-vector nearest the \code{\link[=geomedian]{geomedian()}}: a composite
-whose every pixel is a real spectrum from a real date (the
-odc/hdstats medoid construction). Use it when downstream analysis
-must not see synthetic spectra at all.
+whose every pixel is a real spectrum from a real date, following the
+medoid construction of the Open Data Cube's hdstats package. Use it
+when downstream analysis must not see synthetic spectra at all.
 }
 \details{
 Ties (several dates equally near) average; timesteps with any NaN
@@ -28,5 +28,6 @@ Input layout as \code{\link[=geomedian]{geomedian()}}: a \verb{(band, t, y, x)} 
 \code{"t"}.
 }
 \seealso{
-\code{\link[=geomedian]{geomedian()}}, \code{\link[=reduce_over]{reduce_over()}}
+\code{\link[=geomedian]{geomedian()}}, \code{\link[=reduce_over]{reduce_over()}}; \code{\link[=band_project]{band_project()}} and
+\code{\link[=mlp_project]{mlp_project()}} for projections over the surviving band axis.
 }

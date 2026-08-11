@@ -34,5 +34,6 @@ The input must be a \verb{(band, t, y, x)} cube: stack each band's
 axis survives.
 }
 \seealso{
-\code{\link[=medoid]{medoid()}}, \code{\link[=reduce_over]{reduce_over()}}
+\code{\link[=medoid]{medoid()}}, \code{\link[=reduce_over]{reduce_over()}}; \code{\link[=band_project]{band_project()}} and
+\code{\link[=mlp_project]{mlp_project()}} for projections over the surviving band axis.
 }

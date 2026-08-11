@@ -19,3 +19,6 @@ Each entry of \code{bands} is either a single \code{LazyRaster} (one time slice,
 already-reduced composite) or a list of per-slice \code{LazyRaster}s. Rasters on
 different graphs are imported into one shared graph.
 }
+\seealso{
+\code{\link[=lazy_dataset]{lazy_dataset()}}
+}

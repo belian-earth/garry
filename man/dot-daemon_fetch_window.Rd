@@ -30,14 +30,14 @@ local file.}
 \code{TRUE}.
 }
 \description{
-The fetch half of the phase 12 fetch/assemble split: a plain
+The fetch half of the fetch/assemble split: a plain
 \code{gdal_translate -srcwin} of the window intersecting the target
 extent (plus a warp-kernel margin), remote COG to local tmpfs,
-native dtype and blocks — no warp, no mosaic on the remote path.
+native dtype and blocks; no warp, no mosaic on the remote path.
 On failure with \code{garry.read_fail = "nodata"}, writes a small
 all-nodata placeholder covering the window so the local mosaic
 reads a hole instead of erroring (Int16 when a nodata sentinel is
-declared, Byte 255 otherwise — the HLS QA convention).
+declared, Byte 255 otherwise, the HLS QA convention).
 }
 \details{
 Internal (exported only so mirai daemons can address it via \code{::}).

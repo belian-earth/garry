@@ -15,7 +15,7 @@ dtype_promote(a, b, divide = FALSE)
 The promoted dtype string.
 }
 \description{
-XLA-style rules, locked by decision D3:
+The promotion rules:
 \itemize{
 \item float dominates: float op int/uint/pred keeps the float type;
 \item within a family the wider type wins;

@@ -17,3 +17,6 @@ grid_equal(a, b, tol = 1e-09)
 \description{
 Structural equality of two grids (geometry only, not dtype).
 }
+\seealso{
+\code{\link[=grid_diff]{grid_diff()}}, which describes how two grids differ.
+}

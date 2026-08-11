@@ -31,7 +31,11 @@
   as.integer(sub("^[fiu]", "", dtype))
 }
 
-#' Is `dtype` a member of garry's (anvl-aligned) dtype vocabulary?
+#' Is `dtype` a member of garry's dtype vocabulary?
+#'
+#' The valid dtype strings are `"f32"`, `"f64"`, `"i8"`, `"i16"`,
+#' `"i32"`, `"i64"`, `"u8"`, `"u16"`, `"u32"`, `"u64"`, and `"pred"`
+#' (a boolean/predicate type).
 #'
 #' @param dtype A dtype string, e.g. `"f32"`.
 #' @return `TRUE` or `FALSE`.
@@ -42,7 +46,7 @@ dtype_valid <- function(dtype) {
 
 #' Promote two dtypes for a binary operation.
 #'
-#' XLA-style rules, locked by decision D3:
+#' The promotion rules:
 #' - float dominates: float op int/uint/pred keeps the float type;
 #' - within a family the wider type wins;
 #' - pred promotes to the other operand;
@@ -238,6 +242,9 @@ GridSpec <- S7::new_class(
 #'   number of pixels (anchored at the top-left, so the resolution is exactly
 #'   `res`). Provide this OR `dims`, not both.
 #' @return A `GridSpec`.
+#' @seealso [grid_from_bbox()] and [grid_from_src()], the higher-level
+#'   constructors that derive a grid from an area of interest;
+#'   [GridSpec()], the underlying class constructor.
 #' @export
 grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
   extent <- as.numeric(extent)
@@ -309,11 +316,13 @@ S7::method(res, GridSpec) <- function(x) {
 
 #' Reorder a garry extent for vaster calls.
 #'
-#' garry: (xmin, ymin, xmax, ymax); vaster: (xmin, xmax, ymin, ymax).
-#' This helper is the ONLY sanctioned reorder point (decision D1).
+#' garry orders extents (xmin, ymin, xmax, ymax); vaster expects
+#' (xmin, xmax, ymin, ymax). This helper performs that reordering, so
+#' extents cross the package boundary in one place.
 #'
 #' @param x A `GridSpec` or a length-4 garry-order extent.
 #' @return Length-4 numeric in vaster order.
+#' @keywords internal
 #' @export
 as_vaster_extent <- function(x) {
   ext <- if (S7::S7_inherits(x, GridSpec)) x@extent else as.numeric(x)
@@ -328,6 +337,7 @@ as_vaster_extent <- function(x) {
 #' @param a,b `GridSpec` objects.
 #' @param tol Numeric tolerance for transform/extent comparison.
 #' @return `TRUE` or `FALSE`.
+#' @seealso [grid_diff()], which describes how two grids differ.
 #' @export
 grid_equal <- function(a, b, tol = 1e-9) {
   crs_equal(a@crs, b@crs) &&

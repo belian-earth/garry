@@ -10,7 +10,7 @@ bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 \item{sigma_r}{Range Gaussian standard deviation (data units).}
 
 \item{sigma_d}{Spatial Gaussian standard deviation in pixels
-(default 1, hutan's \code{(window - 1) / 2} for a 3x3 window).}
+(default 1, matching the default 3x3 window).}
 
 \item{radius}{Window radius the body is built for; must match the
 \code{radius} passed to \code{\link[=focal]{focal()}} (default 1 = 3x3).}
@@ -27,9 +27,10 @@ within regions of similar value and stops at sharp transitions. Use
 as \code{focal(x, fn = bilateral_focal(sigma_r), radius = 1L)}.
 }
 \details{
-Semantics match \code{rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")}: a NaN centre stays NaN; NaN neighbours (and the
-NaN halo garry pads outside the raster) drop out of the weighted
-mean. \code{sigma_r} must be supplied: the parameter-free per-band default
+A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
+outside the raster) drop out of the weighted mean (the semantics of
+\code{rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")}).
+\code{sigma_r} must be supplied: the parameter-free per-band default
 (the band's own sd) is a whole-raster statistic, so compute it in a
 separate reduce pass (or reuse fitted values) and pass it in.
 }

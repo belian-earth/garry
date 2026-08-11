@@ -120,13 +120,14 @@ NULL
 
 #' Execute a Plan across mirai daemons.
 #'
-#' Requires `mirai::daemons()` to be set by the caller. Results are
-#' identical to `execute_plan()` (same plan, same kernels; the
-#' equivalence is gate-tested).
+#' Requires garry's daemon pools: call [garry_daemons()] first (the
+#' function errors when the pools are not running). Results are
+#' identical to [execute_plan()] (same plan, same kernels).
 #'
 #' @param plan A `Plan`.
-#' @param path,nodata,band_names,wspec As in `execute_plan()`.
-#' @return As `execute_plan()`.
+#' @param path,nodata,band_names,wspec As in [execute_plan()].
+#' @return As [execute_plan()].
+#' @seealso [collect()], [garry_daemons()]
 #' @export
 execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL,
                                wspec = NULL) {

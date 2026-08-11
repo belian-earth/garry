@@ -19,3 +19,14 @@ The replacement node, invisibly.
 \description{
 Replace a node in place (for rewrite passes).
 }
+\seealso{
+Other graph functions:
+\code{\link[=Graph]{Graph()}},
+\code{\link[=graph_add]{graph_add()}},
+\code{\link[=graph_get]{graph_get()}},
+\code{\link[=graph_ids]{graph_ids()}},
+\code{\link[=graph_import]{graph_import()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_toposort]{graph_toposort()}}
+}
+\concept{graph functions}

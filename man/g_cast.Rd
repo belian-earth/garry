@@ -2,7 +2,7 @@
 % Please edit documentation in R/ops.R
 \name{g_cast}
 \alias{g_cast}
-\title{Cast to a garry dtype (oracle: value semantics only).}
+\title{Cast to a garry dtype.}
 \usage{
 g_cast(x, dtype)
 }
@@ -15,6 +15,7 @@ g_cast(x, dtype)
 Array with \code{dtype}'s value semantics.
 }
 \description{
-Float targets keep double storage; integer targets truncate toward
-zero; \code{pred} maps nonzero to TRUE.
+Integer targets truncate toward zero; \code{pred} maps nonzero to TRUE.
+On plain R arrays the cast changes value semantics only (storage
+stays double).
 }

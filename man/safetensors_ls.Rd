@@ -15,3 +15,6 @@ Data frame with \code{name}, \code{dtype}, \code{shape} (comma string).
 \description{
 List tensor names, dtypes, and shapes without reading data.
 }
+\seealso{
+\code{\link[=safetensors_read]{safetensors_read()}} to read the tensors.
+}

@@ -43,7 +43,7 @@ signatures.}
 A \code{PatchNode}.
 }
 \description{
-The stencil shape for kernels whose spatial context is far beyond a
+Created by \code{\link[=lazy_patch]{lazy_patch()}}. The stencil shape for kernels whose spatial context is far beyond a
 shift-list focal (CNN inference, e.g. OmniCloudMask): \code{fn(xpad)}
 receives the parent's value carrying at least \code{radius} halo cells per
 side (a \verb{(C, H, W)} cube, traced or plain) and returns a
@@ -56,8 +56,11 @@ else 3 with a leading band axis of length \code{out_bands}.
 \details{
 \code{kernel_id} is the content identity of the closed-over model (weights
 \itemize{
-\item configuration): the scheduler hashes it INSTEAD of serializing \code{fn}
-(a model closure can carry tens of MB). \code{bytes_px} / \code{flops_px} are
+\item configuration): it stands in for \code{fn} in kernel signatures, so \code{fn}
+itself is never serialised or hashed (a model closure can carry tens
+of MB). Two nodes with equal \code{kernel_id} are treated as the same
+kernel, so \code{kernel_id} must change whenever the model content
+changes. \code{bytes_px} / \code{flops_px} are
 planner cost hints per CORE pixel; they price chunk sizing, memory
 admission, and placement, which cannot introspect an arbitrary model
 closure.

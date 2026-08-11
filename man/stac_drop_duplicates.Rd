@@ -7,13 +7,29 @@
 stac_drop_duplicates(sources)
 }
 \arguments{
-\item{sources}{A \code{stac_sources()} table.}
+\item{sources}{A STAC \code{doc_items} or a \code{stac_sources()} data frame.}
 }
 \value{
-The deduplicated table.
+The deduplicated \code{doc_items} / data frame.
 }
 \description{
 Duplicate items are a known Planetary Computer quirk; equality uses
 the footprint rounded to 4 decimal places plus the datetime, per
-asset (vrtility's rule).
+asset.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}

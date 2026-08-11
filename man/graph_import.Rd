@@ -18,8 +18,19 @@ The id of the imported root in \code{dst}.
 }
 \description{
 Node ids are renumbered; a SourceNode identical in (path, band, nodata,
-grid, dtype) to one already in \code{dst} is deduplicated (decision D6).
+grid, dtype) to one already in \code{dst} is deduplicated.
 Graphs are append-only (rewrites swap nodes in place, ids never
 reorder), so ascending id order within the reachable set is a valid
 topological order.
 }
+\seealso{
+Other graph functions:
+\code{\link[=Graph]{Graph()}},
+\code{\link[=graph_add]{graph_add()}},
+\code{\link[=graph_get]{graph_get()}},
+\code{\link[=graph_ids]{graph_ids()}},
+\code{\link[=graph_new]{graph_new()}},
+\code{\link[=graph_replace]{graph_replace()}},
+\code{\link[=graph_toposort]{graph_toposort()}}
+}
+\concept{graph functions}

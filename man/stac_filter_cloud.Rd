@@ -7,14 +7,30 @@
 stac_filter_cloud(sources, max_cloud_cover)
 }
 \arguments{
-\item{sources}{A \code{stac_sources()} table.}
+\item{sources}{A STAC \code{doc_items} or a \code{stac_sources()} data frame.}
 
-\item{max_cloud_cover}{Keep rows strictly below this percentage
-(rows with unknown cloud cover are kept).}
+\item{max_cloud_cover}{Keep items strictly below this percentage
+(items with unknown cloud cover are kept).}
 }
 \value{
-The filtered table.
+The filtered \code{doc_items} / data frame.
 }
 \description{
 Filter a source table by maximum cloud cover.
 }
+\seealso{
+Other stac helpers:
+\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
+\code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
+\code{\link[=stac_filter_assets]{stac_filter_assets()}},
+\code{\link[=stac_filter_coverage]{stac_filter_coverage()}},
+\code{\link[=stac_filter_orbit]{stac_filter_orbit()}},
+\code{\link[=stac_gti_index]{stac_gti_index()}},
+\code{\link[=stac_merge]{stac_merge()}},
+\code{\link[=stac_query]{stac_query()}},
+\code{\link[=stac_rename_assets]{stac_rename_assets()}},
+\code{\link[=stac_sign_mpc]{stac_sign_mpc()}},
+\code{\link[=stac_sources]{stac_sources()}},
+\code{\link[=stac_time_slices]{stac_time_slices()}}
+}
+\concept{stac helpers}
