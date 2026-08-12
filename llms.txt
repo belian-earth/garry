@@ -86,6 +86,22 @@ You can install the development version of garry from
 pak::pak("belian-earth/garry")
 ```
 
+garry computes through [anvl](https://github.com/r-xla/anvl)/XLA, whose
+PJRT runtime plugin downloads on first use. Fetch it once up front (it
+prompts interactively otherwise, which fails in scripts and on servers):
+
+``` r
+
+pjrt::install_pjrt()               # CPU plugin (~250 MB unpacked, cached per user)
+# pjrt::install_pjrt(cuda = TRUE)  # instead, for a CUDA-capable GPU
+```
+
+garry also needs GDAL \>= 3.9 on the system (the GTI mosaic driver
+behind
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md));
+`gdalraster` reports yours with
+[`gdalraster::gdal_version()`](https://firelab.github.io/gdalraster/reference/gdal_version.html).
+
 ## Example
 
 A cloud-masked annual median composite of HLS Sentinel-2 imagery,

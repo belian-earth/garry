@@ -90,12 +90,17 @@
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># install.packages("pak")</span></span>
 <span><span class="fu">pak</span><span class="fu">::</span><span class="fu"><a href="https://pak.r-lib.org/reference/pak.html" class="external-link">pak</a></span><span class="op">(</span><span class="st">"belian-earth/garry"</span><span class="op">)</span></span></code></pre></div>
+<p>garry computes through <a href="https://github.com/r-xla/anvl" class="external-link">anvl</a>/XLA, whose PJRT runtime plugin downloads on first use. Fetch it once up front (it prompts interactively otherwise, which fails in scripts and on servers):</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu">pjrt</span><span class="fu">::</span><span class="fu"><a href="https://r-xla.github.io/pjrt/reference/install_pjrt.html" class="external-link">install_pjrt</a></span><span class="op">(</span><span class="op">)</span>               <span class="co"># CPU plugin (~250 MB unpacked, cached per user)</span></span>
+<span><span class="co"># pjrt::install_pjrt(cuda = TRUE)  # instead, for a CUDA-capable GPU</span></span></code></pre></div>
+<p>garry also needs GDAL &gt;= 3.9 on the system (the GTI mosaic driver behind <code><a href="reference/lazy_dataset.html">lazy_dataset()</a></code>); <code>gdalraster</code> reports yours with <code><a href="https://firelab.github.io/gdalraster/reference/gdal_version.html" class="external-link">gdalraster::gdal_version()</a></code>.</p>
 </div>
 <div class="section level2">
 <h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
 </h2>
 <p>A cloud-masked annual median composite of HLS Sentinel-2 imagery, straight from the Microsoft Planetary Computer. The whole pipeline is lazy: it reads and computes only at the final <code><a href="reference/collect.html">collect()</a></code>.</p>
-<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://belian-earth.github.io/garry/">garry</a></span><span class="op">)</span></span>
 <span><span class="co">#&gt; garry: GDAL 3.13.0 "Iowa City", released 2026/05/04</span></span>
 <span></span>
@@ -176,7 +181,7 @@
 <span><span class="co"># plots the result -- a cheap look before committing to the full collect().</span></span>
 <span><span class="fu"><a href="reference/preview.html">preview</a></span><span class="op">(</span><span class="va">composite</span><span class="op">[[</span><span class="st">"ndvi"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span>   <span class="co"># single band -&gt; colour ramp + colourbar</span></span></code></pre></div>
 <p><img src="reference/figures/README-example-1.png" alt="" width="100%"></p>
-<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span></span>
 <span><span class="co"># 5. Execute across the daemons. collect() returns a (y, x, band) array carrying</span></span>
 <span><span class="co">#    a `gis` attribute (extent/CRS), so the result is self-describing.</span></span>
@@ -186,7 +191,7 @@
 <span><span class="fu"><a href="reference/preview.html">preview</a></span><span class="op">(</span><span class="va">a</span><span class="op">)</span>     <span class="co"># multi-band  -&gt; RGB (first three bands)</span></span></code></pre></div>
 <p><img src="reference/figures/README-example-2.png" alt="" width="100%"></p>
 <p>To write to disk instead, <code><a href="reference/write_tif.html">write_tif()</a></code> runs the same plan but streams each chunk into a GeoTIFF as it lands, so nothing is ever held whole in memory. <code>dtype</code> and <code>scale</code> quantise the f32 reflectance back to int16 (half the file size, and the scale is written to the TIFF tags so readers recover real values); <code>cog = TRUE</code> finalises a Cloud-Optimised GeoTIFF.</p>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">tif</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"composite.tif"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="reference/write_tif.html">write_tif</a></span><span class="op">(</span><span class="va">composite</span>, <span class="va">tif</span>,</span>
 <span>          dtype <span class="op">=</span> <span class="st">"i16"</span>, scale <span class="op">=</span> <span class="fl">0.0001</span>, nodata <span class="op">=</span> <span class="op">-</span><span class="fl">32768</span>, cog <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span></code></pre></div>
