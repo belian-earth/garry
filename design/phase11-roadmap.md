@@ -100,7 +100,28 @@ recommended sequence.
   batch write is gone. Gated by streamed-vs-single write equivalence
   (multiband + 2D) in test-mirai-pools.R.
 
-- [ ] **11.4 f32 store values.** BLOCKED on anvl (upstream ask
+- [x] **11.4 f32 store values.** DONE, delivered as phase 12c
+  (design/phase12c-raw-store.md) against the dev-fork anvl/pjrt
+  builds: raw row-major f32/f64 store payloads (the `.sv_*` layer),
+  memcpy uploads/downloads via `g_upload_raw`/`g_download_raw`,
+  capability-gated (`garry.store_values = "auto"`) so released anvl
+  still runs the double path. The upstream asks were implemented on
+  the local fork branches (r-xla PRs pending, a de-forking exercise,
+  not a capability gate); the PJRT thread-pool ask dissolved
+  (PJRT_NPROC env var, stock plugin). Compute-daemon churn is
+  handled by per-task gc + malloc_trim (src/trim.c). The one open
+  remnant was the reader drain plateau (below), closed out on branch
+  fetch-trim (2026-08-11): reader task bodies (.daemon_fetch_window,
+  .daemon_run_source_shm, .cd_fetch_warp) were the only ones that
+  never trimmed; they now mirror the compute/write hygiene. A/B on
+  the README-scale composite (20 readers, same sitting): per-reader
+  resting anon 134 -> 124 MB (fleet -200 MB), during-drain peak
+  unchanged (144 MB both) -- so the drain plateau is LIVE native
+  working state (curl/TLS/PROJ under an active read), not freed-heap
+  retention, and a further diet would need curl/TLS session-cache or
+  PROJ-context attribution. At ~2.9 GB fleet-wide against the wins
+  already banked, that is diminishing-returns territory; parked.
+  Original statement, for the record: BLOCKED on anvl (upstream ask
   below); garry-side follow-ons folded in from 11.1's profiling:
   the reader drain plateau (~150 MB/daemon native growth —
   curl/TLS/PROJ churn, not block cache, not handles) and compute

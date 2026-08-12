@@ -230,6 +230,13 @@ NULL
   }
   sh <- mori::share(val)
   .daemon_shm[[reg_key]] <- sh
+  # Reader-side hygiene, mirroring the compute/write bodies: the read
+  # window and its part list are dead once copied into shm, and the
+  # native churn under the read (curl/TLS/PROJ) leaves freed arena
+  # pages nothing else returns to the OS (the 11.1 drain plateau).
+  rm(m, val)
+  gc(FALSE)
+  .garry_malloc_trim()
   sh
 }
 
@@ -331,6 +338,7 @@ NULL
     unlink(out_file)
     gdal_nodata_window(out_file, ext, crs, nodata)
   }
+  .garry_malloc_trim()
   TRUE
 }
 
@@ -666,5 +674,8 @@ NULL
     NA_character_
   }, error = function(e) conditionMessage(e))
   writeBin(buf, j$bin)   # always write a complete slice (real or all-NaN)
+  rm(buf)
+  gc(FALSE)
+  .garry_malloc_trim()
   list(err = err, tf = 0, tw = tw)
 }
