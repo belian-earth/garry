@@ -41,6 +41,35 @@ NULL
   if (grepl("^https?://", href)) paste0("/vsicurl/", href) else href
 }
 
+# Is a path a remote (network-backed) GDAL source?
+.gdal_is_remote <- function(path) {
+  grepl("^/vsi(curl|s3|gs|az|swift)|^https?://", path)
+}
+
+# Scope the remote-open hygiene config around a block, for garry's OWN
+# host-side opens of REMOTE sources. Two savings, both measured on a
+# 64-band AEF COG (2026-08-12): EMPTY_DIR suppresses the sidecar-probe
+# storm (~25-30 sequential 404 round-trips: .IMD/.RPB/.PVL/_rpc.txt/
+# .msk/.vat.dbf and case variants -- ~8 s at typical RTT, paid at the
+# warp seam and the metadata probe), and the 4 MB ingest collapses the
+# serial 16 KB IFD walk of a many-band header into one request
+# (probe 7.5 s -> 1.0 s; first warp 8.5 s -> 0.01 s). Scoped, not
+# global: the host's OWN config stays untouched outside garry calls,
+# so user-level local reads keep sidecar semantics (the reason
+# garry_daemons() never configures the host). Daemons already run
+# EMPTY_DIR globally (garry_gdal_config); re-scoping there is a no-op.
+.gdal_quiet_remote <- function(code) {
+  prev_rd <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
+  prev_ib <- gdalraster::get_config_option("GDAL_INGESTED_BYTES_AT_OPEN")
+  gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+  gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", "4194304")
+  on.exit({
+    gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", prev_rd)
+    gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", prev_ib)
+  }, add = TRUE)
+  force(code)
+}
+
 .gdal_handle <- function(path, open_options = character(0)) {
   path <- .gdal_href(path)                 # range-read remote COGs, never pull whole
   key <- paste(c(path, open_options), collapse = "\x1f")
@@ -50,10 +79,15 @@ NULL
     .gdal_cache$handles[[key]] <- h
     return(h)
   }
-  open_ds <- function() if (length(open_options) > 0L) {
+  open_raw <- function() if (length(open_options) > 0L) {
     methods::new(gdalraster::GDALRaster, path, TRUE, open_options)
   } else {
     methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
+  }
+  # Remote opens run under the scoped hygiene config (sidecar-probe
+  # storm + serial IFD walk otherwise cost ~8 s each at typical RTT).
+  open_ds <- function() {
+    if (.gdal_is_remote(path)) .gdal_quiet_remote(open_raw()) else open_raw()
   }
   # A GTI mosaic pinned to the analysis grid reprojects mixed-UTM-zone tiles
   # (HLS spans several zones), so PROJ reports "several coordinate operations
@@ -573,8 +607,13 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
       .dtype_family(target_grid@dtype) == "float") {
     args <- c(args, "-dstnodata", "nan")
   }
-  ok <- gdalraster::warp(src_path, vrt, t_srs = target_grid@crs,
-                         cl_arg = args, quiet = TRUE)
+  do_warp <- function() gdalraster::warp(src_path, vrt,
+                                         t_srs = target_grid@crs,
+                                         cl_arg = args, quiet = TRUE)
+  # warp opens the source internally (bypassing .gdal_handle), so it
+  # needs the same remote-open hygiene scoping
+  ok <- if (.gdal_is_remote(src_path)) .gdal_quiet_remote(do_warp())
+        else do_warp()
   if (!isTRUE(ok)) cli::cli_abort("gdalwarp to VRT failed for {.path {src_path}}")
   vrt
 }
@@ -623,9 +662,10 @@ gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
   }
   if (length(vrtnodata))
     args <- c(args, "-vrtnodata", sprintf("%.16g", vrtnodata[[1L]]))
-  gdalraster::buildVRT(dst, files,
-                       cl_arg = if (length(args)) args else NULL,
-                       quiet = TRUE)
+  do_build <- function() gdalraster::buildVRT(
+    dst, files, cl_arg = if (length(args)) args else NULL, quiet = TRUE)
+  if (any(.gdal_is_remote(files))) .gdal_quiet_remote(do_build())
+  else do_build()
   if (!file.exists(dst)) cli::cli_abort("buildVRT mosaic failed.")
   dst
 }
