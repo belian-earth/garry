@@ -1186,7 +1186,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # set on the reader, so it is compute in disguise and must ride the
   # same budget (a fleet of cold fused reads otherwise stacks N XLA
   # ramps on whatever else holds the machine — measured at crop=0 with
-  # the lazy_cog staging resident). The escape is accordingly "nothing
+  # the whole-AOI embedding staging resident). The escape is accordingly "nothing
   # byte-accounted in flight", so one over-budget task always runs.
   # (The cold-scan byte surcharge that once rode in here was retired
   # with the anonymous pool: cold-scan concurrency is bounded

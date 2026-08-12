@@ -1,5 +1,5 @@
 # STAC doc_items as a first-class input: the vrtility-style filters compose on
-# the rstac object, and lazy_dataset()/lazy_cog() convert it to the sources table
+# the rstac object, and lazy_dataset() converts it to the sources table
 # internally. Hand-built doc_items avoid the network.
 
 .di_feat <- function(id, cc, bbox, orbit, hrefs,
@@ -88,21 +88,3 @@ test_that("stac_filter_coverage also works on a sources data frame", {
   expect_equal(nrow(stac_filter_coverage(src, c(0, 0, 10, 10), 0.5)), 1L)
 })
 
-test_that("lazy_cog accepts a doc_items and reads it (internal conversion)", {
-  skip_if_not_installed("rstac")
-  dir <- withr::local_tempdir("dicog")
-  its <- .di_items(list(.di_feat(
-    "s1", 5, c(0, 0, 640, 640), "descending",
-    list(A = .di_cog(file.path(dir, "A.tif"), 20L),
-         B = .di_cog(file.path(dir, "B.tif"), 50L)))))
-  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 640, 640),
-                    dims = c(16L, 16L), dtype = "f32")
-  ds <- lazy_cog(its, grid, assets = c("A", "B"))     # doc_items -> sources table
-  expect_true(S7::S7_inherits(ds, LazyDataset))
-  expect_named(ds@bands, c("A", "B"))
-
-  got <- collect(reduce_over(ds, "median", "t", nan_rm = TRUE), distributed = FALSE)
-  expect_equal(dim(got), c(16L, 16L, 2L))
-  expect_equal(unname(got[1, 1, 1]), 20)
-  expect_equal(unname(got[1, 1, 2]), 50)
-})

@@ -18,7 +18,6 @@ Imports:
     anvl,
     cli,
     codetools,
-    cptkirk,
     gdalraster (>= 2.6.1.9001),
     memuse,
     methods,
@@ -29,7 +28,6 @@ Remotes:
     hypertidy/vaster,
     firelab/gdalraster,
     belian-earth/anvl@nv-scan,
-    belian-earth/cptkirk,
     belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
@@ -72,11 +70,11 @@ Collate:
     'lazy_raster.R'
     'stac.R'
     'dataset.R'
+    'dequantize.R'
     'dot.R'
     'draw.R'
     'gradient.R'
     'grid_from.R'
-    'lazy_cog.R'
     'materialise.R'
     'ocm.R'
     'ocm_blocks.R'

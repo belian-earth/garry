@@ -1,10 +1,10 @@
 ---
-title: "Reading Alpha Earth embeddings with lazy_cog()"
+title: "Reading Alpha Earth embeddings"
 output:
   rmarkdown::html_vignette:
     self_contained: false
 vignette: >
-  %\VignetteIndexEntry{Reading Alpha Earth embeddings with lazy_cog()}
+  %\VignetteIndexEntry{Reading Alpha Earth embeddings}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -13,12 +13,13 @@ vignette: >
 
 [Alpha Earth Foundations](https://deepmind.google/blog/alphaearth-foundations-helps-map-our-planet-in-unprecedented-detail/) (AEF) by Google is published by [Source Cooperative](https://source.coop/tge-labs/aef). This dataset is a collection of annual geospatial embeddings stored as **64-band Int8 Cloud-Optimised GeoTIFFs**: each band is one dimension of a learned embedding, quantised to a signed byte and decoded with a nonlinear, sign-preserving transform, `((x / 127.5)^2) * sign(x)`.
 
-Tens of bands in one file is exactly what `lazy_cog()` is for. Where
-`lazy_dataset()` opens each band separately, `lazy_cog()` routes the read through
-[cptkirk](https://belian-earth.github.io/cptkirk/), whose async-tiff reader opens
-the tile **once** and streams all 64 band planes concurrently. This vignette
-reads one tile, resamples to 30 m, dequantises on the read, and renders three
-arbitrary bands as a false-colour composite.
+A multi-band file is just another source: give `lazy_dataset()` the path and
+it builds one band per file band, named from the file's band descriptions
+(`A00` .. `A63` here). Each band is its own source, so at `collect()` the
+reads fan out band-by-band across the reader pool -- many connections issuing
+range requests concurrently, which is what makes a 64-band remote read fast.
+This vignette reads one tile, resamples to 30 m, dequantises on the read, and
+renders three arbitrary bands as a false-colour composite.
 
 ## Read and dequantise
 
@@ -30,35 +31,36 @@ library(garry)
 tile <- paste0("https://data.source.coop/tge-labs/aef/v1/annual/2021/36S/",
                "xekh5rjs4wg6wb9b4-0000000000-0000000000.tiff")
 
-# get the grid specification from the source tile and spe
+# the analysis grid: the tile's own footprint at 30 m
 grid <- grid_from_src(tile, 30)
 
-embeddings <- lazy_cog(tile, grid, resampling = "average") |>
+embeddings <- lazy_dataset(tile, grid, resampling = "average") |>
   lazy_map(fn = dequantize_aef, dtype = "f32")
 
 embeddings
 #> ── <LazyDataset> ──────────────────────────────────────────────────
-#>   bands  b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 b16 b17 b18 b19 b20 b21 b22 b23 b24 b25 b26 b27 b28 b29 b30 b31 b32 b33 b34 b35 b36 b37 b38 b39 b40 b41 b42 b43 b44 b45 b46 b47 b48 b49 b50 b51 b52 b53 b54 b55 b56 b57 b58 b59 b60 b61 b62 b63 b64
+#>   bands  A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A10 A11 A12 A13 A14 A15 A16 A17 A18 A19 A20 A21 A22 A23 A24 A25 A26 A27 A28 A29 A30 A31 A32 A33 A34 A35 A36 A37 A38 A39 A40 A41 A42 A43 A44 A45 A46 A47 A48 A49 A50 A51 A52 A53 A54 A55 A56 A57 A58 A59 A60 A61 A62 A63
 #>   time   1 slice
 #>   grid   2732 x 2731 • f32
 #>   crs    EPSG:32736
-#>   graph  128 nodes • lazy
+#>   graph  192 nodes • lazy
 #>   ℹ draw(x) to see the pipeline
 ```
 
-`lazy_cog()` records a lazy 64-band dataset; nothing is fetched yet.
+`lazy_dataset()` records a lazy 64-band dataset; nothing is fetched yet (the
+construction costs one metadata probe, however many bands the file carries).
 `dequantize_aef()` is applied as a map, which garry fuses onto the read so the
 nonlinear decode runs on-device, not as a separate pass.
 
 ## Collect three bands and plot
 
 Pick three arbitrary embedding dimensions and collect just those: the band-axis
-subset means only those three are ever computed.
+subset means only those three are ever read or computed.
 
 
 ``` r
 garry_daemons()
-cube <- collect(embeddings[c("b10", "b11", "b12")])
+cube <- collect(embeddings[c("A09", "A10", "A11")])
 garry_daemons(0, 0)
 
 dim(cube)

@@ -74,9 +74,8 @@ reference:
   - kalman_llt
 - title: Geo-embeddings & model weights
   desc: |
-    Special operations for published geo-embedding products: the batched multi-band COG read (via the cptkirk engine), the products' quantiser decodes, and safetensors weight IO.
+    Special operations for published geo-embedding products: the quantiser decodes (fused onto multi-band reads via lazy_map) and safetensors weight IO.
   contents:
-  - lazy_cog
   - dequantize_aef
   - dequantize_esd
   - safetensors_read

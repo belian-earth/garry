@@ -11,7 +11,7 @@ NULL
 
 #' Lazy raster array (single band stack).
 #'
-#' Users obtain one via [lazy_source()], [lazy_cog()], or [lazy_dataset()]
+#' Users obtain one via [lazy_source()] or [lazy_dataset()]
 #' band access, and materialise it with [collect()]; the constructor itself
 #' is rarely called directly.
 #'

@@ -91,18 +91,40 @@ LazyDataset <- S7::new_class(
 # Construction
 # ---------------------------------------------------------------------------
 
-#' Build a lazy dataset from a STAC source table.
+#' Build a lazy dataset from a STAC source table or raster file(s).
 #'
-#' One band per asset, each a time-sliced GTI mosaic pinned to `grid` (mixed
-#' source CRS is fine; the GTI driver reprojects per tile). All bands share one
-#' intermediate representation (IR) graph, so a mask defined once (see
-#' [mask()]) is computed once and dedup'd across bands, and [collect()] plans
-#' the whole dataset in one pass.
+#' The one way into any source. Two input forms:
 #'
-#' @param sources A STAC `doc_items` (from [stac_query()], optionally filtered)
-#'   or a `stac_sources()` table.
-#' @param grid Target [GridSpec()] for every band.
-#' @param assets Character vector of value assets to load.
+#' * a STAC `doc_items` / `stac_sources()` table: one band per asset, each a
+#'   time-sliced GTI mosaic pinned to `grid` (mixed source CRS is fine; the
+#'   GTI driver reprojects per tile).
+#' * a character path (or vector of same-CRS tile paths, mosaicked): one band
+#'   per file band, one time slice. This is the multi-band raster entry --
+#'   geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
+#'   GDAL driver, any multi-band file GDAL reads. Each band is its own
+#'   source, so reads fan out band-by-band across the reader pool (per-band
+#'   tasks through per-daemon handles: the measured fastest remote shape,
+#'   design/gdal-multiband-fanout.md). Bands are named by their file band
+#'   descriptions when present, else `b<index>`; `grid = NULL` stays on the
+#'   file's native grid, and a supplied `grid` inserts an [align()] warp per
+#'   band. Value transforms (e.g. [dequantize_aef()]) go downstream as
+#'   [lazy_map()]s, which fuse onto the read at [collect()].
+#'
+#' All bands share one intermediate representation (IR) graph, so a mask
+#' defined once (see [mask()]) is computed once and dedup'd across bands, and
+#' [collect()] plans the whole dataset in one pass.
+#'
+#' @param sources A STAC `doc_items` (from [stac_query()], optionally
+#'   filtered), a `stac_sources()` table, or a character path / vector of
+#'   paths to (multi-band) raster file(s) -- local, `/vsicurl/`, or bare
+#'   `http(s)://` (prefixed automatically).
+#' @param grid Target [GridSpec()] for every band. Required for the table
+#'   form; `NULL` (the default) keeps the file form on its native grid.
+#' @param assets Character vector of value assets to load (table form), or of
+#'   band names to select (file form, when the file carries band
+#'   descriptions).
+#' @param bands File form only: integer source band indices to select
+#'   (default: all). Mutually exclusive with `assets`.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
@@ -135,12 +157,19 @@ LazyDataset <- S7::new_class(
 #'   used when `scale` is numeric; defaults to 0. Ignored when `scale` is
 #'   logical.
 #' @return A `LazyDataset`.
-#' @seealso [lazy_cog()], [group_by_time()], [collect()]
+#' @seealso [group_by_time()], [collect()]
 #' @export
-lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
+lazy_dataset <- function(sources, grid = NULL, assets = NULL,
+                         mask_asset = NULL,
                          granularity = "day", sort_field = "datetime",
                          nodata = NULL, lon = NULL, resampling = "near",
-                         scale = FALSE, offset = NULL) {
+                         scale = FALSE, offset = NULL, bands = NULL) {
+  if (is.character(sources))
+    return(.ds_from_files(sources, grid, assets, mask_asset, bands,
+                          resampling, nodata, scale, offset))
+  if (!is.null(bands))
+    cli::cli_abort(
+      "{.arg bands} applies to the file form only; use {.arg assets} to select from a source table.")
   .assert_class(grid, GridSpec, "GridSpec")
   if (length(assets) < 1L)
     cli::cli_abort("{.arg assets} must name at least one asset.")
@@ -237,6 +266,82 @@ lazy_dataset <- function(sources, grid, assets, mask_asset = NULL,
                            else as.character(mask_asset),
               steps = list(.step("source", "source",
                                  detail = max(vapply(bands, length, 1L)))))
+}
+
+# File form of lazy_dataset(): one band per (selected) file band, one time
+# slice. A vector of paths mosaics first (same-CRS tiles, gdalbuildvrt). ONE
+# metadata probe serves every band (.gdal_handle caches the dataset handle),
+# and the probed grid is DECLARED on each band source, so construction costs
+# one header fetch however many bands the file carries. Each band is its own
+# SourceNode: at collect() the scheduler fans per-band read tasks across the
+# reader pool -- N independent handles issuing range requests concurrently,
+# the measured fastest remote shape (design/gdal-multiband-fanout.md).
+.ds_from_files <- function(paths, grid, assets, mask_asset, bands,
+                           resampling, nodata, scale, offset) {
+  if (!is.null(assets) && !is.null(bands))
+    cli::cli_abort(
+      "Give {.arg assets} (band names) or {.arg bands} (indices), not both.")
+  # Prefix bare http(s) with /vsicurl/ HERE, so the stored SourceNode path
+  # is GDAL-safe on every seam. The read path (.gdal_handle) prefixes
+  # defensively at open, but the warp seam consumes the path directly --
+  # an unprefixed remote URL there makes GDAL pull the ENTIRE file (a
+  # 2.7 GB AEF tile), observed live 2026-08-12.
+  paths <- vapply(as.character(paths), .gdal_href, "", USE.NAMES = FALSE)
+  path <- if (length(paths) > 1L) {
+    gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
+  } else paths[[1L]]
+
+  meta <- gdal_grid_spec(path)
+  ds <- .gdal_handle(path)
+  nb <- ds$getRasterCount()
+  descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), "")
+
+  idx <- if (is.null(bands)) seq_len(nb) else as.integer(bands)
+  if (any(idx < 1L | idx > nb))
+    cli::cli_abort("{.arg bands} must index 1..{nb} (file has {nb} band{?s}).")
+  nms <- ifelse(nzchar(descs[idx]), descs[idx], paste0("b", idx))
+  if (anyDuplicated(nms))
+    nms <- paste0("b", idx)                # degenerate descriptions: index names
+  if (!is.null(assets)) {
+    want <- unique(c(assets, mask_asset))
+    miss <- setdiff(want, nms)
+    if (length(miss))
+      cli::cli_abort(c(
+        "Band name(s) not found in the file: {.val {miss}}.",
+        "i" = "Available: {.val {nms}}."))
+    keep <- match(want, nms)
+    idx <- idx[keep]
+    nms <- nms[keep]
+  }
+  if (!is.null(mask_asset) && !mask_asset %in% nms)
+    cli::cli_abort("{.arg mask_asset} must name one of the selected bands.")
+
+  resolve_nd <- function(nm, b) {
+    fnd <- ds$getNoDataValue(b)
+    fnd <- if (is.na(fnd)) NULL else as.numeric(fnd)
+    if (is.null(nodata)) return(fnd)
+    if (!is.null(names(nodata)))
+      return(if (nm %in% names(nodata)) unname(nodata[[nm]]) else fnd)
+    as.numeric(nodata)
+  }
+  resolve_rs <- function(nm) {
+    if (!is.null(mask_asset) && nm %in% mask_asset) return("near")
+    if (is.null(names(resampling))) return(unname(resampling[[1L]]))
+    if (nm %in% names(resampling)) unname(resampling[[nm]]) else "near"
+  }
+
+  if (!is.null(grid)) .assert_class(grid, GridSpec, "GridSpec")
+  g <- graph_new()
+  layers <- Map(function(b, nm) {
+    x <- lazy_source(path, band = b, graph = g, grid = meta$grid,
+                     block_dim = meta$block_dim, nodata = resolve_nd(nm, b),
+                     scale = if (is.null(mask_asset) || !nm %in% mask_asset)
+                       scale else FALSE,
+                     offset = offset)
+    if (!is.null(grid)) x <- align(x, grid, resampling = resolve_rs(nm))
+    x
+  }, idx, nms)
+  as_dataset(stats::setNames(layers, nms), mask_asset = mask_asset)
 }
 
 #' Assemble a lazy dataset from existing rasters.

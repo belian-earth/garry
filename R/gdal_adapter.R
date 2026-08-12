@@ -364,6 +364,48 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   info
 }
 
+# Bytes per sample for a GDAL data-type name.
+.gdal_dtype_bytes <- function(dt) {
+  b <- c(Byte = 1L, Int8 = 1L, UInt16 = 2L, Int16 = 2L, UInt32 = 4L,
+         Int32 = 4L, UInt64 = 8L, Int64 = 8L, Float32 = 4L, Float64 = 8L)[[dt]]
+  if (is.null(b)) cli::cli_abort("Unsupported buffer dtype {.val {dt}}.")
+  b
+}
+
+# Build a VRTRawRasterBand dataset XML over a raw band-sequential (BSQ) buffer, so
+# GDAL reads it with zero decode. Band b's plane starts at (b-1) * nx * ny * bytes;
+# pixels are row-major within it. `src` is the .bin basename, referenced as a
+# relativeToVRT sibling (the VRT must be written beside it): GDAL refuses a raw
+# band pointing at an arbitrary absolute path unless the source is a sibling/child
+# of the VRT (or GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE is set), which this
+# satisfies rather than loosening the global config.
+.raw_bsq_vrt_xml <- function(src, nx, ny, gt_csv, wkt, dtype, nbands,
+                             nodata = NULL, descriptions = NULL) {
+  bytes <- .gdal_dtype_bytes(dtype)
+  plane <- as.numeric(nx) * as.numeric(ny) * bytes
+  ndxml <- if (!is.null(nodata))
+    sprintf("\n    <NoDataValue>%s</NoDataValue>",
+            format(nodata, scientific = FALSE)) else ""
+  bands_xml <- vapply(seq_len(nbands), function(b) sprintf(paste0(
+    '  <VRTRasterBand dataType="%s" band="%d" subClass="VRTRawRasterBand">',
+    '%s',
+    '\n    <SourceFilename relativeToVRT="1">%s</SourceFilename>',
+    '\n    <ImageOffset>%.0f</ImageOffset>',
+    '\n    <PixelOffset>%d</PixelOffset>',
+    '\n    <LineOffset>%d</LineOffset>%s',
+    '\n  </VRTRasterBand>'),
+    dtype, b,
+    if (!is.null(descriptions) && b <= length(descriptions) &&
+        nzchar(descriptions[[b]]))
+      sprintf("\n    <Description>%s</Description>", descriptions[[b]])
+    else "",
+    src, (b - 1) * plane, bytes, as.integer(nx * bytes), ndxml), "")
+  sprintf(paste0(
+    '<VRTDataset rasterXSize="%d" rasterYSize="%d">',
+    '\n  <SRS>%s</SRS>\n  <GeoTransform>%s</GeoTransform>\n%s\n</VRTDataset>'),
+    nx, ny, wkt, gt_csv, paste(bands_xml, collapse = "\n"))
+}
+
 # Strict recognition of the .raw_bsq_vrt_xml shape: every band a
 # VRTRawRasterBand over ONE relativeToVRT sibling, uniform Float32 or
 # Float64, exact BSQ strides, bin present at the implied size. Any
@@ -517,6 +559,7 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #' @export
 gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
                           src_nodata = numeric(0)) {
+  src_path <- .gdal_href(src_path)   # bare https would pull the whole file
   vrt <- tempfile(fileext = ".vrt")
   num <- function(v) sprintf("%.17g", v)
   args <- c("-of", "VRT",
@@ -560,8 +603,8 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #'
 #' `gdalbuildvrt` of same-grid single-band rasters: overlapping pixels take the
 #' LAST input, so pass `files` in ascending priority (latest datetime last, to
-#' match the highest-on-top overlap rule). Used to assemble a per-slice mosaic
-#' from cptkirk's per-tile warp outputs.
+#' match the highest-on-top overlap rule). Used to assemble multi-tile
+#' mosaics (e.g. the file form of [lazy_dataset()]).
 #'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
@@ -1022,8 +1065,7 @@ gdal_band_count <- function(path) {
 
 # Toggle GDAL error-logging to R off for a code block (thread-safety:
 # gdalraster's R-callback handler aborts the process when a GDAL worker
-# thread warns; see lazy_cog's .ck_quiet). Lives here per the gdalraster
-# quarantine.
+# thread warns). Lives here per the gdalraster quarantine.
 .gdal_log_errors_off <- function(code) {
   prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
   gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")

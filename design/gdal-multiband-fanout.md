@@ -156,6 +156,12 @@ refactors).
   `garry.read_retry` + fail-soft, and must propagate mirai error
   values into the classed read errors (do not repeat the harness's
   `stop("worker failed")`).
+- **Narrow band subsets are the least-parallel case**: per-band
+  sources mean read concurrency = bands x coarse-splits, so selecting
+  3 of 64 bands over a huge window runs ~6 tasks however wide the
+  pool is (observed live 2026-08-12). If that shape ever matters, the
+  lever is finer read granularity for wide windows
+  (`garry.read_target_px`, already a knob), not reader machinery.
 - **Zarr**: enters through the same door via the GDAL Zarr driver's
   classic raster model ((y, x, band)); the labelled-cube multidim API
   is a separate, later question (see write_zarr notes in

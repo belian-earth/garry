@@ -197,7 +197,7 @@ NULL
       # budget — a fused read IS compute, and admitting a fleet of
       # them by store bytes alone (fused outputs are tiny) stacked
       # N cold XLA ramps on top of whatever else holds the machine
-      # (measured: crop=0 with the lazy_cog staging resident).
+      # (measured: crop=0 with the whole-AOI embedding staging resident).
       wpx <- prod(pmin(as.numeric(S@chunks@chunk_dim),
                        as.numeric(S@grid@dims[c("x", "y")])))
       ws_mb <- wpx * (.stage_fuse_act_bytes_px(graph, C@members, nb_src) +

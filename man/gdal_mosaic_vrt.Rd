@@ -17,7 +17,7 @@ gdal_mosaic_vrt(dst, files, te = NULL, ts = NULL, vrtnodata = NULL)
 \description{
 \code{gdalbuildvrt} of same-grid single-band rasters: overlapping pixels take the
 LAST input, so pass \code{files} in ascending priority (latest datetime last, to
-match the highest-on-top overlap rule). Used to assemble a per-slice mosaic
-from cptkirk's per-tile warp outputs.
+match the highest-on-top overlap rule). Used to assemble multi-tile
+mosaics (e.g. the file form of \code{\link[=lazy_dataset]{lazy_dataset()}}).
 }
 \keyword{internal}
