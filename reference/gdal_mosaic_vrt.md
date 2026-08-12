@@ -2,8 +2,9 @@
 
 `gdalbuildvrt` of same-grid single-band rasters: overlapping pixels take
 the LAST input, so pass `files` in ascending priority (latest datetime
-last, to match the highest-on-top overlap rule). Used to assemble a
-per-slice mosaic from cptkirk's per-tile warp outputs.
+last, to match the highest-on-top overlap rule). Used to assemble
+multi-tile mosaics (e.g. the file form of
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)).
 
 ## Usage
 

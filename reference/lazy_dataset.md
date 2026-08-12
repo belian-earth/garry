@@ -1,21 +1,14 @@
-# Build a lazy dataset from a STAC source table.
+# Build a lazy dataset from a STAC source table or raster file(s).
 
-One band per asset, each a time-sliced GTI mosaic pinned to `grid`
-(mixed source CRS is fine; the GTI driver reprojects per tile). All
-bands share one intermediate representation (IR) graph, so a mask
-defined once (see
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)) is
-computed once and dedup'd across bands, and
-[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
-plans the whole dataset in one pass.
+The one way into any source. Two input forms:
 
 ## Usage
 
 ``` r
 lazy_dataset(
   sources,
-  grid,
-  assets,
+  grid = NULL,
+  assets = NULL,
   mask_asset = NULL,
   granularity = "day",
   sort_field = "datetime",
@@ -23,7 +16,8 @@ lazy_dataset(
   lon = NULL,
   resampling = "near",
   scale = FALSE,
-  offset = NULL
+  offset = NULL,
+  bands = NULL
 )
 ```
 
@@ -33,19 +27,23 @@ lazy_dataset(
 
   A STAC `doc_items` (from
   [`stac_query()`](https://belian-earth.github.io/garry/reference/stac_query.md),
-  optionally filtered) or a
+  optionally filtered), a
   [`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md)
-  table.
+  table, or a character path / vector of paths to (multi-band) raster
+  file(s) – local, `/vsicurl/`, or bare `http(s)://` (prefixed
+  automatically).
 
 - grid:
 
   Target
   [`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md)
-  for every band.
+  for every band. Required for the table form; `NULL` (the default)
+  keeps the file form on its native grid.
 
 - assets:
 
-  Character vector of value assets to load.
+  Character vector of value assets to load (table form), or of band
+  names to select (file form, when the file carries band descriptions).
 
 - mask_asset:
 
@@ -103,12 +101,48 @@ lazy_dataset(
   Explicit additive offset(s) (scalar or named by asset) used when
   `scale` is numeric; defaults to 0. Ignored when `scale` is logical.
 
+- bands:
+
+  File form only: integer source band indices to select (default: all).
+  Mutually exclusive with `assets`.
+
 ## Value
 
 A `LazyDataset`.
 
+## Details
+
+- a STAC `doc_items` /
+  [`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md)
+  table: one band per asset, each a time-sliced GTI mosaic pinned to
+  `grid` (mixed source CRS is fine; the GTI driver reprojects per tile).
+
+- a character path (or vector of same-CRS tile paths, mosaicked): one
+  band per file band, one time slice. This is the multi-band raster
+  entry – geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr
+  via the GDAL driver, any multi-band file GDAL reads. Each band is its
+  own source, so reads fan out band-by-band across the reader pool
+  (per-band tasks through per-daemon handles: the measured fastest
+  remote shape, design/gdal-multiband-fanout.md). Bands are named by
+  their file band descriptions when present, else `b<index>`;
+  `grid = NULL` stays on the file's native grid, and a supplied `grid`
+  inserts an
+  [`align()`](https://belian-earth.github.io/garry/reference/align.md)
+  warp per band. Value transforms (e.g.
+  [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md))
+  go downstream as
+  [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)s,
+  which fuse onto the read at
+  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md).
+
+All bands share one intermediate representation (IR) graph, so a mask
+defined once (see
+[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)) is
+computed once and dedup'd across bands, and
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+plans the whole dataset in one pass.
+
 ## See also
 
-[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md),
 [`group_by_time()`](https://belian-earth.github.io/garry/reference/group_by_time.md),
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)

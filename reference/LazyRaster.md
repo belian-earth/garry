@@ -1,8 +1,7 @@
 # Lazy raster array (single band stack).
 
 Users obtain one via
-[`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md),
-[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md),
+[`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md)
 or
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 band access, and materialise it with

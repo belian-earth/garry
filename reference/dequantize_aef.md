@@ -5,7 +5,7 @@ sign- preserving, mapping the code range `[-127, 127]` to ~`[-1, 1]`.
 Written in the `g_*` vocabulary, so applying it with
 [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
 after
-[`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 fuses the decode onto the read, on the device rather than as a separate
 decode pass.
 

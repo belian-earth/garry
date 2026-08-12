@@ -45,7 +45,7 @@ Build from a STAC table or from rasters, then select, stack, and
 collapse.
 
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
-  : Build a lazy dataset from a STAC source table.
+  : Build a lazy dataset from a STAC source table or raster file(s).
 - [`as_dataset()`](https://belian-earth.github.io/garry/reference/as_dataset.md)
   : Assemble a lazy dataset from existing rasters.
 - [`LazyDataset()`](https://belian-earth.github.io/garry/reference/LazyDataset.md)
@@ -108,12 +108,10 @@ composites, gap filling, and per-pixel smoothers.
 
 ## Geo-embeddings & model weights
 
-Special operations for published geo-embedding products: the batched
-multi-band COG read (via the cptkirk engine), the products’ quantiser
-decodes, and safetensors weight IO.
+Special operations for published geo-embedding products: the quantiser
+decodes (fused onto multi-band reads via lazy_map) and safetensors
+weight IO.
 
-- [`lazy_cog()`](https://belian-earth.github.io/garry/reference/lazy_cog.md)
-  : Read multi-band COGs into a lazy dataset via the cptkirk engine.
 - [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
   : Dequantize Alpha Earth (AEF) embedding codes.
 - [`dequantize_esd()`](https://belian-earth.github.io/garry/reference/dequantize_esd.md)

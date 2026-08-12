@@ -2,8 +2,8 @@
 
 ### All vignettes
 
-- [Reading Alpha Earth embeddings with
-  lazy_cog()](https://belian-earth.github.io/garry/articles/aef-embeddings.md):
+- [Reading Alpha Earth
+  embeddings](https://belian-earth.github.io/garry/articles/aef-embeddings.md):
 - [Getting started with
   garry](https://belian-earth.github.io/garry/articles/garry.md):
 - [Harmonized Landsat-Sentinel composite and

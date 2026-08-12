@@ -19,7 +19,7 @@
 <li class="nav-item"><a class="nav-link" href="../articles/garry.html">Get started</a></li>
 <li class="nav-item dropdown">
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings with lazy_cog()</a></li>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
@@ -161,7 +161,7 @@
           <code><a href="lazy_dataset.html">lazy_dataset()</a></code>
 
         </dt>
-        <dd>Build a lazy dataset from a STAC source table.</dd>
+        <dd>Build a lazy dataset from a STAC source table or raster file(s).</dd>
 
         <dt>
 
@@ -302,7 +302,7 @@
       </dl></div><div class="section level2">
       <h2 id="geo-embeddings-model-weights">Geo-embeddings &amp; model weights<a class="anchor" aria-label="anchor" href="#geo-embeddings-model-weights"></a></h2>
 
-      <div class="section-desc"><p>Special operations for published geo-embedding products: the batched multi-band COG read (via the cptkirk engine), the products’ quantiser decodes, and safetensors weight IO.</p></div>
+      <div class="section-desc"><p>Special operations for published geo-embedding products: the quantiser decodes (fused onto multi-band reads via lazy_map) and safetensors weight IO.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -310,13 +310,6 @@
 
 
       <dl><dt>
-
-          <code><a href="lazy_cog.html">lazy_cog()</a></code>
-
-        </dt>
-        <dd>Read multi-band COGs into a lazy dataset via the cptkirk engine.</dd>
-
-        <dt>
 
           <code><a href="dequantize_aef.html">dequantize_aef()</a></code>
 

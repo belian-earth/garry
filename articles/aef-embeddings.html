@@ -5,12 +5,12 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<title>Reading Alpha Earth embeddings with lazy_cog() • garry</title>
+<title>Reading Alpha Earth embeddings • garry</title>
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
 <script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
-<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Reading Alpha Earth embeddings with lazy_cog()">
+<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Reading Alpha Earth embeddings">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -34,7 +34,7 @@
 <li class="active nav-item dropdown">
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles">
-<li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings with lazy_cog()</a></li>
+<li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
@@ -60,7 +60,7 @@
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
 
-      <h1>Reading Alpha Earth embeddings with lazy_cog()</h1>
+      <h1>Reading Alpha Earth embeddings</h1>
             
       
 
@@ -76,13 +76,15 @@ dataset is a collection of annual geospatial embeddings stored as
 dimension of a learned embedding, quantised to a signed byte and decoded
 with a nonlinear, sign-preserving transform,
 <code>((x / 127.5)^2) * sign(x)</code>.</p>
-<p>Tens of bands in one file is exactly what <code><a href="../reference/lazy_cog.html">lazy_cog()</a></code> is
-for. Where <code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> opens each band separately,
-<code><a href="../reference/lazy_cog.html">lazy_cog()</a></code> routes the read through <a href="https://belian-earth.github.io/cptkirk/" class="external-link">cptkirk</a>, whose
-async-tiff reader opens the tile <strong>once</strong> and streams all
-64 band planes concurrently. This vignette reads one tile, resamples to
-30 m, dequantises on the read, and renders three arbitrary bands as a
-false-colour composite.</p>
+<p>A multi-band file is just another source: give
+<code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> the path and it builds one band per file
+band, named from the file’s band descriptions (<code>A00</code> ..
+<code>A63</code> here). Each band is its own source, so at
+<code><a href="../reference/collect.html">collect()</a></code> the reads fan out band-by-band across the reader
+pool – many connections issuing range requests concurrently, which is
+what makes a 64-band remote read fast. This vignette reads one tile,
+resamples to 30 m, dequantises on the read, and renders three arbitrary
+bands as a false-colour composite.</p>
 <div class="section level2">
 <h2 id="read-and-dequantise">Read and dequantise<a class="anchor" aria-label="anchor" href="#read-and-dequantise"></a>
 </h2>
@@ -93,33 +95,34 @@ false-colour composite.</p>
 <span><span class="va">tile</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/paste.html" class="external-link">paste0</a></span><span class="op">(</span><span class="st">"https://data.source.coop/tge-labs/aef/v1/annual/2021/36S/"</span>,</span>
 <span>               <span class="st">"xekh5rjs4wg6wb9b4-0000000000-0000000000.tiff"</span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># get the grid specification from the source tile and spe</span></span>
+<span><span class="co"># the analysis grid: the tile's own footprint at 30 m</span></span>
 <span><span class="va">grid</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/grid_from_src.html">grid_from_src</a></span><span class="op">(</span><span class="va">tile</span>, <span class="fl">30</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">embeddings</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_cog.html">lazy_cog</a></span><span class="op">(</span><span class="va">tile</span>, <span class="va">grid</span>, resampling <span class="op">=</span> <span class="st">"average"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span><span class="va">embeddings</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">tile</span>, <span class="va">grid</span>, resampling <span class="op">=</span> <span class="st">"average"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/lazy_map.html">lazy_map</a></span><span class="op">(</span>fn <span class="op">=</span> <span class="va">dequantize_aef</span>, dtype <span class="op">=</span> <span class="st">"f32"</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">embeddings</span></span>
-<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ──────────────────────────────────────────────────</span></span>
-<span><span class="co">#&gt;   bands  b1 b2 b3 b4 b5 b6 b7 b8 b9 b10 b11 b12 b13 b14 b15 b16 b17 b18 b19 b20 b21 b22 b23 b24 b25 b26 b27 b28 b29 b30 b31 b32 b33 b34 b35 b36 b37 b38 b39 b40 b41 b42 b43 b44 b45 b46 b47 b48 b49 b50 b51 b52 b53 b54 b55 b56 b57 b58 b59 b60 b61 b62 b63 b64</span></span>
+<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ───────────────────────────────────────────────────────────────</span></span>
+<span><span class="co">#&gt;   bands  A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A10 A11 A12 A13 A14 A15 A16 A17 A18 A19 A20 A21 A22 A23 A24 A25 A26 A27 A28 A29 A30 A31 A32 A33 A34 A35 A36 A37 A38 A39 A40 A41 A42 A43 A44 A45 A46 A47 A48 A49 A50 A51 A52 A53 A54 A55 A56 A57 A58 A59 A60 A61 A62 A63</span></span>
 <span><span class="co">#&gt;   time   1 slice</span></span>
 <span><span class="co">#&gt;   grid   2732 x 2731 • f32</span></span>
 <span><span class="co">#&gt;   crs    EPSG:32736</span></span>
-<span><span class="co">#&gt;   graph  128 nodes • lazy</span></span>
+<span><span class="co">#&gt;   graph  192 nodes • lazy</span></span>
 <span><span class="co">#&gt;   ℹ draw(x) to see the pipeline</span></span></code></pre></div>
-<p><code><a href="../reference/lazy_cog.html">lazy_cog()</a></code> records a lazy 64-band dataset; nothing is
-fetched yet. <code><a href="../reference/dequantize_aef.html">dequantize_aef()</a></code> is applied as a map, which
-garry fuses onto the read so the nonlinear decode runs on-device, not as
-a separate pass.</p>
+<p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> records a lazy 64-band dataset; nothing
+is fetched yet (the construction costs one metadata probe, however many
+bands the file carries). <code><a href="../reference/dequantize_aef.html">dequantize_aef()</a></code> is applied as a
+map, which garry fuses onto the read so the nonlinear decode runs
+on-device, not as a separate pass.</p>
 </div>
 <div class="section level2">
 <h2 id="collect-three-bands-and-plot">Collect three bands and plot<a class="anchor" aria-label="anchor" href="#collect-three-bands-and-plot"></a>
 </h2>
 <p>Pick three arbitrary embedding dimensions and collect just those: the
-band-axis subset means only those three are ever computed.</p>
+band-axis subset means only those three are ever read or computed.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="op">)</span></span>
-<span><span class="va">cube</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"b10"</span>, <span class="st">"b11"</span>, <span class="st">"b12"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">cube</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A09"</span>, <span class="st">"A10"</span>, <span class="st">"A11"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">0</span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">cube</span><span class="op">)</span></span>
