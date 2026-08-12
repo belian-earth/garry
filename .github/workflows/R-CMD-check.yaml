@@ -78,6 +78,37 @@ jobs:
           extra-packages: any::rcmdcheck, rustyfilters=?ignore
           needs: check
 
+
+      # The PJRT CPU plugin otherwise downloads lazily at first XLA use,
+      # INSIDE the test run: one CDN flake fails the whole suite (main
+      # 2026-08-12: three ubuntu jobs lost to "Failure when receiving
+      # data from the peer" on the same release asset). Cache it across
+      # runs and pre-fetch with retries so tests never touch the network
+      # for it.
+      - name: PJRT plugin cache path
+        run: |
+          echo "PJRT_CACHE=$(Rscript -e 'cat(tools::R_user_dir("pjrt", "cache"))')" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Cache PJRT CPU plugin
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PJRT_CACHE }}
+          key: ${{ runner.os }}-pjrt-cpu-${{ hashFiles('DESCRIPTION') }}
+          restore-keys: ${{ runner.os }}-pjrt-cpu-
+
+      - name: Pre-fetch PJRT CPU plugin (retry)
+        run: |
+          ok <- FALSE
+          for (i in 1:5) {
+            ok <- tryCatch({ pjrt::install_pjrt(cuda = FALSE); TRUE },
+                           error = function(e) { message(conditionMessage(e)); FALSE })
+            if (ok) break
+            Sys.sleep(15 * i)
+          }
+          if (!ok) stop("PJRT CPU plugin download failed after 5 attempts")
+        shell: Rscript {0}
+
       # Force a source rebuild of DEV gdalraster against the recent
       # system GDAL above: garry needs >= 2.6.1.9001 (exported
       # get_data_ptr, the DESCRIPTION Remotes pin), and pak's cache can
