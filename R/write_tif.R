@@ -144,7 +144,8 @@ write_tif <- function(x, path, dtype = NULL, scale = NULL, offset = NULL,
   }
   cl <- c("-of", "COG", "-q",
           "-co", paste0("OVERVIEW_RESAMPLING=", toupper(overview_resampling)))
-  if (is.null(creation_options)) cl <- c(cl, "-co", "COMPRESS=DEFLATE")
+  if (is.null(creation_options))
+    cl <- c(cl, "-co", "COMPRESS=DEFLATE", "-co", "NUM_THREADS=ALL_CPUS")
   for (o in creation_options) cl <- c(cl, "-co", o)
   for (i in seq_along(streamed)) {
     ok <- gdal_translate_file(streamed[[i]], finals[[i]], cl)

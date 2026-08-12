@@ -719,8 +719,13 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
   if (grepl("\\.vrt$", path, ignore.case = TRUE))
     return(.raw_cube_create(path, grid, n_bands, nodata, band_names))
   if (is.null(options)) {
+    # NUM_THREADS parallelises per-tile DEFLATE inside the (single)
+    # writer daemon: the streamed-write flush of a 64-band AEF cube was
+    # a 57 s single-threaded backlog after the drain (2026-08-12).
+    # Tiles compress independently, so output bytes are unchanged.
     options <- c("COMPRESS=DEFLATE", "TILED=YES",
-                 "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=IF_SAFER")
+                 "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=IF_SAFER",
+                 "NUM_THREADS=ALL_CPUS")
     if (n_bands > 1L) options <- c(options, "INTERLEAVE=BAND")
   }
   ds <- gdalraster::create("GTiff", path,
