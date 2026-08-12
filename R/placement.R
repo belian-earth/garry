@@ -94,7 +94,7 @@ NULL
                             avail_mb = NULL,
                             mode = "rules") {
   if (!mode %in% c("rules", "cost"))
-    .garry_error(sprintf("unknown placement mode: %s", mode),
+    .garry_error(.glue("unknown placement mode: {mode}"),
                  "garry_placement_error")
   graph <- plan@graph
   cands <- .placement_candidates(plan, consumers_of, warp_only)
@@ -166,28 +166,33 @@ NULL
       } else if (!is.finite(k) &&
                  flops_px > garry_opt("fuse_flops_max")) {
         decision <- "comp"
-        reason <- sprintf(
-          "cost: no reader thread cap and %.0f flops/px > fuse_flops_max %.0f (N uncapped XLA clients)",
-          flops_px, garry_opt("fuse_flops_max"))
+        reason <- .glue(
+          "cost: no reader thread cap and {round(flops_px)} flops/px > ",
+          "fuse_flops_max {round(garry_opt('fuse_flops_max'))} ",
+          "(N uncapped XLA clients)")
       } else if (fuse_ws_mb > garry_opt("fuse_reader_mb")) {
         decision <- "comp"
-        reason <- sprintf(
-          "cost: fused window working set %.0f MB exceeds fuse_reader_mb %.0f (window %.1f Mpx at read granularity)",
-          fuse_ws_mb, garry_opt("fuse_reader_mb"), win_px / 1e6)
+        reason <- .glue(
+          "cost: fused window working set {round(fuse_ws_mb)} MB exceeds ",
+          "fuse_reader_mb {round(garry_opt('fuse_reader_mb'))} ",
+          "(window {formatC(win_px / 1e6, format = 'f', digits = 1)} Mpx ",
+          "at read granularity)")
       } else if (mem_need > mem_free) {
         decision <- "comp"
-        reason <- sprintf(
-          "cost: %d readers x %.0f MB XLA does not fit %.0f MB free headroom",
-          as.integer(n_read %||% 1), garry_opt("cost_xla_client_mb"),
-          mem_free)
+        reason <- .glue(
+          "cost: {as.integer(n_read %||% 1)} readers x ",
+          "{round(garry_opt('cost_xla_client_mb'))} MB XLA does not fit ",
+          "{round(mem_free)} MB free headroom")
       } else if (cost_fuse <= cost_mat) {
         decision <- "fuse"
-        reason <- sprintf("cost: fuse %.3fs <= materialise %.3fs",
-                          cost_fuse, cost_mat)
+        reason <- .glue(
+          "cost: fuse {formatC(cost_fuse, format = 'f', digits = 3)}s <= ",
+          "materialise {formatC(cost_mat, format = 'f', digits = 3)}s")
       } else {
         decision <- "comp"
-        reason <- sprintf("cost: materialise %.3fs < fuse %.3fs",
-                          cost_mat, cost_fuse)
+        reason <- .glue(
+          "cost: materialise {formatC(cost_mat, format = 'f', digits = 3)}s < ",
+          "fuse {formatC(cost_fuse, format = 'f', digits = 3)}s")
       }
     }
     if (decision == "fuse") {
@@ -197,7 +202,7 @@ NULL
       # budget — a fused read IS compute, and admitting a fleet of
       # them by store bytes alone (fused outputs are tiny) stacked
       # N cold XLA ramps on top of whatever else holds the machine
-      # (measured: crop=0 with the lazy_cog staging resident).
+      # (measured: crop=0 with the whole-AOI embedding staging resident).
       wpx <- prod(pmin(as.numeric(S@chunks@chunk_dim),
                        as.numeric(S@grid@dims[c("x", "y")])))
       ws_mb <- wpx * (.stage_fuse_act_bytes_px(graph, C@members, nb_src) +

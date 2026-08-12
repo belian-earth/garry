@@ -21,16 +21,16 @@ NULL
       zone <- floor((lon + 180) / 6) %% 60L + 1L
       paste0("EPSG:", (if (lat >= 0) 32600L else 32700L) + zone)
     },
-    laea = sprintf("+proj=laea +lon_0=%.10g +lat_0=%.10g +ellps=%s +no_defs",
-                   lon, lat, ellps),
-    aeqd = sprintf("+proj=aeqd +lon_0=%.10g +lat_0=%.10g +ellps=%s +no_defs",
-                   lon, lat, ellps),
-    pconic = sprintf(paste("+proj=pconic +lon_0=%.10g +lat_0=%.10g",
-                           "+lat_1=%.10g +lat_2=%.10g +ellps=%s +no_defs"),
-                     lon, lat, bbox_ll[[4L]], bbox_ll[[2L]], ellps),
-    eqdc = sprintf(paste("+proj=eqdc +lon_0=%.10g +lat_1=%.10g +lat_2=%.10g",
-                         "+ellps=%s +no_defs"),
-                   lon, bbox_ll[[4L]], bbox_ll[[2L]], ellps))
+    laea = .glue("+proj=laea +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
+                 "+ellps={ellps} +no_defs"),
+    aeqd = .glue("+proj=aeqd +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
+                 "+ellps={ellps} +no_defs"),
+    pconic = .glue("+proj=pconic +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
+                   "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
+                   "+ellps={ellps} +no_defs"),
+    eqdc = .glue("+proj=eqdc +lon_0={.g10(lon)} ",
+                 "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
+                 "+ellps={ellps} +no_defs"))
   wkt <- gdalraster::srs_to_wkt(crs)
   te <- gdalraster::transform_bounds(bbox_ll, gdalraster::srs_to_wkt("EPSG:4326"),
                                      wkt)

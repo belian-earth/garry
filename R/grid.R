@@ -184,9 +184,9 @@ GridSpec <- S7::new_class(
       for (nm2 in lnm) {
         v <- self@labels[[nm2]]
         if (!is.character(v) || length(v) != self@dims[[nm2]])
-          return(sprintf(
-            "`labels$%s` must be a character vector of length %d",
-            nm2, self@dims[[nm2]]))
+          return(.glue(
+            "`labels${nm2}` must be a character vector of length ",
+            "{self@dims[[nm2]]}"))
       }
     }
     if (length(self@transform) != 6L)
@@ -220,9 +220,9 @@ GridSpec <- S7::new_class(
                  gt[1L] + nx * gt[2L],   # xmax
                  gt[4L])                 # ymax
     if (any(abs(derived - self@extent) > tol))
-      return(sprintf(
-        "`extent` does not agree with `transform` + `dim` (expected [%s])",
-        paste(format(derived), collapse = ", ")))
+      return(.glue(
+        "`extent` does not agree with `transform` + `dim` ",
+        "(expected [{paste(format(derived), collapse = ', ')}])"))
     NULL
   }
 )
@@ -365,17 +365,17 @@ grid_diff <- function(a, b, tol = 1e-9) {
   ra <- c(a@transform[[2L]], -a@transform[[6L]])
   rb <- c(b@transform[[2L]], -b@transform[[6L]])
   if (any(abs(ra - rb) > tol))
-    return(sprintf("resolution differs: %g x %g vs %g x %g",
-                   ra[[1L]], ra[[2L]], rb[[1L]], rb[[2L]]))
+    return(.glue("resolution differs: {format(ra[[1L]])} x {format(ra[[2L]])}",
+                 " vs {format(rb[[1L]])} x {format(rb[[2L]])}"))
   if (any(abs(a@extent - b@extent) > tol)) {
     off <- (b@extent - a@extent) / c(ra[[1L]], ra[[2L]], ra[[1L]], ra[[2L]])
-    return(sprintf("extents differ by %.3g px in x, %.3g px in y",
-                   max(abs(off[c(1L, 3L)])), max(abs(off[c(2L, 4L)]))))
+    return(.glue(
+      "extents differ by {formatC(max(abs(off[c(1L, 3L)])), format = 'g', digits = 3, width = 1)}",
+      " px in x, {formatC(max(abs(off[c(2L, 4L)])), format = 'g', digits = 3, width = 1)} px in y"))
   }
   if (length(a@dims) != length(b@dims) || any(a@dims != b@dims))
-    return(sprintf("dims differ: (%s) vs (%s)",
-                   paste(a@dims, collapse = ","),
-                   paste(b@dims, collapse = ",")))
+    return(.glue("dims differ: ({paste(a@dims, collapse = ',')}) vs ",
+                 "({paste(b@dims, collapse = ',')})"))
   "grids are equal"
 }
 

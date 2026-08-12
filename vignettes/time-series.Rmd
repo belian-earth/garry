@@ -141,8 +141,8 @@ par(mfrow = c(1, 2), mar = c(3, 3, 2, 1))
 for (p in list(p1, p2))
   plot(dates, raw[p[1], p[2], ], pch = 16, col = "grey40",
        ylim = c(-0.1, 1), xlab = "", ylab = "NDVI",
-       main = sprintf("pixel (%d, %d): %d/%d dates",
-                      p[1], p[2], nv[p[1], p[2]], length(dates)))
+       main = glue::glue("pixel ({p[1]}, {p[2]}): ",
+                         "{nv[p[1], p[2]]}/{length(dates)} dates"))
 ```
 
 ![plot of chunk ts-raw-series](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/ts-raw-series-1.png)
@@ -221,7 +221,7 @@ for (p in list(p1, p2)) {
   m <- smooth[p[1], p[2], ]; s <- band[p[1], p[2], ]
   plot(dates, raw[p[1], p[2], ], pch = 16, col = "grey40",
        ylim = c(-0.1, 1), xlab = "", ylab = "NDVI",
-       main = sprintf("pixel (%d, %d)", p[1], p[2]))
+       main = glue::glue("pixel ({p[1]}, {p[2]})"))
   polygon(c(dates, rev(dates)), c(m - 2 * s, rev(m + 2 * s)),
           col = adjustcolor("firebrick", 0.15), border = NA)
   lines(dates, m, col = "firebrick", lwd = 2)

@@ -2,12 +2,12 @@
 % Please edit documentation in R/dataset.R
 \name{lazy_dataset}
 \alias{lazy_dataset}
-\title{Build a lazy dataset from a STAC source table.}
+\title{Build a lazy dataset from a STAC source table or raster file(s).}
 \usage{
 lazy_dataset(
   sources,
-  grid,
-  assets,
+  grid = NULL,
+  assets = NULL,
   mask_asset = NULL,
   granularity = "day",
   sort_field = "datetime",
@@ -15,16 +15,22 @@ lazy_dataset(
   lon = NULL,
   resampling = "near",
   scale = FALSE,
-  offset = NULL
+  offset = NULL,
+  bands = NULL
 )
 }
 \arguments{
-\item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally filtered)
-or a \code{stac_sources()} table.}
+\item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally
+filtered), a \code{stac_sources()} table, or a character path / vector of
+paths to (multi-band) raster file(s) -- local, \verb{/vsicurl/}, or bare
+\verb{http(s)://} (prefixed automatically).}
 
-\item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band.}
+\item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band. Required for the table
+form; \code{NULL} (the default) keeps the file form on its native grid.}
 
-\item{assets}{Character vector of value assets to load.}
+\item{assets}{Character vector of value assets to load (table form), or of
+band names to select (file form, when the file carries band
+descriptions).}
 
 \item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}); loaded
 alongside the value assets and used as the default \code{from} in \code{\link[=mask]{mask()}}.}
@@ -64,17 +70,38 @@ Sentinel-2 L2A) read raw and scale explicitly instead.
 \item{offset}{Explicit additive offset(s) (scalar or named by asset)
 used when \code{scale} is numeric; defaults to 0. Ignored when \code{scale} is
 logical.}
+
+\item{bands}{File form only: integer source band indices to select
+(default: all). Mutually exclusive with \code{assets}.}
 }
 \value{
 A \code{LazyDataset}.
 }
 \description{
-One band per asset, each a time-sliced GTI mosaic pinned to \code{grid} (mixed
-source CRS is fine; the GTI driver reprojects per tile). All bands share one
-intermediate representation (IR) graph, so a mask defined once (see
-\code{\link[=mask]{mask()}}) is computed once and dedup'd across bands, and \code{\link[=collect]{collect()}} plans
-the whole dataset in one pass.
+The one way into any source. Two input forms:
+}
+\details{
+\itemize{
+\item a STAC \code{doc_items} / \code{stac_sources()} table: one band per asset, each a
+time-sliced GTI mosaic pinned to \code{grid} (mixed source CRS is fine; the
+GTI driver reprojects per tile).
+\item a character path (or vector of same-CRS tile paths, mosaicked): one band
+per file band, one time slice. This is the multi-band raster entry --
+geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
+GDAL driver, any multi-band file GDAL reads. Each band is its own
+source, so reads fan out band-by-band across the reader pool (per-band
+tasks through per-daemon handles: the measured fastest remote shape,
+design/gdal-multiband-fanout.md). Bands are named by their file band
+descriptions when present, else \verb{b<index>}; \code{grid = NULL} stays on the
+file's native grid, and a supplied \code{grid} inserts an \code{\link[=align]{align()}} warp per
+band. Value transforms (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}) go downstream as
+\code{\link[=lazy_map]{lazy_map()}}s, which fuse onto the read at \code{\link[=collect]{collect()}}.
+}
+
+All bands share one intermediate representation (IR) graph, so a mask
+defined once (see \code{\link[=mask]{mask()}}) is computed once and dedup'd across bands, and
+\code{\link[=collect]{collect()}} plans the whole dataset in one pass.
 }
 \seealso{
-\code{\link[=lazy_cog]{lazy_cog()}}, \code{\link[=group_by_time]{group_by_time()}}, \code{\link[=collect]{collect()}}
+\code{\link[=group_by_time]{group_by_time()}}, \code{\link[=collect]{collect()}}
 }

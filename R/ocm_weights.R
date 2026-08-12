@@ -57,7 +57,7 @@
 
   stages <- lapply(1:4, function(s) {
     bs <- unique(regmatches(keys, regexpr(
-      sprintf("^encoder\\.model\\.s%d\\.b\\d+", s), keys)))
+      .glue("^encoder\\.model\\.s{s}\\.b\\d+"), keys)))
     bs <- bs[order(as.integer(sub(".*\\.b", "", bs)))]
     lapply(bs, function(p) {
       blk <- list(
@@ -83,11 +83,11 @@
 
   decoder <- lapply(0:4, function(i) list(
     conv1 = .ocm_fold_conv_bn(
-      std, sprintf("decoder.blocks.%d.conv1.0.weight", i),
-      sprintf("decoder.blocks.%d.conv1.1", i)),
+      std, .glue("decoder.blocks.{i}.conv1.0.weight"),
+      .glue("decoder.blocks.{i}.conv1.1")),
     conv2 = .ocm_fold_conv_bn(
-      std, sprintf("decoder.blocks.%d.conv2.0.weight", i),
-      sprintf("decoder.blocks.%d.conv2.1", i))))
+      std, .glue("decoder.blocks.{i}.conv2.0.weight"),
+      .glue("decoder.blocks.{i}.conv2.1"))))
   dch <- vapply(decoder, function(b) dim(b$conv1$w)[[1L]], 0L)
   if (!identical(dch, c(256L, 128L, 64L, 32L, 16L)))
     cli::cli_abort("unexpected SMP decoder channels: {.val {dch}}")
@@ -123,12 +123,12 @@
   .ocm_assert_dim(stem$conv$w, c(48L, 3L, 4L, 4L), "edgenext stem")
 
   stages <- lapply(0:3, function(s) {
-    pre <- sprintf("encoder.model.stages_%d", s)
+    pre <- .glue("encoder.model.stages_{s}")
     ds <- if (paste0(pre, ".downsample.1.weight") %in% keys)
       list(ln = ln(paste0(pre, ".downsample.0")),
            conv = .ocm_wb(std, paste0(pre, ".downsample.1")))
     bl <- unique(regmatches(keys, regexpr(
-      sprintf("^encoder\\.model\\.stages_%d\\.blocks\\.\\d+", s), keys)))
+      .glue("^encoder\\.model\\.stages_{s}\\.blocks\\.\\d+"), keys)))
     bl <- bl[order(as.integer(sub(".*blocks\\.", "", bl)))]
     blocks <- lapply(bl, function(p) {
       sdta <- paste0(p, ".xca.qkv.weight") %in% keys
@@ -143,7 +143,7 @@
         return(base)
       }
       ci <- unique(regmatches(keys, regexpr(
-        sprintf("^%s\\.convs\\.\\d+", gsub("\\.", "\\\\.", p)), keys)))
+        .glue("^{gsub('\\.', '\\\\.', p)}\\.convs\\.\\d+"), keys)))
       ci <- ci[order(as.integer(sub(".*convs\\.", "", ci)))]
       base$convs <- lapply(ci, function(cp) .ocm_wb(std, cp))
       base$norm_xca <- ln(paste0(p, ".norm_xca"))
@@ -167,11 +167,11 @@
 
   decoder <- lapply(0:4, function(i) list(
     conv1 = .ocm_fold_conv_bn(
-      std, sprintf("decoder.blocks.%d.conv1.0.weight", i),
-      sprintf("decoder.blocks.%d.conv1.1", i)),
+      std, .glue("decoder.blocks.{i}.conv1.0.weight"),
+      .glue("decoder.blocks.{i}.conv1.1")),
     conv2 = .ocm_fold_conv_bn(
-      std, sprintf("decoder.blocks.%d.conv2.0.weight", i),
-      sprintf("decoder.blocks.%d.conv2.1", i))))
+      std, .glue("decoder.blocks.{i}.conv2.0.weight"),
+      .glue("decoder.blocks.{i}.conv2.1"))))
   if (!identical(dim(decoder[[1L]]$conv1$w), c(256L, 464L, 3L, 3L)))
     cli::cli_abort("unexpected edgenext decoder block 0 shape")
 

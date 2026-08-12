@@ -58,9 +58,6 @@ collect <- function(x, plan_only = FALSE,
   # ONE single-threaded execution; the distributed scheduler learns
   # multi-sink next.
   if (length(p@sinks) > 1L) {
-    ck <- .ck_resolve(p)
-    p <- ck$plan
-    if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
     .garry_state$route <- if (distributed) "scheduler" else "single"
     res <- if (distributed) {
       execute_plan_mirai(p, path = path, nodata = nodata,
@@ -86,12 +83,6 @@ collect <- function(x, plan_only = FALSE,
   # as output band descriptions unless the dataset already supplied
   # band names.
   band_names <- band_names %||% .grid_layer_labels(p@stages[[p@sink]]@grid)
-  # lazy_cog sources ("CK:") fetch nothing until here: resolve each source set to
-  # a staged grid-aligned raster once (single-band sets through one concurrent
-  # ck_batch pool), then the executors read it as an ordinary GDAL source.
-  ck <- .ck_resolve(p)
-  p <- ck$plan
-  if (!is.null(ck$root)) on.exit(unlink(ck$root, recursive = TRUE), add = TRUE)
   res <- if (distributed) {
     if (!garry_daemons_set())
       cli::cli_abort(c(
@@ -223,7 +214,7 @@ garry_last_route <- function() .garry_state$route
                   character(1), USE.NAMES = FALSE))
   ext <- tools::file_ext(path); stem <- tools::file_path_sans_ext(path)
   vapply(safe, function(s)
-    if (nzchar(ext)) sprintf("%s_%s.%s", stem, s, ext) else sprintf("%s_%s", stem, s),
+    if (nzchar(ext)) .glue("{stem}_{s}.{ext}") else .glue("{stem}_{s}"),
     character(1), USE.NAMES = FALSE)
 }
 

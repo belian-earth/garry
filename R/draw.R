@@ -62,15 +62,15 @@ NULL
   k <- .node_kind(node)
   body <- switch(k,
     source = paste0("source  ", cli::col_grey(.dims_str(node@grid))),
-    focal  = sprintf("focal  r=%d", node@radius),
+    focal  = glue::glue("focal  r={node@radius}"),
     map    = if (length(node@parents) > 1L)
-               sprintf("map  (%d inputs)", length(node@parents)) else "map",
-    reduce = sprintf("%s  over %s",
-                     if (length(node@fn)) "custom reduce" else node@op,
-                     paste(node@over, collapse = ",")),
-    scan   = sprintf("scan %s  over %s", node@direction, node@over),
-    patch  = sprintf("patch  r=%d", node@radius),
-    stack  = sprintf("stack  along %s", node@along),
+               glue::glue("map  ({length(node@parents)} inputs)") else "map",
+    reduce = glue::glue(
+      "{if (length(node@fn)) 'custom reduce' else node@op}",
+      "  over {paste(node@over, collapse = ',')}"),
+    scan   = glue::glue("scan {node@direction}  over {node@over}"),
+    patch  = glue::glue("patch  r={node@radius}"),
+    stack  = glue::glue("stack  along {node@along}"),
     warp   = "warp",
     fused  = "fused",
     "node")
@@ -105,8 +105,8 @@ NULL
                          box = .box_chars()) {
   conn <- if (is_root) "" else if (is_last) box$l else box$t
   mult <- if (node$mult > 1L)
-    cli::col_grey(sprintf("  %s%d", if (cli::is_utf8_output()) "\u00d7" else "x",
-                          node$mult)) else ""
+    cli::col_grey(glue::glue(
+      "  {if (cli::is_utf8_output()) '\u00d7' else 'x'}{node$mult}")) else ""
   line <- paste0(prefix, conn, .kind_glyph(node$kind), " ", node$label, mult)
   child_prefix <- paste0(prefix, if (is_root) "" else if (is_last) "   " else box$g)
   lines <- line
@@ -137,13 +137,13 @@ S7::method(print, LazyRaster) <- function(x, ...) {
   node <- graph_get(x@graph, x@node_id)
   g <- x@grid
   .card(
-    sprintf("<LazyRaster> %s", .node_label(node)),
+    glue::glue("<LazyRaster> {.node_label(node)}"),
     list(
-      c("grid", sprintf("%s %s %s", paste(unname(g@dims), collapse = " x "),
-                        cli::symbol$bullet %||% "-", g@dtype)),
+      c("grid", glue::glue("{paste(unname(g@dims), collapse = ' x ')} ",
+                           "{cli::symbol$bullet %||% '-'} {g@dtype}")),
       c("crs",  .crs_label(g@crs)),
-      c("graph", sprintf("%d nodes %s lazy", length(graph_ids(x@graph)),
-                         cli::symbol$bullet %||% "-"))
+      c("graph", glue::glue("{length(graph_ids(x@graph))} nodes ",
+                            "{cli::symbol$bullet %||% '-'} lazy"))
     ),
     hint = "draw(x) to see the pipeline")
   invisible(x)
@@ -155,17 +155,17 @@ S7::method(print, LazyDataset) <- function(x, ...) {
   val <- .ds_value_bands(x)
   bands_txt <- paste(val, collapse = " ")
   if (length(x@mask_asset))
-    bands_txt <- paste0(bands_txt, cli::col_grey(sprintf("  (+%s)", x@mask_asset)))
+    bands_txt <- paste0(bands_txt, cli::col_grey(glue::glue("  (+{x@mask_asset})")))
   .card(
     "<LazyDataset>",
     list(
       c("bands", bands_txt),
       c("time",  .slices_txt(.ds_n_slices(x))),
-      c("grid",  sprintf("%s x %s %s %s", g@dims[["x"]], g@dims[["y"]],
-                         cli::symbol$bullet %||% "-", g@dtype)),
+      c("grid",  glue::glue("{g@dims[['x']]} x {g@dims[['y']]} ",
+                            "{cli::symbol$bullet %||% '-'} {g@dtype}")),
       c("crs",   .crs_label(g@crs)),
-      c("graph", sprintf("%d nodes %s lazy", length(graph_ids(x@graph)),
-                         cli::symbol$bullet %||% "-"))
+      c("graph", glue::glue("{length(graph_ids(x@graph))} nodes ",
+                            "{cli::symbol$bullet %||% '-'} lazy"))
     ),
     hint = "draw(x) to see the pipeline")
   invisible(x)
@@ -176,18 +176,17 @@ S7::method(print, LazyDatasetGroups) <- function(x, ...) {
   nb <- vapply(x@groups, function(g) length(.ds_value_bands(g)), integer(1))
   ns <- vapply(x@groups, function(g) max(vapply(g@bands, length, integer(1))), integer(1))
   show <- if (length(labs) > 6L)
-    c(labs[1:5], cli::col_grey(sprintf("... (+%d)", length(labs) - 5L))) else labs
+    c(labs[1:5], cli::col_grey(glue::glue("... (+{length(labs) - 5L})"))) else labs
   .card(
     "<LazyDatasetGroups>",
     list(
-      c("groups", sprintf("%d by %s", length(labs), x@by)),
+      c("groups", glue::glue("{length(labs)} by {x@by}")),
       c("labels", paste(show, collapse = " ")),
       c("bands",  if (min(nb) == max(nb)) as.character(max(nb))
-                  else sprintf("%d-%d per group", min(nb), max(nb))),
-      c("time",   sprintf("%s slice%s per group",
-                          if (min(ns) == max(ns)) as.character(max(ns))
-                          else sprintf("%d-%d", min(ns), max(ns)),
-                          if (max(ns) == 1L) "" else "s"))
+                  else glue::glue("{min(nb)}-{max(nb)} per group")),
+      c("time",   glue::glue(
+        "{if (min(ns) == max(ns)) max(ns) else glue::glue('{min(ns)}-{max(ns)}')}",
+        " slice{if (max(ns) == 1L) '' else 's'} per group"))
     ),
     hint = "reduce_over(x, \"median\", \"t\") then collect(x)")
   invisible(x)
@@ -200,7 +199,7 @@ S7::method(print, LazyDatasetGroups) <- function(x, ...) {
   if (!is.null(src) && is.numeric(src$detail)) src$detail
   else max(vapply(x@bands, length, integer(1)))
 }
-.slices_txt <- function(n) sprintf("%d slice%s", n, if (n == 1L) "" else "s")
+.slices_txt <- function(n) glue::glue("{n} slice{if (n == 1L) '' else 's'}")
 
 # Short human CRS label: an EPSG code if the WKT carries one, else the name.
 .crs_label <- function(crs) {
@@ -241,9 +240,9 @@ draw <- S7::new_generic("draw", "x")
 
 S7::method(draw, LazyRaster) <- function(x, ...) {
   g <- x@grid
-  cat(cli::rule(left = sprintf("<LazyRaster> %s x %s %s %s",
-                               g@dims[["x"]], g@dims[["y"]],
-                               cli::symbol$bullet %||% "-", g@dtype),
+  cat(cli::rule(left = glue::glue("<LazyRaster> {g@dims[['x']]} x ",
+                                  "{g@dims[['y']]} ",
+                                  "{cli::symbol$bullet %||% '-'} {g@dtype}"),
                 line_col = "grey"), "\n", sep = "")
   cat(.render_tree(.ir_tree(x@graph, x@node_id)), sep = "\n")
   cat("\n")
@@ -264,15 +263,16 @@ S7::method(draw, LazyDataset) <- function(x, ...) {
     detail <- if (identical(s$kind, "source")) {
       val <- .ds_value_bands(x)
       bt <- paste(val, collapse = " ")
-      if (length(x@mask_asset)) bt <- paste0(bt, sprintf(" (+%s)", x@mask_asset))
-      sprintf("%s  %s  %s %s %s", bt, cli::symbol$bullet %||% "-",
-              .slices_txt(s$detail), cli::symbol$bullet %||% "-", .dims_str(g))
+      if (length(x@mask_asset)) bt <- paste0(bt, glue::glue(" (+{x@mask_asset})"))
+      glue::glue("{bt}  {cli::symbol$bullet %||% '-'}  ",
+                 "{.slices_txt(s$detail)} {cli::symbol$bullet %||% '-'} ",
+                 "{.dims_str(g)}")
     } else s$detail %||% ""
     cat("  ", .kind_glyph(s$kind), " ", .style(s$kind, formatC(s$label, width = -8)),
         "  ", cli::col_grey(detail), "\n", sep = "")
   }
-  cat("  ", cli::col_grey(sprintf("%s %d nodes %s crs %s",
-      cli::symbol$line %||% "-", length(graph_ids(x@graph)),
-      cli::symbol$bullet %||% "-", .crs_label(g@crs))), "\n", sep = "")
+  cat("  ", cli::col_grey(glue::glue(
+      "{cli::symbol$line %||% '-'} {length(graph_ids(x@graph))} nodes ",
+      "{cli::symbol$bullet %||% '-'} crs {.crs_label(g@crs)}")), "\n", sep = "")
   invisible(x)
 }

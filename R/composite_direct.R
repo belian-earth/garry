@@ -279,11 +279,12 @@ NULL
       sl <- sub(".*'([^']*)'.*", "\\1", filt); e[e$slice == sl, , drop = FALSE]
     } else e
     list(nid = n@id, nodata = n@nodata, locs = er$location, dt = er$datetime,
-         resampling = n@resampling, bin = file.path(tmp, sprintf("n%d.bin", n@id)))
+         resampling = n@resampling, bin = file.path(tmp, .glue("n{n@id}.bin")))
   })
   names(info) <- vapply(info, function(x) as.character(x$nid), "")
   K <- list(nx = nx, ny = ny,
-            gtstr = paste(sprintf("%.10g", grid@transform), collapse = "/"),
+            gtstr = paste(formatC(grid@transform, format = "g", digits = 10, width = 1),
+                          collapse = "/"),
             wkt = gdalraster::srs_to_wkt(cr))
   jobs <- lapply(info, function(x)
     list(locs = .mpc_resign(x$locs), dt = x$dt, nodata = x$nodata,
@@ -336,8 +337,8 @@ NULL
 # "nodata" warns and keeps the NaN-filled slices.
 .gd_fetch_fail <- function(errs, n, label) {
   if (length(errs) == 0L) return(invisible(NULL))
-  msg <- sprintf("gdal-direct: %d/%d %s warps failed (e.g. %s)",
-                 length(errs), n, label, errs[[1L]])
+  msg <- .glue("gdal-direct: {length(errs)}/{n} {label} warps failed ",
+               "(e.g. {errs[[1L]]})")
   if (!identical(garry_opt("read_fail"), "nodata"))
     cli::cli_abort(c(msg,
       "i" = paste0("failed slices would read as all-nodata; set ",
@@ -355,19 +356,21 @@ NULL
   t <- proc.time()[["elapsed"]] - launched$t0
   if (progress) {
     ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
-    cli::cli_inform(sprintf("[gdal-direct] per-task sums: fetch=%.1fs warp=%.1fs",
-                    sum(vapply(ok, function(x) x$tf, 0)),
-                    sum(vapply(ok, function(x) x$tw, 0))))
+    cli::cli_inform(.glue(
+      "[gdal-direct] per-task sums: ",
+      "fetch={formatC(sum(vapply(ok, function(x) x$tf, 0)), format = 'f', digits = 1)}s ",
+      "warp={formatC(sum(vapply(ok, function(x) x$tw, 0)), format = 'f', digits = 1)}s"))
   }
   .gd_fetch_fail(.gd_fetch_errs(r), length(info), "source")
-  if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+warp=%.2fs", t))
+  if (progress) cli::cli_inform(.glue(
+    "[gdal-direct] fetch+warp={formatC(t, format = 'f', digits = 2)}s"))
   info
 }
 
 # tmpfs dir for a run's per-source .bin payloads.
 .gd_tmp <- function() {
   tmp <- file.path(if (dir.exists("/dev/shm")) "/dev/shm" else tempdir(),
-                   sprintf("gdirect-%d", Sys.getpid()))
+                   .glue("gdirect-{Sys.getpid()}"))
   dir.create(tmp); tmp
 }
 
@@ -447,7 +450,8 @@ NULL
       c(band_cubes, if (masked) list(fm) else NULL)))
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    cli::cli_inform(sprintf("[gdal-direct] lean compute=%.2fs", tcomp))
+    cli::cli_inform(.glue(
+      "[gdal-direct] lean compute={formatC(tcomp, format = 'f', digits = 2)}s"))
   .gd_write_result(res, spec, path, nodata, band_names, wspec = wspec)
 }
 
@@ -547,10 +551,11 @@ NULL
   if (masked) {
     fmr <- lapply(fmask_p, function(h) h[])
     .gd_check_fetch(fmr, "fmask")
-    if (progress) cli::cli_inform(sprintf(
-      "[gdal-direct] fmask drain=%.2fs (%d tasks, warp sum=%.1fs)",
-      proc.time()[["elapsed"]] - t0, length(fmr),
-      sum(vapply(fmr, function(r) r$tw, 0))))
+    if (progress) cli::cli_inform(.glue(
+      "[gdal-direct] fmask ",
+      "drain={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
+      "({length(fmr)} tasks, warp ",
+      "sum={formatC(sum(vapply(fmr, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"))
     Km <- list(fmask_bins = bin_of(spec$fmask_srcs), out_bin = mask_bin,
                chain = lapply(spec$mask_chain, function(n) {
                  n@fn <- .slim_fn(n@fn); n }),
@@ -576,8 +581,8 @@ NULL
                          2L * max(1L, .comp_n()))
   nb <- length(spec$band_srcs)
   if (progress && cap < nb * ns)
-    cli::cli_inform(sprintf(
-      "[gdal-direct] compute in-flight capped at %d strip task(s) (RAM budget)", cap))
+    cli::cli_inform(.glue(
+      "[gdal-direct] compute in-flight capped at {cap} strip task(s) (RAM budget)"))
   mask_done <- !masked
   res_p <- new.env(parent = emptyenv())
   parts <- lapply(seq_len(nb), function(i) vector("list", ns))
@@ -610,10 +615,10 @@ NULL
   }
   for (bi in seq_len(nb)) {
     bres <- lapply(band_p[[bi]], function(h) h[])
-    .gd_check_fetch(bres, sprintf("band %d", bi))
-    if (progress) cli::cli_inform(sprintf(
-      "[gdal-direct] band %d drained at %.2fs",
-      bi, proc.time()[["elapsed"]] - t0))
+    .gd_check_fetch(bres, .glue("band {bi}"))
+    if (progress) cli::cli_inform(.glue(
+      "[gdal-direct] band {bi} drained at ",
+      "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"))
     if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
     for (si in seq_len(ns)) {
       while (length(inflight) >= cap) harvest()       # RAM cap: bound concurrency
@@ -621,18 +626,21 @@ NULL
                  affine = spec$band_affine[[bi]],
                  rows = if (ns == 1L) NULL else bounds[[si]],
                  ck = band_ck[[bi]])
-      key <- sprintf("b%d.s%d", bi, si)
+      key <- .glue("b{bi}.s{si}")
       res_p[[key]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
                                    jb = jb, kb = Kb, .compute = next_cp())
       inflight[[length(inflight) + 1L]] <- list(bi = bi, si = si, key = key)
     }
   }
-  if (progress) cli::cli_inform(sprintf("[gdal-direct] fetch+dispatch=%.2fs",
-                                proc.time()[["elapsed"]] - t0))
+  if (progress) cli::cli_inform(.glue(
+    "[gdal-direct] fetch+dispatch=",
+    "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"))
   while (length(inflight)) harvest()
-  if (progress) cli::cli_inform(sprintf(
-    "[gdal-direct] pipeline total=%.2fs (compute sum=%.2fs, %d strip/band, %d post-warm compile)",
-    proc.time()[["elapsed"]] - t0, t_comp, ns, jit_creates))
+  if (progress) cli::cli_inform(.glue(
+    "[gdal-direct] pipeline ",
+    "total={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
+    "(compute sum={formatC(t_comp, format = 'f', digits = 2)}s, ",
+    "{ns} strip/band, {jit_creates} post-warm compile)"))
   res
 }
 
@@ -707,7 +715,8 @@ NULL
     res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(gspec$sink_out)]]
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    cli::cli_inform(sprintf("[gdal-direct] general compute=%.2fs", tcomp))
+    cli::cli_inform(.glue(
+      "[gdal-direct] general compute={formatC(tcomp, format = 'f', digits = 2)}s"))
 
   m <- .sv_materialise(res)
   d <- dim(m)
@@ -848,7 +857,8 @@ NULL
     res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(u$sink_out)]]
   })[["elapsed"]]
   if (isTRUE(getOption("garry.progress", FALSE)))
-    cli::cli_inform(sprintf("[gdal-direct] upper compute=%.2fs", tcomp))
+    cli::cli_inform(.glue(
+      "[gdal-direct] upper compute={formatC(tcomp, format = 'f', digits = 2)}s"))
 
   m <- .sv_materialise(res); d <- dim(m)
   nb <- if (length(d) == 3L) d[[1L]] else 1L

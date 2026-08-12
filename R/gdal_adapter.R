@@ -41,6 +41,35 @@ NULL
   if (grepl("^https?://", href)) paste0("/vsicurl/", href) else href
 }
 
+# Is a path a remote (network-backed) GDAL source?
+.gdal_is_remote <- function(path) {
+  grepl("^/vsi(curl|s3|gs|az|swift)|^https?://", path)
+}
+
+# Scope the remote-open hygiene config around a block, for garry's OWN
+# host-side opens of REMOTE sources. Two savings, both measured on a
+# 64-band AEF COG (2026-08-12): EMPTY_DIR suppresses the sidecar-probe
+# storm (~25-30 sequential 404 round-trips: .IMD/.RPB/.PVL/_rpc.txt/
+# .msk/.vat.dbf and case variants -- ~8 s at typical RTT, paid at the
+# warp seam and the metadata probe), and the 4 MB ingest collapses the
+# serial 16 KB IFD walk of a many-band header into one request
+# (probe 7.5 s -> 1.0 s; first warp 8.5 s -> 0.01 s). Scoped, not
+# global: the host's OWN config stays untouched outside garry calls,
+# so user-level local reads keep sidecar semantics (the reason
+# garry_daemons() never configures the host). Daemons already run
+# EMPTY_DIR globally (garry_gdal_config); re-scoping there is a no-op.
+.gdal_quiet_remote <- function(code) {
+  prev_rd <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
+  prev_ib <- gdalraster::get_config_option("GDAL_INGESTED_BYTES_AT_OPEN")
+  gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+  gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", "4194304")
+  on.exit({
+    gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", prev_rd)
+    gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", prev_ib)
+  }, add = TRUE)
+  force(code)
+}
+
 .gdal_handle <- function(path, open_options = character(0)) {
   path <- .gdal_href(path)                 # range-read remote COGs, never pull whole
   key <- paste(c(path, open_options), collapse = "\x1f")
@@ -50,10 +79,15 @@ NULL
     .gdal_cache$handles[[key]] <- h
     return(h)
   }
-  open_ds <- function() if (length(open_options) > 0L) {
+  open_raw <- function() if (length(open_options) > 0L) {
     methods::new(gdalraster::GDALRaster, path, TRUE, open_options)
   } else {
     methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
+  }
+  # Remote opens run under the scoped hygiene config (sidecar-probe
+  # storm + serial IFD walk otherwise cost ~8 s each at typical RTT).
+  open_ds <- function() {
+    if (.gdal_is_remote(path)) .gdal_quiet_remote(open_raw()) else open_raw()
   }
   # A GTI mosaic pinned to the analysis grid reprojects mixed-UTM-zone tiles
   # (HLS spans several zones), so PROJ reports "several coordinate operations
@@ -277,7 +311,8 @@ gdal_open_update <- function(path) {
   seek(con, total - 1)                 # sparse allocation
   writeBin(raw(1L), con)
   close(con)
-  gt_csv <- paste(sprintf("%.17g", grid@transform), collapse = ", ")
+  gt_csv <- paste(formatC(grid@transform, format = "g", digits = 17, width = 1),
+                  collapse = ", ")
   xml <- .raw_bsq_vrt_xml(
     basename(bin), nx, ny, gt_csv, grid@crs,
     if (bytes == 4L) "Float32" else "Float64", n_bands,
@@ -331,7 +366,8 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
     }
   }
   close(con)
-  gt_csv <- paste(sprintf("%.17g", grid@transform), collapse = ", ")
+  gt_csv <- paste(formatC(grid@transform, format = "g", digits = 17, width = 1),
+                  collapse = ", ")
   xml <- .raw_bsq_vrt_xml(
     basename(bin), nx, ny, gt_csv, grid@crs,
     if (bytes == 4L) "Float32" else "Float64", nb,
@@ -362,6 +398,48 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   info <- tryCatch(.raw_vrt_parse(path), error = function(e) NULL)
   .raw_vrt_cache[[key]] <- info %||% FALSE
   info
+}
+
+# Bytes per sample for a GDAL data-type name.
+.gdal_dtype_bytes <- function(dt) {
+  b <- c(Byte = 1L, Int8 = 1L, UInt16 = 2L, Int16 = 2L, UInt32 = 4L,
+         Int32 = 4L, UInt64 = 8L, Int64 = 8L, Float32 = 4L, Float64 = 8L)[[dt]]
+  if (is.null(b)) cli::cli_abort("Unsupported buffer dtype {.val {dt}}.")
+  b
+}
+
+# Build a VRTRawRasterBand dataset XML over a raw band-sequential (BSQ) buffer, so
+# GDAL reads it with zero decode. Band b's plane starts at (b-1) * nx * ny * bytes;
+# pixels are row-major within it. `src` is the .bin basename, referenced as a
+# relativeToVRT sibling (the VRT must be written beside it): GDAL refuses a raw
+# band pointing at an arbitrary absolute path unless the source is a sibling/child
+# of the VRT (or GDAL_VRT_RAWRASTERBAND_ALLOWED_SOURCE is set), which this
+# satisfies rather than loosening the global config.
+.raw_bsq_vrt_xml <- function(src, nx, ny, gt_csv, wkt, dtype, nbands,
+                             nodata = NULL, descriptions = NULL) {
+  bytes <- .gdal_dtype_bytes(dtype)
+  plane <- as.numeric(nx) * as.numeric(ny) * bytes
+  ndxml <- if (!is.null(nodata))
+    .glue("\n    <NoDataValue>{format(nodata, scientific = FALSE)}",
+          "</NoDataValue>") else ""
+  bands_xml <- vapply(seq_len(nbands), function(b) {
+    desc <- if (!is.null(descriptions) && b <= length(descriptions) &&
+                nzchar(descriptions[[b]]))
+      .glue("\n    <Description>{descriptions[[b]]}</Description>")
+    else ""
+    .glue(
+      '  <VRTRasterBand dataType="{dtype}" band="{b}" ',
+      'subClass="VRTRawRasterBand">{desc}',
+      '\n    <SourceFilename relativeToVRT="1">{src}</SourceFilename>',
+      "\n    <ImageOffset>",
+      "{formatC((b - 1) * plane, format = 'f', digits = 0)}</ImageOffset>",
+      "\n    <PixelOffset>{bytes}</PixelOffset>",
+      "\n    <LineOffset>{as.integer(nx * bytes)}</LineOffset>{ndxml}",
+      "\n  </VRTRasterBand>")
+  }, "")
+  .glue('<VRTDataset rasterXSize="{nx}" rasterYSize="{ny}">',
+        "\n  <SRS>{wkt}</SRS>\n  <GeoTransform>{gt_csv}</GeoTransform>",
+        "\n{paste(bands_xml, collapse = '\n')}\n</VRTDataset>")
 }
 
 # Strict recognition of the .raw_bsq_vrt_xml shape: every band a
@@ -517,8 +595,9 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #' @export
 gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
                           src_nodata = numeric(0)) {
+  src_path <- .gdal_href(src_path)   # bare https would pull the whole file
   vrt <- tempfile(fileext = ".vrt")
-  num <- function(v) sprintf("%.17g", v)
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
   args <- c("-of", "VRT",
             "-te", num(target_grid@extent[1L]), num(target_grid@extent[2L]),
                    num(target_grid@extent[3L]), num(target_grid@extent[4L]),
@@ -530,8 +609,13 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
       .dtype_family(target_grid@dtype) == "float") {
     args <- c(args, "-dstnodata", "nan")
   }
-  ok <- gdalraster::warp(src_path, vrt, t_srs = target_grid@crs,
-                         cl_arg = args, quiet = TRUE)
+  do_warp <- function() gdalraster::warp(src_path, vrt,
+                                         t_srs = target_grid@crs,
+                                         cl_arg = args, quiet = TRUE)
+  # warp opens the source internally (bypassing .gdal_handle), so it
+  # needs the same remote-open hygiene scoping
+  ok <- if (.gdal_is_remote(src_path)) .gdal_quiet_remote(do_warp())
+        else do_warp()
   if (!isTRUE(ok)) cli::cli_abort("gdalwarp to VRT failed for {.path {src_path}}")
   vrt
 }
@@ -560,8 +644,8 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #'
 #' `gdalbuildvrt` of same-grid single-band rasters: overlapping pixels take the
 #' LAST input, so pass `files` in ascending priority (latest datetime last, to
-#' match the highest-on-top overlap rule). Used to assemble a per-slice mosaic
-#' from cptkirk's per-tile warp outputs.
+#' match the highest-on-top overlap rule). Used to assemble multi-tile
+#' mosaics (e.g. the file form of [lazy_dataset()]).
 #'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
@@ -576,13 +660,16 @@ gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
     ts <- as.numeric(ts)
     tr <- c((te[[3L]] - te[[1L]]) / ts[[1L]],
             (te[[4L]] - te[[2L]]) / ts[[2L]])
-    args <- c("-te", sprintf("%.16g", te), "-tr", sprintf("%.16g", tr))
+    args <- c("-te", formatC(te, format = "g", digits = 16, width = 1),
+              "-tr", formatC(tr, format = "g", digits = 16, width = 1))
   }
   if (length(vrtnodata))
-    args <- c(args, "-vrtnodata", sprintf("%.16g", vrtnodata[[1L]]))
-  gdalraster::buildVRT(dst, files,
-                       cl_arg = if (length(args)) args else NULL,
-                       quiet = TRUE)
+    args <- c(args, "-vrtnodata",
+              formatC(vrtnodata[[1L]], format = "g", digits = 16, width = 1))
+  do_build <- function() gdalraster::buildVRT(
+    dst, files, cl_arg = if (length(args)) args else NULL, quiet = TRUE)
+  if (any(.gdal_is_remote(files))) .gdal_quiet_remote(do_build())
+  else do_build()
   if (!file.exists(dst)) cli::cli_abort("buildVRT mosaic failed.")
   dst
 }
@@ -723,9 +810,9 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
   # gdalraster 2.6.1.9001 (previously an internal resolved at runtime), hence
   # the Remotes pin on the dev version.
   ptr <- gdalraster::get_data_ptr(buf)
-  dsn <- sprintf(
-    "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",
-    ptr, nx, ny, gtstr)
+  dsn <- .glue(
+    "MEM:::DATAPOINTER={ptr},PIXELS={nx},LINES={ny},BANDS=1,",
+    "DATATYPE=Float32,GEOTRANSFORM={gtstr}")
   o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
   o$setProjection(wkt)
   cl <- c("-r", resampling, "-q", "-dstnodata", "nan")
@@ -952,7 +1039,7 @@ gdal_nodata_window <- function(out_file, ext, crs,
 #' @export
 gti_open_options <- function(grid = NULL, filter = NULL,
                              sort_field = NULL, sort_asc = TRUE) {
-  num <- function(v) sprintf("%.17g", v)
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
   oo <- character(0)
   if (!is.null(grid)) {
     oo <- c(oo,
@@ -982,10 +1069,10 @@ gti_open_options <- function(grid = NULL, filter = NULL,
       !startsWith(path, "GTI:")) return(path)
   idx  <- sub("^GTI:", "", path)
   wrap <- paste0(idx, ".gti")
-  writeLines(sprintf(paste0(
-    "<GDALTileIndexDataset><IndexDataset>%s</IndexDataset>",
-    "<IndexLayer>index</IndexLayer><Resampling>%s</Resampling>",
-    "</GDALTileIndexDataset>"), idx, resampling), wrap)
+  writeLines(.glue(
+    "<GDALTileIndexDataset><IndexDataset>{idx}</IndexDataset>",
+    "<IndexLayer>index</IndexLayer><Resampling>{resampling}</Resampling>",
+    "</GDALTileIndexDataset>"), wrap)
   wrap
 }
 
@@ -1022,8 +1109,7 @@ gdal_band_count <- function(path) {
 
 # Toggle GDAL error-logging to R off for a code block (thread-safety:
 # gdalraster's R-callback handler aborts the process when a GDAL worker
-# thread warns; see lazy_cog's .ck_quiet). Lives here per the gdalraster
-# quarantine.
+# thread warns). Lives here per the gdalraster quarantine.
 .gdal_log_errors_off <- function(code) {
   prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
   gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")

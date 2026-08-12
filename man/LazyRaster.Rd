@@ -17,7 +17,7 @@ LazyRaster(graph = Graph(), node_id = integer(0), grid = GridSpec())
 A \code{LazyRaster}.
 }
 \description{
-Users obtain one via \code{\link[=lazy_source]{lazy_source()}}, \code{\link[=lazy_cog]{lazy_cog()}}, or \code{\link[=lazy_dataset]{lazy_dataset()}}
+Users obtain one via \code{\link[=lazy_source]{lazy_source()}} or \code{\link[=lazy_dataset]{lazy_dataset()}}
 band access, and materialise it with \code{\link[=collect]{collect()}}; the constructor itself
 is rarely called directly.
 }
