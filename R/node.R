@@ -129,8 +129,7 @@ FocalNode <- S7::new_class(
   validator = function(self) {
     k <- (2L * self@radius + 1L)^2
     if (length(self@weights) > 0L && length(self@weights) != k)
-      return(sprintf("`weights` must have length %d for radius %d", k,
-                     self@radius))
+      return(.glue("`weights` must have length {k} for radius {self@radius}"))
     NULL
   }
 )

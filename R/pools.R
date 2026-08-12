@@ -192,7 +192,7 @@ NULL
   # writer): the error is caught, and the connection warning that
   # precedes it must not leak either
   s <- tryCatch(
-    suppressWarnings(readLines(sprintf("/proc/%d/status", pid),
+    suppressWarnings(readLines(.glue("/proc/{pid}/status"),
                                warn = FALSE)),
     error = function(e) character(0))
   ln <- grep("^RssAnon:", s, value = TRUE)
@@ -413,7 +413,7 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
     try(mirai::daemons(0L, .compute = p), silent = TRUE)
   .garry_state$comp_profiles <- NULL
   if (compute > 0L) {
-    profs <- sprintf("garry_comp_%d", seq_len(compute))
+    profs <- .glue("garry_comp_{seq_len(compute)}")
     for (p in profs)
       mirai::daemons(1L, dispatcher = FALSE, .compute = p, ...)
     .garry_state$comp_profiles <- profs

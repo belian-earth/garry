@@ -112,12 +112,12 @@ Plan <- S7::new_class(
 S7::method(print, Plan) <- function(x, ...) {
   cat("<Plan>", length(x@stages), "stages, sink =", x@sink, "\n")
   for (s in x@stages) {
-    cat(sprintf(
-      "  [%d] %-14s members=(%s) halo=%d%s chunks=%dx%d inputs=(%s)\n",
-      s@id, s@kind, paste(s@members, collapse = ","), s@halo,
-      if (s@out_pad > 0L) sprintf(" pad=%d", s@out_pad) else "",
-      s@chunks@chunk_dim[1L], s@chunks@chunk_dim[2L],
-      paste(s@inputs, collapse = ",")))
+    cat(.glue(
+      "  [{s@id}] {formatC(s@kind, width = -14)} ",
+      "members=({paste(s@members, collapse = ',')}) halo={s@halo}",
+      "{if (s@out_pad > 0L) .glue(' pad={s@out_pad}') else ''}",
+      " chunks={s@chunks@chunk_dim[1L]}x{s@chunks@chunk_dim[2L]}",
+      " inputs=({paste(s@inputs, collapse = ',')})"), "\n", sep = "")
   }
   invisible(x)
 }

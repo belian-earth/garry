@@ -24,7 +24,7 @@
       return("must be a single finite number")
     if (int && v != as.integer(v)) return("must be a whole number")
     if (v < min || v > max)
-      return(sprintf("must be in [%s, %s]", format(min), format(max)))
+      return(.glue("must be in [{format(min)}, {format(max)}]"))
     TRUE
   }
 }
@@ -34,7 +34,7 @@
   choices <- c(...)
   function(v) {
     if (is.character(v) && length(v) == 1L && v %in% choices) TRUE
-    else sprintf("must be one of %s", paste0('"', choices, '"', collapse = ", "))
+    else .glue("must be one of {paste0('\"', choices, '\"', collapse = ', ')}")
   }
 }
 .opt_path <- function() function(v) {
@@ -447,10 +447,22 @@ garry_options <- function() {
     if (is.null(info)) next
     ok <- info$check(garry_opt(n))
     if (!isTRUE(ok))
-      .garry_error(sprintf(
-        "invalid value for option garry.%s (%s): it %s",
-        n, paste(deparse(garry_opt(n)), collapse = ""), ok),
+      .garry_error(.glue(
+        "invalid value for option garry.{n} ",
+        "({paste(deparse(garry_opt(n)), collapse = '')}): it {ok}"),
         "garry_option_error")
   }
   invisible(NULL)
 }
+
+# glue to PLAIN character, evaluated in the caller. The house pattern for
+# VALUE strings (task keys, registry names, file names, GDAL args): glue's
+# classed return breaks identical() against stored plain strings and rides
+# its attributes into cross-process task payloads. Prose (messages, print
+# cards) uses glue::glue directly.
+.glue <- function(...) {
+  as.character(glue::glue(..., .envir = parent.frame(), .trim = FALSE))
+}
+
+# %.10g-equivalent numeric formatting (proj-string coordinates).
+.g10 <- function(v) formatC(v, format = "g", digits = 10, width = 1)

@@ -19,6 +19,7 @@ Imports:
     cli,
     codetools,
     gdalraster (>= 2.6.1.9001),
+    glue,
     memuse,
     methods,
     mirai,

@@ -16,16 +16,16 @@ plan_dot <- function(plan) {
              warp = "parallelogram")
   lines <- c("digraph plan {", "  rankdir=LR;")
   for (s in plan@stages) {
-    label <- sprintf("[%d] %s\\nnodes: %s\\nhalo: %d", s@id, s@kind,
-                     paste(s@members, collapse = ","), s@halo)
-    lines <- c(lines, sprintf("  s%d [shape=%s, label=\"%s\"];",
-                              s@id, shape[[s@kind]], label))
+    label <- .glue("[{s@id}] {s@kind}\\nnodes: ",
+                   "{paste(s@members, collapse = ',')}\\nhalo: {s@halo}")
+    lines <- c(lines,
+               .glue("  s{s@id} [shape={shape[[s@kind]]}, label=\"{label}\"];"))
   }
   for (s in plan@stages) {
     for (i in s@inputs) {
-      lines <- c(lines, sprintf("  s%d -> s%d;", i, s@id))
+      lines <- c(lines, .glue("  s{i} -> s{s@id};"))
     }
   }
-  lines <- c(lines, sprintf("  s%d [penwidth=2];", plan@sink), "}")
+  lines <- c(lines, .glue("  s{plan@sink} [penwidth=2];"), "}")
   paste(lines, collapse = "\n")
 }

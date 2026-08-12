@@ -160,7 +160,7 @@ ocm_mask <- function(x, red, green, nir, model = ocm_model(),
 
 #' @export
 print.garry_ocm_model <- function(x, ...) {
-  cat(sprintf("<ocm_model> %s  halo=%d  kernel=%s\n",
-              paste(x$models, collapse = "+"), x$halo, x$kernel_id))
+  cat(.glue("<ocm_model> {paste(x$models, collapse = '+')}  ",
+            "halo={x$halo}  kernel={x$kernel_id}"), "\n", sep = "")
   invisible(x)
 }

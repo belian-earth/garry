@@ -214,7 +214,7 @@ garry_last_route <- function() .garry_state$route
                   character(1), USE.NAMES = FALSE))
   ext <- tools::file_ext(path); stem <- tools::file_path_sans_ext(path)
   vapply(safe, function(s)
-    if (nzchar(ext)) sprintf("%s_%s.%s", stem, s, ext) else sprintf("%s_%s", stem, s),
+    if (nzchar(ext)) .glue("{stem}_{s}.{ext}") else .glue("{stem}_{s}"),
     character(1), USE.NAMES = FALSE)
 }
 

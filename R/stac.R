@@ -610,7 +610,7 @@ lazy_stac_stack <- function(sources, grid, asset,
       nodata = nodata,
       open_options = gti_open_options(
         grid,
-        filter = sprintf("slice = '%s'", sl),
+        filter = .glue("slice = '{sl}'"),
         sort_field = sort_field),
       grid = meta$grid,
       block_dim = meta$block_dim,

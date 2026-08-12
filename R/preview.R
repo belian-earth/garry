@@ -245,7 +245,7 @@ NULL
 
 .coarsen_open_options <- function(oo, cg) {
   if (!length(oo)) return(oo)
-  num <- function(v) sprintf("%.17g", v)
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
   keep <- oo[!grepl("^RES[XY]=", oo)]
   c(keep, paste0("RESX=", num(cg@transform[[2L]])),
     paste0("RESY=", num(-cg@transform[[6L]])))

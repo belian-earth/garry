@@ -212,7 +212,8 @@ graph_import <- function(dst, src, root_id) {
 # (e.g. deserialized ones).
 
 .source_key <- function(node) {
-  paste(c(node@path, node@band, sprintf("%.17g", node@nodata),
+  paste(c(node@path, node@band,
+          formatC(node@nodata, format = "g", digits = 17, width = 1),
           node@open_options),
         collapse = "\x1f")
 }

@@ -252,7 +252,7 @@ lazy_dataset <- function(sources, grid = NULL, assets = NULL,
       lazy_source(
         paste0("GTI:", idx), graph = graph, nodata = nd,
         open_options = gti_open_options(
-          grid, filter = sprintf("slice = '%s'", sl), sort_field = sort_field),
+          grid, filter = .glue("slice = '{sl}'"), sort_field = sort_field),
         grid = meta$grid, block_dim = meta$block_dim, resampling = rs,
         scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
         offset = if (length(aff$offset) == 1L) aff$offset else NULL)
@@ -450,9 +450,9 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
                                                boundary = boundary))
   LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset,
               steps = c(x@steps, list(.step("focal", "focal",
-                        detail = sprintf("r=%d %s %s", radius,
-                                         cli::symbol$bullet %||% "-",
-                                         paste(sel, collapse = " "))))))
+                        detail = .glue(
+                          "r={radius} {cli::symbol$bullet %||% '-'} ",
+                          "{paste(sel, collapse = ' ')}")))))
 }
 
 .ds_reduce <- function(x, op, over, nan_rm, bands) {
@@ -470,9 +470,9 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   LazyDataset(graph = x@graph, bands = newbands,
               mask_asset = intersect(x@mask_asset, names(newbands)),
               steps = c(x@steps, list(.step("reduce", "reduce",
-                        detail = sprintf("%s over %s",
-                                 if (is.function(op)) "custom" else op,
-                                 paste(over, collapse = ","))))))
+                        detail = .glue(
+                          "{if (is.function(op)) 'custom' else op}",
+                          " over {paste(over, collapse = ',')}")))))
 }
 
 .ds_scan <- function(x, fn, over, direction, dtype, bands) {
@@ -490,7 +490,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   LazyDataset(graph = x@graph, bands = newbands,
               mask_asset = intersect(x@mask_asset, names(newbands)),
               steps = c(x@steps, list(.step("scan", "scan",
-                        detail = sprintf("%s over %s", direction, over)))))
+                        detail = .glue("{direction} over {over}")))))
 }
 
 # ---------------------------------------------------------------------------
@@ -545,8 +545,7 @@ LazyDatasetGroups <- S7::new_class(
     day     = substr(slices, 1L, 10L),
     quarter = {
       d <- .slice_dates(slices)
-      sprintf("%s-Q%d", format(d, "%Y"),
-              (as.integer(format(d, "%m")) - 1L) %/% 3L + 1L)
+      .glue("{format(d, '%Y')}-Q{(as.integer(format(d, '%m')) - 1L) %/% 3L + 1L}")
     },
     week    = format(.slice_dates(slices), "%G-W%V"),
     cli::cli_abort("unknown {.arg by} {.val {by}}: use year/quarter/month/week/day or a function."))
@@ -597,7 +596,7 @@ group_by_time <- function(x, by = "month") {
     LazyDataset(graph = x@graph, bands = nb,
                 mask_asset = intersect(x@mask_asset, names(nb)),
                 steps = c(x@steps, list(.step("group", "group",
-                          detail = sprintf("%s = %s", lab, g)))))
+                          detail = .glue("{lab} = {g}")))))
   })
   names(groups) <- labels
   LazyDatasetGroups(groups = groups, by = lab)
@@ -790,10 +789,10 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE,
 
   where_desc <- attr(where, "garry_desc") %||%
     if (is.numeric(where)) paste0("values ", .rng(where)) else "predicate"
-  morph <- c(if (open   > 0L) sprintf("open %d", open),
-             if (dilate > 0L) sprintf("dilate %d", dilate))
-  detail <- paste(c(sprintf("from %s", from), where_desc, morph),
-                  collapse = sprintf(" %s ", cli::symbol$bullet %||% "-"))
+  morph <- c(if (open   > 0L) .glue("open {open}"),
+             if (dilate > 0L) .glue("dilate {dilate}"))
+  detail <- paste(c(.glue("from {from}"), where_desc, morph),
+                  collapse = .glue(" {cli::symbol$bullet %||% '-'} "))
   LazyDataset(graph = x@graph, bands = newbands,
               mask_asset = if (drop) character(0) else x@mask_asset,
               steps = c(x@steps, list(.step("mask", "mask", detail = detail))))
@@ -908,8 +907,8 @@ qa_bits <- function(bits) {
   for (a in .ds_value_bands(ds))
     newbands[[a]] <- lapply(ds@bands[[a]], function(lr)
       if (scalar_first) op(s, lr) else op(lr, s))
-  detail <- if (scalar_first) sprintf("%s %s bands", s, sym)
-            else sprintf("bands %s %s", sym, s)
+  detail <- if (scalar_first) .glue("{s} {sym} bands")
+            else .glue("bands {sym} {s}")
   LazyDataset(graph = ds@graph, bands = newbands, mask_asset = ds@mask_asset,
               steps = c(ds@steps, list(.step("math", "math", detail = detail))))
 }
@@ -928,7 +927,7 @@ qa_bits <- function(bits) {
   }
   LazyDataset(graph = a@graph, bands = newbands, mask_asset = character(0),
               steps = c(a@steps, list(.step("math", "math",
-                        detail = sprintf("bands %s dataset", sym)))))
+                        detail = .glue("bands {sym} dataset")))))
 }
 
 # Comparisons, ^ and %% ride the same per-slice machinery: `f` here is

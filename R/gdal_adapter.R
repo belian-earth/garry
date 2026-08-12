@@ -311,7 +311,8 @@ gdal_open_update <- function(path) {
   seek(con, total - 1)                 # sparse allocation
   writeBin(raw(1L), con)
   close(con)
-  gt_csv <- paste(sprintf("%.17g", grid@transform), collapse = ", ")
+  gt_csv <- paste(formatC(grid@transform, format = "g", digits = 17, width = 1),
+                  collapse = ", ")
   xml <- .raw_bsq_vrt_xml(
     basename(bin), nx, ny, gt_csv, grid@crs,
     if (bytes == 4L) "Float32" else "Float64", n_bands,
@@ -365,7 +366,8 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
     }
   }
   close(con)
-  gt_csv <- paste(sprintf("%.17g", grid@transform), collapse = ", ")
+  gt_csv <- paste(formatC(grid@transform, format = "g", digits = 17, width = 1),
+                  collapse = ", ")
   xml <- .raw_bsq_vrt_xml(
     basename(bin), nx, ny, gt_csv, grid@crs,
     if (bytes == 4L) "Float32" else "Float64", nb,
@@ -418,26 +420,26 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   bytes <- .gdal_dtype_bytes(dtype)
   plane <- as.numeric(nx) * as.numeric(ny) * bytes
   ndxml <- if (!is.null(nodata))
-    sprintf("\n    <NoDataValue>%s</NoDataValue>",
-            format(nodata, scientific = FALSE)) else ""
-  bands_xml <- vapply(seq_len(nbands), function(b) sprintf(paste0(
-    '  <VRTRasterBand dataType="%s" band="%d" subClass="VRTRawRasterBand">',
-    '%s',
-    '\n    <SourceFilename relativeToVRT="1">%s</SourceFilename>',
-    '\n    <ImageOffset>%.0f</ImageOffset>',
-    '\n    <PixelOffset>%d</PixelOffset>',
-    '\n    <LineOffset>%d</LineOffset>%s',
-    '\n  </VRTRasterBand>'),
-    dtype, b,
-    if (!is.null(descriptions) && b <= length(descriptions) &&
-        nzchar(descriptions[[b]]))
-      sprintf("\n    <Description>%s</Description>", descriptions[[b]])
-    else "",
-    src, (b - 1) * plane, bytes, as.integer(nx * bytes), ndxml), "")
-  sprintf(paste0(
-    '<VRTDataset rasterXSize="%d" rasterYSize="%d">',
-    '\n  <SRS>%s</SRS>\n  <GeoTransform>%s</GeoTransform>\n%s\n</VRTDataset>'),
-    nx, ny, wkt, gt_csv, paste(bands_xml, collapse = "\n"))
+    .glue("\n    <NoDataValue>{format(nodata, scientific = FALSE)}",
+          "</NoDataValue>") else ""
+  bands_xml <- vapply(seq_len(nbands), function(b) {
+    desc <- if (!is.null(descriptions) && b <= length(descriptions) &&
+                nzchar(descriptions[[b]]))
+      .glue("\n    <Description>{descriptions[[b]]}</Description>")
+    else ""
+    .glue(
+      '  <VRTRasterBand dataType="{dtype}" band="{b}" ',
+      'subClass="VRTRawRasterBand">{desc}',
+      '\n    <SourceFilename relativeToVRT="1">{src}</SourceFilename>',
+      "\n    <ImageOffset>",
+      "{formatC((b - 1) * plane, format = 'f', digits = 0)}</ImageOffset>",
+      "\n    <PixelOffset>{bytes}</PixelOffset>",
+      "\n    <LineOffset>{as.integer(nx * bytes)}</LineOffset>{ndxml}",
+      "\n  </VRTRasterBand>")
+  }, "")
+  .glue('<VRTDataset rasterXSize="{nx}" rasterYSize="{ny}">',
+        "\n  <SRS>{wkt}</SRS>\n  <GeoTransform>{gt_csv}</GeoTransform>",
+        "\n{paste(bands_xml, collapse = '\n')}\n</VRTDataset>")
 }
 
 # Strict recognition of the .raw_bsq_vrt_xml shape: every band a
@@ -595,7 +597,7 @@ gdal_warp_vrt <- function(src_path, band, target_grid, resampling,
                           src_nodata = numeric(0)) {
   src_path <- .gdal_href(src_path)   # bare https would pull the whole file
   vrt <- tempfile(fileext = ".vrt")
-  num <- function(v) sprintf("%.17g", v)
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
   args <- c("-of", "VRT",
             "-te", num(target_grid@extent[1L]), num(target_grid@extent[2L]),
                    num(target_grid@extent[3L]), num(target_grid@extent[4L]),
@@ -658,10 +660,12 @@ gdal_mosaic_vrt <- function(dst, files, te = NULL, ts = NULL,
     ts <- as.numeric(ts)
     tr <- c((te[[3L]] - te[[1L]]) / ts[[1L]],
             (te[[4L]] - te[[2L]]) / ts[[2L]])
-    args <- c("-te", sprintf("%.16g", te), "-tr", sprintf("%.16g", tr))
+    args <- c("-te", formatC(te, format = "g", digits = 16, width = 1),
+              "-tr", formatC(tr, format = "g", digits = 16, width = 1))
   }
   if (length(vrtnodata))
-    args <- c(args, "-vrtnodata", sprintf("%.16g", vrtnodata[[1L]]))
+    args <- c(args, "-vrtnodata",
+              formatC(vrtnodata[[1L]], format = "g", digits = 16, width = 1))
   do_build <- function() gdalraster::buildVRT(
     dst, files, cl_arg = if (length(args)) args else NULL, quiet = TRUE)
   if (any(.gdal_is_remote(files))) .gdal_quiet_remote(do_build())
@@ -806,9 +810,9 @@ gdal_warp_to_buffer <- function(buf, nx, ny, gtstr, wkt, srcs, srcnodata = NULL,
   # gdalraster 2.6.1.9001 (previously an internal resolved at runtime), hence
   # the Remotes pin on the dev version.
   ptr <- gdalraster::get_data_ptr(buf)
-  dsn <- sprintf(
-    "MEM:::DATAPOINTER=%s,PIXELS=%d,LINES=%d,BANDS=1,DATATYPE=Float32,GEOTRANSFORM=%s",
-    ptr, nx, ny, gtstr)
+  dsn <- .glue(
+    "MEM:::DATAPOINTER={ptr},PIXELS={nx},LINES={ny},BANDS=1,",
+    "DATATYPE=Float32,GEOTRANSFORM={gtstr}")
   o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
   o$setProjection(wkt)
   cl <- c("-r", resampling, "-q", "-dstnodata", "nan")
@@ -1035,7 +1039,7 @@ gdal_nodata_window <- function(out_file, ext, crs,
 #' @export
 gti_open_options <- function(grid = NULL, filter = NULL,
                              sort_field = NULL, sort_asc = TRUE) {
-  num <- function(v) sprintf("%.17g", v)
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
   oo <- character(0)
   if (!is.null(grid)) {
     oo <- c(oo,
@@ -1065,10 +1069,10 @@ gti_open_options <- function(grid = NULL, filter = NULL,
       !startsWith(path, "GTI:")) return(path)
   idx  <- sub("^GTI:", "", path)
   wrap <- paste0(idx, ".gti")
-  writeLines(sprintf(paste0(
-    "<GDALTileIndexDataset><IndexDataset>%s</IndexDataset>",
-    "<IndexLayer>index</IndexLayer><Resampling>%s</Resampling>",
-    "</GDALTileIndexDataset>"), idx, resampling), wrap)
+  writeLines(.glue(
+    "<GDALTileIndexDataset><IndexDataset>{idx}</IndexDataset>",
+    "<IndexLayer>index</IndexLayer><Resampling>{resampling}</Resampling>",
+    "</GDALTileIndexDataset>"), wrap)
   wrap
 }
 

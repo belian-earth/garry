@@ -289,13 +289,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       if (!any(do_fetch)) return(NULL)
       if (is.null(fetch_root)) {
         base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
-        fetch_root <<- file.path(base, sprintf("garry-fetch-%d", run_id))
+        fetch_root <<- file.path(base, .glue("garry-fetch-{run_id}"))
         dir.create(fetch_root)
       }
       fetch_n_idx <<- fetch_n_idx + 1L
-      sub <- file.path(fetch_root, sprintf("i%d", fetch_n_idx))
+      sub <- file.path(fetch_root, .glue("i{fetch_n_idx}"))
       dir.create(sub)
-      dst <- file.path(sub, sprintf("r%04d.tif", seq_len(nrow(ent))))
+      dst <- file.path(sub, .glue(
+        "r{formatC(seq_len(nrow(ent)), width = 4, flag = '0')}.tif"))
       lent <- ent
       lent$location <- ifelse(do_fetch, dst, ent$location)
       lpath <- file.path(sub, basename(ipath))
@@ -311,7 +312,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     slval <- regmatches(fl, regexec("^FILTER=slice = '(.*)'$", fl))[[1]][[2]]
     if (is.na(slval)) return(NULL)
     rows <- which(st$slice == slval & st$do)
-    keys <- sprintf("f%d_%d", st$id, rows)
+    keys <- .glue("f{st$id}_{rows}")
     for (k in seq_along(rows)) {
       key <- keys[[k]]
       if (!is.null(fetch_made[[key]])) next
@@ -529,14 +530,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           fetch_reads_left[[.key(s@id)]] <- nrow(it)
         if (!is.null(fspec))
           source_deps[[.key(oid)]] <-
-            sprintf("s%d_c%d", s@id, seq_len(nrow(it)))
+            .glue("s{s@id}_c{seq_len(nrow(it))}")
         for (j in seq_len(nrow(it))) {
           local({
             sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
             sc <- rsc; of <- rof
-            key <- sprintf("s%d_c%d", sid, jj)
+            key <- .glue("s{sid}_c{jj}")
             add_task(key, fetch_deps, read_pool, mb = task_mb_read,
                      store_mb = store_mb_read,
                      launch = function(prof) {
@@ -547,7 +548,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                                               store_raw = sr,
                                               scale = sc, offset = of),
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, reg = sprintf("r%d_%s", run_id, key), fs = fs,
+                oo = oo, reg = .glue("r{run_id}_{key}"), fs = fs,
                 rr = rr, sr = sr, sc = sc, of = of,
                 .compute = prof)
             })
@@ -565,18 +566,18 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         H2 <- if (is.null(fspec)) 2L * split_cg@halo
               else 2L * (fspec$out_pad %||% 0L)
         dep_of <- character(nrow(its))
-        elt_of <- sprintf("%s\x1f%d", skey, seq_len(nrow(its)))
+        elt_of <- .glue("{skey}\x1f{seq_len(nrow(its))}")
         if (length(fetch_deps))
           fetch_reads_left[[.key(s@id)]] <- nrow(it)
         for (r in seq_len(nrow(it))) {
           members <- .exec_split_members(its, it[r, ])
-          dep_of[members] <- sprintf("s%d_r%d", s@id, r)
+          dep_of[members] <- .glue("s{s@id}_r{r}")
           local({
             sid <- s@id; rr2 <- r; cg <- s@chunks; core <- it[rr2, ]
             p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
             fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
             sc <- rsc; of <- rof
-            key <- sprintf("s%d_r%d", sid, rr2)
+            key <- .glue("s{sid}_r{rr2}")
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
             parts <- lapply(members, function(j) {
@@ -598,7 +599,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                 p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
                 k2 = k2, oo = oo, parts = parts, fs = fs,
                 rr = rr, sr = sr, sc = sc, of = of,
-                reg = sprintf("r%d_%s", run_id, key),
+                reg = .glue("r{run_id}_{key}"),
                 .compute = prof)
             })
             task_stage_of[[key]] <- oid2
@@ -677,7 +678,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           sdev <- s@device
           in_deps <- vapply(meta, function(m) {
             dep <- source_deps[[.key(m$id)]]
-            if (is.null(dep)) sprintf("s%d_c%d", m$id, jj) else dep[[jj]]
+            if (is.null(dep)) .glue("s{m$id}_c{jj}") else dep[[jj]]
           }, character(1))
           in_keys <- vapply(s@input_nodes, .key, character(1))
           # Mori store: coarse-read inputs address their part element.
@@ -688,7 +689,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           trims <- vapply(meta, function(m)
             as.integer(m$pad - need), integer(1))
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
-          key <- sprintf("s%d_c%d", sid, jj)
+          key <- .glue("s{sid}_c{jj}")
           sr <- use_raw
           add_task(key, unique(in_deps), "comp", mb = task_mb,
                    store_mb = store_mb_comp,
@@ -713,7 +714,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
               in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
               in_keys = shm_keys,
               trims = trims, dtypes = dtypes,
-              reg = sprintf("r%d_%s", run_id, key),
+              reg = .glue("r{run_id}_{key}"),
               ok = out_keys, dv = sdev, sr = sr, eg = edge,
               .compute = prof)
           })
@@ -775,7 +776,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       return(invisible(NULL))
     for (p in profiles)
       try(mirai::everywhere(garry::.daemon_shm_drop(regs),
-                            regs = sprintf("r%d_%s", run_id, pending_drop),
+                            regs = .glue("r{run_id}_{pending_drop}"),
                             .compute = p),
           silent = TRUE)
     # Per-key exists() filter: ls() on the store env sorts every key
@@ -843,7 +844,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # defect hunt H1, 2026-07-30.)
   chunk_of <- function(sid, j) {
     deps <- source_deps[[.key(sid)]]
-    if (is.null(deps)) return(chunk_vals[[sprintf("s%d_c%d", sid, j)]])
+    if (is.null(deps)) return(chunk_vals[[.glue("s{sid}_c{j}")]])
     v <- chunk_vals[[deps[[j]]]]
     el <- source_elts[[.key(sid)]]
     if (is.null(el)) v
@@ -855,7 +856,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   chunk_ref <- function(sid, j) {
     deps <- source_deps[[.key(sid)]]
     if (is.null(deps)) {
-      rk <- sprintf("s%d_c%d", sid, j)
+      rk <- .glue("s{sid}_c{j}")
       return(list(v = chunk_vals[[rk]], el = NULL, rk = rk))
     }
     el <- source_elts[[.key(sid)]]
@@ -869,7 +870,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   sink_task_map <- function(st_id, n_chunks) {
     deps <- source_deps[[.key(st_id)]]
     keys <- if (is.null(deps))
-      sprintf("s%d_c%d", st_id, seq_len(n_chunks)) else deps
+      .glue("s{st_id}_c{seq_len(n_chunks)}") else deps
     split(seq_len(n_chunks), keys)
   }
 
@@ -1282,9 +1283,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           file = task_log, append = TRUE)
     function(event, key, pool = "", slot = "", mb = "", store_mb = "",
              ready = "")
-      cat(sprintf("%.3f,%s,%s,%s,%s,%s,%s,%s\n", unclass(Sys.time()),
-                  event, key, pool, slot, mb, store_mb, ready),
-          file = task_log, append = TRUE)
+      cat(.glue("{formatC(unclass(Sys.time()), format = 'f', digits = 3)},",
+                "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"),
+          "\n", sep = "", file = task_log, append = TRUE)
   }
   t_drain0 <- unclass(Sys.time())   # zero-dep tasks are ready at drain start
   n_total <- length(tasks)
@@ -1365,7 +1366,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                slot = if (slot == "comp") prof else slot,
                mb = round(tasks[[k]]$mb_live, 1),
                store_mb = round(t$store_mb %||% 0, 1),
-               ready = sprintf("%.3f", tasks[[k]]$t_ready %||% t_drain0))
+               ready = formatC(tasks[[k]]$t_ready %||% t_drain0, format = "f", digits = 3))
     }
     }
     if (length(inflight) == 0L)
