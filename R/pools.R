@@ -399,6 +399,18 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # world files) for the caller's own reads. Call garry_gdal_config() yourself
   # to tune host-side discovery.
   if (isTRUE(gdal_config)) .garry_env_defaults()
+  # Under covr, daemons must not load the INSTRUMENTED garry: covr
+  # bakes a trace-file finalizer into the instrumented package, and a
+  # daemon hitting the (benign) XLA teardown segfault leaves a
+  # truncated trace that aborts covr's merge ("error reading from
+  # connection", diagnosed 2026-08-12). Dropping covr's temp library
+  # from R_LIBS for the spawn makes daemons run the normally installed
+  # garry: identical formals (the ABI token passes), no trace files.
+  # Daemon-process execution is therefore uncounted in coverage; the
+  # single-process equivalence tests exercise the same logic on the
+  # host, where it IS counted.
+  restore_libs <- .covr_daemon_libs()
+  if (!is.null(restore_libs)) on.exit(restore_libs(), add = TRUE)
   mirai::daemons(read, .compute = "garry_read", ...)
   # Compute pool: N width-1 direct-connection profiles (no dispatcher
   # processes — probed 2026-08-02: everywhere() state persists,
@@ -495,4 +507,42 @@ garry_pool_hygiene <- function(deep = FALSE) {
 #' @export
 garry_daemons_set <- function() {
   .gd_n_compute("garry_read") > 0L && .comp_n() > 0L
+}
+
+# Coverage-safe daemon library path: when covr is active, scope R_LIBS
+# (for the daemon spawn only) to exclude covr's temp install library,
+# provided the real garry exists elsewhere on the path. Returns a
+# restore closure, or NULL when nothing needs doing. See the call site
+# in garry_daemons() for the full rationale.
+.covr_daemon_libs <- function() {
+  if (!identical(Sys.getenv("R_COVR"), "true")) return(NULL)
+  # Identify covr's temp library by CONTENT, not via find.package():
+  # under testthat::test_local() the host garry is pkgload-loaded from
+  # the SOURCE TREE, so find.package() points there while covr's
+  # instrumented install still sits first on the lib path (diagnosed
+  # 2026-08-12: daemons resolved the instrumented copy and wrote the
+  # corrupt traces). An instrumented install is recognisable by the
+  # covr save-hook covr:::add_hooks() writes into the package load
+  # script.
+  instrumented <- function(lib) {
+    ls_ <- file.path(lib, "garry", "R", "garry")
+    file.exists(ls_) &&
+      any(grepl("covr:::save_trace",
+                tryCatch(readLines(ls_, warn = FALSE),
+                         error = function(e) character(0)),
+                fixed = TRUE))
+  }
+  libs <- .libPaths()
+  bad <- vapply(libs, instrumented, logical(1))
+  clean <- libs[!bad]
+  has_garry <- vapply(clean, function(l) {
+    file.exists(file.path(l, "garry", "R", "garry"))
+  }, logical(1))
+  if (!any(bad) || !any(has_garry))
+    return(NULL)          # nothing to strip, or no clean garry to fall back to
+  old <- Sys.getenv("R_LIBS", unset = NA)
+  Sys.setenv(R_LIBS = paste(clean, collapse = .Platform$path.sep))
+  function() {
+    if (is.na(old)) Sys.unsetenv("R_LIBS") else Sys.setenv(R_LIBS = old)
+  }
 }
