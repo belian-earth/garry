@@ -1,6 +1,13 @@
 # Fast multi-band COG reads for geo-embeddings (AEF) — investigation + plan
 
-Status: **first slice BUILT (`read_cog`), benchmark + optimisation pending.**
+Status: **SUPERSEDED 2026-08-12 by design/gdal-multiband-fanout.md.**
+The open benchmark question is answered: a mirai fan-out of
+band-partitioned GDAL reads matched or beat cptkirk in every regime
+(single file, multi-file junction, slow/fast link, local), so cptkirk
+and lazy_cog are slated for removal; lazy_dataset/lazy_source become
+the single entry for any source. Kept for the investigation record.
+
+Original status: **first slice BUILT (`read_cog`), benchmark + optimisation pending.**
 Paused 2026-07-15. This note is self-contained to resume from.
 
 **Built (R/read_cog.R, tests/testthat/test-read-cog.R, suite green):**
