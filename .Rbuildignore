@@ -14,3 +14,4 @@
 \.tif$
 ^Rplots\.pdf$
 ^\.Rprofile$
+^codecov\.yml$

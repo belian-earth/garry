@@ -12,3 +12,12 @@ docs
 *.aux.xml
 tests/testthat/_problems/
 .Rprofile
+
+# compiled-code build + coverage artifacts (R CMD INSTALL builds in
+# src/; covr's gcov instrumentation drops counters there and a covr/
+# working dir in-tree)
+src/*.o
+src/*.so
+src/*.gcda
+src/*.gcno
+covr/

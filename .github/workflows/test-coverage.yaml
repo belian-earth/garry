@@ -1,0 +1,99 @@
+# Workflow derived from https://github.com/r-lib/actions/tree/v2/examples,
+# adapted for garry's stack (system GDAL >= 3.9, r-xla r-universe, PJRT
+# plugin) and for covr's process model (see .covr_daemon_libs in R/pools.R):
+# every subprocess holding a live XLA client dies uncleanly at exit and
+# truncates its covr trace file, so coverage must run testthat SEQUENTIALLY
+# (parallel workers are testthat's processes) and a CLEAN garry must be
+# installed in the normal library so daemons have an uninstrumented copy to
+# load (garry strips covr's instrumented library from their R_LIBS at spawn).
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+name: test-coverage.yaml
+
+permissions: read-all
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+    # Sequential + instrumented is slow (the parallel uninstrumented suite
+    # runs ~30 min on this runner); this only fires on a genuine wedge.
+    timeout-minutes: 300
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      PJRT_INSTALL: "1"          # let pjrt fetch the CPU plugin non-interactively
+      # Parallel testthat workers hold live XLA and corrupt their covr
+      # trace files at exit ("error reading from connection" in the merge).
+      TESTTHAT_PARALLEL: "false"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # garry's mosaic layer uses GDAL's GTI driver (>= 3.9); the distro
+      # default is older. Mirrors R-CMD-check.yaml.
+      - name: Recent GDAL (ubuntugis-unstable PPA)
+        run: |
+          sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
+          sudo apt-get update
+          sudo apt-get install -y gdal-bin libgdal-dev libproj-dev libgeos-dev
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          extra-repositories: https://r-xla.r-universe.dev
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: any::covr, any::xml2, rustyfilters=?ignore
+          needs: coverage
+
+      # Force a source rebuild of DEV gdalraster against the recent system
+      # GDAL above (mirrors R-CMD-check.yaml; pak's cache can serve a build
+      # linked against a since-upgraded GDAL).
+      - name: Rebuild dev gdalraster from source
+        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster', force = TRUE)"
+
+      - name: Print GDAL version
+        run: Rscript -e "cat('GDAL:', gdalraster::gdal_version()[[1]], '\n')"
+
+      # A CLEAN (uninstrumented) garry in the normal library: garry's daemon
+      # spawn strips covr's instrumented library from R_LIBS and falls back
+      # to this copy, so daemons never write (and never corrupt) trace files.
+      # Without it the fallback does not exist and the merge fails.
+      - name: Install clean garry for daemon processes
+        run: R CMD INSTALL --no-multiarch .
+
+      - name: Test coverage
+        run: |
+          cov <- covr::package_coverage(
+            quiet = FALSE,
+            clean = FALSE,
+            install_path = file.path(normalizePath(Sys.getenv("RUNNER_TEMP"), winslash = "/"), "package")
+          )
+          print(cov)
+          covr::to_cobertura(cov)
+        shell: Rscript {0}
+
+      - uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
+        with:
+          # Fail if error if not on PR, or if on PR and token is given
+          fail_ci_if_error: ${{ github.event_name != 'pull_request' || secrets.CODECOV_TOKEN }}
+          files: ./cobertura.xml
+          plugins: noop
+          disable_search: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Show testthat output
+        if: always()
+        run: |
+          ## --------------------------------------------------------------------
+          find '${{ runner.temp }}/package' -name 'testthat.Rout*' -exec cat '{}' \; || true
+        shell: bash
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-test-failures
+          path: ${{ runner.temp }}/package
