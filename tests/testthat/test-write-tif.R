@@ -83,6 +83,29 @@ test_that("cog = TRUE under pools writes the same values as a plain write", {
   unlink(c(pp, pc))
 })
 
+test_that("relative and dot-prefixed paths stream-write correctly under pools", {
+  # Regression: the writer daemon caches open datasets keyed by PATH,
+  # and ls() hides dot-prefixed names by default, so a "./out.tif" key
+  # (which cog = TRUE manufactured for every relative target) escaped
+  # .daemon_write_close: the file was returned as an unflushed
+  # zero-filled shell while the data sat in the writer's block cache.
+  s <- .wt_src()
+  x <- lazy_source(s$f) + 0
+  wd <- withr::local_tempdir()
+  withr::local_dir(wd)
+  local_pools(2, 1)     # spawn AFTER the cwd change: daemons resolve
+                        # relative paths in their spawn-time cwd
+  write_tif(x, "./rel-dot.tif", dtype = "i16", nodata = -32768,
+            distributed = TRUE)
+  write_tif(x, "rel-cog.tif", dtype = "i16", nodata = -32768, cog = TRUE,
+            distributed = TRUE)
+  a <- matrix(collect(lazy_source("./rel-dot.tif")), 20)
+  b <- matrix(collect(lazy_source("rel-cog.tif")), 20)
+  ref <- round(s$m); ref[is.nan(s$m)] <- NA
+  expect_equal(a[!is.na(ref)], ref[!is.na(ref)])
+  expect_equal(b[!is.na(ref)], ref[!is.na(ref)])
+})
+
 test_that("multi-export list form writes one file per sink (dir and cog)", {
   s <- .wt_src()
   x <- lazy_source(s$f) + 0

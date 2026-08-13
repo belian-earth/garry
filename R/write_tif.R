@@ -117,7 +117,11 @@ write_tif <- function(x, path, dtype = NULL, scale = NULL, offset = NULL,
       tmp_dirs <- td
       work <- if (dir.exists(path)) td else file.path(td, basename(path))
     } else {
-      work <- tempfile("garry-cog-", tmpdir = dirname(path),
+      # normalizePath: a relative target makes dirname(path) ".", and a
+      # "./"-prefixed temp key would be invisible to any default ls()
+      # over a path-keyed cache (the writer-close bug, 2026-08-13);
+      # absolute temps are unambiguous everywhere.
+      work <- tempfile("garry-cog-", tmpdir = normalizePath(dirname(path)),
                        fileext = ".tif")
     }
     on.exit(unlink(c(unname(unlist(work)), tmp_dirs), recursive = TRUE),

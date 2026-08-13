@@ -42,7 +42,7 @@ NULL
 .daemon_hygiene <- function(deep = FALSE) {
   if (isTRUE(deep)) {
     e <- .daemon_cache
-    rm(list = ls(e), envir = e)
+    rm(list = ls(e, all.names = TRUE), envir = e)
   }
   gc(FALSE)
   invisible(.garry_malloc_trim())
@@ -122,7 +122,7 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_shm_clear <- function() {
-  rm(list = ls(.daemon_shm), envir = .daemon_shm)
+  rm(list = ls(.daemon_shm, all.names = TRUE), envir = .daemon_shm)
   gc(FALSE)
   invisible(NULL)
 }
@@ -136,7 +136,7 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_shm_drop <- function(keys) {
-  keys <- intersect(keys, ls(.daemon_shm))
+  keys <- intersect(keys, ls(.daemon_shm, all.names = TRUE))
   if (length(keys) > 0L) {
     rm(list = keys, envir = .daemon_shm)
     gc(FALSE)
@@ -152,8 +152,8 @@ NULL
 # (content-addressed), stage closure, upload dtype, export node key.
 # Returns the kernel's single export (pad consumed: core-sized).
 .apply_fuse <- function(m, fuse, store_raw = FALSE) {
-  if (length(ls(.daemon_cache)) > 64L)
-    rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  if (length(ls(.daemon_cache, all.names = TRUE)) > 64L)
+    rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   jf <- .daemon_cache[[fuse$ck]]
   if (is.null(jf)) {
     jf <- g_jit(fuse$fn)
@@ -300,8 +300,15 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_write_close <- function() {
-  for (p in ls(.daemon_ds)) try(.daemon_ds[[p]]$close(), silent = TRUE)
-  rm(list = ls(.daemon_ds), envir = .daemon_ds)
+  # all.names: the cache is keyed by OUTPUT PATH, and ls() hides
+  # dot-prefixed names by default -- a "./out.tif" key (every cog=TRUE
+  # temp under a relative path) was invisible here, so its dataset was
+  # never closed and the file stayed an unflushed zero-filled shell
+  # (diagnosed 2026-08-13: pools + relative path + cog wrote "all
+  # zeros" while the data sat in the writer's block cache).
+  ks <- ls(.daemon_ds, all.names = TRUE)
+  for (p in ks) try(.daemon_ds[[p]]$close(), silent = TRUE)
+  rm(list = ks, envir = .daemon_ds)
   gc(FALSE)
   invisible(NULL)
 }
@@ -367,8 +374,8 @@ NULL
                                     out_keys = NULL, device = "cpu",
                                     store_raw = FALSE, edge = NULL,
                                     wq = NULL) {
-  if (length(ls(.daemon_cache)) > 64L)
-    rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  if (length(ls(.daemon_cache, all.names = TRUE)) > 64L)
+    rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   dev <- .exec_device(device)
   jf <- .daemon_cache[[cache_key]]
   if (is.null(jf)) {
@@ -506,8 +513,8 @@ NULL
 # the inline behaviour.
 .gd_cached_jit <- function(ck, fn, dev) {
   if (is.null(ck)) return(g_jit(fn, device = dev))
-  if (length(ls(.daemon_cache)) > 64L)
-    rm(list = ls(.daemon_cache), envir = .daemon_cache)
+  if (length(ls(.daemon_cache, all.names = TRUE)) > 64L)
+    rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   jf <- .daemon_cache[[ck]]
   if (is.null(jf)) {
     jf <- g_jit(fn, device = dev)
