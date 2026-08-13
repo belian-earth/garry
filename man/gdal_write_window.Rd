@@ -18,11 +18,6 @@ gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
 \item{nodata}{Optional sentinel for NaN demotion.}
 
 \item{band}{1-based destination band.}
-
-\item{scale, offset}{Optional quantization affine: values are stored as
-\code{round((v - offset) / scale)} (round-half-even) BEFORE NaN demotes to
-\code{nodata}, so the sentinel lives in stored units and must sit outside
-the quantized value range.}
 }
 \value{
 Invisibly, \code{NULL}.
