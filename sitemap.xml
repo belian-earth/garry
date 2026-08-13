@@ -74,6 +74,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/g-reductions.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_broadcast_arrays.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_cast.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/g_clamp.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_concat_t.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_conv2d.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_download.html</loc></url>
@@ -87,7 +88,9 @@
 <url><loc>https://belian-earth.github.io/garry/reference/g_jit.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_pad.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_pad_rb.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/g_quantize.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_rep_t.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/g_round.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_scan.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_shift_slice.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_slice_t.html</loc></url>

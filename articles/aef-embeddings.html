@@ -134,11 +134,101 @@ band-axis subset means only those three are ever read or computed.</p>
 </div>
 <p>Neighbouring pixels of similar land cover carry similar embeddings,
 so the false-colour image segments the landscape into coherent regions:
-the structure the embeddings encode. The same dequantised dataset feeds
-any downstream verb – a band-axis PCA
-(<code>reduce_over(over = "band")</code> with
-<code><a href="../reference/band_project.html">band_project()</a></code>), a similarity search, or a classifier fit
-on the collected array.</p>
+the structure the embeddings encode. But three bands show three of
+sixty-four dimensions. The clustering below uses all of them.</p>
+</div>
+<div class="section level2">
+<h2 id="cluster-the-full-embedding-space">Cluster the full embedding space<a class="anchor" aria-label="anchor" href="#cluster-the-full-embedding-space"></a>
+</h2>
+<p>An unsupervised k-means over the 64-dimensional embedding vectors
+segments the landscape without a single training label. The pattern is
+fit-small, predict-lazily:</p>
+<p><strong>Fit.</strong> k-means needs pixels in R, but not all 7.5
+million of them. AEF embeddings are built to average linearly (the read
+above already relies on that with <code>resampling = "average"</code>),
+so fit on a coarser 120 m read of the same tile: an overview-backed,
+light fetch of ~470k pixels.</p>
+<div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">emb120</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">tile</span>, <span class="fu"><a href="../reference/grid_from_src.html">grid_from_src</a></span><span class="op">(</span><span class="va">tile</span>, <span class="fl">120</span><span class="op">)</span>,</span>
+<span>                       resampling <span class="op">=</span> <span class="st">"average"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/lazy_map.html">lazy_map</a></span><span class="op">(</span>fn <span class="op">=</span> <span class="va">dequantize_aef</span>, dtype <span class="op">=</span> <span class="st">"f32"</span><span class="op">)</span></span>
+<span></span>
+<span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="op">)</span></span>
+<span><span class="va">arr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="va">emb120</span><span class="op">)</span><span class="op">)</span>          <span class="co"># (y, x, 64)</span></span>
+<span><span class="va">px</span>  <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="va">arr</span>, ncol <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">arr</span><span class="op">)</span><span class="op">[[</span><span class="fl">3</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">px</span>  <span class="op">&lt;-</span> <span class="va">px</span><span class="op">[</span><span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/complete.cases.html" class="external-link">complete.cases</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span>, <span class="op">]</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">42</span><span class="op">)</span></span>
+<span><span class="va">px</span>  <span class="op">&lt;-</span> <span class="va">px</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/sample.html" class="external-link">sample</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">nrow</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span>, <span class="fl">1e5</span><span class="op">)</span>, <span class="op">]</span>           <span class="co"># 100k px place 6 centroids fine</span></span>
+<span><span class="va">km</span>  <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/kmeans.html" class="external-link">kmeans</a></span><span class="op">(</span><span class="va">px</span>, centers <span class="op">=</span> <span class="fl">5</span><span class="op">)</span></span>
+<span><span class="va">km</span><span class="op">$</span><span class="va">size</span></span>
+<span><span class="co">#&gt; [1] 14675 10598 30765 21419 22543</span></span></code></pre></div>
+<p><strong>Assign.</strong> Every 30 m pixel goes to its nearest
+centroid: <code>argmax_k (x . c_k - |c_k|^2 / 2)</code>, and
+<code>x . c_k</code> is a linear combination of bands – the
+<code><a href="../reference/band_project.html">band_project()</a></code> reducer from the <a href="hls-harmonized-pca.html">PCA article</a>. The argmax is
+expressible in the same public vocabulary, so the WHOLE assignment runs
+inside the graph: a custom band reducer composes six projections with a
+comparison chain, and <code><a href="../reference/collect.html">collect()</a></code> returns the finished
+cluster map. This is ordinary user code – garry’s shipped verbs are
+built from exactly these pieces, with no privileged access to the
+engine.</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">nearest_center</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">centers</span><span class="op">)</span> <span class="op">{</span></span>
+<span>  <span class="va">ct</span>   <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/unname.html" class="external-link">unname</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">as.matrix</a></span><span class="op">(</span><span class="va">centers</span><span class="op">)</span><span class="op">)</span>            <span class="co"># k x band</span></span>
+<span>  <span class="va">half</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/colSums.html" class="external-link">rowSums</a></span><span class="op">(</span><span class="va">ct</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span> <span class="op">/</span> <span class="fl">2</span></span>
+<span>  <span class="va">proj</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">lapply</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">nrow</a></span><span class="op">(</span><span class="va">ct</span><span class="op">)</span><span class="op">)</span>, <span class="kw">function</span><span class="op">(</span><span class="va">k</span><span class="op">)</span> <span class="fu"><a href="../reference/band_project.html">band_project</a></span><span class="op">(</span><span class="va">ct</span><span class="op">[</span><span class="va">k</span>, <span class="op">]</span><span class="op">)</span><span class="op">)</span></span>
+<span>  <span class="kw">function</span><span class="op">(</span><span class="va">x</span>, <span class="va">dims</span><span class="op">)</span> <span class="op">{</span></span>
+<span>    <span class="va">s1</span>   <span class="op">&lt;-</span> <span class="va">proj</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">(</span><span class="va">x</span>, <span class="va">dims</span><span class="op">)</span> <span class="op">-</span> <span class="va">half</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span>      <span class="co"># score against centre 1</span></span>
+<span>    <span class="va">best</span> <span class="op">&lt;-</span> <span class="va">s1</span></span>
+<span>    <span class="va">cl</span>   <span class="op">&lt;-</span> <span class="va">s1</span> <span class="op">*</span> <span class="fl">0</span> <span class="op">+</span> <span class="fl">1</span>                          <span class="co"># current best label</span></span>
+<span>    <span class="kw">for</span> <span class="op">(</span><span class="va">k</span> <span class="kw">in</span> <span class="fl">2</span><span class="op">:</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">nrow</a></span><span class="op">(</span><span class="va">ct</span><span class="op">)</span><span class="op">)</span> <span class="op">{</span></span>
+<span>      <span class="va">sk</span>   <span class="op">&lt;-</span> <span class="va">proj</span><span class="op">[[</span><span class="va">k</span><span class="op">]</span><span class="op">]</span><span class="op">(</span><span class="va">x</span>, <span class="va">dims</span><span class="op">)</span> <span class="op">-</span> <span class="va">half</span><span class="op">[[</span><span class="va">k</span><span class="op">]</span><span class="op">]</span></span>
+<span>      <span class="va">hit</span>  <span class="op">&lt;-</span> <span class="va">sk</span> <span class="op">&gt;</span> <span class="va">best</span></span>
+<span>      <span class="va">cl</span>   <span class="op">&lt;-</span> <span class="fu"><a href="../reference/g_ifelse.html">g_ifelse</a></span><span class="op">(</span><span class="va">hit</span>, <span class="va">k</span>, <span class="va">cl</span><span class="op">)</span></span>
+<span>      <span class="va">best</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/g_ifelse.html">g_ifelse</a></span><span class="op">(</span><span class="va">hit</span>, <span class="va">sk</span>, <span class="va">best</span><span class="op">)</span></span>
+<span>    <span class="op">}</span></span>
+<span>    <span class="fu"><a href="../reference/g_ifelse.html">g_ifelse</a></span><span class="op">(</span><span class="fu"><a href="../reference/g_is_nodata.html">g_is_nodata</a></span><span class="op">(</span><span class="va">s1</span><span class="op">)</span>, <span class="cn">NaN</span>, <span class="va">cl</span><span class="op">)</span>          <span class="co"># nodata stays nodata</span></span>
+<span>  <span class="op">}</span></span>
+<span><span class="op">}</span></span>
+<span></span>
+<span><span class="va">clusters</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/reduce_over.html">reduce_over</a></span><span class="op">(</span><span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">)</span>,</span>
+<span>                        <span class="fu">nearest_center</span><span class="op">(</span><span class="va">km</span><span class="op">$</span><span class="va">centers</span><span class="op">)</span>, over <span class="op">=</span> <span class="st">"band"</span><span class="op">)</span></span>
+<span><span class="va">clmap</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">clusters</span><span class="op">)</span></span>
+<span></span>
+<span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">0</span><span class="op">)</span></span></code></pre></div>
+<p>One fused kernel reads the full-resolution 64-band cube once,
+computes every projection and the argmax per pixel, and only the
+finished single-band cluster map ever reaches R. (Want the raw scores
+instead? Stack plain <code><a href="../reference/band_project.html">band_project()</a></code> reducers with
+<code>lazy_stack(along = "band")</code> and take <code><a href="https://rdrr.io/r/base/maxCol.html" class="external-link">max.col()</a></code>
+host-side – same digital numbers.)</p>
+<p>The k-means prediction can also stream straight to disk. Note the
+<code>dtype</code> and <code>overview_resampling</code> arguments: COG
+overviews default to “average”, and an averaged class label is
+meaningless, so categorical outputs want “nearest”:</p>
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="../reference/write_tif.html">write_tif</a></span><span class="op">(</span></span>
+<span>  <span class="va">clusters</span>,</span>
+<span>  <span class="st">"km-aef.tif"</span>,</span>
+<span>  dtype <span class="op">=</span> <span class="st">"i16"</span>,</span>
+<span>  cog <span class="op">=</span> <span class="cn">TRUE</span>,</span>
+<span>  overview_resampling <span class="op">=</span> <span class="st">"nearest"</span></span>
+<span><span class="op">)</span></span></code></pre></div>
+<p>And the final k-means map:</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span></span>
+<span>  <span class="va">clmap</span>,</span>
+<span>  col <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"#E41A1C"</span>, <span class="st">"#377EB8"</span>, <span class="st">"#4DAF4A"</span>, <span class="st">"#984EA3"</span>, <span class="st">"#FF7F00"</span><span class="op">)</span></span>
+<span><span class="op">)</span></span></code></pre></div>
+<div class="float">
+<img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/km-plot-1.png" alt="plot of chunk km-plot"><div class="figcaption">plot of chunk km-plot</div>
+</div>
+<p>Five clusters, no labels, and the landscape decomposes into its
+structure: the dendritic drainage network, the river corridor and
+settlement strip, and the textured forest mosaic each claim their own
+class. The same dequantised dataset feeds any downstream verb the same
+way – a band-axis PCA, a similarity search, or a classifier fit on the
+collected array.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

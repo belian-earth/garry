@@ -16,7 +16,8 @@ Internal (exported only so mirai daemons can address it via `::`).
   out_keys = NULL,
   device = "cpu",
   store_raw = FALSE,
-  edge = NULL
+  edge = NULL,
+  wq = NULL
 )
 ```
 
