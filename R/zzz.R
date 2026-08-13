@@ -21,5 +21,7 @@ NULL
 .onAttach <- function(libname, pkgname) {
   msg <- tryCatch(gdal_version_str(), error = function(e) NULL)
   # cli styling, but through packageStartupMessage so suppressPackageStartupMessages() works.
-  if (!is.null(msg)) packageStartupMessage(cli::format_inline("{.pkg garry}: {msg}"))
+  if (!is.null(msg)) {
+    packageStartupMessage(cli::format_inline("{.pkg garry}: {msg}"))
+  }
 }

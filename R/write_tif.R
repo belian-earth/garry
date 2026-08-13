@@ -3,9 +3,12 @@ NULL
 
 # Integer dtype value ranges for sentinel/quantization validation.
 .wt_int_range <- list(
-  u8  = c(0, 255),         i8  = c(-128, 127),
-  u16 = c(0, 65535),       i16 = c(-32768, 32767),
-  u32 = c(0, 4294967295),  i32 = c(-2147483648, 2147483647)
+  u8 = c(0, 255),
+  i8 = c(-128, 127),
+  u16 = c(0, 65535),
+  i16 = c(-32768, 32767),
+  u32 = c(0, 4294967295),
+  i32 = c(-2147483648, 2147483647)
 )
 
 #' Execute a lazy raster and stream it to a GeoTIFF.
@@ -59,80 +62,138 @@ NULL
 #' @seealso [collect()] to return the result in the R session;
 #'   [materialise()] to checkpoint to local cubes and stay lazy.
 #' @export
-write_tif <- function(x, path, dtype = NULL, scale = NULL, offset = NULL,
-                      nodata = NULL, cog = FALSE, creation_options = NULL,
-                      overview_resampling = c("average", "nearest", "bilinear",
-                                              "cubic", "mode", "rms"),
-                      band_names = NULL,
-                      distributed = garry_daemons_set()) {
+write_tif <- function(
+  x,
+  path,
+  dtype = NULL,
+  scale = NULL,
+  offset = NULL,
+  nodata = NULL,
+  cog = FALSE,
+  creation_options = NULL,
+  overview_resampling = c(
+    "average",
+    "nearest",
+    "bilinear",
+    "cubic",
+    "mode",
+    "rms"
+  ),
+  band_names = NULL,
+  distributed = garry_daemons_set()
+) {
   overview_resampling <- rlang::arg_match(overview_resampling)
-  if (!is.character(path) || !length(path) || anyNA(path))
+  if (!is.character(path) || !length(path) || anyNA(path)) {
     cli::cli_abort("{.arg path} must be a character path.")
-  if (any(grepl("\\.vrt$", path, ignore.case = TRUE)))
+  }
+  if (any(grepl("\\.vrt$", path, ignore.case = TRUE))) {
     cli::cli_abort(c(
       "{.fn write_tif} writes GeoTIFFs; {.path .vrt} raw cubes are {.fn materialise}'s format.",
-      "i" = "Use {.fn materialise} to checkpoint lazily."))
+      "i" = "Use {.fn materialise} to checkpoint lazily."
+    ))
+  }
 
   quantizing <- !is.null(scale) || !is.null(offset)
   if (quantizing) {
-    if (is.null(scale)) cli::cli_abort("{.arg offset} needs {.arg scale}.")
+    if (is.null(scale)) {
+      cli::cli_abort("{.arg offset} needs {.arg scale}.")
+    }
     scale <- as.numeric(scale)
     offset <- if (is.null(offset)) 0 else as.numeric(offset)
-    if (length(scale) != 1L || length(offset) != 1L || scale == 0)
-      cli::cli_abort("{.arg scale}/{.arg offset} must be non-zero length-1 numerics.")
-    if (is.null(dtype) || is.null(.wt_int_range[[dtype]]))
+    if (length(scale) != 1L || length(offset) != 1L || scale == 0) {
+      cli::cli_abort(
+        "{.arg scale}/{.arg offset} must be non-zero length-1 numerics."
+      )
+    }
+    if (is.null(dtype) || is.null(.wt_int_range[[dtype]])) {
       cli::cli_abort(c(
         "quantization ({.arg scale}/{.arg offset}) needs an integer {.arg dtype}.",
-        "i" = "e.g. {.code dtype = \"i16\"} for scaled reflectance."))
+        "i" = "e.g. {.code dtype = \"i16\"} for scaled reflectance."
+      ))
+    }
   }
-  if (!is.null(dtype) && !is.null(.wt_int_range[[dtype]]) &&
-      !is.null(nodata)) {
+  if (!is.null(dtype) && !is.null(.wt_int_range[[dtype]]) && !is.null(nodata)) {
     rng <- .wt_int_range[[dtype]]
-    if (nodata < rng[[1L]] || nodata > rng[[2L]])
+    if (nodata < rng[[1L]] || nodata > rng[[2L]]) {
       cli::cli_abort(paste0(
         "{.arg nodata} ({nodata}) does not fit output dtype ",
-        "{.val {dtype}} [{rng[[1L]]}, {rng[[2L]]}]."))
+        "{.val {dtype}} [{rng[[1L]]}, {rng[[2L]]}]."
+      ))
+    }
   }
   wspec <- list(
     dtype = dtype,
     scale = if (quantizing) scale else numeric(0),
     offset = if (quantizing) offset else numeric(0),
-    options = if (!isTRUE(cog)) creation_options else NULL)
-  if (is.null(dtype) && !quantizing && is.null(wspec$options)) wspec <- NULL
+    options = if (!isTRUE(cog)) creation_options else NULL
+  )
+  if (is.null(dtype) && !quantizing && is.null(wspec$options)) {
+    wspec <- NULL
+  }
 
   # cog: stream to sibling temp target(s), then translate into place.
   work <- path
   tmp_dirs <- character(0)
   if (isTRUE(cog)) {
     if (length(path) > 1L) {
-      work <- stats::setNames(vapply(path, function(p)
-        tempfile("garry-cog-", tmpdir = dirname(p), fileext = ".tif"),
-        character(1)), names(path))
+      work <- stats::setNames(
+        vapply(
+          path,
+          function(p) {
+            tempfile("garry-cog-", tmpdir = dirname(p), fileext = ".tif")
+          },
+          character(1)
+        ),
+        names(path)
+      )
     } else if (dir.exists(path) || grepl("\\{group\\}|\\{time\\}", path)) {
       # directory / placeholder targets: stream into a temp dir with the
       # same layout; final files land beside/inside the real target.
-      td <- tempfile("garry-cog-", tmpdir = if (dir.exists(path)) path
-                                            else dirname(path))
+      td <- tempfile(
+        "garry-cog-",
+        tmpdir = if (dir.exists(path)) {
+          path
+        } else {
+          dirname(path)
+        }
+      )
       dir.create(td)
       tmp_dirs <- td
       work <- if (dir.exists(path)) td else file.path(td, basename(path))
     } else {
-      work <- tempfile("garry-cog-", tmpdir = dirname(path),
-                       fileext = ".tif")
+      # normalizePath: a relative target makes dirname(path) ".", and a
+      # "./"-prefixed temp key would be invisible to any default ls()
+      # over a path-keyed cache (the writer-close bug, 2026-08-13);
+      # absolute temps are unambiguous everywhere.
+      work <- tempfile(
+        "garry-cog-",
+        tmpdir = normalizePath(dirname(path)),
+        fileext = ".tif"
+      )
     }
-    on.exit(unlink(c(unname(unlist(work)), tmp_dirs), recursive = TRUE),
-            add = TRUE)
+    on.exit(
+      unlink(c(unname(unlist(work)), tmp_dirs), recursive = TRUE),
+      add = TRUE
+    )
   }
 
-  res <- .collect_impl(x, path = work, nodata = nodata,
-                       distributed = distributed, band_names = band_names,
-                       wspec = wspec)
-  if (!isTRUE(cog)) return(invisible(res))
+  res <- .collect_impl(
+    x,
+    path = work,
+    nodata = nodata,
+    distributed = distributed,
+    band_names = band_names,
+    wspec = wspec
+  )
+  if (!isTRUE(cog)) {
+    return(invisible(res))
+  }
 
   # Enumerate the streamed files (a directory target returns the dir).
   wf <- unname(unlist(res))
-  streamed <- unique(unlist(lapply(wf, function(p)
-    if (dir.exists(p)) list.files(p, "\\.tif$", full.names = TRUE) else p)))
+  streamed <- unique(unlist(lapply(wf, function(p) {
+    if (dir.exists(p)) list.files(p, "\\.tif$", full.names = TRUE) else p
+  })))
   finals <- if (length(path) > 1L) {
     unname(unlist(path))[match(streamed, unname(unlist(work)))]
   } else if (dir.exists(path)) {
@@ -142,14 +203,24 @@ write_tif <- function(x, path, dtype = NULL, scale = NULL, offset = NULL,
   } else {
     path
   }
-  cl <- c("-of", "COG", "-q",
-          "-co", paste0("OVERVIEW_RESAMPLING=", toupper(overview_resampling)))
-  if (is.null(creation_options)) cl <- c(cl, "-co", "COMPRESS=DEFLATE")
-  for (o in creation_options) cl <- c(cl, "-co", o)
+  cl <- c(
+    "-of",
+    "COG",
+    "-q",
+    "-co",
+    paste0("OVERVIEW_RESAMPLING=", toupper(overview_resampling))
+  )
+  if (is.null(creation_options)) {
+    cl <- c(cl, "-co", "COMPRESS=DEFLATE", "-co", "NUM_THREADS=ALL_CPUS")
+  }
+  for (o in creation_options) {
+    cl <- c(cl, "-co", o)
+  }
   for (i in seq_along(streamed)) {
     ok <- gdal_translate_file(streamed[[i]], finals[[i]], cl)
-    if (!isTRUE(ok) || !file.exists(finals[[i]]))
+    if (!isTRUE(ok) || !file.exists(finals[[i]])) {
       cli::cli_abort("COG finalise failed for {.path {finals[[i]]}}.")
+    }
   }
   invisible(if (length(finals) == 1L) finals[[1L]] else finals)
 }

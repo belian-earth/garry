@@ -55,10 +55,13 @@ dequantize_aef <- function(x) {
 #' scalar quantization: VQ-VAE made simple. ICLR.
 #' @export
 dequantize_esd <- function(x, level, levels = c(8L, 8L, 8L, 5L, 5L, 5L)) {
-  if (length(level) != 1L || is.na(level) || level < 1L ||
-      level > length(levels))
+  if (
+    length(level) != 1L || is.na(level) || level < 1L || level > length(levels)
+  ) {
     cli::cli_abort(
-      "{.arg level} must be a single index in 1..{length(levels)}.")
+      "{.arg level} must be a single index in 1..{length(levels)}."
+    )
+  }
   basis <- cumprod(c(1, levels[-length(levels)]))[[level]]
   L <- as.numeric(levels[[level]])
   half <- floor(L / 2)

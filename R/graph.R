@@ -45,7 +45,7 @@ graph_new <- function() {
 # of attr(); Node properties are static (no custom getters), so attr()
 # is exact.
 .node_parents <- function(node) attr(node, "parents", exact = TRUE)
-.node_grid    <- function(node) attr(node, "grid", exact = TRUE)
+.node_grid <- function(node) attr(node, "grid", exact = TRUE)
 
 #' Add a node. `ctor` is an S7 node constructor; `...` are its properties
 #' (the `id` property is assigned here and passed automatically).
@@ -57,12 +57,13 @@ graph_new <- function() {
 #' @family graph functions
 #' @export
 graph_add <- function(graph, ctor, ...) {
-  id   <- graph@nodes$.next_id
+  id <- graph@nodes$.next_id
   node <- ctor(id = id, ...)
-  graph@nodes[[.key(id)]]    <- node
-  graph@nodes$.next_id       <- id + 1L
-  if (S7::S7_inherits(node, SourceNode))
+  graph@nodes[[.key(id)]] <- node
+  graph@nodes$.next_id <- id + 1L
+  if (S7::S7_inherits(node, SourceNode)) {
     .source_index_add(.source_index(graph), node)
+  }
   id
 }
 
@@ -100,7 +101,7 @@ graph_ids <- function(graph) {
 #' @export
 graph_toposort <- function(graph) {
   ids <- graph_ids(graph)
-  indeg    <- setNames(integer(length(ids)), as.character(ids))
+  indeg <- setNames(integer(length(ids)), as.character(ids))
   children <- setNames(vector("list", length(ids)), as.character(ids))
 
   for (id in ids) {
@@ -115,7 +116,8 @@ graph_toposort <- function(graph) {
   queue <- as.integer(names(indeg)[indeg == 0L])
   order <- integer(0)
   while (length(queue) > 0L) {
-    head  <- queue[1L]; queue <- queue[-1L]
+    head <- queue[1L]
+    queue <- queue[-1L]
     order <- c(order, head)
     for (c in children[[.key(head)]]) {
       indeg[.key(c)] <- indeg[.key(c)] - 1L
@@ -123,8 +125,9 @@ graph_toposort <- function(graph) {
     }
   }
 
-  if (length(order) != length(ids))
+  if (length(order) != length(ids)) {
     cli::cli_abort("graph has a cycle", .internal = TRUE)
+  }
   order
 }
 
@@ -138,11 +141,13 @@ graph_toposort <- function(graph) {
 #' @export
 graph_replace <- function(graph, id, node) {
   old <- graph@nodes[[.key(id)]]
-  if (!is.null(old) && S7::S7_inherits(old, SourceNode))
+  if (!is.null(old) && S7::S7_inherits(old, SourceNode)) {
     .source_index_drop(.source_index(graph), old)
+  }
   graph@nodes[[.key(id)]] <- node
-  if (S7::S7_inherits(node, SourceNode))
+  if (S7::S7_inherits(node, SourceNode)) {
     .source_index_add(.source_index(graph), node)
+  }
   invisible(node)
 }
 
@@ -161,7 +166,9 @@ graph_replace <- function(graph, id, node) {
 #' @family graph functions
 #' @export
 graph_import <- function(dst, src, root_id) {
-  if (identical(dst@nodes, src@nodes)) return(root_id)
+  if (identical(dst@nodes, src@nodes)) {
+    return(root_id)
+  }
 
   # Reachable set via reverse DFS over parents.
   seen <- integer(0)
@@ -169,7 +176,9 @@ graph_import <- function(dst, src, root_id) {
   while (length(stack) > 0L) {
     id <- stack[[1L]]
     stack <- stack[-1L]
-    if (id %in% seen) next
+    if (id %in% seen) {
+      next
+    }
     seen <- c(seen, id)
     stack <- c(stack, graph_get(src, id)@parents)
   }
@@ -187,16 +196,20 @@ graph_import <- function(dst, src, root_id) {
         next
       }
     }
-    new_parents <- vapply(node@parents,
-                          function(p) id_map[[.key(p)]], integer(1))
+    new_parents <- vapply(
+      node@parents,
+      function(p) id_map[[.key(p)]],
+      integer(1)
+    )
     new_id <- dst@nodes$.next_id
     node@id <- new_id
     node@parents <- as.integer(new_parents)
     dst@nodes[[.key(new_id)]] <- node
     dst@nodes$.next_id <- new_id + 1L
     id_map[[.key(id)]] <- new_id
-    if (S7::S7_inherits(node, SourceNode))
+    if (S7::S7_inherits(node, SourceNode)) {
       .source_index_add(idx, node)
+    }
   }
   id_map[[.key(root_id)]]
 }
@@ -212,10 +225,15 @@ graph_import <- function(dst, src, root_id) {
 # (e.g. deserialized ones).
 
 .source_key <- function(node) {
-  paste(c(node@path, node@band,
-          formatC(node@nodata, format = "g", digits = 17, width = 1),
-          node@open_options),
-        collapse = "\x1f")
+  paste(
+    c(
+      node@path,
+      node@band,
+      formatC(node@nodata, format = "g", digits = 17, width = 1),
+      node@open_options
+    ),
+    collapse = "\x1f"
+  )
 }
 
 .source_index <- function(graph) {

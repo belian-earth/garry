@@ -417,3 +417,22 @@ Benchmark (Hugh, 2026-08-08, benchmarks/compare.sh, 3-band HLS
 median B04/B03/B02, cpu): garry 22.05 s vs ODC 27.59 s -- 1.25x
 faster. Previously parity-to-slightly-behind (~1.0-1.2x of ODC);
 the closed drain is the differentiator.
+
+## 12. Writer-daemon quantize serialization (2026-08-12)
+
+The write_tif tail on a 64-band AEF cube decomposes as: streamed
+drain 41 s (reads + fused dequant, fully overlapped), then ~57 s of
+post-drain host wait while the SINGLE writer daemon serially works
+its queue -- readBin from shm, f32 -> i16 quantization in R, RasterIO
+-- then the COG translate. NUM_THREADS=ALL_CPUS creation options cut
+the translate 44 -> 13 s but did NOT move the 57 s, so that phase is
+writer-side R work, not compression. Dequantize itself was measured
+innocent (9 comp tasks; it fuses onto the warp reads).
+
+Levers, unbuilt: (a) quantize at the producer -- fold the wspec
+scale/offset/dtype into the fused kernel output (or the raw-store
+download), so sink chunks arrive as ready-to-write integer bytes and
+the writer daemon only does RasterIO; (b) per-band temp files with
+parallel writers, single COG translate collecting them (GTiff is
+single-writer PER FILE only). (a) is the natural fit with the D19
+raw store and keeps one writer.

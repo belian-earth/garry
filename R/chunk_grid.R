@@ -24,18 +24,21 @@ NULL
 ChunkGrid <- S7::new_class(
   "ChunkGrid",
   properties = list(
-    grid      = GridSpec,
-    chunk_dim = S7::class_integer,   # length 2: (cx, cy)
-    block_dim = S7::class_integer,   # native GDAL block dim, for snapping
-    halo      = S7::class_integer    # length 1, radius in pixels
+    grid = GridSpec,
+    chunk_dim = S7::class_integer, # length 2: (cx, cy)
+    block_dim = S7::class_integer, # native GDAL block dim, for snapping
+    halo = S7::class_integer # length 1, radius in pixels
   ),
   validator = function(self) {
-    if (length(self@chunk_dim) != 2L || any(self@chunk_dim <= 0L))
+    if (length(self@chunk_dim) != 2L || any(self@chunk_dim <= 0L)) {
       return("`chunk_dim` must be length 2 with positive values")
-    if (length(self@block_dim) != 2L || any(self@block_dim <= 0L))
+    }
+    if (length(self@block_dim) != 2L || any(self@block_dim <= 0L)) {
       return("`block_dim` must be length 2 with positive values")
-    if (length(self@halo) != 1L || self@halo < 0L)
+    }
+    if (length(self@halo) != 1L || self@halo < 0L) {
       return("`halo` must be a single non-negative integer")
+    }
     NULL
   }
 )
@@ -74,12 +77,14 @@ S7::method(chunk_iter, ChunkGrid) <- function(cg) {
   x_starts <- seq.int(0L, nx - 1L, by = cx)
   y_starts <- seq.int(0L, ny - 1L, by = cy)
 
-  grid <- expand.grid(ix = seq_along(x_starts),
-                      iy = seq_along(y_starts),
-                      KEEP.OUT.ATTRS = FALSE,
-                      stringsAsFactors = FALSE)
-  grid$x_off  <- x_starts[grid$ix]
-  grid$y_off  <- y_starts[grid$iy]
+  grid <- expand.grid(
+    ix = seq_along(x_starts),
+    iy = seq_along(y_starts),
+    KEEP.OUT.ATTRS = FALSE,
+    stringsAsFactors = FALSE
+  )
+  grid$x_off <- x_starts[grid$ix]
+  grid$y_off <- y_starts[grid$iy]
   grid$x_size <- pmin(cx, nx - grid$x_off)
   grid$y_size <- pmin(cy, ny - grid$y_off)
 
@@ -87,9 +92,11 @@ S7::method(chunk_iter, ChunkGrid) <- function(cg) {
   # (chunk larger than raster) counts as interior, not clipped.
   clipped_x <- grid$x_size < min(cx, nx)
   clipped_y <- grid$y_size < min(cy, ny)
-  grid$shape_id <- ifelse(clipped_x & clipped_y, "corner",
-                   ifelse(clipped_x, "right",
-                   ifelse(clipped_y, "bottom", "interior")))
+  grid$shape_id <- ifelse(
+    clipped_x & clipped_y,
+    "corner",
+    ifelse(clipped_x, "right", ifelse(clipped_y, "bottom", "interior"))
+  )
   grid
 }
 
@@ -108,10 +115,14 @@ S7::method(chunk_iter, ChunkGrid) <- function(cg) {
 #' @export
 chunk_window_with_halo <- S7::new_generic("chunk_window_with_halo", "cg")
 
-S7::method(chunk_window_with_halo, ChunkGrid) <- function(cg,
-                                                          x_off, y_off,
-                                                          x_size, y_size) {
-  h  <- cg@halo
+S7::method(chunk_window_with_halo, ChunkGrid) <- function(
+  cg,
+  x_off,
+  y_off,
+  x_size,
+  y_size
+) {
+  h <- cg@halo
   nx <- cg@grid@dims[1L]
   ny <- cg@grid@dims[2L]
 
@@ -121,13 +132,13 @@ S7::method(chunk_window_with_halo, ChunkGrid) <- function(cg,
   y_hi <- min(ny, y_off + y_size + h)
 
   list(
-    x_off      = x_lo,
-    y_off      = y_lo,
-    x_size     = x_hi - x_lo,
-    y_size     = y_hi - y_lo,
-    pad_left   = x_off - x_lo,
-    pad_top    = y_off - y_lo,
-    pad_right  = x_hi - (x_off + x_size),
+    x_off = x_lo,
+    y_off = y_lo,
+    x_size = x_hi - x_lo,
+    y_size = y_hi - y_lo,
+    pad_left = x_off - x_lo,
+    pad_top = y_off - y_lo,
+    pad_right = x_hi - (x_off + x_size),
     pad_bottom = y_hi - (y_off + y_size)
   )
 }
@@ -145,10 +156,12 @@ S7::method(chunk_window_with_halo, ChunkGrid) <- function(cg,
 # north-up grid.
 .window_world_bounds <- function(grid, x_off, y_off, x_size, y_size) {
   gt <- grid@transform
-  c(gt[1L] + x_off * gt[2L],
+  c(
+    gt[1L] + x_off * gt[2L],
     gt[4L] + (y_off + y_size) * gt[6L],
     gt[1L] + (x_off + x_size) * gt[2L],
-    gt[4L] + y_off * gt[6L])
+    gt[4L] + y_off * gt[6L]
+  )
 }
 
 #' Map an output-chunk window on `out_grid` to the minimal input window
@@ -170,9 +183,15 @@ S7::method(chunk_window_with_halo, ChunkGrid) <- function(cg,
 #'   windows and `garry_opt("window_margin")` across CRS.
 #' @return A list with the 0-based input window.
 #' @export
-cross_grid_window <- function(out_grid, in_grid,
-                              x_off, y_off, x_size, y_size,
-                              margin = NULL) {
+cross_grid_window <- function(
+  out_grid,
+  in_grid,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  margin = NULL
+) {
   bounds <- .window_world_bounds(out_grid, x_off, y_off, x_size, y_size)
 
   same_crs <- crs_equal(out_grid@crs, in_grid@crs)
@@ -180,7 +199,9 @@ cross_grid_window <- function(out_grid, in_grid,
     bounds <- gdalraster::transform_bounds(bounds, out_grid@crs, in_grid@crs)
     if (is.null(margin)) margin <- garry_opt("window_margin")
   }
-  if (is.null(margin)) margin <- 0L
+  if (is.null(margin)) {
+    margin <- 0L
+  }
 
   gt <- in_grid@transform
   # North-up: x from xmin/xmax, y rows from ymax downwards (gt[6] < 0).
@@ -189,8 +210,10 @@ cross_grid_window <- function(out_grid, in_grid,
   py_lo <- floor((bounds[4L] - gt[4L]) / gt[6L])
   py_hi <- ceiling((bounds[2L] - gt[4L]) / gt[6L])
 
-  px_lo <- px_lo - margin; py_lo <- py_lo - margin
-  px_hi <- px_hi + margin; py_hi <- py_hi + margin
+  px_lo <- px_lo - margin
+  py_lo <- py_lo - margin
+  px_hi <- px_hi + margin
+  py_hi <- py_hi + margin
 
   nx <- in_grid@dims[1L]
   ny <- in_grid@dims[2L]
@@ -200,8 +223,8 @@ cross_grid_window <- function(out_grid, in_grid,
   y_hi <- max(min(ny, py_hi), y_lo)
 
   list(
-    x_off  = as.integer(x_lo),
-    y_off  = as.integer(y_lo),
+    x_off = as.integer(x_lo),
+    y_off = as.integer(y_lo),
     x_size = as.integer(x_hi - x_lo),
     y_size = as.integer(y_hi - y_lo)
   )

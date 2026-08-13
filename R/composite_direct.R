@@ -25,11 +25,19 @@ NULL
 # Returns list(chain = source->mask order, src = fmask source id, halo = sum of
 # focal radii) or NULL if the chain branches or hits an unsupported node.
 .cd_walk_mask <- function(gg, mid) {
-  chain <- list(); h <- 0L; cur <- gg(mid)
+  chain <- list()
+  h <- 0L
+  cur <- gg(mid)
   while (!S7::S7_inherits(cur, SourceNode)) {
-    if (!(S7::S7_inherits(cur, MapNode) || S7::S7_inherits(cur, FocalNode)) ||
-        length(cur@parents) != 1L) return(NULL)
-    if (S7::S7_inherits(cur, FocalNode)) h <- h + cur@radius
+    if (
+      !(S7::S7_inherits(cur, MapNode) || S7::S7_inherits(cur, FocalNode)) ||
+        length(cur@parents) != 1L
+    ) {
+      return(NULL)
+    }
+    if (S7::S7_inherits(cur, FocalNode)) {
+      h <- h + cur@radius
+    }
     chain <- c(list(cur), chain)
     cur <- gg(cur@parents[[1L]])
   }
@@ -43,25 +51,30 @@ NULL
 # cube (t, ny, nx).
 .gd_replay_mask <- function(fm, chain, halo, ny, nx) {
   mc <- if (halo > 0L) g_pad(fm, halo, NaN) else fm
-  cy <- ny + 2L * halo; cx <- nx + 2L * halo
+  cy <- ny + 2L * halo
+  cx <- nx + 2L * halo
   for (node in chain) {
     if (S7::S7_inherits(node, FocalNode)) {
-      r <- node@radius; oy <- cy - 2L * r; ox <- cx - 2L * r
-      offs <- expand.grid(dx = -r:r, dy = -r:r)     # match .eval_node order
-      shifts <- lapply(seq_len(nrow(offs)), function(i)
-        g_shift_slice(mc, offs$dy[i], offs$dx[i], oy, ox, r))
-      mc <- if (length(node@weights) > 0L)
+      r <- node@radius
+      oy <- cy - 2L * r
+      ox <- cx - 2L * r
+      offs <- expand.grid(dx = -r:r, dy = -r:r) # match .eval_node order
+      shifts <- lapply(seq_len(nrow(offs)), function(i) {
+        g_shift_slice(mc, offs$dy[i], offs$dx[i], oy, ox, r)
+      })
+      mc <- if (length(node@weights) > 0L) {
         Reduce(`+`, Map(function(s, w) s * w, shifts, as.list(node@weights)))
-      else node@fn(shifts)
-      cy <- oy; cx <- ox
+      } else {
+        node@fn(shifts)
+      }
+      cy <- oy
+      cx <- ox
     } else {
-      mc <- node@fn(mc)                              # MapNode: elementwise
+      mc <- node@fn(mc) # MapNode: elementwise
     }
   }
   mc
 }
-
-
 
 
 # Given a ReduceNode, lift one band's pieces: per-slice band + fmask sources,
@@ -84,72 +97,162 @@ NULL
   aff <- list(scale = n1@scale, offset = n1@offset)
   for (id in ids[-1L]) {
     n <- gg(id)
-    if (!identical(n@scale, aff$scale) || !identical(n@offset, aff$offset))
+    if (!identical(n@scale, aff$scale) || !identical(n@offset, aff$offset)) {
       return(NULL)
+    }
   }
   aff
 }
 .cd_chain_sig <- function(chain) {
-  rlang::hash(lapply(chain, function(n) list(
-    cls = class(n)[[1L]],
-    fn = serialize(.slim_fn(n@fn), NULL),
-    radius = if (S7::S7_inherits(n, FocalNode)) n@radius else integer(0),
-    boundary = if (S7::S7_inherits(n, FocalNode)) n@boundary else character(0),
-    weights = if (S7::S7_inherits(n, FocalNode)) n@weights else numeric(0))))
+  rlang::hash(lapply(chain, function(n) {
+    list(
+      cls = class(n)[[1L]],
+      fn = serialize(.slim_fn(n@fn), NULL),
+      radius = if (S7::S7_inherits(n, FocalNode)) n@radius else integer(0),
+      boundary = if (S7::S7_inherits(n, FocalNode)) {
+        n@boundary
+      } else {
+        character(0)
+      },
+      weights = if (S7::S7_inherits(n, FocalNode)) n@weights else numeric(0)
+    )
+  }))
 }
 
 .cd_reduce_spec <- function(gg, red) {
-  if (!S7::S7_inherits(red, ReduceNode)) return(NULL)
-  if (!("t" %in% red@over) ||
-      !(red@op %in% c("median", "mean", "min", "max", "sum", "prod")))
+  if (!S7::S7_inherits(red, ReduceNode)) {
     return(NULL)
-  if (length(red@parents) != 1L) return(NULL)
+  }
+  if (
+    !("t" %in% red@over) ||
+      !(red@op %in% c("median", "mean", "min", "max", "sum", "prod"))
+  ) {
+    return(NULL)
+  }
+  if (length(red@parents) != 1L) {
+    return(NULL)
+  }
   stk <- gg(red@parents[[1L]])
-  if (!S7::S7_inherits(stk, StackNode) || !length(stk@parents)) return(NULL)
+  if (!S7::S7_inherits(stk, StackNode) || !length(stk@parents)) {
+    return(NULL)
+  }
   masked <- stk@parents
   first <- gg(masked[[1L]])
   if (S7::S7_inherits(first, MapNode)) {
-    if (length(first@parents) != 2L) return(NULL)
+    if (length(first@parents) != 2L) {
+      return(NULL)
+    }
     # Every slice must be a 2-parent masked MapNode: a stack mixing
     # masked and bare slices is legal IR, and probing it must fall
     # through to the scheduler, not subscript-error out of collect().
-    if (!all(vapply(masked, function(id) {
-      n <- gg(id)
-      S7::S7_inherits(n, MapNode) && length(n@parents) == 2L
-    }, logical(1)))) return(NULL)
-    band_srcs <- vapply(masked, function(id) gg(id)@parents[[1L]], integer(1))
-    if (!all(vapply(band_srcs,
-                    function(id) S7::S7_inherits(gg(id), SourceNode), logical(1))))
+    if (
+      !all(vapply(
+        masked,
+        function(id) {
+          n <- gg(id)
+          S7::S7_inherits(n, MapNode) && length(n@parents) == 2L
+        },
+        logical(1)
+      ))
+    ) {
       return(NULL)
+    }
+    band_srcs <- vapply(masked, function(id) gg(id)@parents[[1L]], integer(1))
+    if (
+      !all(vapply(
+        band_srcs,
+        function(id) S7::S7_inherits(gg(id), SourceNode),
+        logical(1)
+      ))
+    ) {
+      return(NULL)
+    }
     # Per-slice homogeneity of F.
     f_sig <- .cd_fn_sig(first@fn)
-    if (!all(vapply(masked, function(id)
-      identical(.cd_fn_sig(gg(id)@fn), f_sig), logical(1)))) return(NULL)
-    m0 <- .cd_walk_mask(gg, first@parents[[2L]]); if (is.null(m0)) return(NULL)
+    if (
+      !all(vapply(
+        masked,
+        function(id) {
+          identical(.cd_fn_sig(gg(id)@fn), f_sig)
+        },
+        logical(1)
+      ))
+    ) {
+      return(NULL)
+    }
+    m0 <- .cd_walk_mask(gg, first@parents[[2L]])
+    if (is.null(m0)) {
+      return(NULL)
+    }
     c_sig <- .cd_chain_sig(m0$chain)
-    fmask_srcs <- vapply(masked, function(id) {
-      w <- .cd_walk_mask(gg, gg(id)@parents[[2L]])
-      if (is.null(w) || !identical(.cd_chain_sig(w$chain), c_sig))
-        NA_integer_ else w$src
-    }, integer(1))
-    if (anyNA(fmask_srcs)) return(NULL)
+    fmask_srcs <- vapply(
+      masked,
+      function(id) {
+        w <- .cd_walk_mask(gg, gg(id)@parents[[2L]])
+        if (is.null(w) || !identical(.cd_chain_sig(w$chain), c_sig)) {
+          NA_integer_
+        } else {
+          w$src
+        }
+      },
+      integer(1)
+    )
+    if (anyNA(fmask_srcs)) {
+      return(NULL)
+    }
     aff <- .cd_slice_affine(gg, band_srcs)
-    if (is.null(aff)) return(NULL)
+    if (is.null(aff)) {
+      return(NULL)
+    }
     # QA sources carry class codes; a scaled mask source is not replayable.
-    if (any(vapply(fmask_srcs, function(id) length(gg(id)@scale) == 1L,
-                   logical(1)))) return(NULL)
-    list(band = band_srcs, fmask = fmask_srcs, F = first@fn,
-         mask_chain = m0$chain, halo = m0$halo, op = red@op, nan_rm = red@nan_rm,
-         affine = aff)
+    if (
+      any(vapply(
+        fmask_srcs,
+        function(id) length(gg(id)@scale) == 1L,
+        logical(1)
+      ))
+    ) {
+      return(NULL)
+    }
+    list(
+      band = band_srcs,
+      fmask = fmask_srcs,
+      F = first@fn,
+      mask_chain = m0$chain,
+      halo = m0$halo,
+      op = red@op,
+      nan_rm = red@nan_rm,
+      affine = aff
+    )
   } else if (S7::S7_inherits(first, SourceNode)) {
-    if (!all(vapply(masked, function(id)
-      S7::S7_inherits(gg(id), SourceNode), logical(1)))) return(NULL)
+    if (
+      !all(vapply(
+        masked,
+        function(id) {
+          S7::S7_inherits(gg(id), SourceNode)
+        },
+        logical(1)
+      ))
+    ) {
+      return(NULL)
+    }
     aff <- .cd_slice_affine(gg, as.integer(masked))
-    if (is.null(aff)) return(NULL)
-    list(band = as.integer(masked), fmask = integer(0), F = NULL,
-         mask_chain = list(), halo = 0L, op = red@op, nan_rm = red@nan_rm,
-         affine = aff)
-  } else NULL
+    if (is.null(aff)) {
+      return(NULL)
+    }
+    list(
+      band = as.integer(masked),
+      fmask = integer(0),
+      F = NULL,
+      mask_chain = list(),
+      halo = 0L,
+      op = red@op,
+      nan_rm = red@nan_rm,
+      affine = aff
+    )
+  } else {
+    NULL
+  }
 }
 
 # Recognise the reconstructible composite shape and lift its pieces, or NULL.
@@ -159,43 +262,69 @@ NULL
 # StackNode of homogeneous per-slice masked MapNodes (F) over (band SourceNode,
 # mask MapNode (M) over fmask SourceNode) -- or bare SourceNodes when unmasked.
 .cd_spec <- function(plan) {
-  if (!isTRUE(garry_opt("composite_direct"))) return(NULL)
-  if (!.g_has_raw_upload()) return(NULL)
+  if (!isTRUE(garry_opt("composite_direct"))) {
+    return(NULL)
+  }
+  if (!.g_has_raw_upload()) {
+    return(NULL)
+  }
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
-  if (sink@kind != "compute") return(NULL)
+  if (sink@kind != "compute") {
+    return(NULL)
+  }
   # Every GTI source must be a `source_read` stage with a .meta.rds sidecar
   # (so its items can be fetched locally). Intermediate compute stages are
   # fine -- the lean path recomputes from sources regardless of how the
   # planner split the graph (e.g. a shared mask materialised on its own).
   src_stages <- Filter(function(s) s@kind == "source_read", plan@stages)
-  if (!length(src_stages)) return(NULL)
+  if (!length(src_stages)) {
+    return(NULL)
+  }
   gg <- function(id) graph_get(graph, id)
   for (s in src_stages) {
     n <- gg(s@members[[1L]])
-    if (!grepl("^GTI:", n@path)) return(NULL)
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) return(NULL)
+    if (!grepl("^GTI:", n@path)) {
+      return(NULL)
+    }
+    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
+      return(NULL)
+    }
   }
   src_ids <- vapply(src_stages, function(s) gg(s@members[[1L]])@id, integer(1))
-  top <- gg(sink@members[[length(sink@members)]])   # the sink's output node
+  top <- gg(sink@members[[length(sink@members)]]) # the sink's output node
   if (S7::S7_inherits(top, ReduceNode)) {
     reduces <- list(top)
   } else if (S7::S7_inherits(top, StackNode) && identical(top@along, "band")) {
     reduces <- lapply(top@parents, gg)
-  } else return(NULL)
+  } else {
+    return(NULL)
+  }
 
   specs <- lapply(reduces, function(r) .cd_reduce_spec(gg, r))
-  if (any(vapply(specs, is.null, logical(1)))) return(NULL)
+  if (any(vapply(specs, is.null, logical(1)))) {
+    return(NULL)
+  }
   # every band/fmask leaf must be a fetchable source_read source
   leaves <- unlist(lapply(specs, function(s) c(s$band, s$fmask)))
-  if (!all(leaves %in% src_ids)) return(NULL)
-  s1 <- specs[[1L]]; masked <- length(s1$mask_chain) > 0L
-  ok <- vapply(specs, function(s)
-    identical(s$op, s1$op) && identical(s$nan_rm, s1$nan_rm) &&
-      (length(s$mask_chain) > 0L) == masked &&
-      (!masked || identical(s$fmask, s1$fmask)),   # one shared mask across bands
-    logical(1))
-  if (!all(ok)) return(NULL)
+  if (!all(leaves %in% src_ids)) {
+    return(NULL)
+  }
+  s1 <- specs[[1L]]
+  masked <- length(s1$mask_chain) > 0L
+  ok <- vapply(
+    specs,
+    function(s) {
+      identical(s$op, s1$op) &&
+        identical(s$nan_rm, s1$nan_rm) &&
+        (length(s$mask_chain) > 0L) == masked &&
+        (!masked || identical(s$fmask, s1$fmask))
+    }, # one shared mask across bands
+    logical(1)
+  )
+  if (!all(ok)) {
+    return(NULL)
+  }
   # Smart routing (deep review 2026-08-02): the budget guards the arms
   # that run the whole-grid compute SINGLE-PROCESS in the host (no
   # overlap with the fetch drain) — the single-band kernel, and the
@@ -204,18 +333,30 @@ NULL
   # across the compute pool RAM-capped, overlapped with the fetches.
   # A heavy plan that falls through lands on the reduce-decomposition
   # route (multi-band) or the scheduler (single-band).
-  n_bands <- length(specs); n_slices <- length(s1$band)
+  n_bands <- length(specs)
+  n_slices <- length(s1$band)
   grid_px <- sink@grid@dims[["x"]] * sink@grid@dims[["y"]]
   weight <- (n_bands + (s1$halo > 0L)) * n_slices * grid_px
-  if (weight > garry_opt("gd_compute_budget") &&
-      (n_bands == 1L || !isTRUE(garry_opt("gd_parallel")))) return(NULL)
-  list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F, mask_chain = s1$mask_chain,
-       halo = s1$halo, band_srcs = lapply(specs, function(s) s$band),
-       band_affine = lapply(specs, function(s) s$affine),
-       fmask_srcs = s1$fmask, n_bands = n_bands,
-       grid = sink@grid, device = sink@device)
+  if (
+    weight > garry_opt("gd_compute_budget") &&
+      (n_bands == 1L || !isTRUE(garry_opt("gd_parallel")))
+  ) {
+    return(NULL)
+  }
+  list(
+    op = s1$op,
+    nan_rm = s1$nan_rm,
+    F = s1$F,
+    mask_chain = s1$mask_chain,
+    halo = s1$halo,
+    band_srcs = lapply(specs, function(s) s$band),
+    band_affine = lapply(specs, function(s) s$affine),
+    fmask_srcs = s1$fmask,
+    n_bands = n_bands,
+    grid = sink@grid,
+    device = sink@device
+  )
 }
-
 
 
 # Uniform strip grid for the pipeline's band medians: equal ceiling-height
@@ -224,7 +365,9 @@ NULL
 .gd_strip_bounds <- function(ny, n_strips) {
   ny <- as.integer(ny)
   ns <- max(1L, min(as.integer(n_strips), ny))
-  if (ns == 1L) return(list(c(0L, ny)))
+  if (ns == 1L) {
+    return(list(c(0L, ny)))
+  }
   h <- as.integer(ceiling(ny / ns))
   ns <- as.integer(ceiling(ny / h))
   lapply(seq_len(ns) - 1L, function(i) c(i * h, min(h, ny - i * h)))
@@ -241,7 +384,9 @@ NULL
   pool <- max(1L, as.integer(pool))
   per_task_mb <- 3.5 * n_slices * ny * nx * 4 / 1e6
   avail <- .garry_ram_avail_mb()
-  if (is.na(avail) || per_task_mb <= 0) return(pool)
+  if (is.na(avail) || per_task_mb <= 0) {
+    return(pool)
+  }
   cap <- floor(garry_opt("compute_ram_fraction") * avail / per_task_mb)
   max(1L, min(pool, as.integer(cap)))
 }
@@ -256,8 +401,9 @@ NULL
 # source node id, each with its .bin path. `grid` supplies the spatial target
 # (nx/ny/transform/crs); every source is pinned to it. Shared by the lean cube
 # path and the general IR-replay path.
-.gd_warp_sources <- function(plan, grid, tmp)
+.gd_warp_sources <- function(plan, grid, tmp) {
   .gd_warp_collect(.gd_warp_launch(plan, grid, tmp))
+}
 
 # Build the per-source warp job bundle WITHOUT dispatching: `info` (keyed by
 # source node id, each with its .bin path), the grid-constant bundle `K` sent
@@ -266,29 +412,52 @@ NULL
 .gd_build_jobs <- function(plan, grid, tmp) {
   graph <- plan@graph
   cr <- grid@crs
-  nx <- grid@dims[["x"]]; ny <- grid@dims[["y"]]
+  nx <- grid@dims[["x"]]
+  ny <- grid@dims[["y"]]
   srcs <- Filter(function(s) s@kind == "source_read", plan@stages)
   meta_cache <- new.env(parent = emptyenv())
   info <- lapply(srcs, function(s) {
-    n <- graph_get(graph, s@members[[1L]]); gti <- sub("^GTI:", "", n@path)
-    if (is.null(meta_cache[[gti]]))
+    n <- graph_get(graph, s@members[[1L]])
+    gti <- sub("^GTI:", "", n@path)
+    if (is.null(meta_cache[[gti]])) {
       meta_cache[[gti]] <- readRDS(paste0(gti, ".meta.rds"))
+    }
     e <- meta_cache[[gti]]$entries
     filt <- grep("FILTER=", n@open_options, value = TRUE)
     er <- if (length(filt)) {
-      sl <- sub(".*'([^']*)'.*", "\\1", filt); e[e$slice == sl, , drop = FALSE]
-    } else e
-    list(nid = n@id, nodata = n@nodata, locs = er$location, dt = er$datetime,
-         resampling = n@resampling, bin = file.path(tmp, .glue("n{n@id}.bin")))
+      sl <- sub(".*'([^']*)'.*", "\\1", filt)
+      e[e$slice == sl, , drop = FALSE]
+    } else {
+      e
+    }
+    list(
+      nid = n@id,
+      nodata = n@nodata,
+      locs = er$location,
+      dt = er$datetime,
+      resampling = n@resampling,
+      bin = file.path(tmp, .glue("n{n@id}.bin"))
+    )
   })
   names(info) <- vapply(info, function(x) as.character(x$nid), "")
-  K <- list(nx = nx, ny = ny,
-            gtstr = paste(formatC(grid@transform, format = "g", digits = 10, width = 1),
-                          collapse = "/"),
-            wkt = gdalraster::srs_to_wkt(cr))
-  jobs <- lapply(info, function(x)
-    list(locs = .mpc_resign(x$locs), dt = x$dt, nodata = x$nodata,
-         resampling = x$resampling, bin = x$bin))
+  K <- list(
+    nx = nx,
+    ny = ny,
+    gtstr = paste(
+      formatC(grid@transform, format = "g", digits = 10, width = 1),
+      collapse = "/"
+    ),
+    wkt = gdalraster::srs_to_wkt(cr)
+  )
+  jobs <- lapply(info, function(x) {
+    list(
+      locs = .mpc_resign(x$locs),
+      dt = x$dt,
+      nodata = x$nodata,
+      resampling = x$resampling,
+      bin = x$bin
+    )
+  })
   list(info = info, K = K, jobs = jobs)
 }
 
@@ -297,11 +466,15 @@ NULL
 # not propagate to mirai daemons).
 .gd_daemon_prep <- function(prof) {
   .garry_abi_check(prof)
-  .pool_broadcast(quote({
-    suppressMessages(library(garry))
-    garry::garry_gdal_config()
-    options(garry.read_retry = rr)
-  }), profiles = prof, rr = garry_opt("read_retry"))
+  .pool_broadcast(
+    quote({
+      suppressMessages(library(garry))
+      garry::garry_gdal_config()
+      options(garry.read_retry = rr)
+    }),
+    profiles = prof,
+    rr = garry_opt("read_retry")
+  )
 }
 
 # Launch the parallel warp-on-read WITHOUT blocking (raw mirai() per
@@ -312,9 +485,9 @@ NULL
   b <- .gd_build_jobs(plan, grid, tmp)
   prof <- .gd_profile()
   .gd_daemon_prep(prof)
-  promise <- lapply(unname(b$jobs), function(j)
-    mirai::mirai(garry::.cd_fetch_warp(j, k), j = j, k = b$K,
-                 .compute = prof))
+  promise <- lapply(unname(b$jobs), function(j) {
+    mirai::mirai(garry::.cd_fetch_warp(j, k), j = j, k = b$K, .compute = prof)
+  })
   list(info = b$info, promise = promise, t0 = proc.time()[["elapsed"]])
 }
 
@@ -326,23 +499,39 @@ NULL
 # diagnostic.
 .gd_fetch_errs <- function(r) {
   transport <- vapply(r, function(x) inherits(x, "miraiError"), FALSE)
-  caught <- vapply(r, function(x)
-    is.list(x) && length(x$err) == 1L && !is.na(x$err), FALSE)
-  c(vapply(r[transport], conditionMessage, ""),
-    vapply(r[caught], function(x) x$err, ""))
+  caught <- vapply(
+    r,
+    function(x) {
+      is.list(x) && length(x$err) == 1L && !is.na(x$err)
+    },
+    FALSE
+  )
+  c(
+    vapply(r[transport], conditionMessage, ""),
+    vapply(r[caught], function(x) x$err, "")
+  )
 }
 
 # Enforce the read-failure contract on a fetch group, matching the
 # scheduler: `garry.read_fail = "error"` (the default) aborts the run,
 # "nodata" warns and keeps the NaN-filled slices.
 .gd_fetch_fail <- function(errs, n, label) {
-  if (length(errs) == 0L) return(invisible(NULL))
-  msg <- .glue("gdal-direct: {length(errs)}/{n} {label} warps failed ",
-               "(e.g. {errs[[1L]]})")
-  if (!identical(garry_opt("read_fail"), "nodata"))
-    cli::cli_abort(c(msg,
-      "i" = paste0("failed slices would read as all-nodata; set ",
-                   "options(garry.read_fail = \"nodata\") to accept holes")))
+  if (length(errs) == 0L) {
+    return(invisible(NULL))
+  }
+  msg <- .glue(
+    "gdal-direct: {length(errs)}/{n} {label} warps failed ",
+    "(e.g. {errs[[1L]]})"
+  )
+  if (!identical(garry_opt("read_fail"), "nodata")) {
+    cli::cli_abort(c(
+      msg,
+      "i" = paste0(
+        "failed slices would read as all-nodata; set ",
+        "options(garry.read_fail = \"nodata\") to accept holes"
+      )
+    ))
+  }
   cli::cli_warn(paste0(msg, "; slices filled with nodata"))
 }
 
@@ -359,38 +548,63 @@ NULL
     cli::cli_inform(.glue(
       "[gdal-direct] per-task sums: ",
       "fetch={formatC(sum(vapply(ok, function(x) x$tf, 0)), format = 'f', digits = 1)}s ",
-      "warp={formatC(sum(vapply(ok, function(x) x$tw, 0)), format = 'f', digits = 1)}s"))
+      "warp={formatC(sum(vapply(ok, function(x) x$tw, 0)), format = 'f', digits = 1)}s"
+    ))
   }
   .gd_fetch_fail(.gd_fetch_errs(r), length(info), "source")
-  if (progress) cli::cli_inform(.glue(
-    "[gdal-direct] fetch+warp={formatC(t, format = 'f', digits = 2)}s"))
+  if (progress) {
+    cli::cli_inform(.glue(
+      "[gdal-direct] fetch+warp={formatC(t, format = 'f', digits = 2)}s"
+    ))
+  }
   info
 }
 
 # tmpfs dir for a run's per-source .bin payloads.
 .gd_tmp <- function() {
-  tmp <- file.path(if (dir.exists("/dev/shm")) "/dev/shm" else tempdir(),
-                   .glue("gdirect-{Sys.getpid()}"))
-  dir.create(tmp); tmp
+  tmp <- file.path(
+    if (dir.exists("/dev/shm")) "/dev/shm" else tempdir(),
+    .glue("gdirect-{Sys.getpid()}")
+  )
+  dir.create(tmp)
+  tmp
 }
 
 # Materialise the per-band results and write the composite GTiff (or return the
 # matrices when path is NULL). Shared by the direct and pipeline paths.
-.gd_write_result <- function(res, spec, path, nodata, band_names = NULL,
-                             wspec = NULL) {
-  mats <- lapply(res, .sv_materialise)                        # one per band
-  if (is.null(path)) return(if (spec$n_bands == 1L) mats[[1L]] else mats)
+.gd_write_result <- function(
+  res,
+  spec,
+  path,
+  nodata,
+  band_names = NULL,
+  wspec = NULL
+) {
+  mats <- lapply(res, .sv_materialise) # one per band
+  if (is.null(path)) {
+    return(if (spec$n_bands == 1L) mats[[1L]] else mats)
+  }
   nd <- if (is.null(nodata)) numeric(0) else nodata
-  wsc <- wspec$scale %||% numeric(0)
-  wof <- wspec$offset %||% numeric(0)
-  ds <- gdal_create_output(path, spec$grid, nodata = nd,
-                           band_names = band_names, dtype = wspec$dtype,
-                           options = wspec$options,
-                           scale = wsc, offset = wof)
+  ds <- gdal_create_output(
+    path,
+    spec$grid,
+    nodata = nd,
+    band_names = band_names,
+    dtype = wspec$dtype,
+    options = wspec$options
+  )
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
-  for (b in seq_along(mats))
-    gdal_write_window(ds, 0L, 0L, mats[[b]], wspec$dtype %||% spec$grid@dtype,
-                      nodata = nd, band = b, scale = wsc, offset = wof)
+  for (b in seq_along(mats)) {
+    gdal_write_window(
+      ds,
+      0L,
+      0L,
+      mats[[b]],
+      wspec$dtype %||% spec$grid@dtype,
+      nodata = nd,
+      band = b
+    )
+  }
   invisible(path)
 }
 
@@ -402,8 +616,14 @@ NULL
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
 #' @noRd
-.execute_composite_direct <- function(plan, spec, path = NULL, nodata = NULL,
-                                      band_names = NULL, wspec = NULL) {
+.execute_composite_direct <- function(
+  plan,
+  spec,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+) {
   .require_anvl()
   parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
   # Split pool: the fetch-ordered pipeline overlaps the mask + per-band medians
@@ -412,12 +632,21 @@ NULL
   # so it uses the simpler parallel-or-whole-grid path below.
   # Parallel multi-band always takes the split-pool pipeline (distributed
   # execution requires garry_daemons(), so the pools are guaranteed here).
-  if (parallel)
-    return(.execute_composite_pipeline(plan, spec, path, nodata, band_names,
-                                       wspec = wspec))
+  if (parallel) {
+    return(.execute_composite_pipeline(
+      plan,
+      spec,
+      path,
+      nodata,
+      band_names,
+      wspec = wspec
+    ))
+  }
 
-  nx <- spec$grid@dims[["x"]]; ny <- spec$grid@dims[["y"]]
-  tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  nx <- spec$grid@dims[["x"]]
+  ny <- spec$grid@dims[["y"]]
+  tmp <- .gd_tmp()
+  on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   info <- .gd_warp_sources(plan, spec$grid, tmp)
   masked <- length(spec$fmask_srcs) > 0L
   # COMPUTE: one lean whole-grid kernel in this process (a single band, or
@@ -425,33 +654,54 @@ NULL
   # whole fmask cube, vectorised over time, and shared across bands.
   tcomp <- system.time({
     dev <- .exec_device(spec$device)
-    cube <- function(ids)
-      g_upload_raw(do.call(c, lapply(ids, function(id)
-        readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L))),
-        "f32", c(length(ids), ny, nx), device = dev)
+    cube <- function(ids) {
+      g_upload_raw(
+        do.call(
+          c,
+          lapply(ids, function(id) {
+            readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L)
+          })
+        ),
+        "f32",
+        c(length(ids), ny, nx),
+        device = dev
+      )
+    }
     band_cubes <- lapply(spec$band_srcs, cube)
     fm <- if (masked) cube(spec$fmask_srcs) else NULL
-    F <- spec$F; chain <- spec$mask_chain; halo <- spec$halo
-    op <- spec$op; nan_rm <- spec$nan_rm; nyy <- ny; nxx <- nx
+    F <- spec$F
+    chain <- spec$mask_chain
+    halo <- spec$halo
+    op <- spec$op
+    nan_rm <- spec$nan_rm
+    nyy <- ny
+    nxx <- nx
     nb <- length(band_cubes)
     affs <- spec$band_affine
     lean <- function(inp) {
-      mask <- if (masked) .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
-              else NULL
+      mask <- if (masked) {
+        .gd_replay_mask(inp[[nb + 1L]], chain, halo, nyy, nxx)
+      } else {
+        NULL
+      }
       lapply(seq_len(nb), function(b) {
         x <- inp[[b]]
-        if (length(affs[[b]]$scale) == 1L)
+        if (length(affs[[b]]$scale) == 1L) {
           x <- x * affs[[b]]$scale + affs[[b]]$offset
+        }
         m <- if (masked) F(x, mask) else x
         .apply_reduce(op, m, 1L, nan_rm)
       })
     }
     res <- g_download(g_jit(lean, device = dev)(
-      c(band_cubes, if (masked) list(fm) else NULL)))
+      c(band_cubes, if (masked) list(fm) else NULL)
+    ))
   })[["elapsed"]]
-  if (isTRUE(getOption("garry.progress", FALSE)))
+  if (isTRUE(getOption("garry.progress", FALSE))) {
     cli::cli_inform(.glue(
-      "[gdal-direct] lean compute={formatC(tcomp, format = 'f', digits = 2)}s"))
+      "[gdal-direct] lean compute={formatC(tcomp, format = 'f', digits = 2)}s"
+    ))
+  }
   .gd_write_result(res, spec, path, nodata, band_names, wspec = wspec)
 }
 
@@ -462,11 +712,25 @@ NULL
 #' lands, so band B's median runs while later bands are still fetching. Only the
 #' last band's median is exposed after the drain. Requires a garry_daemons split.
 #' @noRd
-.execute_composite_pipeline <- function(plan, spec, path = NULL, nodata = NULL,
-                                        band_names = NULL, wspec = NULL) {
+.execute_composite_pipeline <- function(
+  plan,
+  spec,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+) {
   .require_anvl()
-  tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
-  .gd_write_result(.gd_reduce_results(plan, spec, tmp), spec, path, nodata, band_names, wspec = wspec)
+  tmp <- .gd_tmp()
+  on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  .gd_write_result(
+    .gd_reduce_results(plan, spec, tmp),
+    spec,
+    path,
+    nodata,
+    band_names,
+    wspec = wspec
+  )
 }
 
 # The fetch-ordered per-band compute of the composite pipeline, factored out so
@@ -476,7 +740,8 @@ NULL
 # per-band raw f32 payloads (band-source order); the caller writes or feeds them
 # to an upper kernel. `tmp` is caller-owned (shared across groups).
 .gd_reduce_results <- function(plan, spec, tmp) {
-  ny <- spec$grid@dims[["y"]]; nx <- spec$grid@dims[["x"]]
+  ny <- spec$grid@dims[["y"]]
+  nx <- spec$grid@dims[["x"]]
   progress <- isTRUE(getOption("garry.progress", FALSE))
   masked <- length(spec$fmask_srcs) > 0L
   prof_r <- "garry_read"
@@ -491,8 +756,11 @@ NULL
   }
 
   b <- .gd_build_jobs(plan, spec$grid, tmp)
-  info <- b$info; K <- b$K
-  bin_of <- function(ids) vapply(ids, function(id) info[[as.character(id)]]$bin, "")
+  info <- b$info
+  K <- b$K
+  bin_of <- function(ids) {
+    vapply(ids, function(id) info[[as.character(id)]]$bin, "")
+  }
   # Raw mirai() per job with the task fn resolved BY NAME on the daemon
   # (garry::), the same pattern as the scheduler's launch functions.
   # mirai_map() ships the function object inside every task's .args;
@@ -500,10 +768,16 @@ NULL
   # ~6 ms (idle pool) to ~100 ms once the read daemons are busy with
   # live warps, serialising a 220-task dispatch into ~25 s of host
   # stall that delayed every downstream phase (the "slow lead-in").
-  fetch <- function(ids) lapply(ids, function(id)
-    mirai::mirai(garry::.cd_fetch_warp(j, k),
-                 j = b$jobs[[as.character(id)]], k = K,
-                 .compute = prof_r))
+  fetch <- function(ids) {
+    lapply(ids, function(id) {
+      mirai::mirai(
+        garry::.cd_fetch_warp(j, k),
+        j = b$jobs[[as.character(id)]],
+        k = K,
+        .compute = prof_r
+      )
+    })
+  }
 
   t0 <- proc.time()[["elapsed"]]
   .gd_daemon_prep(prof_r)
@@ -519,15 +793,27 @@ NULL
   Fs <- if (is.null(spec$F)) NULL else .slim_fn(spec$F)
   base_sig <- rlang::hash(list(
     fn = if (is.null(Fs)) NULL else serialize(Fs, NULL),
-    op = spec$op, nan_rm = spec$nan_rm, masked = masked, dev = spec$device))
-  band_ck <- vapply(seq_along(spec$band_srcs), function(bi)
-    rlang::hash(list(base_sig, spec$band_affine[[bi]])), "")
+    op = spec$op,
+    nan_rm = spec$nan_rm,
+    masked = masked,
+    dev = spec$device
+  ))
+  band_ck <- vapply(
+    seq_along(spec$band_srcs),
+    function(bi) {
+      rlang::hash(list(base_sig, spec$band_affine[[bi]]))
+    },
+    ""
+  )
 
   # Strip grid: spread each band's median across the pool so the exposed
   # drain (the bands with no fetch left to hide behind) divides by the
   # pool width instead of landing whole on one daemon.
   ns_opt <- as.integer(garry_opt("gd_strips"))
-  bounds <- .gd_strip_bounds(ny, if (ns_opt >= 1L) ns_opt else max(1L, .comp_n()))
+  bounds <- .gd_strip_bounds(
+    ny,
+    if (ns_opt >= 1L) ns_opt else max(1L, .comp_n())
+  )
   ns <- length(bounds)
 
   # Warm + attach the compute pool while the read pool fetches: hide the
@@ -535,36 +821,70 @@ NULL
   # ck, executed per strip height on zero-byte g_fill dummies) inside the
   # fetch window, so no post-drain strip pays a compile.
   hs <- unique(vapply(bounds, `[[`, integer(1), 2L))
-  wsp <- unname(lapply(which(!duplicated(band_ck)), function(bi)
-    list(ck = band_ck[[bi]], F = Fs, op = spec$op, nan_rm = spec$nan_rm,
-         affine = spec$band_affine[[bi]], masked = masked, dev = spec$device,
-         n = length(spec$band_srcs[[bi]]), hs = hs, nx = nx)))
-  for (p in comp_profs)
-    mirai::everywhere({
-      suppressMessages(library(garry))
-      try(garry::.gd_warm_pipeline(sp), silent = TRUE)
-    }, sp = wsp, .compute = p)
+  wsp <- unname(lapply(which(!duplicated(band_ck)), function(bi) {
+    list(
+      ck = band_ck[[bi]],
+      F = Fs,
+      op = spec$op,
+      nan_rm = spec$nan_rm,
+      affine = spec$band_affine[[bi]],
+      masked = masked,
+      dev = spec$device,
+      n = length(spec$band_srcs[[bi]]),
+      hs = hs,
+      nx = nx
+    )
+  }))
+  for (p in comp_profs) {
+    mirai::everywhere(
+      {
+        suppressMessages(library(garry))
+        try(garry::.gd_warm_pipeline(sp), silent = TRUE)
+      },
+      sp = wsp,
+      .compute = p
+    )
+  }
 
   # Mask: once fmask lands, compute the cleaned cube on the compute pool while
   # the bands are still fetching. One mask .bin, read by every band median.
-  mask_bin <- tempfile("mask", tmpdir = tmp, fileext = ".bin"); mask_p <- NULL
+  mask_bin <- tempfile("mask", tmpdir = tmp, fileext = ".bin")
+  mask_p <- NULL
   if (masked) {
     fmr <- lapply(fmask_p, function(h) h[])
     .gd_check_fetch(fmr, "fmask")
-    if (progress) cli::cli_inform(.glue(
-      "[gdal-direct] fmask ",
-      "drain={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
-      "({length(fmr)} tasks, warp ",
-      "sum={formatC(sum(vapply(fmr, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"))
-    Km <- list(fmask_bins = bin_of(spec$fmask_srcs), out_bin = mask_bin,
-               chain = lapply(spec$mask_chain, function(n) {
-                 n@fn <- .slim_fn(n@fn); n }),
-               halo = spec$halo, ny = ny, nx = nx, dev = spec$device,
-               ck = rlang::hash(list(chain = .cd_chain_sig(spec$mask_chain),
-                                     halo = spec$halo, ny = ny, nx = nx,
-                                     dev = spec$device)))
-    mask_p <- mirai::mirai(garry::.gd_compute_mask(km), km = Km,
-                           .compute = next_cp())
+    if (progress) {
+      cli::cli_inform(.glue(
+        "[gdal-direct] fmask ",
+        "drain={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
+        "({length(fmr)} tasks, warp ",
+        "sum={formatC(sum(vapply(fmr, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"
+      ))
+    }
+    Km <- list(
+      fmask_bins = bin_of(spec$fmask_srcs),
+      out_bin = mask_bin,
+      chain = lapply(spec$mask_chain, function(n) {
+        n@fn <- .slim_fn(n@fn)
+        n
+      }),
+      halo = spec$halo,
+      ny = ny,
+      nx = nx,
+      dev = spec$device,
+      ck = rlang::hash(list(
+        chain = .cd_chain_sig(spec$mask_chain),
+        halo = spec$halo,
+        ny = ny,
+        nx = nx,
+        dev = spec$device
+      ))
+    )
+    mask_p <- mirai::mirai(
+      garry::.gd_compute_mask(km),
+      km = Km,
+      .compute = next_cp()
+    )
   }
 
   # Per-band medians, strip-decomposed: wait each band's fetch, then dispatch
@@ -574,40 +894,66 @@ NULL
   # generous / many-band pool then drains in memory-bounded waves, not a
   # spike). Strips reassemble by raw concatenation in y order: the payloads
   # are row-major f32, so the result is byte-identical to a whole-band job.
-  Kb <- list(F = Fs, op = spec$op, nan_rm = spec$nan_rm, ny = ny, nx = nx,
-             dev = spec$device, mask_bin = if (masked) mask_bin else character(0))
+  Kb <- list(
+    F = Fs,
+    op = spec$op,
+    nan_rm = spec$nan_rm,
+    ny = ny,
+    nx = nx,
+    dev = spec$device,
+    mask_bin = if (masked) mask_bin else character(0)
+  )
   n_slices <- length(spec$band_srcs[[1L]])
-  cap <- .gd_compute_cap(n_slices, bounds[[1L]][[2L]], nx,
-                         2L * max(1L, .comp_n()))
+  cap <- .gd_compute_cap(
+    n_slices,
+    bounds[[1L]][[2L]],
+    nx,
+    2L * max(1L, .comp_n())
+  )
   nb <- length(spec$band_srcs)
-  if (progress && cap < nb * ns)
+  if (progress && cap < nb * ns) {
     cli::cli_inform(.glue(
-      "[gdal-direct] compute in-flight capped at {cap} strip task(s) (RAM budget)"))
+      "[gdal-direct] compute in-flight capped at {cap} strip task(s) (RAM budget)"
+    ))
+  }
   mask_done <- !masked
   res_p <- new.env(parent = emptyenv())
   parts <- lapply(seq_len(nb), function(i) vector("list", ns))
   got <- integer(nb)
   res <- vector("list", nb)
-  t_comp <- 0; jit_creates <- 0L
-  inflight <- list()                          # dispatched, not yet collected (FIFO)
+  t_comp <- 0
+  jit_creates <- 0L
+  inflight <- list() # dispatched, not yet collected (FIFO)
   harvest <- function() {
-    it <- inflight[[1L]]; inflight <<- inflight[-1L]
+    it <- inflight[[1L]]
+    inflight <<- inflight[-1L]
     v <- res_p[[it$key]][]
-    if (inherits(v, "miraiError"))
+    if (inherits(v, "miraiError")) {
       cli::cli_abort(paste0(
         "gdal-direct pipeline compute failed on band {it$bi} strip {it$si}: ",
-        "{conditionMessage(v)}"))
+        "{conditionMessage(v)}"
+      ))
+    }
     t_comp <<- t_comp + (attr(v, "gd_t") %||% 0)
     jit_creates <<- jit_creates + (attr(v, "gd_jit") %||% 0L)
-    attr(v, "gd_t") <- NULL; attr(v, "gd_jit") <- NULL
+    attr(v, "gd_t") <- NULL
+    attr(v, "gd_jit") <- NULL
     rm(list = it$key, envir = res_p)
     parts[[it$bi]][[it$si]] <<- v
     got[[it$bi]] <<- got[[it$bi]] + 1L
     if (got[[it$bi]] == ns) {
-      res[[it$bi]] <<- if (ns == 1L) parts[[it$bi]][[1L]] else {
-        p <- do.call(c, lapply(parts[[it$bi]], function(x) {
-          attributes(x) <- NULL; x }))
-        attr(p, "gdim") <- c(ny, nx); attr(p, "gdt") <- "f32"
+      res[[it$bi]] <<- if (ns == 1L) {
+        parts[[it$bi]][[1L]]
+      } else {
+        p <- do.call(
+          c,
+          lapply(parts[[it$bi]], function(x) {
+            attributes(x) <- NULL
+            x
+          })
+        )
+        attr(p, "gdim") <- c(ny, nx)
+        attr(p, "gdt") <- "f32"
         p
       }
       parts[[it$bi]] <<- list()
@@ -616,31 +962,53 @@ NULL
   for (bi in seq_len(nb)) {
     bres <- lapply(band_p[[bi]], function(h) h[])
     .gd_check_fetch(bres, .glue("band {bi}"))
-    if (progress) cli::cli_inform(.glue(
-      "[gdal-direct] band {bi} drained at ",
-      "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"))
-    if (!mask_done) { mask_p[]; mask_done <- TRUE }   # mask .bin must exist first
+    if (progress) {
+      cli::cli_inform(.glue(
+        "[gdal-direct] band {bi} drained at ",
+        "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"
+      ))
+    }
+    if (!mask_done) {
+      mask_p[]
+      mask_done <- TRUE
+    } # mask .bin must exist first
     for (si in seq_len(ns)) {
-      while (length(inflight) >= cap) harvest()       # RAM cap: bound concurrency
-      jb <- list(band_bins = bin_of(spec$band_srcs[[bi]]),
-                 affine = spec$band_affine[[bi]],
-                 rows = if (ns == 1L) NULL else bounds[[si]],
-                 ck = band_ck[[bi]])
+      while (length(inflight) >= cap) {
+        harvest()
+      } # RAM cap: bound concurrency
+      jb <- list(
+        band_bins = bin_of(spec$band_srcs[[bi]]),
+        affine = spec$band_affine[[bi]],
+        rows = if (ns == 1L) NULL else bounds[[si]],
+        ck = band_ck[[bi]]
+      )
       key <- .glue("b{bi}.s{si}")
-      res_p[[key]] <- mirai::mirai(garry::.gd_compute_masked_band(jb, kb),
-                                   jb = jb, kb = Kb, .compute = next_cp())
+      res_p[[key]] <- mirai::mirai(
+        garry::.gd_compute_masked_band(jb, kb),
+        jb = jb,
+        kb = Kb,
+        .compute = next_cp()
+      )
       inflight[[length(inflight) + 1L]] <- list(bi = bi, si = si, key = key)
     }
   }
-  if (progress) cli::cli_inform(.glue(
-    "[gdal-direct] fetch+dispatch=",
-    "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"))
-  while (length(inflight)) harvest()
-  if (progress) cli::cli_inform(.glue(
-    "[gdal-direct] pipeline ",
-    "total={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
-    "(compute sum={formatC(t_comp, format = 'f', digits = 2)}s, ",
-    "{ns} strip/band, {jit_creates} post-warm compile)"))
+  if (progress) {
+    cli::cli_inform(.glue(
+      "[gdal-direct] fetch+dispatch=",
+      "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"
+    ))
+  }
+  while (length(inflight)) {
+    harvest()
+  }
+  if (progress) {
+    cli::cli_inform(.glue(
+      "[gdal-direct] pipeline ",
+      "total={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
+      "(compute sum={formatC(t_comp, format = 'f', digits = 2)}s, ",
+      "{ns} strip/band, {jit_creates} post-warm compile)"
+    ))
+  }
   res
 }
 
@@ -659,83 +1027,148 @@ NULL
 #' Recognise any warp-on-read-replayable plan and lift its whole IR, or NULL.
 #' @noRd
 .gd_spec <- function(plan) {
-  if (!isTRUE(garry_opt("composite_direct"))) return(NULL)
-  if (!.g_has_raw_upload()) return(NULL)
+  if (!isTRUE(garry_opt("composite_direct"))) {
+    return(NULL)
+  }
+  if (!.g_has_raw_upload()) {
+    return(NULL)
+  }
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
-  if (sink@kind != "compute") return(NULL)          # raster (compute) sink only
+  if (sink@kind != "compute") {
+    return(NULL)
+  } # raster (compute) sink only
   src_stages <- Filter(function(s) s@kind == "source_read", plan@stages)
-  if (!length(src_stages)) return(NULL)
-  for (s in src_stages) {                            # every source must be fetchable
+  if (!length(src_stages)) {
+    return(NULL)
+  }
+  for (s in src_stages) {
+    # every source must be fetchable
     n <- graph_get(graph, s@members[[1L]])
-    if (!grepl("^GTI:", n@path)) return(NULL)
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) return(NULL)
+    if (!grepl("^GTI:", n@path)) {
+      return(NULL)
+    }
+    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
+      return(NULL)
+    }
   }
   sink_out <- sink@members[[length(sink@members)]]
-  ids <- .reachable(graph, sink_out)                # ascending = topo
+  ids <- .reachable(graph, sink_out) # ascending = topo
   nds <- lapply(ids, function(id) graph_get(graph, id))
-  ok_type <- function(n)
-    S7::S7_inherits(n, SourceNode) || S7::S7_inherits(n, MapNode) ||
-    S7::S7_inherits(n, FocalNode) || S7::S7_inherits(n, StackNode) ||
-    S7::S7_inherits(n, ReduceNode)
-  if (!all(vapply(nds, ok_type, logical(1)))) return(NULL)   # Warp/Fused -> sched
+  ok_type <- function(n) {
+    S7::S7_inherits(n, SourceNode) ||
+      S7::S7_inherits(n, MapNode) ||
+      S7::S7_inherits(n, FocalNode) ||
+      S7::S7_inherits(n, StackNode) ||
+      S7::S7_inherits(n, ReduceNode)
+  }
+  if (!all(vapply(nds, ok_type, logical(1)))) {
+    return(NULL)
+  } # Warp/Fused -> sched
   is_src <- vapply(nds, function(n) S7::S7_inherits(n, SourceNode), logical(1))
   input_nodes <- ids[is_src]
-  src_ids <- vapply(src_stages, function(s)
-    graph_get(graph, s@members[[1L]])@id, integer(1))
-  if (!all(input_nodes %in% src_ids)) return(NULL)
+  src_ids <- vapply(
+    src_stages,
+    function(s) {
+      graph_get(graph, s@members[[1L]])@id
+    },
+    integer(1)
+  )
+  if (!all(input_nodes %in% src_ids)) {
+    return(NULL)
+  }
   members <- ids[!is_src]
-  list(members = members, input_nodes = input_nodes, sink_out = sink_out,
-       halo = .stage_halo(graph, members, input_nodes),
-       grid = sink@grid, device = sink@device)
+  list(
+    members = members,
+    input_nodes = input_nodes,
+    sink_out = sink_out,
+    halo = .stage_halo(graph, members, input_nodes),
+    grid = sink@grid,
+    device = sink@device
+  )
 }
 
 #' Execute any warp-on-read plan via whole-IR replay in one jit.
 #' @noRd
-.execute_gd_general <- function(plan, gspec, path = NULL, nodata = NULL,
-                                band_names = NULL, wspec = NULL) {
+.execute_gd_general <- function(
+  plan,
+  gspec,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+) {
   .require_anvl()
   graph <- plan@graph
-  nx <- gspec$grid@dims[["x"]]; ny <- gspec$grid@dims[["y"]]
-  tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
-  info <- .gd_warp_sources(plan, gspec$grid, tmp)   # overview-aware, on the read pool
+  nx <- gspec$grid@dims[["x"]]
+  ny <- gspec$grid@dims[["y"]]
+  tmp <- .gd_tmp()
+  on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  info <- .gd_warp_sources(plan, gspec$grid, tmp) # overview-aware, on the read pool
 
   tcomp <- system.time({
     dev <- .exec_device(gspec$device)
     h <- gspec$halo
-    fn <- .compose_stage_fn(graph, gspec$members, gspec$input_nodes,
-                            list(gspec$sink_out), h)
+    fn <- .compose_stage_fn(
+      graph,
+      gspec$members,
+      gspec$input_nodes,
+      list(gspec$sink_out),
+      h
+    )
     inputs <- lapply(gspec$input_nodes, function(id) {
-      a <- g_upload_raw(readBin(info[[as.character(id)]]$bin, "raw",
-                                n = ny * nx * 4L), "f32", c(ny, nx), device = dev)
+      a <- g_upload_raw(
+        readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L),
+        "f32",
+        c(ny, nx),
+        device = dev
+      )
       n <- graph_get(graph, id)
-      if (length(n@scale) == 1L) a <- a * n@scale + n@offset
-      if (h > 0L) g_pad(a, h, NaN) else a          # radius-cell NaN edge boundary
+      if (length(n@scale) == 1L) {
+        a <- a * n@scale + n@offset
+      }
+      if (h > 0L) g_pad(a, h, NaN) else a # radius-cell NaN edge boundary
     })
     res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(gspec$sink_out)]]
   })[["elapsed"]]
-  if (isTRUE(getOption("garry.progress", FALSE)))
+  if (isTRUE(getOption("garry.progress", FALSE))) {
     cli::cli_inform(.glue(
-      "[gdal-direct] general compute={formatC(tcomp, format = 'f', digits = 2)}s"))
+      "[gdal-direct] general compute={formatC(tcomp, format = 'f', digits = 2)}s"
+    ))
+  }
 
   m <- .sv_materialise(res)
   d <- dim(m)
   nb <- if (length(d) == 3L) d[[1L]] else 1L
-  mats <- if (length(d) == 3L) lapply(seq_len(nb), function(b) m[b, , ]) else list(m)
-  if (is.null(path)) return(if (nb == 1L) mats[[1L]] else mats)
+  mats <- if (length(d) == 3L) {
+    lapply(seq_len(nb), function(b) m[b, , ])
+  } else {
+    list(m)
+  }
+  if (is.null(path)) {
+    return(if (nb == 1L) mats[[1L]] else mats)
+  }
   wnodata <- if (is.null(nodata)) numeric(0) else nodata
-  ds <- gdal_create_output(path, gspec$grid, nodata = wnodata,
-                           band_names = band_names, dtype = wspec$dtype,
-                           options = wspec$options,
-                           scale = wspec$scale %||% numeric(0),
-                           offset = wspec$offset %||% numeric(0))
+  ds <- gdal_create_output(
+    path,
+    gspec$grid,
+    nodata = wnodata,
+    band_names = band_names,
+    dtype = wspec$dtype,
+    options = wspec$options
+  )
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
-  for (b in seq_len(nb))
-    gdal_write_window(ds, 0L, 0L, mats[[b]],
-                      wspec$dtype %||% gspec$grid@dtype,
-                      nodata = wnodata, band = b,
-                      scale = wspec$scale %||% numeric(0),
-                      offset = wspec$offset %||% numeric(0))
+  for (b in seq_len(nb)) {
+    gdal_write_window(
+      ds,
+      0L,
+      0L,
+      mats[[b]],
+      wspec$dtype %||% gspec$grid@dtype,
+      nodata = wnodata,
+      band = b
+    )
+  }
   invisible(path)
 }
 
@@ -761,8 +1194,10 @@ NULL
 # ---------------------------------------------------------------------------
 
 .gd_hash <- function(x) {
-  tf <- tempfile(); on.exit(unlink(tf), add = TRUE)
-  writeBin(serialize(x, NULL), tf); unname(tools::md5sum(tf))
+  tf <- tempfile()
+  on.exit(unlink(tf), add = TRUE)
+  writeBin(serialize(x, NULL), tf)
+  unname(tools::md5sum(tf))
 }
 
 #' Recognise a reduce-decomposable plan and lift its groups + upper IR, or NULL.
@@ -773,69 +1208,132 @@ NULL
 #' scheduler). `.gd_spec` gates fetchability and the node-type whitelist.
 #' @noRd
 .gd_decompose <- function(plan) {
-  gsp <- .gd_spec(plan)                       # fetchable GTI + Source/Map/Focal/Stack/Reduce
-  if (is.null(gsp)) return(NULL)
+  gsp <- .gd_spec(plan) # fetchable GTI + Source/Map/Focal/Stack/Reduce
+  if (is.null(gsp)) {
+    return(NULL)
+  }
   graph <- plan@graph
   gg <- function(id) graph_get(graph, id)
   sink_out <- gsp$sink_out
   ids <- .reachable(graph, sink_out)
   is_red_t <- function(n) S7::S7_inherits(n, ReduceNode) && "t" %in% n@over
   # Leaf temporal reduces: a reduce over t with no reduce anywhere below it.
-  leaf_ids <- Filter(function(id) {
-    if (!is_red_t(gg(id))) return(FALSE)
-    below <- setdiff(.reachable(graph, id), id)
-    !any(vapply(below, function(s) is_red_t(gg(s)), logical(1)))
-  }, ids)
-  if (!length(leaf_ids)) return(NULL)
+  leaf_ids <- Filter(
+    function(id) {
+      if (!is_red_t(gg(id))) {
+        return(FALSE)
+      }
+      below <- setdiff(.reachable(graph, id), id)
+      !any(vapply(below, function(s) is_red_t(gg(s)), logical(1)))
+    },
+    ids
+  )
+  if (!length(leaf_ids)) {
+    return(NULL)
+  }
   specs <- lapply(leaf_ids, function(id) .cd_reduce_spec(gg, gg(id)))
-  if (any(vapply(specs, is.null, logical(1)))) return(NULL)
+  if (any(vapply(specs, is.null, logical(1)))) {
+    return(NULL)
+  }
 
   # Upper IR: nodes strictly above the leaf reduces (their subtrees are the
   # inputs). No upper members -> pure composite, not our job.
-  subtrees <- unique(unlist(lapply(leaf_ids, function(id) .reachable(graph, id))))
-  members <- setdiff(ids, subtrees)           # ascending == topo
-  if (!length(members)) return(NULL)
+  subtrees <- unique(unlist(lapply(leaf_ids, function(id) {
+    .reachable(graph, id)
+  })))
+  members <- setdiff(ids, subtrees) # ascending == topo
+  if (!length(members)) {
+    return(NULL)
+  }
   # Every upper member's parents must resolve to an upper member or a leaf
   # reduce (else a raw non-reduced source feeds the upper IR -> scheduler).
   leaf_set <- unlist(leaf_ids)
-  ok <- all(vapply(members, function(id)
-    all(gg(id)@parents %in% c(members, leaf_set)), logical(1)))
-  if (!ok) return(NULL)
+  ok <- all(vapply(
+    members,
+    function(id) {
+      all(gg(id)@parents %in% c(members, leaf_set))
+    },
+    logical(1)
+  ))
+  if (!ok) {
+    return(NULL)
+  }
 
   # Group leaf reduces that form ONE composite (shared mask/op) -> one pipeline
   # call computes them as a multi-band composite with fetch overlap.
-  gkey <- vapply(seq_along(specs), function(i) {
-    s <- specs[[i]]
-    paste(s$op, s$nan_rm, s$halo, paste(s$fmask, collapse = ","),
-          .gd_hash(list(lapply(s$mask_chain, function(n) { n@fn <- .slim_fn(n@fn); n }),
-                        if (is.null(s$F)) NULL else .slim_fn(s$F))), sep = "#")
-  }, "")
+  gkey <- vapply(
+    seq_along(specs),
+    function(i) {
+      s <- specs[[i]]
+      paste(
+        s$op,
+        s$nan_rm,
+        s$halo,
+        paste(s$fmask, collapse = ","),
+        .gd_hash(list(
+          lapply(s$mask_chain, function(n) {
+            n@fn <- .slim_fn(n@fn)
+            n
+          }),
+          if (is.null(s$F)) NULL else .slim_fn(s$F)
+        )),
+        sep = "#"
+      )
+    },
+    ""
+  )
   groups <- lapply(unique(gkey), function(k) {
-    idx <- which(gkey == k); ss <- specs[idx]; s1 <- ss[[1L]]
-    list(reduce_ids = unlist(leaf_ids[idx]),
-         spec = list(op = s1$op, nan_rm = s1$nan_rm, F = s1$F,
-                     mask_chain = s1$mask_chain, halo = s1$halo,
-                     band_srcs = lapply(ss, function(s) s$band),
-                     band_affine = lapply(ss, function(s) s$affine),
-                     fmask_srcs = s1$fmask, n_bands = length(ss),
-                     grid = gsp$grid, device = gsp$device))
+    idx <- which(gkey == k)
+    ss <- specs[idx]
+    s1 <- ss[[1L]]
+    list(
+      reduce_ids = unlist(leaf_ids[idx]),
+      spec = list(
+        op = s1$op,
+        nan_rm = s1$nan_rm,
+        F = s1$F,
+        mask_chain = s1$mask_chain,
+        halo = s1$halo,
+        band_srcs = lapply(ss, function(s) s$band),
+        band_affine = lapply(ss, function(s) s$affine),
+        fmask_srcs = s1$fmask,
+        n_bands = length(ss),
+        grid = gsp$grid,
+        device = gsp$device
+      )
+    )
   })
-  list(groups = groups,
-       upper = list(members = members, input_nodes = leaf_set, sink_out = sink_out,
-                    halo = .stage_halo(graph, members, leaf_set),
-                    grid = gsp$grid, device = gsp$device))
+  list(
+    groups = groups,
+    upper = list(
+      members = members,
+      input_nodes = leaf_set,
+      sink_out = sink_out,
+      halo = .stage_halo(graph, members, leaf_set),
+      grid = gsp$grid,
+      device = gsp$device
+    )
+  )
 }
 
 #' Execute a reduce-decomposable plan: overlap-compute the leaf reduces, then
 #' run the upper IR on the materialised results.
 #' @noRd
-.execute_gd_reduce <- function(plan, decomp, path = NULL, nodata = NULL,
-                               band_names = NULL, wspec = NULL) {
+.execute_gd_reduce <- function(
+  plan,
+  decomp,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+) {
   .require_anvl()
   graph <- plan@graph
-  tmp <- .gd_tmp(); on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  tmp <- .gd_tmp()
+  on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   u <- decomp$upper
-  dev <- .exec_device(u$device); h <- u$halo
+  dev <- .exec_device(u$device)
+  h <- u$halo
 
   # 1. Each group's leaf reduces via the overlapped per-band pipeline, keyed by
   #    reduce node id (band-source order == reduce_ids order).
@@ -843,39 +1341,63 @@ NULL
   for (grp in decomp$groups) {
     res <- .gd_reduce_results(plan, grp$spec, tmp)
     mats <- lapply(res, .sv_materialise)
-    for (i in seq_along(grp$reduce_ids))
+    for (i in seq_along(grp$reduce_ids)) {
       leaf[[.key(grp$reduce_ids[[i]])]] <- mats[[i]]
+    }
   }
 
   # 2. Upper IR on the materialised 2D leaf results, one lean kernel.
   tcomp <- system.time({
-    fn <- .compose_stage_fn(graph, u$members, u$input_nodes, list(u$sink_out), h)
+    fn <- .compose_stage_fn(
+      graph,
+      u$members,
+      u$input_nodes,
+      list(u$sink_out),
+      h
+    )
     inputs <- lapply(u$input_nodes, function(id) {
       a <- g_upload(leaf[[.key(id)]], "f32", device = dev)
       if (h > 0L) g_pad(a, h, NaN) else a
     })
     res <- g_download(g_jit(fn, device = dev)(inputs))[[.key(u$sink_out)]]
   })[["elapsed"]]
-  if (isTRUE(getOption("garry.progress", FALSE)))
+  if (isTRUE(getOption("garry.progress", FALSE))) {
     cli::cli_inform(.glue(
-      "[gdal-direct] upper compute={formatC(tcomp, format = 'f', digits = 2)}s"))
+      "[gdal-direct] upper compute={formatC(tcomp, format = 'f', digits = 2)}s"
+    ))
+  }
 
-  m <- .sv_materialise(res); d <- dim(m)
+  m <- .sv_materialise(res)
+  d <- dim(m)
   nb <- if (length(d) == 3L) d[[1L]] else 1L
-  mats <- if (length(d) == 3L) lapply(seq_len(nb), function(b) m[b, , ]) else list(m)
-  if (is.null(path)) return(if (nb == 1L) mats[[1L]] else mats)
+  mats <- if (length(d) == 3L) {
+    lapply(seq_len(nb), function(b) m[b, , ])
+  } else {
+    list(m)
+  }
+  if (is.null(path)) {
+    return(if (nb == 1L) mats[[1L]] else mats)
+  }
   wnodata <- if (is.null(nodata)) numeric(0) else nodata
-  ds <- gdal_create_output(path, u$grid, nodata = wnodata,
-                           band_names = band_names, dtype = wspec$dtype,
-                           options = wspec$options,
-                           scale = wspec$scale %||% numeric(0),
-                           offset = wspec$offset %||% numeric(0))
+  ds <- gdal_create_output(
+    path,
+    u$grid,
+    nodata = wnodata,
+    band_names = band_names,
+    dtype = wspec$dtype,
+    options = wspec$options
+  )
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
-  for (b in seq_len(nb))
-    gdal_write_window(ds, 0L, 0L, mats[[b]], wspec$dtype %||% u$grid@dtype,
-                      nodata = wnodata, band = b,
-                      scale = wspec$scale %||% numeric(0),
-                      offset = wspec$offset %||% numeric(0))
+  for (b in seq_len(nb)) {
+    gdal_write_window(
+      ds,
+      0L,
+      0L,
+      mats[[b]],
+      wspec$dtype %||% u$grid@dtype,
+      nodata = wnodata,
+      band = b
+    )
+  }
   invisible(path)
 }
-

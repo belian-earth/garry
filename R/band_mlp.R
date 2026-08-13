@@ -55,13 +55,26 @@
 #'   `over = "band"`.
 #' @seealso [band_project()] for the linear case, [reduce_over()]
 #' @export
-mlp_project <- function(weights, biases, center = NULL, scale = NULL,
-                        output_activation = c("identity", "sigmoid"),
-                        qa_plane = NULL, qa_floor = NULL) {
+mlp_project <- function(
+  weights,
+  biases,
+  center = NULL,
+  scale = NULL,
+  output_activation = c("identity", "sigmoid"),
+  qa_plane = NULL,
+  qa_floor = NULL
+) {
   output_activation <- match.arg(output_activation)
-  if (!is.list(weights) || !is.list(biases) ||
-      length(weights) != length(biases) || length(weights) < 1L)
-    cli::cli_abort("{.arg weights} and {.arg biases} must be equal-length non-empty lists")
+  if (
+    !is.list(weights) ||
+      !is.list(biases) ||
+      length(weights) != length(biases) ||
+      length(weights) < 1L
+  ) {
+    cli::cli_abort(
+      "{.arg weights} and {.arg biases} must be equal-length non-empty lists"
+    )
+  }
   weights <- lapply(weights, function(w) {
     w <- as.matrix(w)
     storage.mode(w) <- "double"
@@ -70,19 +83,26 @@ mlp_project <- function(weights, biases, center = NULL, scale = NULL,
   biases <- lapply(biases, as.numeric)
   n_in <- ncol(weights[[1L]])
   for (l in seq_along(weights)) {
-    if (length(biases[[l]]) != nrow(weights[[l]]))
+    if (length(biases[[l]]) != nrow(weights[[l]])) {
       cli::cli_abort("layer {l}: bias length must equal nrow(weights)")
-    if (l > 1L && ncol(weights[[l]]) != nrow(weights[[l - 1L]]))
-      cli::cli_abort("layer {l}: ncol(weights) must equal the previous layer's nrow")
+    }
+    if (l > 1L && ncol(weights[[l]]) != nrow(weights[[l - 1L]])) {
+      cli::cli_abort(
+        "layer {l}: ncol(weights) must equal the previous layer's nrow"
+      )
+    }
   }
-  if (nrow(weights[[length(weights)]]) != 1L)
+  if (nrow(weights[[length(weights)]]) != 1L) {
     cli::cli_abort("the final layer must have one output (nrow(weights) == 1)")
+  }
   ctr <- if (!is.null(center)) as.numeric(center)
   scl <- if (!is.null(scale)) as.numeric(scale)
-  if (!is.null(ctr) && length(ctr) != n_in)
+  if (!is.null(ctr) && length(ctr) != n_in) {
     cli::cli_abort("{.arg center} must have one value per input band ({n_in})")
-  if (!is.null(scl) && length(scl) != n_in)
+  }
+  if (!is.null(scl) && length(scl) != n_in) {
     cli::cli_abort("{.arg scale} must have one value per input band ({n_in})")
+  }
   # QA gating inside the kernel (rather than a separate gate chain):
   # the QA plane rides as the LAST plane of the input cube, so the
   # whole predict consumes ONE coalesced multi-band read — the shape
@@ -92,26 +112,36 @@ mlp_project <- function(weights, biases, center = NULL, scale = NULL,
   # the QA value, and NaN features already yield NaN predictions.
   if (!is.null(qa_plane)) {
     qa_plane <- as.integer(qa_plane)
-    if (qa_plane != n_in + 1L)
-      cli::cli_abort("qa_plane must be the last plane ({n_in + 1L}); got {qa_plane}")
+    if (qa_plane != n_in + 1L) {
+      cli::cli_abort(
+        "qa_plane must be the last plane ({n_in + 1L}); got {qa_plane}"
+      )
+    }
   }
   qf <- if (!is.null(qa_floor)) as.numeric(qa_floor)
   force(output_activation)
 
   function(x, dims) {
-    if (!identical(as.integer(dims), 1L))
-      cli::cli_abort("mlp_project() reduces the leading band axis (margin 1); got {dims}")
+    if (!identical(as.integer(dims), 1L)) {
+      cli::cli_abort(
+        "mlp_project() reduces the leading band axis (margin 1); got {dims}"
+      )
+    }
     sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
     n_exp <- n_in + !is.null(qa_plane)
-    if (length(sh) != 3L || sh[[1L]] != n_exp)
-      cli::cli_abort("expected a ({n_exp}, y, x) chunk; got dims {paste(sh, collapse = 'x')}")
-    ny <- sh[[2L]]; nx <- sh[[3L]]
+    if (length(sh) != 3L || sh[[1L]] != n_exp) {
+      cli::cli_abort(
+        "expected a ({n_exp}, y, x) chunk; got dims {paste(sh, collapse = 'x')}"
+      )
+    }
+    ny <- sh[[2L]]
+    nx <- sh[[3L]]
     qa_v <- NULL
     if (!is.null(qa_plane)) {
-      qa_v <- .g_flatten_yx(g_slice_t(x, n_in + 1L, n_in + 1L))  # (1, npix)
+      qa_v <- .g_flatten_yx(g_slice_t(x, n_in + 1L, n_in + 1L)) # (1, npix)
       x <- g_slice_t(x, 1L, n_in)
     }
-    h <- .g_flatten_yx(x)                               # (band, npix)
+    h <- .g_flatten_yx(x) # (band, npix)
     if (!is.null(ctr)) {
       b <- g_broadcast_arrays(h, matrix(ctr, n_in, 1L))
       h <- b[[1L]] - b[[2L]]
@@ -122,11 +152,11 @@ mlp_project <- function(weights, biases, center = NULL, scale = NULL,
     }
     n_layers <- length(weights)
     for (l in seq_len(n_layers)) {
-      h <- weights[[l]] %*% h                            # (n_out, npix)
+      h <- weights[[l]] %*% h # (n_out, npix)
       b <- g_broadcast_arrays(h, matrix(biases[[l]], nrow(weights[[l]]), 1L))
       h <- b[[1L]] + b[[2L]]
       h <- if (l < n_layers) {
-        (h + abs(h)) / 2                                 # NaN-preserving ReLU
+        (h + abs(h)) / 2 # NaN-preserving ReLU
       } else if (output_activation == "sigmoid") {
         1 / (1 + exp(-h))
       } else {
@@ -135,9 +165,11 @@ mlp_project <- function(weights, biases, center = NULL, scale = NULL,
     }
     if (!is.null(qa_v)) {
       bad <- g_is_nodata(qa_v)
-      if (!is.null(qf)) bad <- bad | (qa_v < qf)
-      h <- g_ifelse(bad, NaN, h)                         # (1, npix)
+      if (!is.null(qf)) {
+        bad <- bad | (qa_v < qf)
+      }
+      h <- g_ifelse(bad, NaN, h) # (1, npix)
     }
-    .g_unflatten_yx(h, ny, nx)                           # (y, x)
+    .g_unflatten_yx(h, ny, nx) # (y, x)
   }
 }

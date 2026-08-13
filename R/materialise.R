@@ -6,11 +6,13 @@ NULL
 .mat_check_clear <- function(path, overwrite) {
   bin <- sub("\\.vrt$", ".bin", path)
   hit <- c(path, bin)[file.exists(c(path, bin))]
-  if (length(hit) && !overwrite)
+  if (length(hit) && !overwrite) {
     cli::cli_abort(c(
       "target already exists: {.path {hit[[1L]]}}.",
       "i" = "pass {.code overwrite = TRUE} to replace it (the existing
-             file may hold pixels from an older graph)"))
+             file may hold pixels from an older graph)"
+    ))
+  }
   unlink(c(path, bin))
 }
 
@@ -57,9 +59,14 @@ NULL
 #' @seealso [collect()] to execute and return the result in the R
 #'   session; [write_tif()] to execute and stream to a GeoTIFF.
 #' @export
-materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
-                        overwrite = FALSE,
-                        distributed = garry_daemons_set()) {
+materialise <- function(
+  x,
+  dir = NULL,
+  name = "garry",
+  nodata = NULL,
+  overwrite = FALSE,
+  distributed = garry_daemons_set()
+) {
   if (is.null(dir)) {
     dir <- tempfile("materialise-")
     cli::cli_inform("materialising to {.path {dir}} (session-temporary)")
@@ -74,36 +81,51 @@ materialise <- function(x, dir = NULL, name = "garry", nodata = NULL,
   .assert_class(x, LazyDataset, "LazyDataset")
 
   slices <- unique(unlist(lapply(x@bands, names), use.names = FALSE))
-  if (is.null(slices) || !all(nzchar(slices)))
+  if (is.null(slices) || !all(nzchar(slices))) {
     cli::cli_abort(c(
       "the dataset's slices must be named (dates) to materialise.",
-      "i" = "unnamed layers cannot be matched back into a dataset"))
+      "i" = "unnamed layers cannot be matched back into a dataset"
+    ))
+  }
   slices <- sort(slices)
 
   # one sink per slice: the bands PRESENT on that date, stacked in the
   # dataset's band order (ragged bands shrink their dates' cubes)
-  order_of <- lapply(stats::setNames(nm = slices), function(nm)
-    names(x@bands)[vapply(x@bands, function(b) nm %in% names(b),
-                          logical(1))])
+  order_of <- lapply(stats::setNames(nm = slices), function(nm) {
+    names(x@bands)[vapply(x@bands, function(b) nm %in% names(b), logical(1))]
+  })
   sinks <- lapply(stats::setNames(nm = slices), function(nm) {
     layers <- lapply(order_of[[nm]], function(b) x@bands[[b]][[nm]])
-    if (length(layers) == 1L) layers[[1L]]
-    else lazy_stack(stats::setNames(layers, order_of[[nm]]),
-                    along = "band")
+    if (length(layers) == 1L) {
+      layers[[1L]]
+    } else {
+      lazy_stack(stats::setNames(layers, order_of[[nm]]), along = "band")
+    }
   })
   paths <- stats::setNames(
-    file.path(dir, paste0(name, "-", slices, ".vrt")), slices)
-  for (p in paths) .mat_check_clear(p, overwrite)
+    file.path(dir, paste0(name, "-", slices, ".vrt")),
+    slices
+  )
+  for (p in paths) {
+    .mat_check_clear(p, overwrite)
+  }
 
-  .collect_impl(sinks, path = paths, nodata = nodata, distributed = distributed,
-          band_names = order_of)
+  .collect_impl(
+    sinks,
+    path = paths,
+    nodata = nodata,
+    distributed = distributed,
+    band_names = order_of
+  )
 
   bands <- lapply(stats::setNames(nm = names(x@bands)), function(b) {
     have <- slices[vapply(order_of, function(o) b %in% o, logical(1))]
-    stats::setNames(lapply(have, function(nm)
-      lazy_source(paths[[nm]], band = match(b, order_of[[nm]]))), have)
+    stats::setNames(
+      lapply(have, function(nm) {
+        lazy_source(paths[[nm]], band = match(b, order_of[[nm]]))
+      }),
+      have
+    )
   })
   as_dataset(bands, mask_asset = if (length(x@mask_asset)) x@mask_asset)
 }
-
-

@@ -14,9 +14,7 @@
   pad,
   dtype,
   nodata,
-  n_chunks,
-  scale = numeric(0),
-  offset = numeric(0)
+  n_chunks
 )
 }
 \arguments{

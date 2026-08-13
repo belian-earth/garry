@@ -64,6 +64,104 @@ preview(cube, bands=c(2,1,3))   # False-colour composite
 
 Neighbouring pixels of similar land cover carry similar embeddings, so the
 false-colour image segments the landscape into coherent regions: the structure
-the embeddings encode. The same dequantised dataset feeds any downstream verb --
-a band-axis PCA (`reduce_over(over = "band")` with `band_project()`), a
-similarity search, or a classifier fit on the collected array.
+the embeddings encode. But three bands show three of sixty-four dimensions.
+The clustering below uses all of them.
+
+## Cluster the full embedding space
+
+An unsupervised k-means over the 64-dimensional embedding vectors segments
+the landscape without a single training label. The pattern is
+fit-small, predict-lazily:
+
+**Fit.** k-means needs pixels in R, but not all 7.5 million of them. AEF
+embeddings are built to average linearly (the read above already relies on
+that with `resampling = "average"`), so fit on a coarser 120 m read of the
+same tile: an overview-backed, light fetch of ~470k pixels.
+
+```{r km-fit, message = FALSE, warning = FALSE}
+emb120 <- lazy_dataset(tile, grid_from_src(tile, 120),
+                       resampling = "average") |>
+  lazy_map(fn = dequantize_aef, dtype = "f32")
+
+garry_daemons()
+arr <- collect(stack_bands(emb120))          # (y, x, 64)
+px  <- matrix(arr, ncol = dim(arr)[[3]])
+px  <- px[stats::complete.cases(px), ]
+set.seed(42)
+px  <- px[sample(nrow(px), 1e5), ]           # 100k px place 6 centroids fine
+km  <- kmeans(px, centers = 5)
+km$size
+```
+
+**Assign.** Every 30 m pixel goes to its nearest centroid:
+`argmax_k (x . c_k - |c_k|^2 / 2)`, and `x . c_k` is a linear combination of
+bands -- the `band_project()` reducer from the
+[PCA article](hls-harmonized-pca.html). The argmax is expressible in the
+same public vocabulary, so the WHOLE assignment runs inside the graph: a
+custom band reducer composes six projections with a comparison chain, and
+`collect()` returns the finished cluster map. This is ordinary user code --
+garry's shipped verbs are built from exactly these pieces, with no
+privileged access to the engine.
+
+```{r km-assign, message = FALSE}
+nearest_center <- function(centers) {
+  ct   <- unname(as.matrix(centers))            # k x band
+  half <- rowSums(ct^2) / 2
+  proj <- lapply(seq_len(nrow(ct)), function(k) band_project(ct[k, ]))
+  function(x, dims) {
+    s1   <- proj[[1]](x, dims) - half[[1]]      # score against centre 1
+    best <- s1
+    cl   <- s1 * 0 + 1                          # current best label
+    for (k in 2:nrow(ct)) {
+      sk   <- proj[[k]](x, dims) - half[[k]]
+      hit  <- sk > best
+      cl   <- g_ifelse(hit, k, cl)
+      best <- g_ifelse(hit, sk, best)
+    }
+    g_ifelse(g_is_nodata(s1), NaN, cl)          # nodata stays nodata
+  }
+}
+
+clusters <- reduce_over(stack_bands(embeddings),
+                        nearest_center(km$centers), over = "band")
+clmap <- collect(clusters)
+
+garry_daemons(0, 0)
+```
+
+
+One fused kernel reads the full-resolution 64-band cube once, computes every
+projection and the argmax per pixel, and only the finished single-band
+cluster map ever reaches R. (Want the raw scores instead? Stack plain
+`band_project()` reducers with `lazy_stack(along = "band")` and take
+`max.col()` host-side -- same digital numbers.)
+
+The k-means prediction can also stream straight to disk. Note the
+`dtype` and `overview_resampling` arguments: COG overviews default to
+"average", and an averaged class label is meaningless, so categorical
+outputs want "nearest":
+
+```{r km-write, eval = FALSE}
+write_tif(
+  clusters,
+  "km-aef.tif",
+  dtype = "i16",
+  cog = TRUE,
+  overview_resampling = "nearest"
+)
+```
+
+And the final k-means map:
+
+```{r km-plot, message = FALSE}
+preview(
+  clmap,
+  col = c("#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00")
+)
+```
+
+Five clusters, no labels, and the landscape decomposes into its structure:
+the dendritic drainage network, the river corridor and settlement strip,
+and the textured forest mosaic each claim their own class. The same
+dequantised dataset feeds any downstream verb the same way -- a band-axis
+PCA, a similarity search, or a classifier fit on the collected array.

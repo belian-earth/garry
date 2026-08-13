@@ -26,10 +26,12 @@
 }
 
 .require_anvl <- function() {
-  if (!rlang::is_installed("anvl"))
+  if (!rlang::is_installed("anvl")) {
     cli::cli_abort(c(
       "The {.pkg anvl} package is required for execution.",
-      "i" = "Install it from {.url https://r-xla.r-universe.dev}."))
+      "i" = "Install it from {.url https://r-xla.r-universe.dev}."
+    ))
+  }
 }
 
 # Promote a plain R scalar to the traced operand's dtype.
@@ -86,9 +88,14 @@ g_value_and_gradient <- function(f, wrt) {
 g_upload <- function(x, dtype, device = NULL) {
   .require_anvl()
   carrier <- unname(.anvl_upload_dtype[dtype])
-  if (!is.na(carrier)) dtype <- carrier
-  if (is.null(device)) anvl::nv_array(x, dtype)
-  else anvl::nv_array(x, dtype, device = device)
+  if (!is.na(carrier)) {
+    dtype <- carrier
+  }
+  if (is.null(device)) {
+    anvl::nv_array(x, dtype)
+  } else {
+    anvl::nv_array(x, dtype, device = device)
+  }
 }
 
 #' Download an AnvlArray (or a nested list of them) to R arrays.
@@ -98,8 +105,12 @@ g_upload <- function(x, dtype, device = NULL) {
 #' @export
 g_download <- function(x) {
   # Order matters: an AnvlArray is itself a list internally.
-  if (.g_traced(x)) return(anvl::as_array(x))
-  if (is.list(x)) return(lapply(x, g_download))
+  if (.g_traced(x)) {
+    return(anvl::as_array(x))
+  }
+  if (is.list(x)) {
+    return(lapply(x, g_download))
+  }
   x
 }
 
@@ -119,11 +130,17 @@ g_download <- function(x) {
 #' @export
 .g_has_raw_upload <- function() {
   ok <- .g_raw_probe$ok
-  if (!is.null(ok)) return(ok)
-  ok <- rlang::is_installed("anvl") && tryCatch({
-    x <- anvl::nv_array(as.raw(c(0L, 0L, 128L, 63L)), "f32", shape = 1L)
-    identical(as.numeric(anvl::as_array(x)), 1)
-  }, error = function(e) FALSE)
+  if (!is.null(ok)) {
+    return(ok)
+  }
+  ok <- rlang::is_installed("anvl") &&
+    tryCatch(
+      {
+        x <- anvl::nv_array(as.raw(c(0L, 0L, 128L, 63L)), "f32", shape = 1L)
+        identical(as.numeric(anvl::as_array(x)), 1)
+      },
+      error = function(e) FALSE
+    )
   .g_raw_probe$ok <- ok
   ok
 }
@@ -165,8 +182,11 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
 #' @export
 g_fill <- function(value, dim, dtype = "f32", device = NULL) {
   .require_anvl()
-  if (is.null(device)) anvl::nv_fill(value, dim, dtype)
-  else anvl::nv_fill(value, dim, dtype, device = device)
+  if (is.null(device)) {
+    anvl::nv_fill(value, dim, dtype)
+  } else {
+    anvl::nv_fill(value, dim, dtype, device = device)
+  }
 }
 
 #' Download an AnvlArray as a raw store payload.
@@ -182,10 +202,101 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 g_download_raw <- function(x) {
   .require_anvl()
   dt <- .g_dtype(x)
-  if (!dt %in% c("f32", "f64"))
-    cli::cli_abort("raw store payloads are f32/f64; got {.val {dt}}")
-  structure(anvl::as_raw(x, row_major = TRUE),
-            gdim = .g_shape(x), gdt = dt)
+  # f32/f64 are the store's compute payloads (D19/f64-store); the
+  # integer dtypes are SINK-ONLY payloads from g_quantize() -- written
+  # bytes, never re-uploaded or sliced. u32 is excluded: R cannot
+  # readBin unsigned 4-byte values, and the writer must be able to
+  # recover a plain integer vector from the payload.
+  if (!dt %in% c("f32", "f64", "u8", "i8", "i16", "u16", "i32")) {
+    cli::cli_abort(
+      "raw store payloads are f32/f64 or sink integers; got {.val {dt}}"
+    )
+  }
+  structure(anvl::as_raw(x, row_major = TRUE), gdim = .g_shape(x), gdt = dt)
+}
+
+#' Round to nearest integer value (half to even), elementwise.
+#'
+#' Matches base R's `round(x)` semantics (IEEE round-half-to-even), so
+#' device-side quantization reproduces the historical writer-side
+#' `round()` exactly.
+#'
+#' @param x Traced array or plain numeric.
+#' @return Same shape as `x`.
+#' @keywords internal
+#' @export
+g_round <- function(x) {
+  .require_anvl()
+  anvl::nv_round(x)
+}
+
+#' Clamp values to a closed range, elementwise.
+#'
+#' @param x Traced array or plain numeric.
+#' @param lo,hi Range bounds (scalars).
+#' @return Same shape as `x`.
+#' @keywords internal
+#' @export
+g_clamp <- function(x, lo, hi) {
+  .require_anvl()
+  anvl::nv_clamp(lo, x, hi)
+}
+
+# Integer output ranges for quantized sinks (mirrors GDAL's clamp at
+# the double -> integer band conversion the writer used to rely on).
+.g_int_range <- list(
+  u8 = c(0, 255),
+  i8 = c(-128, 127),
+  u16 = c(0, 65535),
+  i16 = c(-32768, 32767),
+  i32 = c(-2147483648, 2147483647)
+)
+
+#' Quantize physical values to integer digital numbers, on device.
+#'
+#' The sink-side write transform `round((x - offset) / scale)` --
+#' clamped to `dtype`'s range (as GDAL's conversion would), with NaN
+#' mapped to `nodata` BEFORE the integer cast (casting NaN to an
+#' integer is undefined). Runs in f32 on the producer, so every
+#' execution route yields byte-identical digital numbers; the writer
+#' daemon then only writes.
+#'
+#' @param x Traced f32 array (physical values; NaN = nodata).
+#' @param scale,offset Write quantization: `DN = round((x - offset) / scale)`.
+#' @param nodata Integer sentinel NaN maps to (must fit `dtype`).
+#' @param dtype Integer output dtype (`"u8"`, `"i8"`, `"i16"`, `"u16"`,
+#'   `"i32"`).
+#' @return Traced array of `dtype`.
+#' @keywords internal
+#' @export
+g_quantize <- function(x, scale, offset, nodata, dtype) {
+  rng <- .g_int_range[[dtype]]
+  if (is.null(rng)) {
+    cli::cli_abort("unsupported quantize dtype {.val {dtype}}")
+  }
+  q <- g_round((x - offset) / scale)
+  q <- g_clamp(q, rng[[1L]], rng[[2L]])
+  if (length(nodata) == 1L) {
+    q <- g_ifelse(g_is_nodata(x), nodata, q)
+  } else {
+    # No sentinel: legal for NaN-free data (the historical writer
+    # contract). NaN cannot survive the integer cast, so check on
+    # device and fail with the historical message. Eager-only branch
+    # (the check downloads a scalar); every current seam is eager.
+    n_nan <- g_download(g_sum(g_cast(g_is_nodata(x), "f32")))
+    if (n_nan > 0) {
+      .garry_error(
+        paste0(
+          "result contains nodata (NaN) but no nodata sentinel was ",
+          "given for integer output dtype '",
+          dtype,
+          "'"
+        ),
+        "garry_write_error"
+      )
+    }
+  }
+  g_cast(q, dtype)
 }
 
 # Shape of an AnvlArray (bridge; the executor must not touch anvl).
@@ -207,8 +318,12 @@ g_download_raw <- function(x) {
 #' @export
 g_ifelse <- function(cond, yes, no) {
   if (.g_traced(cond)) {
-    if (is.numeric(yes) && length(yes) == 1L) yes <- .g_scalar_like(no, yes)
-    if (is.numeric(no) && length(no) == 1L) no <- .g_scalar_like(yes, no)
+    if (is.numeric(yes) && length(yes) == 1L) {
+      yes <- .g_scalar_like(no, yes)
+    }
+    if (is.numeric(no) && length(no) == 1L) {
+      no <- .g_scalar_like(yes, no)
+    }
     return(anvl::nv_ifelse(cond, yes, no))
   }
   ifelse(cond, yes, no)
@@ -220,8 +335,10 @@ g_ifelse <- function(cond, yes, no) {
 #' @return Logical array.
 #' @export
 g_is_nodata <- function(x) {
-  if (.g_traced(x)) return(anvl::nv_is_nan(x))
-  is.na(x)   # TRUE for both NaN and NA_real_
+  if (.g_traced(x)) {
+    return(anvl::nv_is_nan(x))
+  }
+  is.na(x) # TRUE for both NaN and NA_real_
 }
 
 #' Pad a matrix by `h` cells on every side with `value`.
@@ -233,14 +350,19 @@ g_is_nodata <- function(x) {
 #' @export
 g_pad <- function(x, h, value = 0) {
   h <- as.integer(h)
-  if (h == 0L) return(x)
+  if (h == 0L) {
+    return(x)
+  }
   if (.g_traced(x)) {
     # Pad the LAST two (spatial) dims; leading dims (e.g. time in a (t,y,x)
     # cube) are left full so one focal op vectorises over the whole cube.
     lead <- rep(0L, length(anvl::shape(x)) - 2L)
-    return(anvl::nv_pad(x, .g_scalar_like(x, value),
-                        edge_padding_low = c(lead, h, h),
-                        edge_padding_high = c(lead, h, h)))
+    return(anvl::nv_pad(
+      x,
+      .g_scalar_like(x, value),
+      edge_padding_low = c(lead, h, h),
+      edge_padding_high = c(lead, h, h)
+    ))
   }
   out <- matrix(value, nrow(x) + 2L * h, ncol(x) + 2L * h)
   out[(h + 1L):(h + nrow(x)), (h + 1L):(h + ncol(x))] <- x
@@ -263,17 +385,24 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
   if (.g_traced(xpad)) {
     # Slice the LAST two (spatial) dims; leading dims (time in a (t,y,x) cube)
     # are taken in full, so the stencil vectorises over the whole cube.
-    sh <- anvl::shape(xpad); lead <- length(sh) - 2L
+    sh <- anvl::shape(xpad)
+    lead <- length(sh) - 2L
     return(anvl::nv_static_slice(
       xpad,
       start_indices = c(rep(1L, lead), 1L + h + dy, 1L + h + dx),
-      limit_indices = c(sh[seq_len(lead)], out_nrow + h + dy, out_ncol + h + dx),
-      strides = rep(1L, lead + 2L)))
+      limit_indices = c(
+        sh[seq_len(lead)],
+        out_nrow + h + dy,
+        out_ncol + h + dx
+      ),
+      strides = rep(1L, lead + 2L)
+    ))
   }
   d <- dim(xpad)
-  idx <- c(rep(list(quote(expr = )), length(d) - 2L),
-           list((1L + h + dy):(out_nrow + h + dy),
-                (1L + h + dx):(out_ncol + h + dx)))
+  idx <- c(
+    rep(list(quote(expr = )), length(d) - 2L),
+    list((1L + h + dy):(out_nrow + h + dy), (1L + h + dx):(out_ncol + h + dx))
+  )
   do.call(`[`, c(list(xpad), idx, list(drop = FALSE)))
 }
 
@@ -289,7 +418,9 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
 #' @export
 g_cast <- function(x, dtype) {
   stopifnot(dtype_valid(dtype))
-  if (.g_traced(x)) return(anvl::nv_convert(x, dtype))
+  if (.g_traced(x)) {
+    return(anvl::nv_convert(x, dtype))
+  }
   fam <- .dtype_family(dtype)
   out <- if (fam == "float") {
     x + 0
@@ -316,8 +447,8 @@ g_stack <- function(values) {
     return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
   d <- dim(values[[1L]])
-  arr <- simplify2array(values)                # (d..., k)
-  aperm(arr, c(length(d) + 1L, seq_along(d)))  # -> (k, d...)
+  arr <- simplify2array(values) # (d..., k)
+  aperm(arr, c(length(d) + 1L, seq_along(d))) # -> (k, d...)
 }
 
 #' Extract element `i` of a 1-D array as a scalar (static index).
@@ -329,8 +460,14 @@ g_stack <- function(values) {
 g_index_scalar <- function(v, i) {
   if (.g_traced(v)) {
     return(anvl::nv_reshape(
-      anvl::nv_static_slice(v, start_indices = i, limit_indices = i,
-                            strides = 1L), integer(0)))
+      anvl::nv_static_slice(
+        v,
+        start_indices = i,
+        limit_indices = i,
+        strides = 1L
+      ),
+      integer(0)
+    ))
   }
   v[[i]]
 }
@@ -349,7 +486,9 @@ g_index_scalar <- function(v, i) {
 #' @export
 .g_has_nv_scan <- function() {
   ok <- .g_scan_probe$ok
-  if (!is.null(ok)) return(ok)
+  if (!is.null(ok)) {
+    return(ok)
+  }
   ok <- rlang::is_installed("anvl") &&
     is.function(asNamespace("anvl")$nv_scan)
   .g_scan_probe$ok <- ok
@@ -360,7 +499,9 @@ g_index_scalar <- function(v, i) {
 # (a 1-D input yields a scalar) -- the oracle mirror of nv_scan's read.
 .g_scan_slice <- function(x, t) {
   d <- dim(x) %||% length(x)
-  if (length(d) == 1L) return(x[[t]])
+  if (length(d) == 1L) {
+    return(x[[t]])
+  }
   idx <- rep(list(quote(expr = )), length(d) - 1L)
   out <- do.call(`[`, c(list(x, t), idx, list(drop = FALSE)))
   array(out, dim = d[-1L])
@@ -381,8 +522,11 @@ g_index_scalar <- function(v, i) {
   if (is.list(x)) Map(.g_tree_map2, x, y, MoreArgs = list(f = f)) else f(x, y)
 }
 .g_tree_any <- function(x, f) {
-  if (is.list(x) && !.g_traced(x)) any(vapply(x, .g_tree_any, logical(1), f = f))
-  else f(x)
+  if (is.list(x) && !.g_traced(x)) {
+    any(vapply(x, .g_tree_any, logical(1), f = f))
+  } else {
+    f(x)
+  }
 }
 
 #' Scan: carry state along dim 1, emitting per-step outputs.
@@ -415,24 +559,34 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
     (!is.null(xs) && .g_tree_any(xs, .g_traced))
   if (traced) {
     .require_anvl()
-    if (!.g_has_nv_scan())
+    if (!.g_has_nv_scan()) {
       cli::cli_abort(c(
         "The installed {.pkg anvl} does not provide {.fn nv_scan}.",
-        "i" = "Install the anvl branch with the scan wrapper (nv-scan)."))
-    return(anvl::nv_scan(init, body, xs = xs, length = length,
-                         reverse = reverse))
+        "i" = "Install the anvl branch with the scan wrapper (nv-scan)."
+      ))
+    }
+    return(anvl::nv_scan(
+      init,
+      body,
+      xs = xs,
+      length = length,
+      reverse = reverse
+    ))
   }
   # -- pure-R oracle path ------------------------------------------------------
   n <- if (!is.null(xs)) {
     lens <- unlist(.g_tree_map(xs, function(x) (dim(x) %||% length(x))[[1L]]))
-    if (!all(lens == lens[[1L]]))
+    if (!all(lens == lens[[1L]])) {
       cli::cli_abort("all leaves of {.arg xs} must agree on the size of dim 1")
-    if (!is.null(length) && as.integer(length) != lens[[1L]])
+    }
+    if (!is.null(length) && as.integer(length) != lens[[1L]]) {
       cli::cli_abort("{.arg length} disagrees with dim 1 of {.arg xs}")
+    }
     as.integer(lens[[1L]])
   } else {
-    if (is.null(length))
+    if (is.null(length)) {
       cli::cli_abort("{.arg length} is required when {.arg xs} is NULL")
+    }
     as.integer(length)
   }
   carry <- init
@@ -441,19 +595,28 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
   for (t in steps) {
     x_t <- if (!is.null(xs)) .g_tree_map(xs, function(x) .g_scan_slice(x, t))
     st <- body(carry, x_t)
-    if (!is.list(st) || is.null(names(st)) ||
-        !setequal(names(st), c("carry", "out")))
+    if (
+      !is.list(st) ||
+        is.null(names(st)) ||
+        !setequal(names(st), c("carry", "out"))
+    ) {
       cli::cli_abort("{.arg body} must return {.code list(carry = , out = )}")
+    }
     carry <- st$carry
-    if (is.null(bufs) && !is.null(st$out))
+    if (is.null(bufs) && !is.null(st$out)) {
       bufs <- .g_tree_map(st$out, function(leaf) {
         d <- dim(leaf)
-        if (is.null(d) && length(leaf) > 1L) d <- length(leaf)
+        if (is.null(d) && length(leaf) > 1L) {
+          d <- length(leaf)
+        }
         array(NA_real_, dim = c(n, d))
       })
-    if (!is.null(st$out))
-      bufs <- .g_tree_map2(bufs, st$out, function(buf, leaf)
-        .g_scan_assign(buf, leaf, t))
+    }
+    if (!is.null(st$out)) {
+      bufs <- .g_tree_map2(bufs, st$out, function(buf, leaf) {
+        .g_scan_assign(buf, leaf, t)
+      })
+    }
   }
   list(carry = carry, out = bufs)
 }
@@ -469,14 +632,16 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
 #' @return Array with dim 1 of length `to - from + 1`.
 #' @export
 g_slice_t <- function(x, from, to) {
-  from <- as.integer(from); to <- as.integer(to)
+  from <- as.integer(from)
+  to <- as.integer(to)
   if (.g_traced(x)) {
     sh <- .g_shape(x)
     return(anvl::nv_static_slice(
       x,
       start_indices = c(from, rep(1L, length(sh) - 1L)),
       limit_indices = c(to, sh[-1L]),
-      strides = rep(1L, length(sh))))
+      strides = rep(1L, length(sh))
+    ))
   }
   d <- dim(x)
   idx <- rep(list(quote(expr = )), length(d) - 1L)
@@ -548,14 +713,15 @@ g_rep_t <- function(x, n) {
 #' @return Array of rank `length(dim(x)) + 1`.
 #' @export
 g_expand <- function(x, axis, n) {
-  axis <- as.integer(axis); n <- as.integer(n)
+  axis <- as.integer(axis)
+  n <- as.integer(n)
   if (.g_traced(x)) {
     sh <- .g_shape(x)
     out_sh <- append(sh, n, after = axis - 1L)
     return(anvl::nv_broadcast_to(anvl::nv_unsqueeze(x, axis), out_sh))
   }
-  d <- dim(x) %||% length(x)                     # vectors are rank-1
-  arr <- array(as.vector(x), c(d, n))            # copies on a trailing axis
+  d <- dim(x) %||% length(x) # vectors are rank-1
+  arr <- array(as.vector(x), c(d, n)) # copies on a trailing axis
   aperm(arr, append(seq_along(d), length(d) + 1L, after = axis - 1L))
 }
 
@@ -576,16 +742,21 @@ g_expand <- function(x, axis, n) {
 }
 
 .g_unflatten_yx <- function(v, ny, nx) {
-  if (.g_traced(v)) return(anvl::nv_reshape(v, c(as.integer(ny), as.integer(nx))))
+  if (.g_traced(v)) {
+    return(anvl::nv_reshape(v, c(as.integer(ny), as.integer(nx))))
+  }
   matrix(as.vector(v), ny, nx)
 }
 # Rank-3 inverse of .g_flatten_yx: (k, ny*nx) back to (k, ny, nx).
 # Same contract as the pair above: each branch inverts its own
 # flatten ordering, so it is only valid around per-pixel-column math.
 .g_unflatten_kyx <- function(v, k, ny, nx) {
-  if (.g_traced(v))
-    return(anvl::nv_reshape(v, c(as.integer(k), as.integer(ny),
-                                 as.integer(nx))))
+  if (.g_traced(v)) {
+    return(anvl::nv_reshape(
+      v,
+      c(as.integer(k), as.integer(ny), as.integer(nx))
+    ))
+  }
   array(as.vector(v), c(k, ny, nx))
 }
 
@@ -594,9 +765,13 @@ g_expand <- function(x, axis, n) {
 # Shared shape handling: `dims` are integer array margins to REDUCE
 # (planner maps named dims to margins). NULL reduces everything.
 .g_reduce <- function(x, dims, f) {
-  if (is.null(dims)) return(f(as.vector(x)))
+  if (is.null(dims)) {
+    return(f(as.vector(x)))
+  }
   keep <- setdiff(seq_along(dim(x)), as.integer(dims))
-  if (length(keep) == 0L) return(f(as.vector(x)))
+  if (length(keep) == 0L) {
+    return(f(as.vector(x)))
+  }
   apply(x, keep, f)
 }
 
@@ -619,8 +794,9 @@ NULL
 #' @rdname g-reductions
 #' @export
 g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
-  if (.g_traced(x))
+  if (.g_traced(x)) {
     return(anvl::nv_reduce_sum(x, axes = dims, nan_rm = nan_rm))
+  }
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))
 }
 
@@ -637,17 +813,25 @@ g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_broadcast_arrays <- function(...) {
   args <- list(...)
-  if (.g_traced(args[[1L]])) return(anvl::nv_broadcast_arrays(...))
+  if (.g_traced(args[[1L]])) {
+    return(anvl::nv_broadcast_arrays(...))
+  }
   # oracle (plain-R arrays): replicate singleton dims to the common shape.
   # Same-rank inputs (as the band reducer supplies); no rank padding.
   shp <- lapply(args, function(a) dim(a) %||% length(a))
   target <- do.call(pmax, shp)
   lapply(args, function(a) {
     s <- dim(a) %||% length(a)
-    if (identical(as.integer(s), as.integer(target))) return(a)
-    idx <- lapply(seq_along(target), function(ax)
-      if (s[[ax]] == 1L && target[[ax]] > 1L) rep(1L, target[[ax]])
-      else seq_len(target[[ax]]))
+    if (identical(as.integer(s), as.integer(target))) {
+      return(a)
+    }
+    idx <- lapply(seq_along(target), function(ax) {
+      if (s[[ax]] == 1L && target[[ax]] > 1L) {
+        rep(1L, target[[ax]])
+      } else {
+        seq_len(target[[ax]])
+      }
+    })
     do.call(`[`, c(list(array(a, s)), idx, list(drop = FALSE)))
   })
 }
@@ -655,27 +839,30 @@ g_broadcast_arrays <- function(...) {
 #' @rdname g-reductions
 #' @export
 g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
-  if (.g_traced(x))
+  if (.g_traced(x)) {
     return(anvl::nv_mean(x, axes = dims, nan_rm = nan_rm))
+  }
   .g_reduce(x, dims, function(v) mean(.nan_filter(v, nan_rm)))
 }
 
 #' @rdname g-reductions
 #' @export
 g_min <- function(x, dims = NULL, nan_rm = FALSE) {
-  if (.g_traced(x))
+  if (.g_traced(x)) {
     return(anvl::nv_reduce_min(x, axes = dims, nan_rm = nan_rm))
+  }
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
-    if (length(v) == 0L) Inf else min(v)   # XLA init value, no warning
+    if (length(v) == 0L) Inf else min(v) # XLA init value, no warning
   })
 }
 
 #' @rdname g-reductions
 #' @export
 g_max <- function(x, dims = NULL, nan_rm = FALSE) {
-  if (.g_traced(x))
+  if (.g_traced(x)) {
     return(anvl::nv_reduce_max(x, axes = dims, nan_rm = nan_rm))
+  }
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
     if (length(v) == 0L) -Inf else max(v)
@@ -685,11 +872,12 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @rdname g-reductions
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
-  if (.g_traced(x))
+  if (.g_traced(x)) {
     return(anvl::nv_median(x, axis = dims, nan_rm = nan_rm))
+  }
   .g_reduce(x, dims, function(v) {
     m <- stats::median(v, na.rm = nan_rm)
-    if (is.na(m)) NaN else m               # all-nodata -> NaN, never NA
+    if (is.na(m)) NaN else m # all-nodata -> NaN, never NA
   })
 }
 
@@ -709,7 +897,9 @@ g_count <- function(x, dims = NULL) {
 # holding integral values. Coercion preserving shape:
 .bitw <- function(f, a, b) {
   out <- f(as.integer(a), as.integer(b))
-  if (!is.null(dim(a))) dim(out) <- dim(a)
+  if (!is.null(dim(a))) {
+    dim(out) <- dim(a)
+  }
   out
 }
 
@@ -725,51 +915,67 @@ NULL
 
 # Promote a plain R integer scalar to the traced operand's dtype.
 .g_int_like <- function(a, b) {
-  if (.g_traced(b)) return(b)
+  if (.g_traced(b)) {
+    return(b)
+  }
   .g_scalar_like(a, as.integer(b))
 }
 
 #' @rdname g-bitwise
 #' @export
 g_bitand <- function(a, b) {
-  if (.g_traced(a)) return(anvl::nv_and(a, .g_int_like(a, b)))
+  if (.g_traced(a)) {
+    return(anvl::nv_and(a, .g_int_like(a, b)))
+  }
   .bitw(bitwAnd, a, b)
 }
 
 #' @rdname g-bitwise
 #' @export
 g_bitor <- function(a, b) {
-  if (.g_traced(a)) return(anvl::nv_or(a, .g_int_like(a, b)))
+  if (.g_traced(a)) {
+    return(anvl::nv_or(a, .g_int_like(a, b)))
+  }
   .bitw(bitwOr, a, b)
 }
 
 #' @rdname g-bitwise
 #' @export
 g_bitxor <- function(a, b) {
-  if (.g_traced(a)) return(anvl::nv_xor(a, .g_int_like(a, b)))
+  if (.g_traced(a)) {
+    return(anvl::nv_xor(a, .g_int_like(a, b)))
+  }
   .bitw(bitwXor, a, b)
 }
 
 #' @rdname g-bitwise
 #' @export
 g_bitnot <- function(a) {
-  if (.g_traced(a)) return(anvl::nv_not(a))
+  if (.g_traced(a)) {
+    return(anvl::nv_not(a))
+  }
   out <- bitwNot(as.integer(a))
-  if (!is.null(dim(a))) dim(out) <- dim(a)
+  if (!is.null(dim(a))) {
+    dim(out) <- dim(a)
+  }
   out
 }
 
 #' @rdname g-bitwise
 #' @export
 g_shiftl <- function(a, n) {
-  if (.g_traced(a)) return(anvl::nv_shift_left(a, .g_int_like(a, n)))
+  if (.g_traced(a)) {
+    return(anvl::nv_shift_left(a, .g_int_like(a, n)))
+  }
   .bitw(bitwShiftL, a, n)
 }
 
 #' @rdname g-bitwise
 #' @export
 g_shiftr <- function(a, n) {
-  if (.g_traced(a)) return(anvl::nv_shift_right_logical(a, .g_int_like(a, n)))
+  if (.g_traced(a)) {
+    return(anvl::nv_shift_right_logical(a, .g_int_like(a, n)))
+  }
   .bitw(bitwShiftR, a, n)
 }
 
@@ -795,17 +1001,29 @@ g_shiftr <- function(a, n) {
 #' @param groups Feature group count.
 #' @return `(C_out, H_out, W_out)` array.
 #' @export
-g_conv2d <- function(x, w, bias = NULL, stride = 1L, padding = 0L,
-                     dilation = 1L, groups = 1L) {
-  stride   <- as.integer(rep_len(stride, 2L))
-  padding  <- as.integer(rep_len(padding, 2L))
+g_conv2d <- function(
+  x,
+  w,
+  bias = NULL,
+  stride = 1L,
+  padding = 0L,
+  dilation = 1L,
+  groups = 1L
+) {
+  stride <- as.integer(rep_len(stride, 2L))
+  padding <- as.integer(rep_len(padding, 2L))
   dilation <- as.integer(rep_len(dilation, 2L))
-  groups   <- as.integer(groups)
+  groups <- as.integer(groups)
   co <- dim(w)[[1L]]
   if (.g_traced(x)) {
-    out <- anvl::nv_conv2d(anvl::nv_unsqueeze(x, 1L), g_upload(w, "f32"),
-                           stride = stride, padding = padding,
-                           dilation = dilation, groups = groups)
+    out <- anvl::nv_conv2d(
+      anvl::nv_unsqueeze(x, 1L),
+      g_upload(w, "f32"),
+      stride = stride,
+      padding = padding,
+      dilation = dilation,
+      groups = groups
+    )
     out <- anvl::nv_squeeze(out, 1L)
     if (!is.null(bias)) {
       bt <- g_upload(array(as.numeric(bias), c(co, 1L, 1L)), "f32")
@@ -813,33 +1031,45 @@ g_conv2d <- function(x, w, bias = NULL, stride = 1L, padding = 0L,
     }
     return(out)
   }
-  d <- dim(x); ci <- d[[1L]]; h <- d[[2L]]; wd <- d[[3L]]
-  kh <- dim(w)[[3L]]; kw <- dim(w)[[4L]]
+  d <- dim(x)
+  ci <- d[[1L]]
+  h <- d[[2L]]
+  wd <- d[[3L]]
+  kh <- dim(w)[[3L]]
+  kw <- dim(w)[[4L]]
   xp <- array(0, c(ci, h + 2L * padding[[1L]], wd + 2L * padding[[2L]]))
   xp[, padding[[1L]] + seq_len(h), padding[[2L]] + seq_len(wd)] <- x
   ho <- (dim(xp)[[2L]] - (kh - 1L) * dilation[[1L]] - 1L) %/% stride[[1L]] + 1L
   wo <- (dim(xp)[[3L]] - (kw - 1L) * dilation[[2L]] - 1L) %/% stride[[2L]] + 1L
-  cig <- ci %/% groups; cog <- co %/% groups
+  cig <- ci %/% groups
+  cog <- co %/% groups
   out <- array(0, c(co, ho, wo))
   for (g in seq_len(groups)) {
-    cs <- (g - 1L) * cig + seq_len(cig)          # input channels of the group
-    os <- (g - 1L) * cog + seq_len(cog)          # output channels
+    cs <- (g - 1L) * cig + seq_len(cig) # input channels of the group
+    os <- (g - 1L) * cog + seq_len(cog) # output channels
     cols <- vector("list", kh * kw)
     wcols <- vector("list", kh * kw)
     i <- 0L
-    for (ky in seq_len(kh)) for (kx in seq_len(kw)) {
-      ys <- (ky - 1L) * dilation[[1L]] + seq(1L, by = stride[[1L]], length.out = ho)
-      xs <- (kx - 1L) * dilation[[2L]] + seq(1L, by = stride[[2L]], length.out = wo)
-      sl <- xp[cs, ys, xs, drop = FALSE]
-      i <- i + 1L
-      cols[[i]]  <- matrix(sl, nrow = cig)       # (Cin/g, ho*wo) col-major
-      wcols[[i]] <- matrix(w[os, , ky, kx], nrow = cog)   # (Cout/g, Cin/g)
+    for (ky in seq_len(kh)) {
+      for (kx in seq_len(kw)) {
+        ys <- (ky - 1L) *
+          dilation[[1L]] +
+          seq(1L, by = stride[[1L]], length.out = ho)
+        xs <- (kx - 1L) *
+          dilation[[2L]] +
+          seq(1L, by = stride[[2L]], length.out = wo)
+        sl <- xp[cs, ys, xs, drop = FALSE]
+        i <- i + 1L
+        cols[[i]] <- matrix(sl, nrow = cig) # (Cin/g, ho*wo) col-major
+        wcols[[i]] <- matrix(w[os, , ky, kx], nrow = cog) # (Cout/g, Cin/g)
+      }
     }
     res <- do.call(cbind, wcols) %*% do.call(rbind, cols) # (Cout/g, ho*wo)
     out[os, , ] <- array(res, c(cog, ho, wo))
   }
-  if (!is.null(bias)) out <- out + array(rep(as.numeric(bias), ho * wo),
-                                         c(co, ho, wo))
+  if (!is.null(bias)) {
+    out <- out + array(rep(as.numeric(bias), ho * wo), c(co, ho, wo))
+  }
   out
 }
 
@@ -853,13 +1083,16 @@ g_conv2d <- function(x, w, bias = NULL, stride = 1L, padding = 0L,
 g_upsample2x <- function(x) {
   if (.g_traced(x)) {
     sh <- .g_shape(x)
-    u <- anvl::nv_unsqueeze(anvl::nv_unsqueeze(x, 3L), 5L)  # (C,H,1,W,1)
+    u <- anvl::nv_unsqueeze(anvl::nv_unsqueeze(x, 3L), 5L) # (C,H,1,W,1)
     b <- anvl::nv_broadcast_to(u, c(sh[[1L]], sh[[2L]], 2L, sh[[3L]], 2L))
     return(anvl::nv_reshape(b, c(sh[[1L]], 2L * sh[[2L]], 2L * sh[[3L]])))
   }
   d <- dim(x)
-  x[, rep(seq_len(d[[2L]]), each = 2L), rep(seq_len(d[[3L]]), each = 2L),
-    drop = FALSE]
+  x[,
+    rep(seq_len(d[[2L]]), each = 2L),
+    rep(seq_len(d[[3L]]), each = 2L),
+    drop = FALSE
+  ]
 }
 
 #' Pad the bottom/right edges of the last two dims.
@@ -874,15 +1107,21 @@ g_upsample2x <- function(x) {
 #' @return Array with the last two dims grown by `dy`, `dx`.
 #' @export
 g_pad_rb <- function(x, dy, dx, value = 0) {
-  dy <- as.integer(dy); dx <- as.integer(dx)
+  dy <- as.integer(dy)
+  dx <- as.integer(dx)
   if (.g_traced(x)) {
     r <- length(.g_shape(x))
     hi <- c(rep(0L, r - 2L), dy, dx)
-    return(anvl::nv_pad(x, value, edge_padding_low = rep(0L, r),
-                        edge_padding_high = hi))
+    return(anvl::nv_pad(
+      x,
+      value,
+      edge_padding_low = rep(0L, r),
+      edge_padding_high = hi
+    ))
   }
   d <- dim(x)
-  nd <- d; nd[length(d) - 1L] <- d[[length(d) - 1L]] + dy
+  nd <- d
+  nd[length(d) - 1L] <- d[[length(d) - 1L]] + dy
   nd[length(d)] <- d[[length(d)]] + dx
   out <- array(value, nd)
   idx <- lapply(d, seq_len)
@@ -899,7 +1138,9 @@ g_pad_rb <- function(x, dy, dx, value = 0) {
 #' @return Permuted array.
 #' @export
 g_transpose <- function(x, perm = NULL) {
-  if (.g_traced(x)) return(anvl::nv_transpose(x, permutation = perm))
+  if (.g_traced(x)) {
+    return(anvl::nv_transpose(x, permutation = perm))
+  }
   aperm(x, perm)
 }
 
@@ -909,7 +1150,9 @@ g_transpose <- function(x, perm = NULL) {
 #' @return `erf(x)` elementwise.
 #' @export
 g_erf <- function(x) {
-  if (.g_traced(x)) return(anvl::nv_erf(x))
+  if (.g_traced(x)) {
+    return(anvl::nv_erf(x))
+  }
   2 * stats::pnorm(x * sqrt(2)) - 1
 }
 
@@ -922,7 +1165,9 @@ g_erf <- function(x) {
 #' @return Array of one lower rank.
 #' @export
 g_squeeze1 <- function(x) {
-  if (.g_traced(x)) return(anvl::nv_squeeze(x, 1L))
+  if (.g_traced(x)) {
+    return(anvl::nv_squeeze(x, 1L))
+  }
   d <- dim(x)
   stopifnot(d[[1L]] == 1L)
   array(x, d[-1L])

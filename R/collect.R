@@ -29,23 +29,29 @@ NULL
 #'   `dim` = `c(nx, ny, nbands)`, `srs` = WKT, `datatype`), so the array is
 #'   self-describing and [preview()] can set real-world axes without the grid.
 #' @export
-collect <- function(x, plan_only = FALSE,
-                    distributed = garry_daemons_set()) {
+collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   .collect_impl(x, plan_only = plan_only, distributed = distributed)
 }
 
 # The execution engine behind collect()/write_tif()/materialise().
 # `wspec` (write_tif) is the sink write spec: list(dtype, scale, offset),
 # applied at the sink boundary by the executors.
-.collect_impl <- function(x, plan_only = FALSE, path = NULL, nodata = NULL,
-                          distributed = garry_daemons_set(),
-                          band_names = NULL, wspec = NULL) {
+.collect_impl <- function(
+  x,
+  plan_only = FALSE,
+  path = NULL,
+  nodata = NULL,
+  distributed = garry_daemons_set(),
+  band_names = NULL,
+  wspec = NULL
+) {
   .garry_opt_check()
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.
-  if (S7::S7_inherits(x, LazyDatasetGroups))
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
     return(.collect_groups(x, plan_only, path, nodata, distributed, wspec))
+  }
   # A dataset's band names become the output band descriptions; capture them
   # before stack_bands() collapses the named bands into one node.
   if (S7::S7_inherits(x, LazyDataset)) {
@@ -53,20 +59,34 @@ collect <- function(x, plan_only = FALSE,
     x <- stack_bands(x)
   }
   p <- plan_lazy(x)
-  if (plan_only) return(p)
+  if (plan_only) {
+    return(p)
+  }
   # Multi-export v1 (design/multi-export-collect.md): several sinks share
   # ONE single-threaded execution; the distributed scheduler learns
   # multi-sink next.
   if (length(p@sinks) > 1L) {
     .garry_state$route <- if (distributed) "scheduler" else "single"
     res <- if (distributed) {
-      execute_plan_mirai(p, path = path, nodata = nodata,
-                         band_names = band_names, wspec = wspec)
+      execute_plan_mirai(
+        p,
+        path = path,
+        nodata = nodata,
+        band_names = band_names,
+        wspec = wspec
+      )
     } else {
-      execute_plan(p, path = path, nodata = nodata,
-                   band_names = band_names, wspec = wspec)
+      execute_plan(
+        p,
+        path = path,
+        nodata = nodata,
+        band_names = band_names,
+        wspec = wspec
+      )
     }
-    if (!is.null(path)) return(invisible(res))
+    if (!is.null(path)) {
+      return(invisible(res))
+    }
     # per-sink: same layout + gis attribute as a single-sink collect
     return(lapply(stats::setNames(seq_along(res), names(res)), function(k) {
       out <- .collect_layout(res[[k]])
@@ -84,35 +104,72 @@ collect <- function(x, plan_only = FALSE,
   # band names.
   band_names <- band_names %||% .grid_layer_labels(p@stages[[p@sink]]@grid)
   res <- if (distributed) {
-    if (!garry_daemons_set())
+    if (!garry_daemons_set()) {
       cli::cli_abort(c(
         "{.arg distributed} is TRUE but no garry daemon pools are running.",
-        "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
-    spec <- .cd_spec(p)               # pure composite fast path (fetch-ordered pipeline)
-    decomp <- if (is.null(spec)) .gd_decompose(p) else NULL   # reduce-decomposition
+        "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."
+      ))
+    }
+    # Quantized writes (wspec with scale) bypass the cd/gd fast paths:
+    # their band kernels do not yet fold g_quantize, and the one-
+    # device-quantizer invariant (byte-identical digital numbers on
+    # every route) is worth more than the fast path here. Folding wq
+    # into the cd/gd kernels is the follow-up (ir-extensions-todo #12).
+    quantizing <- !is.null(wspec) && length(wspec$scale) == 1L
+    spec <- if (quantizing) NULL else .cd_spec(p) # composite fast path
+    decomp <- if (is.null(spec) && !quantizing) .gd_decompose(p) else NULL
     # Record which route ran (garry_last_route()): the selection is
     # silent, and a plan silently changing route is exactly the
     # regression class the equivalence suite must be able to observe.
-    .garry_state$route <- if (!is.null(spec)) "composite_direct"
-      else if (!is.null(decomp)) "gd_reduce"
-      else "scheduler"
-    if (!is.null(spec))
-      .execute_composite_direct(p, spec, path = path, nodata = nodata,
-                                band_names = band_names, wspec = wspec)
-    else if (!is.null(decomp))
+    .garry_state$route <- if (!is.null(spec)) {
+      "composite_direct"
+    } else if (!is.null(decomp)) {
+      "gd_reduce"
+    } else {
+      "scheduler"
+    }
+    if (!is.null(spec)) {
+      .execute_composite_direct(
+        p,
+        spec,
+        path = path,
+        nodata = nodata,
+        band_names = band_names,
+        wspec = wspec
+      )
+    } else if (!is.null(decomp)) {
       # Any reduce-structured graph (ndvi, nested reduce->map->reduce, focal over
       # a composite): overlap-compute the leaf reduces, run the upper IR on them.
-      .execute_gd_reduce(p, decomp, path = path, nodata = nodata,
-                         band_names = band_names, wspec = wspec)
-    else
-      execute_plan_mirai(p, path = path, nodata = nodata,
-                         band_names = band_names, wspec = wspec)
+      .execute_gd_reduce(
+        p,
+        decomp,
+        path = path,
+        nodata = nodata,
+        band_names = band_names,
+        wspec = wspec
+      )
+    } else {
+      execute_plan_mirai(
+        p,
+        path = path,
+        nodata = nodata,
+        band_names = band_names,
+        wspec = wspec
+      )
+    }
   } else {
     .garry_state$route <- "single"
-    execute_plan(p, path = path, nodata = nodata, band_names = band_names,
-                 wspec = wspec)
+    execute_plan(
+      p,
+      path = path,
+      nodata = nodata,
+      band_names = band_names,
+      wspec = wspec
+    )
   }
-  if (!is.null(path)) return(invisible(res))
+  if (!is.null(path)) {
+    return(invisible(res))
+  }
   out <- .collect_layout(res)
   # Self-describing result: a gdalraster read_ds()-style `gis` attribute from the
   # plan's output grid. Only for rasters (matrix/array) -- a scalar global
@@ -139,17 +196,28 @@ collect <- function(x, plan_only = FALSE,
 as_terra <- function(x) {
   rlang::check_installed("terra", reason = "for as_terra().")
   gis <- attr(x, "gis")
-  if (is.null(gis))
+  if (is.null(gis)) {
     cli::cli_abort(paste0(
       "{.arg x} has no {.code gis} attribute; pass an in-memory ",
-      "{.fn collect} result (matrix or (y, x, band) array)"))
+      "{.fn collect} result (matrix or (y, x, band) array)"
+    ))
+  }
   a <- if (length(dim(x)) == 2L) array(x, c(dim(x), 1L)) else unclass(x)
   attr(a, "gis") <- NULL
-  r <- terra::rast(a, crs = gis$srs,
-                   extent = terra::ext(gis$bbox[[1L]], gis$bbox[[3L]],
-                                       gis$bbox[[2L]], gis$bbox[[4L]]))
+  r <- terra::rast(
+    a,
+    crs = gis$srs,
+    extent = terra::ext(
+      gis$bbox[[1L]],
+      gis$bbox[[3L]],
+      gis$bbox[[2L]],
+      gis$bbox[[4L]]
+    )
+  )
   nms <- dimnames(x)[[3L]]
-  if (!is.null(nms)) names(r) <- nms
+  if (!is.null(nms)) {
+    names(r) <- nms
+  }
   r
 }
 
@@ -175,10 +243,20 @@ garry_last_route <- function() .garry_state$route
 # file per group (a `{group}` placeholder is substituted, else the group label
 # is inserted before the extension) and returns the paths invisibly; otherwise
 # returns a named list of results (or Plans when `plan_only`).
-.collect_groups <- function(x, plan_only, path, nodata, distributed,
-                            wspec = NULL) {
+.collect_groups <- function(
+  x,
+  plan_only,
+  path,
+  nodata,
+  distributed,
+  wspec = NULL
+) {
   labels <- names(x@groups)
-  paths <- if (is.null(path)) NULL else stats::setNames(unlist(.group_paths(path, labels)), labels)
+  paths <- if (is.null(path)) {
+    NULL
+  } else {
+    stats::setNames(unlist(.group_paths(path, labels)), labels)
+  }
   # Multi-export route (design/multi-export-collect.md): ONE plan whose
   # sinks are the per-group band stacks, so every group's reads enter
   # one ready queue and drain together under fetch-first priority.
@@ -188,20 +266,34 @@ garry_last_route <- function() .garry_state$route
   # expect one inspectable Plan per group.
   if (!plan_only && length(x@groups) > 1L) {
     sinks <- stats::setNames(lapply(x@groups, stack_bands), labels)
-    bn <- stats::setNames(lapply(x@groups, function(g) names(g@bands)),
-                          labels)
-    res <- .collect_impl(sinks, path = paths, nodata = nodata,
-                         distributed = distributed, band_names = bn,
-                         wspec = wspec)
-    if (!is.null(path)) return(invisible(paths))
+    bn <- stats::setNames(lapply(x@groups, function(g) names(g@bands)), labels)
+    res <- .collect_impl(
+      sinks,
+      path = paths,
+      nodata = nodata,
+      distributed = distributed,
+      band_names = bn,
+      wspec = wspec
+    )
+    if (!is.null(path)) {
+      return(invisible(paths))
+    }
     return(res)
   }
-  res <- lapply(seq_along(x@groups), function(i)
-    .collect_impl(x@groups[[i]], plan_only = plan_only,
-                  path = if (is.null(paths)) NULL else paths[[i]],
-                  nodata = nodata, distributed = distributed, wspec = wspec))
+  res <- lapply(seq_along(x@groups), function(i) {
+    .collect_impl(
+      x@groups[[i]],
+      plan_only = plan_only,
+      path = if (is.null(paths)) NULL else paths[[i]],
+      nodata = nodata,
+      distributed = distributed,
+      wspec = wspec
+    )
+  })
   names(res) <- labels
-  if (!is.null(path) && !plan_only) return(invisible(paths))
+  if (!is.null(path) && !plan_only) {
+    return(invisible(paths))
+  }
   res
 }
 
@@ -209,13 +301,24 @@ garry_last_route <- function() .garry_state$route
 # insert the (filesystem-safe) group label before the file extension.
 .group_paths <- function(path, labels) {
   safe <- gsub("[^A-Za-z0-9._-]", "-", labels)
-  if (grepl("\\{group\\}|\\{time\\}", path))
-    return(vapply(safe, function(s) gsub("\\{group\\}|\\{time\\}", s, path),
-                  character(1), USE.NAMES = FALSE))
-  ext <- tools::file_ext(path); stem <- tools::file_path_sans_ext(path)
-  vapply(safe, function(s)
-    if (nzchar(ext)) .glue("{stem}_{s}.{ext}") else .glue("{stem}_{s}"),
-    character(1), USE.NAMES = FALSE)
+  if (grepl("\\{group\\}|\\{time\\}", path)) {
+    return(vapply(
+      safe,
+      function(s) gsub("\\{group\\}|\\{time\\}", s, path),
+      character(1),
+      USE.NAMES = FALSE
+    ))
+  }
+  ext <- tools::file_ext(path)
+  stem <- tools::file_path_sans_ext(path)
+  vapply(
+    safe,
+    function(s) {
+      if (nzchar(ext)) .glue("{stem}_{s}.{ext}") else .glue("{stem}_{s}")
+    },
+    character(1),
+    USE.NAMES = FALSE
+  )
 }
 
 # gdalraster read_ds()-style `gis` attribute from a GridSpec: type, bbox
@@ -224,7 +327,11 @@ garry_last_route <- function() .garry_state$route
   list(
     type = "raster",
     bbox = as.numeric(grid@extent),
-    dim = c(unname(grid@dims[["x"]]), unname(grid@dims[["y"]]), as.integer(nbands)),
+    dim = c(
+      unname(grid@dims[["x"]]),
+      unname(grid@dims[["y"]]),
+      as.integer(nbands)
+    ),
     srs = .canon_crs(grid@crs),
     datatype = unname(.gdal_dtype_rev[[grid@dtype]] %||% grid@dtype)
   )
@@ -238,8 +345,11 @@ garry_last_route <- function() .garry_state$route
 # at the user boundary. The composite path hands back a list of [y, x] matrices;
 # the scheduler a (band, y, x) array.
 .collect_layout <- function(res) {
-  if (is.list(res))
+  if (is.list(res)) {
     return(if (length(res) == 1L) res[[1L]] else simplify2array(res))
-  if (is.array(res) && length(dim(res)) == 3L) return(aperm(res, c(2L, 3L, 1L)))
+  }
+  if (is.array(res) && length(dim(res)) == 3L) {
+    return(aperm(res, c(2L, 3L, 1L)))
+  }
   res
 }

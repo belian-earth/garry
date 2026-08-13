@@ -61,6 +61,51 @@ test_that("cog = TRUE produces COG layout and leaves no temps", {
   unlink(p)
 })
 
+test_that("cog = TRUE under pools writes the same values as a plain write", {
+  # End-to-end guard for the streamed-writer + translate composition:
+  # a broken interaction anywhere in stream/close/translate would leave
+  # the pre-created (zero-filled) temp as the COG's content.
+  local_pools(2, 1)
+  s <- .wt_src()
+  x <- lazy_source(s$f) + 0
+  pp <- file.path(tempdir(), "wt-pools-plain.tif")
+  pc <- file.path(tempdir(), "wt-pools-cog.tif")
+  write_tif(x, pp, dtype = "i16", scale = 1e-4, offset = -0.1,
+            nodata = -32768, distributed = TRUE)
+  write_tif(x, pc, dtype = "i16", scale = 1e-4, offset = -0.1,
+            nodata = -32768, cog = TRUE, distributed = TRUE)
+  d <- methods::new(gdalraster::GDALRaster, pc)
+  expect_identical(d$getMetadataItem(0, "LAYOUT", "IMAGE_STRUCTURE"), "COG")
+  d$close()
+  a <- collect(lazy_source(pp)); b <- collect(lazy_source(pc))
+  expect_identical(unclass(unname(a)), unclass(unname(b)))
+  expect_gt(stats::sd(b, na.rm = TRUE), 0)     # not a constant-fill file
+  unlink(c(pp, pc))
+})
+
+test_that("relative and dot-prefixed paths stream-write correctly under pools", {
+  # Regression: the writer daemon caches open datasets keyed by PATH,
+  # and ls() hides dot-prefixed names by default, so a "./out.tif" key
+  # (which cog = TRUE manufactured for every relative target) escaped
+  # .daemon_write_close: the file was returned as an unflushed
+  # zero-filled shell while the data sat in the writer's block cache.
+  s <- .wt_src()
+  x <- lazy_source(s$f) + 0
+  wd <- withr::local_tempdir()
+  withr::local_dir(wd)
+  local_pools(2, 1)     # spawn AFTER the cwd change: daemons resolve
+                        # relative paths in their spawn-time cwd
+  write_tif(x, "./rel-dot.tif", dtype = "i16", nodata = -32768,
+            distributed = TRUE)
+  write_tif(x, "rel-cog.tif", dtype = "i16", nodata = -32768, cog = TRUE,
+            distributed = TRUE)
+  a <- matrix(collect(lazy_source("./rel-dot.tif")), 20)
+  b <- matrix(collect(lazy_source("rel-cog.tif")), 20)
+  ref <- round(s$m); ref[is.nan(s$m)] <- NA
+  expect_equal(a[!is.na(ref)], ref[!is.na(ref)])
+  expect_equal(b[!is.na(ref)], ref[!is.na(ref)])
+})
+
 test_that("multi-export list form writes one file per sink (dir and cog)", {
   s <- .wt_src()
   x <- lazy_source(s$f) + 0
@@ -117,13 +162,38 @@ test_that("distributed quantized write matches host, on the scheduler route", {
             nodata = -32768, distributed = TRUE)
   expect_identical(garry_last_route(), "scheduler")
   a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
-  expect_equal(unclass(a1), unclass(a2), ignore_attr = TRUE)
+  # one device quantizer for every route: digital numbers are EXACTLY
+  # identical (file bytes may differ in tile order under streaming)
+  expect_identical(unclass(unname(a1)), unclass(unname(a2)))
   md <- gdal_grid_spec(pd)
   expect_identical(md$grid@dtype, "i16")
   expect_identical(md$scale, 1e-4)
 })
 
-test_that("composite_direct route writes quantized output identically", {
+test_that("g_quantize matches the historical writer semantics", {
+  x <- c(-0.05, 0.00005, 0.15005, 3.27675, 9, NaN)
+  dev <- g_upload(matrix(x, 1L), "f32")
+  q <- g_download(g_quantize(dev, 1e-4, 0, -32768, "i16"))
+  ref <- round((x) / 1e-4)              # R round: half to even, like nv_round
+  ref <- pmin(pmax(ref, -32768), 32767) # clamp = GDAL cast behaviour
+  ref[is.na(ref)] <- -32768
+  expect_equal(as.numeric(q), ref)
+  # no sentinel + NaN present: the historical error, now from the device
+  expect_error(
+    g_download(g_quantize(dev, 1e-4, 0, numeric(0), "i16")),
+    "no nodata sentinel")
+  # no sentinel + NaN-free: legal (the historical contract)
+  clean <- g_upload(matrix(c(0.1, 0.2), 1L), "f32")
+  expect_equal(as.numeric(g_download(g_quantize(clean, 0.1, 0,
+                                                numeric(0), "i16"))),
+               c(1, 2))
+})
+
+test_that("a composite-shaped quantized write routes to the scheduler, identically", {
+  # Quantized writes bypass the cd/gd fast paths by design (one device
+  # quantizer for every route; folding g_quantize into the cd band
+  # kernels is ir-extensions-todo #12). The same plan WITHOUT a wspec
+  # still takes composite_direct (guarded below).
   local_pools(2, 2)
   x <- .gg_masked_composite()
   ph <- tempfile(fileext = ".tif"); pd <- tempfile(fileext = ".tif")
@@ -131,6 +201,11 @@ test_that("composite_direct route writes quantized output identically", {
             nodata = -32768, distributed = FALSE)
   write_tif(x, pd, dtype = "i16", scale = 0.5, offset = 0,
             nodata = -32768, distributed = TRUE)
+  expect_identical(garry_last_route(), "scheduler")
+  a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
+  expect_identical(unclass(unname(a1)), unclass(unname(a2)))
+  pf <- tempfile(fileext = ".tif")
+  write_tif(x, pf, distributed = TRUE)
   expect_identical(garry_last_route(), "composite_direct")
   a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
   expect_equal(unclass(a1), unclass(a2), ignore_attr = TRUE)

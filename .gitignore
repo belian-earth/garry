@@ -21,3 +21,8 @@ src/*.so
 src/*.gcda
 src/*.gcno
 covr/
+
+
+# scratch files
+scratch.R
+km*.tif

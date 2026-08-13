@@ -18,10 +18,18 @@ NULL
 
 # Physical / logical core counts, with safe fallbacks (detectCores can NA).
 .garry_cores <- function() {
-  phys <- tryCatch(parallel::detectCores(logical = FALSE), error = function(e) NA_integer_)
-  logi <- tryCatch(parallel::detectCores(logical = TRUE),  error = function(e) NA_integer_)
-  if (is.na(logi) || logi < 1L) logi <- 4L
-  if (is.na(phys) || phys < 1L) phys <- logi
+  phys <- tryCatch(parallel::detectCores(logical = FALSE), error = function(e) {
+    NA_integer_
+  })
+  logi <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) {
+    NA_integer_
+  })
+  if (is.na(logi) || logi < 1L) {
+    logi <- 4L
+  }
+  if (is.na(phys) || phys < 1L) {
+    phys <- logi
+  }
   list(physical = as.integer(phys), logical = as.integer(logi))
 }
 
@@ -32,21 +40,33 @@ NULL
 # away from its own limit -- budgeting on it would overcommit straight
 # into a cgroup OOM kill.
 .garry_cgroup_avail_mb <- function() {
-  if (!file.exists("/proc/self/cgroup")) return(NA_real_)  # non-Linux
-  ln <- tryCatch(readLines("/proc/self/cgroup", n = 5L),
-                 error = function(e) character(0))
+  if (!file.exists("/proc/self/cgroup")) {
+    return(NA_real_)
+  } # non-Linux
+  ln <- tryCatch(readLines("/proc/self/cgroup", n = 5L), error = function(e) {
+    character(0)
+  })
   rel <- sub("^0::", "", grep("^0::", ln, value = TRUE)[1L])
-  if (is.na(rel) || !nzchar(rel)) return(NA_real_)
+  if (is.na(rel) || !nzchar(rel)) {
+    return(NA_real_)
+  }
   base <- file.path("/sys/fs/cgroup", sub("^/", "", rel))
   f_max <- file.path(base, "memory.max")
   f_cur <- file.path(base, "memory.current")
-  if (!file.exists(f_max) || !file.exists(f_cur)) return(NA_real_)
+  if (!file.exists(f_max) || !file.exists(f_cur)) {
+    return(NA_real_)
+  }
   mx <- tryCatch(readLines(f_max, n = 1L), error = function(e) "max")
-  if (identical(mx, "max")) return(NA_real_)          # unlimited
+  if (identical(mx, "max")) {
+    return(NA_real_)
+  } # unlimited
   mx <- suppressWarnings(as.numeric(mx))
   cur <- suppressWarnings(as.numeric(
-    tryCatch(readLines(f_cur, n = 1L), error = function(e) NA)))
-  if (is.na(mx) || is.na(cur)) return(NA_real_)
+    tryCatch(readLines(f_cur, n = 1L), error = function(e) NA)
+  ))
+  if (is.na(mx) || is.na(cur)) {
+    return(NA_real_)
+  }
   max(0, (mx - cur) / 2^20)
 }
 
@@ -60,23 +80,38 @@ NULL
 # reclaimable on demand. `lines` is injectable for off-platform tests.
 .garry_darwin_avail_mb <- function(lines = NULL) {
   if (is.null(lines)) {
-    if (!identical(Sys.info()[["sysname"]], "Darwin")) return(NA_real_)
-    lines <- tryCatch(system2("vm_stat", stdout = TRUE, stderr = FALSE),
-                      error = function(e) character(0))
+    if (!identical(Sys.info()[["sysname"]], "Darwin")) {
+      return(NA_real_)
+    }
+    lines <- tryCatch(
+      system2("vm_stat", stdout = TRUE, stderr = FALSE),
+      error = function(e) character(0)
+    )
   }
-  if (length(lines) < 2L) return(NA_real_)
+  if (length(lines) < 2L) {
+    return(NA_real_)
+  }
   ps <- suppressWarnings(as.numeric(
-    sub(".*page size of (\\d+) bytes.*", "\\1", lines[[1L]])))
-  if (!is.finite(ps) || ps <= 0) return(NA_real_)
+    sub(".*page size of (\\d+) bytes.*", "\\1", lines[[1L]])
+  ))
+  if (!is.finite(ps) || ps <= 0) {
+    return(NA_real_)
+  }
   page_of <- function(key) {
     ln <- grep(paste0("^Pages ", key, ":"), lines, value = TRUE)
-    if (!length(ln)) return(0)
+    if (!length(ln)) {
+      return(0)
+    }
     v <- suppressWarnings(as.numeric(gsub("[^0-9]", "", ln[[1L]])))
     if (is.finite(v)) v else 0
   }
-  pages <- page_of("free") + page_of("inactive") +
-    page_of("speculative") + page_of("purgeable")
-  if (pages <= 0) return(NA_real_)
+  pages <- page_of("free") +
+    page_of("inactive") +
+    page_of("speculative") +
+    page_of("purgeable")
+  if (pages <= 0) {
+    return(NA_real_)
+  }
   pages * ps / 2^20
 }
 
@@ -93,11 +128,20 @@ NULL
   if (!is.finite(host)) {
     host <- tryCatch(
       as.numeric(memuse::Sys.meminfo()$freeram) / 2^20,
-      error = function(e) NA_real_)
+      error = function(e) NA_real_
+    )
   }
-  if (length(host) != 1L || !is.finite(host)) host <- NA_real_
+  if (length(host) != 1L || !is.finite(host)) {
+    host <- NA_real_
+  }
   cg <- .garry_cgroup_avail_mb()
-  if (is.na(cg)) host else if (is.na(host)) cg else min(host, cg)
+  if (is.na(cg)) {
+    host
+  } else if (is.na(host)) {
+    cg
+  } else {
+    min(host, cg)
+  }
 }
 
 # Free space on /dev/shm in MB, NA when absent or unreadable. The mori
@@ -107,30 +151,48 @@ NULL
 # run ahead of it within a flush window. This is the ground truth the
 # budget refresh clamps against.
 .garry_shm_free_mb <- function() {
-  if (!dir.exists("/dev/shm")) return(NA_real_)
-  df <- tryCatch(system2("df", c("-kP", "/dev/shm"), stdout = TRUE,
-                         stderr = FALSE),
-                 error = function(e) character(0))
-  if (length(df) < 2L) return(NA_real_)
+  if (!dir.exists("/dev/shm")) {
+    return(NA_real_)
+  }
+  df <- tryCatch(
+    system2("df", c("-kP", "/dev/shm"), stdout = TRUE, stderr = FALSE),
+    error = function(e) character(0)
+  )
+  if (length(df) < 2L) {
+    return(NA_real_)
+  }
   avail_kb <- suppressWarnings(as.numeric(
-    strsplit(trimws(df[[2L]]), "\\s+")[[1L]][[4L]]))
-  if (!is.finite(avail_kb)) return(NA_real_)
+    strsplit(trimws(df[[2L]]), "\\s+")[[1L]][[4L]]
+  ))
+  if (!is.finite(avail_kb)) {
+    return(NA_real_)
+  }
   avail_kb / 1024
 }
 
 # Human-readable size from MB: MB below 1 GiB (rounding small budgets
 # to "0 GiB" erased both numbers from the oversized-chunk warning).
 .garry_fmt_mb <- function(mb) {
-  if (!is.finite(mb)) return(as.character(mb))
-  if (mb >= 1024) paste0(round(mb / 1024, 1), " GiB")
-  else if (mb >= 10) paste0(round(mb), " MB")
-  else paste0(signif(mb, 2), " MB")
+  if (!is.finite(mb)) {
+    return(as.character(mb))
+  }
+  if (mb >= 1024) {
+    paste0(round(mb / 1024, 1), " GiB")
+  } else if (mb >= 10) {
+    paste0(round(mb), " MB")
+  } else {
+    paste0(signif(mb, 2), " MB")
+  }
 }
 
 # Number of connected daemons in a mirai profile (0 if none / unknown).
 .gd_n_compute <- function(prof) {
   st <- tryCatch(mirai::status(.compute = prof), error = function(e) NULL)
-  if (is.null(st) || !is.numeric(st$connections)) 0L else as.integer(st$connections)
+  if (is.null(st) || !is.numeric(st$connections)) {
+    0L
+  } else {
+    as.integer(st$connections)
+  }
 }
 
 # Active compute-pool profile names. Routed dispatch
@@ -154,15 +216,23 @@ NULL
 # (probed 2026-08-02; a substitute()-based first attempt relied on a
 # nonexistent .expr_quoted argument and was backed out). `quiet`
 # tolerates down profiles (teardown-adjacent broadcasts).
-.pool_broadcast <- function(expr, profiles = .comp_profiles(), ...,
-                            quiet = FALSE) {
+.pool_broadcast <- function(
+  expr,
+  profiles = .comp_profiles(),
+  ...,
+  quiet = FALSE
+) {
   args <- c(list(expr), list(...))
   out <- list()
   for (p in profiles) {
-    h <- if (quiet)
-      tryCatch(do.call(mirai::everywhere, c(args, list(.compute = p))),
-               error = function(e) NULL)
-    else do.call(mirai::everywhere, c(args, list(.compute = p)))
+    h <- if (quiet) {
+      tryCatch(
+        do.call(mirai::everywhere, c(args, list(.compute = p))),
+        error = function(e) NULL
+      )
+    } else {
+      do.call(mirai::everywhere, c(args, list(.compute = p)))
+    }
     if (!is.null(h)) out <- c(out, lapply(h, function(m) m[]))
   }
   invisible(out)
@@ -171,9 +241,13 @@ NULL
 # Every daemon pid of a mirai profile (empty when unavailable).
 .garry_pool_pids <- function(profile) {
   tryCatch(
-    vapply(mirai::everywhere(Sys.getpid(), .compute = profile),
-           function(m) m[], integer(1)),
-    error = function(e) integer(0))
+    vapply(
+      mirai::everywhere(Sys.getpid(), .compute = profile),
+      function(m) m[],
+      integer(1)
+    ),
+    error = function(e) integer(0)
+  )
 }
 
 # Measured ANONYMOUS resident memory (MB) summed over the daemon
@@ -192,18 +266,23 @@ NULL
   # writer): the error is caught, and the connection warning that
   # precedes it must not leak either
   s <- tryCatch(
-    suppressWarnings(readLines(.glue("/proc/{pid}/status"),
-                               warn = FALSE)),
-    error = function(e) character(0))
+    suppressWarnings(readLines(.glue("/proc/{pid}/status"), warn = FALSE)),
+    error = function(e) character(0)
+  )
   ln <- grep("^RssAnon:", s, value = TRUE)
-  if (length(ln) != 1L) return(NA_real_)
+  if (length(ln) != 1L) {
+    return(NA_real_)
+  }
   kb <- suppressWarnings(as.numeric(
-    strsplit(trimws(sub("^RssAnon:", "", ln)), "\\s+")[[1L]][[1L]]))
+    strsplit(trimws(sub("^RssAnon:", "", ln)), "\\s+")[[1L]][[1L]]
+  ))
   if (is.finite(kb)) kb / 1024 else NA_real_
 }
 
 .garry_fleet_anon_mb <- function(pids) {
-  if (length(pids) == 0L) return(NA_real_)
+  if (length(pids) == 0L) {
+    return(NA_real_)
+  }
   v <- vapply(pids, .garry_anon_mb_of, numeric(1))
   if (all(is.na(v))) NA_real_ else sum(v, na.rm = TRUE)
 }
@@ -214,7 +293,10 @@ NULL
 # environment BEFORE daemons spawn -- children inherit them at exec. Only-if-
 # unset, so a value the user exported themselves wins.
 .garry_env_defaults <- function() {
-  defs <- c(MALLOC_MMAP_THRESHOLD_ = "131072", MALLOC_TRIM_THRESHOLD_ = "131072")
+  defs <- c(
+    MALLOC_MMAP_THRESHOLD_ = "131072",
+    MALLOC_TRIM_THRESHOLD_ = "131072"
+  )
   unset <- defs[!nzchar(Sys.getenv(names(defs)))]
   if (length(unset)) do.call(Sys.setenv, as.list(unset))
 }
@@ -237,16 +319,24 @@ NULL
 # placement pass's fuse_flops_max gate keeps wide kernels off the
 # readers. Returns the cap (NULL when uncapped) for .garry_state.
 .pool_affinity_apply <- function(profile, n, k = NULL, pids = NULL) {
-  if (!identical(Sys.info()[["sysname"]], "Linux")) return(NULL)
-  if (!nzchar(Sys.which("taskset"))) return(NULL)
+  if (!identical(Sys.info()[["sysname"]], "Linux")) {
+    return(NULL)
+  }
+  if (!nzchar(Sys.which("taskset"))) {
+    return(NULL)
+  }
   cores <- .garry_cores()$logical
   k <- as.integer(k %||% max(2L, cores %/% max(1L, as.integer(n))))
-  if (k >= cores) return(NULL)                # cap would be a no-op
+  if (k >= cores) {
+    return(NULL)
+  } # cap would be a no-op
   # `pids` overrides the profile lookup: routed compute pools span N
   # width-1 profiles whose daemons must take DISJOINT global slices,
   # so the caller passes the combined pid vector in profile order.
   pids <- pids %||% .garry_pool_pids(profile)
-  if (length(pids) == 0L) return(NULL)
+  if (length(pids) == 0L) {
+    return(NULL)
+  }
   # Apply EVERY mask before judging success: returning early on one
   # failed taskset left the pool half re-masked while the recorded
   # thread state kept the old width (defect hunt L5).
@@ -255,11 +345,18 @@ NULL
     lo <- ((i - 1L) * k) %% cores
     cpus <- paste(seq(lo, lo + k - 1L) %% cores, collapse = ",")
     st <- suppressWarnings(
-      system2("taskset", c("-a", "-cp", cpus, pids[[i]]),
-              stdout = FALSE, stderr = FALSE))
+      system2(
+        "taskset",
+        c("-a", "-cp", cpus, pids[[i]]),
+        stdout = FALSE,
+        stderr = FALSE
+      )
+    )
     if (!identical(st, 0L)) ok <- FALSE
   }
-  if (!ok) return(NULL)
+  if (!ok) {
+    return(NULL)
+  }
   k
 }
 
@@ -275,7 +372,9 @@ NULL
 # masks (alternating halves; admission keeps ~2 active), everything
 # else keeps the creation-time disjoint narrow masks.
 .comp_pool_shape <- function(n_comp, plan_has_scan, n_scan = 0L) {
-  if (is.null(.garry_state$comp_threads)) return(invisible(NULL))
+  if (is.null(.garry_state$comp_threads)) {
+    return(invisible(NULL))
+  }
   cores <- .garry_cores()$logical
   pids <- .garry_state$comp_pids
   if (n_scan > 0L && length(pids) > n_scan) {
@@ -286,21 +385,30 @@ NULL
     # B's data pointed at, expressible only with daemon identity.
     k_fat <- max(2L, cores %/% 2L)
     k_narrow <- max(2L, cores %/% max(1L, length(pids)))
-    .pool_affinity_apply(NULL, n_scan, k = k_fat,
-                         pids = pids[seq_len(n_scan)])
-    got <- .pool_affinity_apply(NULL, length(pids) - n_scan,
-                                k = k_narrow,
-                                pids = pids[-seq_len(n_scan)])
-    if (!is.null(got)) .garry_state$comp_threads <- got
+    .pool_affinity_apply(NULL, n_scan, k = k_fat, pids = pids[seq_len(n_scan)])
+    got <- .pool_affinity_apply(
+      NULL,
+      length(pids) - n_scan,
+      k = k_narrow,
+      pids = pids[-seq_len(n_scan)]
+    )
+    if (!is.null(got)) {
+      .garry_state$comp_threads <- got
+    }
     return(invisible(NULL))
   }
-  k_want <- if (plan_has_scan) max(2L, cores %/% 2L)
-            else max(2L, cores %/% max(1L, n_comp))
-  if (identical(.garry_state$comp_threads, k_want))
+  k_want <- if (plan_has_scan) {
+    max(2L, cores %/% 2L)
+  } else {
+    max(2L, cores %/% max(1L, n_comp))
+  }
+  if (identical(.garry_state$comp_threads, k_want)) {
     return(invisible(NULL))
-  got <- .pool_affinity_apply(NULL, n_comp, k = k_want,
-                              pids = pids)
-  if (!is.null(got)) .garry_state$comp_threads <- got
+  }
+  got <- .pool_affinity_apply(NULL, n_comp, k = k_want, pids = pids)
+  if (!is.null(got)) {
+    .garry_state$comp_threads <- got
+  }
   invisible(NULL)
 }
 
@@ -365,8 +473,13 @@ NULL
 #' @return Invisibly, `list(read =, compute =)`.
 #' @seealso [garry_daemons_set()], [garry_pool_hygiene()], [collect()]
 #' @export
-garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
-                          gdal_config = TRUE, ...) {
+garry_daemons <- function(
+  read = NULL,
+  compute = NULL,
+  read_handles = NULL,
+  gdal_config = TRUE,
+  ...
+) {
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
     # Machine-derived defaults (deep review 2026-08-02, from the
@@ -387,9 +500,13 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
     #   pin their own width (build_si(readers = 8)). The default
     #   serves the remote-fetch case, where width = cores restores
     #   ODC parity.
-    if (is.null(compute))
-      compute <- if (identical(garry_opt("device"), "cuda")) 2L
-                 else max(2L, min(cr$logical %/% 3L, 8L))
+    if (is.null(compute)) {
+      compute <- if (identical(garry_opt("device"), "cuda")) {
+        2L
+      } else {
+        max(2L, min(cr$logical %/% 3L, 8L))
+      }
+    }
     if (is.null(read)) read <- cr$logical
   }
   read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
@@ -398,7 +515,9 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # DISABLE_READDIR_ON_OPEN=EMPTY_DIR would hide local sidecars (overviews,
   # world files) for the caller's own reads. Call garry_gdal_config() yourself
   # to tune host-side discovery.
-  if (isTRUE(gdal_config)) .garry_env_defaults()
+  if (isTRUE(gdal_config)) {
+    .garry_env_defaults()
+  }
   # Under covr, daemons must not load the INSTRUMENTED garry: covr
   # bakes a trace-file finalizer into the instrumented package, and a
   # daemon hitting the (benign) XLA teardown segfault leaves a
@@ -410,7 +529,9 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # single-process equivalence tests exercise the same logic on the
   # host, where it IS counted.
   restore_libs <- .covr_daemon_libs()
-  if (!is.null(restore_libs)) on.exit(restore_libs(), add = TRUE)
+  if (!is.null(restore_libs)) {
+    on.exit(restore_libs(), add = TRUE)
+  }
   mirai::daemons(read, .compute = "garry_read", ...)
   # Compute pool: N width-1 direct-connection profiles (no dispatcher
   # processes — probed 2026-08-02: everywhere() state persists,
@@ -420,14 +541,15 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # was excised after the both-mode suite and the width sweep proved
   # routing strictly dominant). Any previous generation is torn down
   # first so generations never mix.
-  for (p in c(.garry_state$comp_profiles %||% character(0),
-              "garry_compute"))
+  for (p in c(.garry_state$comp_profiles %||% character(0), "garry_compute")) {
     try(mirai::daemons(0L, .compute = p), silent = TRUE)
+  }
   .garry_state$comp_profiles <- NULL
   if (compute > 0L) {
     profs <- .glue("garry_comp_{seq_len(compute)}")
-    for (p in profs)
+    for (p in profs) {
       mirai::daemons(1L, dispatcher = FALSE, .compute = p, ...)
+    }
     .garry_state$comp_profiles <- profs
   }
   # ONE writer daemon rides along with the pools: streamed sink chunks
@@ -435,41 +557,57 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
   # single-writer, so one daemon serialises file access safely while
   # isolating the write-path conversion transients away from the
   # host). Lean: no anvl, no GDAL session config needed.
-  mirai::daemons(if (read > 0L || compute > 0L) 1L else 0L,
-                 .compute = "garry_write", ...)
+  mirai::daemons(
+    if (read > 0L || compute > 0L) 1L else 0L,
+    .compute = "garry_write",
+    ...
+  )
   if (read > 0L) {
     # Read daemons: set the handle-cache depth, and (once) the GDAL config so it
     # is live from pool creation (the pipeline also re-applies it per run).
-    w <- mirai::everywhere({
-      options(garry.handle_cache_max = hc, garry.gdal_cachemax_mb = cm)
-      if (cfg) { suppressMessages(library(garry)); garry::garry_gdal_config() }
-    }, hc = as.integer(read_handles),
-    cm = as.numeric(garry_opt("gdal_cachemax_mb")),
-    cfg = isTRUE(gdal_config),
-    .compute = "garry_read")
+    w <- mirai::everywhere(
+      {
+        options(garry.handle_cache_max = hc, garry.gdal_cachemax_mb = cm)
+        if (cfg) {
+          suppressMessages(library(garry))
+          garry::garry_gdal_config()
+        }
+      },
+      hc = as.integer(read_handles),
+      cm = as.numeric(garry_opt("gdal_cachemax_mb")),
+      cfg = isTRUE(gdal_config),
+      .compute = "garry_read"
+    )
     invisible(lapply(w, function(m) m[]))
   }
   # Pool CPU affinity (see .pool_affinity_apply): applied at pool
   # creation, BEFORE any kernel jits an XLA client anywhere. The
   # compute pool is skipped on a CUDA device (its daemons drive the
   # GPU; pinning their host threads buys nothing and can starve H2D).
-  .garry_state$abi_ok <- NULL       # fresh pools: re-check the ABI token
+  .garry_state$abi_ok <- NULL # fresh pools: re-check the ABI token
   # Fleet pids, recorded once per pool generation: the per-daemon RSS
   # poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
   # and the affinity/shaping calls mask them by global index (one pid
   # collection round trip per generation, shared by both).
-  .garry_state$comp_pids <- if (compute > 0L)
-    unlist(lapply(.comp_profiles(), .garry_pool_pids)) else integer(0)
+  .garry_state$comp_pids <- if (compute > 0L) {
+    unlist(lapply(.comp_profiles(), .garry_pool_pids))
+  } else {
+    integer(0)
+  }
   .garry_state$pool_pids <- c(
     if (read > 0L) .garry_pool_pids("garry_read"),
     .garry_state$comp_pids,
-    if (read > 0L || compute > 0L) .garry_pool_pids("garry_write"))
+    if (read > 0L || compute > 0L) .garry_pool_pids("garry_write")
+  )
   aff <- identical(garry_opt("pool_affinity"), "auto")
-  .garry_state$reader_threads <- if (aff && read > 0L)
+  .garry_state$reader_threads <- if (aff && read > 0L) {
     .pool_affinity_apply("garry_read", read)
-  .garry_state$comp_threads <- if (aff && compute > 0L &&
-                                   !identical(garry_opt("device"), "cuda"))
+  }
+  .garry_state$comp_threads <- if (
+    aff && compute > 0L && !identical(garry_opt("device"), "cuda")
+  ) {
     .pool_affinity_apply(NULL, compute, pids = .garry_state$comp_pids)
+  }
   invisible(list(read = read, compute = compute))
 }
 
@@ -489,10 +627,12 @@ garry_daemons <- function(read = NULL, compute = NULL, read_handles = NULL,
 #' @seealso [garry_daemons()]
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
-  .pool_broadcast(quote(garry::.daemon_hygiene(deep = d)),
-                  profiles = c("garry_read", .comp_profiles(),
-                               "garry_write"),
-                  d = deep, quiet = TRUE)
+  .pool_broadcast(
+    quote(garry::.daemon_hygiene(deep = d)),
+    profiles = c("garry_read", .comp_profiles(), "garry_write"),
+    d = deep,
+    quiet = TRUE
+  )
   invisible(NULL)
 }
 
@@ -515,7 +655,9 @@ garry_daemons_set <- function() {
 # restore closure, or NULL when nothing needs doing. See the call site
 # in garry_daemons() for the full rationale.
 .covr_daemon_libs <- function() {
-  if (!identical(Sys.getenv("R_COVR"), "true")) return(NULL)
+  if (!identical(Sys.getenv("R_COVR"), "true")) {
+    return(NULL)
+  }
   # Identify covr's temp library by CONTENT, not via find.package():
   # under testthat::test_local() the host garry is pkgload-loaded from
   # the SOURCE TREE, so find.package() points there while covr's
@@ -527,19 +669,27 @@ garry_daemons_set <- function() {
   instrumented <- function(lib) {
     ls_ <- file.path(lib, "garry", "R", "garry")
     file.exists(ls_) &&
-      any(grepl("covr:::save_trace",
-                tryCatch(readLines(ls_, warn = FALSE),
-                         error = function(e) character(0)),
-                fixed = TRUE))
+      any(grepl(
+        "covr:::save_trace",
+        tryCatch(readLines(ls_, warn = FALSE), error = function(e) {
+          character(0)
+        }),
+        fixed = TRUE
+      ))
   }
   libs <- .libPaths()
   bad <- vapply(libs, instrumented, logical(1))
   clean <- libs[!bad]
-  has_garry <- vapply(clean, function(l) {
-    file.exists(file.path(l, "garry", "R", "garry"))
-  }, logical(1))
-  if (!any(bad) || !any(has_garry))
-    return(NULL)          # nothing to strip, or no clean garry to fall back to
+  has_garry <- vapply(
+    clean,
+    function(l) {
+      file.exists(file.path(l, "garry", "R", "garry"))
+    },
+    logical(1)
+  )
+  if (!any(bad) || !any(has_garry)) {
+    return(NULL)
+  } # nothing to strip, or no clean garry to fall back to
   old <- Sys.getenv("R_LIBS", unset = NA)
   Sys.setenv(R_LIBS = paste(clean, collapse = .Platform$path.sep))
   function() {
