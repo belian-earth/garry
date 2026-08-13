@@ -381,16 +381,13 @@ NULL
   mats <- lapply(res, .sv_materialise)                        # one per band
   if (is.null(path)) return(if (spec$n_bands == 1L) mats[[1L]] else mats)
   nd <- if (is.null(nodata)) numeric(0) else nodata
-  wsc <- wspec$scale %||% numeric(0)
-  wof <- wspec$offset %||% numeric(0)
   ds <- gdal_create_output(path, spec$grid, nodata = nd,
                            band_names = band_names, dtype = wspec$dtype,
-                           options = wspec$options,
-                           scale = wsc, offset = wof)
+                           options = wspec$options)
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_along(mats))
     gdal_write_window(ds, 0L, 0L, mats[[b]], wspec$dtype %||% spec$grid@dtype,
-                      nodata = nd, band = b, scale = wsc, offset = wof)
+                      nodata = nd, band = b)
   invisible(path)
 }
 
@@ -726,16 +723,12 @@ NULL
   wnodata <- if (is.null(nodata)) numeric(0) else nodata
   ds <- gdal_create_output(path, gspec$grid, nodata = wnodata,
                            band_names = band_names, dtype = wspec$dtype,
-                           options = wspec$options,
-                           scale = wspec$scale %||% numeric(0),
-                           offset = wspec$offset %||% numeric(0))
+                           options = wspec$options)
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_len(nb))
     gdal_write_window(ds, 0L, 0L, mats[[b]],
                       wspec$dtype %||% gspec$grid@dtype,
-                      nodata = wnodata, band = b,
-                      scale = wspec$scale %||% numeric(0),
-                      offset = wspec$offset %||% numeric(0))
+                      nodata = wnodata, band = b)
   invisible(path)
 }
 
@@ -867,15 +860,11 @@ NULL
   wnodata <- if (is.null(nodata)) numeric(0) else nodata
   ds <- gdal_create_output(path, u$grid, nodata = wnodata,
                            band_names = band_names, dtype = wspec$dtype,
-                           options = wspec$options,
-                           scale = wspec$scale %||% numeric(0),
-                           offset = wspec$offset %||% numeric(0))
+                           options = wspec$options)
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   for (b in seq_len(nb))
     gdal_write_window(ds, 0L, 0L, mats[[b]], wspec$dtype %||% u$grid@dtype,
-                      nodata = wnodata, band = b,
-                      scale = wspec$scale %||% numeric(0),
-                      offset = wspec$offset %||% numeric(0))
+                      nodata = wnodata, band = b)
   invisible(path)
 }
 

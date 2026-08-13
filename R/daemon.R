@@ -50,7 +50,7 @@ NULL
 
 # Store layout ABI version: bump on any incompatible change to the raw
 # payload byte layout, region naming, or shared-value envelope.
-.garry_store_abi <- 1L
+.garry_store_abi <- 2L   # 2: sink-only integer payloads (g_quantize)
 
 #' Daemon-facing ABI token: a hash of every `.daemon_*` entry point's
 #' formals plus the store layout version.
@@ -163,10 +163,19 @@ NULL
         else g_upload(m, fuse$dtype)
   res <- jf(list(up))
   out_dev <- res[[1L]]
+  # Producer-side write quantization for a FUSED sink (the host sets
+  # fuse$wq only when this fused export is a no-other-consumer sink).
+  # Applied eagerly on device, outside the jitted kernel, so the
+  # content-addressed kernel cache key is untouched.
+  if (!is.null(fuse$wq))
+    out_dev <- g_quantize(out_dev, fuse$wq$scale, fuse$wq$offset,
+                          fuse$wq$nodata, fuse$wq$dtype)
   # f32/f64 kernel outputs become raw store payloads directly off the
-  # device (D19; f64 per design/f64-store.md): no double
-  # materialisation on the download either.
-  out <- if (store_raw && .g_dtype(out_dev) %in% c("f32", "f64")) {
+  # device (D19; f64 per design/f64-store.md); quantized sink outputs
+  # ride the same raw path as integer payloads.
+  out <- if (store_raw &&
+             .g_dtype(out_dev) %in% c("f32", "f64", "u8", "i8", "i16",
+                                      "u16", "i32")) {
     g_download_raw(out_dev)
   } else {
     g_download(out_dev)
@@ -268,8 +277,7 @@ NULL
 #' @keywords internal
 #' @export
 .daemon_write_chunk <- function(path, x_off, y_off, val, skey, el,
-                                pad, dtype, nodata, n_chunks,
-                                scale = numeric(0), offset = numeric(0)) {
+                                pad, dtype, nodata, n_chunks) {
   ds <- .daemon_ds[[path]]
   if (is.null(ds)) {
     ds <- gdal_open_update(path)
@@ -277,8 +285,7 @@ NULL
   }
   ch <- if (is.null(el)) val[[skey]] else val[[el]]
   .exec_check_writable(ch, n_chunks)
-  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata,
-                    scale = scale, offset = offset)
+  .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
   rm(ch, val)
   gc(FALSE)
   .garry_malloc_trim()
@@ -358,7 +365,8 @@ NULL
 .daemon_run_compute_shm <- function(cache_key, fn, in_vals, in_keys,
                                     trims, dtypes, reg_key,
                                     out_keys = NULL, device = "cpu",
-                                    store_raw = FALSE, edge = NULL) {
+                                    store_raw = FALSE, edge = NULL,
+                                    wq = NULL) {
   if (length(ls(.daemon_cache)) > 64L)
     rm(list = ls(.daemon_cache), envir = .daemon_cache)
   dev <- .exec_device(device)
@@ -376,7 +384,19 @@ NULL
   inputs <- Map(function(v, k, tr, dt) {
     .sv_upload(v[[k]], tr, dt, dev)
   }, in_vals, in_keys, trims, dtypes)
-  res <- .sv_download_exports(jf(unname(inputs)), store_raw)
+  dev_res <- jf(unname(inputs))
+  # Producer-side write quantization (g_quantize, the one quantizer):
+  # `wq$keys` names the sink exports the host cleared for it (sink
+  # nodes with NO other consumers -- a store value another stage still
+  # reads must stay f32). Positions resolve through out_keys (the
+  # content-addressed cache renames exports positionally after).
+  if (!is.null(wq) && length(wq$keys)) {
+    pos <- match(wq$keys, out_keys %||% names(dev_res))
+    for (p2 in pos[!is.na(pos)])
+      dev_res[[p2]] <- g_quantize(dev_res[[p2]], wq$scale, wq$offset,
+                                  wq$nodata, wq$dtype)
+  }
+  res <- .sv_download_exports(dev_res, store_raw)
   # Content-addressed cache keys share one jitted wrapper across
   # structurally identical stages; the wrapper's export NAMES belong
   # to whichever stage compiled it, so rename positionally (exports

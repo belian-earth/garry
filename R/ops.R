@@ -182,10 +182,91 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 g_download_raw <- function(x) {
   .require_anvl()
   dt <- .g_dtype(x)
-  if (!dt %in% c("f32", "f64"))
-    cli::cli_abort("raw store payloads are f32/f64; got {.val {dt}}")
+  # f32/f64 are the store's compute payloads (D19/f64-store); the
+  # integer dtypes are SINK-ONLY payloads from g_quantize() -- written
+  # bytes, never re-uploaded or sliced. u32 is excluded: R cannot
+  # readBin unsigned 4-byte values, and the writer must be able to
+  # recover a plain integer vector from the payload.
+  if (!dt %in% c("f32", "f64", "u8", "i8", "i16", "u16", "i32"))
+    cli::cli_abort(
+      "raw store payloads are f32/f64 or sink integers; got {.val {dt}}")
   structure(anvl::as_raw(x, row_major = TRUE),
             gdim = .g_shape(x), gdt = dt)
+}
+
+#' Round to nearest integer value (half to even), elementwise.
+#'
+#' Matches base R's `round(x)` semantics (IEEE round-half-to-even), so
+#' device-side quantization reproduces the historical writer-side
+#' `round()` exactly.
+#'
+#' @param x Traced array or plain numeric.
+#' @return Same shape as `x`.
+#' @keywords internal
+#' @export
+g_round <- function(x) {
+  .require_anvl()
+  anvl::nv_round(x)
+}
+
+#' Clamp values to a closed range, elementwise.
+#'
+#' @param x Traced array or plain numeric.
+#' @param lo,hi Range bounds (scalars).
+#' @return Same shape as `x`.
+#' @keywords internal
+#' @export
+g_clamp <- function(x, lo, hi) {
+  .require_anvl()
+  anvl::nv_clamp(lo, x, hi)
+}
+
+# Integer output ranges for quantized sinks (mirrors GDAL's clamp at
+# the double -> integer band conversion the writer used to rely on).
+.g_int_range <- list(
+  u8  = c(0, 255),         i8  = c(-128, 127),
+  u16 = c(0, 65535),       i16 = c(-32768, 32767),
+  i32 = c(-2147483648, 2147483647)
+)
+
+#' Quantize physical values to integer digital numbers, on device.
+#'
+#' The sink-side write transform `round((x - offset) / scale)` --
+#' clamped to `dtype`'s range (as GDAL's conversion would), with NaN
+#' mapped to `nodata` BEFORE the integer cast (casting NaN to an
+#' integer is undefined). Runs in f32 on the producer, so every
+#' execution route yields byte-identical digital numbers; the writer
+#' daemon then only writes.
+#'
+#' @param x Traced f32 array (physical values; NaN = nodata).
+#' @param scale,offset Write quantization: `DN = round((x - offset) / scale)`.
+#' @param nodata Integer sentinel NaN maps to (must fit `dtype`).
+#' @param dtype Integer output dtype (`"u8"`, `"i8"`, `"i16"`, `"u16"`,
+#'   `"i32"`).
+#' @return Traced array of `dtype`.
+#' @keywords internal
+#' @export
+g_quantize <- function(x, scale, offset, nodata, dtype) {
+  rng <- .g_int_range[[dtype]]
+  if (is.null(rng))
+    cli::cli_abort("unsupported quantize dtype {.val {dtype}}")
+  q <- g_round((x - offset) / scale)
+  q <- g_clamp(q, rng[[1L]], rng[[2L]])
+  if (length(nodata) == 1L) {
+    q <- g_ifelse(g_is_nodata(x), nodata, q)
+  } else {
+    # No sentinel: legal for NaN-free data (the historical writer
+    # contract). NaN cannot survive the integer cast, so check on
+    # device and fail with the historical message. Eager-only branch
+    # (the check downloads a scalar); every current seam is eager.
+    n_nan <- g_download(g_sum(g_cast(g_is_nodata(x), "f32")))
+    if (n_nan > 0)
+      .garry_error(paste0(
+        "result contains nodata (NaN) but no nodata sentinel was ",
+        "given for integer output dtype '", dtype, "'"),
+        "garry_write_error")
+  }
+  g_cast(q, dtype)
 }
 
 # Shape of an AnvlArray (bridge; the executor must not touch anvl).

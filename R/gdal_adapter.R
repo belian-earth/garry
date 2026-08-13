@@ -764,8 +764,16 @@ gdal_create_output <- function(path, grid, nodata = numeric(0),
 #' @return Invisibly, `NULL`.
 #' @export
 gdal_write_window <- function(ds, x_off, y_off, m, dtype,
-                              nodata = numeric(0), band = 1L,
-                              scale = numeric(0), offset = numeric(0)) {
+                              nodata = numeric(0), band = 1L) {
+  # Quantized sink payloads arrive as ready-to-write integers from
+  # g_quantize() at the producer (design: one device quantizer for
+  # every route; the old writer-side round((v - offset) / scale) is
+  # gone, so the single writer daemon only does IO).
+  if (.sv_is_int(m)) {
+    d <- .sv_dim(m)
+    ds$write(as.integer(band), x_off, y_off, d[[2L]], d[[1L]], .sv_to_int(m))
+    return(invisible(NULL))
+  }
   if (.sv_is(m)) {
     # Raw store payloads are already in GDAL's row-major write order.
     d <- .sv_dim(m)
@@ -775,10 +783,8 @@ gdal_write_window <- function(ds, x_off, y_off, m, dtype,
   } else {
     nr <- nrow(m)
     nc <- ncol(m)
-    v <- as.numeric(t(m))
+    v <- if (is.integer(m)) as.integer(t(m)) else as.numeric(t(m))
   }
-  if (length(scale) == 1L)
-    v <- round((v - (if (length(offset) == 1L) offset else 0)) / scale)
   if (length(nodata) == 1L) {
     v[is.na(v)] <- nodata
   } else if (anyNA(v) && .dtype_family(dtype) != "float") {

@@ -117,13 +117,38 @@ test_that("distributed quantized write matches host, on the scheduler route", {
             nodata = -32768, distributed = TRUE)
   expect_identical(garry_last_route(), "scheduler")
   a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
-  expect_equal(unclass(a1), unclass(a2), ignore_attr = TRUE)
+  # one device quantizer for every route: digital numbers are EXACTLY
+  # identical (file bytes may differ in tile order under streaming)
+  expect_identical(unclass(unname(a1)), unclass(unname(a2)))
   md <- gdal_grid_spec(pd)
   expect_identical(md$grid@dtype, "i16")
   expect_identical(md$scale, 1e-4)
 })
 
-test_that("composite_direct route writes quantized output identically", {
+test_that("g_quantize matches the historical writer semantics", {
+  x <- c(-0.05, 0.00005, 0.15005, 3.27675, 9, NaN)
+  dev <- g_upload(matrix(x, 1L), "f32")
+  q <- g_download(g_quantize(dev, 1e-4, 0, -32768, "i16"))
+  ref <- round((x) / 1e-4)              # R round: half to even, like nv_round
+  ref <- pmin(pmax(ref, -32768), 32767) # clamp = GDAL cast behaviour
+  ref[is.na(ref)] <- -32768
+  expect_equal(as.numeric(q), ref)
+  # no sentinel + NaN present: the historical error, now from the device
+  expect_error(
+    g_download(g_quantize(dev, 1e-4, 0, numeric(0), "i16")),
+    "no nodata sentinel")
+  # no sentinel + NaN-free: legal (the historical contract)
+  clean <- g_upload(matrix(c(0.1, 0.2), 1L), "f32")
+  expect_equal(as.numeric(g_download(g_quantize(clean, 0.1, 0,
+                                                numeric(0), "i16"))),
+               c(1, 2))
+})
+
+test_that("a composite-shaped quantized write routes to the scheduler, identically", {
+  # Quantized writes bypass the cd/gd fast paths by design (one device
+  # quantizer for every route; folding g_quantize into the cd band
+  # kernels is ir-extensions-todo #12). The same plan WITHOUT a wspec
+  # still takes composite_direct (guarded below).
   local_pools(2, 2)
   x <- .gg_masked_composite()
   ph <- tempfile(fileext = ".tif"); pd <- tempfile(fileext = ".tif")
@@ -131,6 +156,11 @@ test_that("composite_direct route writes quantized output identically", {
             nodata = -32768, distributed = FALSE)
   write_tif(x, pd, dtype = "i16", scale = 0.5, offset = 0,
             nodata = -32768, distributed = TRUE)
+  expect_identical(garry_last_route(), "scheduler")
+  a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
+  expect_identical(unclass(unname(a1)), unclass(unname(a2)))
+  pf <- tempfile(fileext = ".tif")
+  write_tif(x, pf, distributed = TRUE)
   expect_identical(garry_last_route(), "composite_direct")
   a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
   expect_equal(unclass(a1), unclass(a2), ignore_attr = TRUE)

@@ -108,7 +108,26 @@ NULL
 # arithmetic on this instead of a hard-coded 4.
 .sv_es <- function(v) {
   gdt <- if (is.character(v)) v else attr(v, "gdt")
-  if (identical(gdt, "f64")) 8L else 4L
+  switch(gdt,
+         f64 = 8L,
+         f32 = , i32 = 4L,
+         i16 = , u16 = 2L,
+         i8 = , u8 = 1L,
+         4L)
+}
+
+# Is a payload a sink-only integer (g_quantize output)? These are
+# written bytes: never re-uploaded, never part-sliced.
+.sv_is_int <- function(v) {
+  .sv_is(v) && attr(v, "gdt") %in% c("u8", "i8", "i16", "u16", "i32")
+}
+
+# Integer payload -> ROW-major R integer vector (GDAL write order).
+.sv_to_int <- function(v) {
+  gdt <- attr(v, "gdt")
+  es <- .sv_es(v)
+  readBin(v, integer(), n = prod(.sv_dim(v)), size = es,
+          signed = !(gdt %in% c("u8", "u16")))
 }
 
 .sv_from_vec <- function(v, nr, nc, gdt = "f32") {
@@ -429,15 +448,13 @@ NULL
 # (t or band, D17). Padding (source/warp sinks, or D22 padded compute
 # exports) trims off first.
 .exec_write_chunk <- function(ds, x_off, y_off, ch, sink_pad, dtype,
-                              nodata, scale = numeric(0),
-                              offset = numeric(0)) {
+                              nodata) {
   ch <- .exec_trim(ch, sink_pad)
   if (.sv_is(ch)) {
     d <- .sv_dim(ch)
     if (length(d) == 2L) {
       gdal_write_window(ds, x_off, y_off, ch,
-                        dtype = dtype, nodata = nodata,
-                        scale = scale, offset = offset)
+                        dtype = dtype, nodata = nodata)
     } else {
       # Row-major (band, y, x) payload: each band's plane is one
       # contiguous byte range.
@@ -449,20 +466,18 @@ NULL
         gdal_write_window(ds, x_off, y_off,
                           structure(bytes, gdim = d[2:3],
                                     gdt = attr(ch, "gdt")),
-                          dtype = dtype, nodata = nodata, band = b,
-                          scale = scale, offset = offset)
+                          dtype = dtype, nodata = nodata, band = b)
       }
     }
   } else if (is.matrix(ch)) {
     gdal_write_window(ds, x_off, y_off, ch, dtype = dtype,
-                      nodata = nodata, scale = scale, offset = offset)
+                      nodata = nodata)
   } else {
     for (b in seq_len(dim(ch)[[1L]])) {
       m <- ch[b, , , drop = FALSE]
       dim(m) <- dim(ch)[2:3]
       gdal_write_window(ds, x_off, y_off, m, dtype = dtype,
-                        nodata = nodata, band = b,
-                        scale = scale, offset = offset)
+                        nodata = nodata, band = b)
     }
   }
   invisible(NULL)
@@ -481,6 +496,36 @@ NULL
                  "garry_plan_error")
 }
 
+# Sink write-quantization spec from a wspec + nodata: NULL unless the
+# write quantizes (scale present). nodata is optional (the historical
+# writer contract): absent, g_quantize checks the chunk for NaN on
+# device and errors -- NaN cannot survive the integer cast.
+.exec_wq <- function(wspec, nodata) {
+  if (is.null(wspec) || length(wspec$scale) != 1L) return(NULL)
+  list(scale = wspec$scale,
+       offset = if (length(wspec$offset) == 1L) wspec$offset else 0,
+       nodata = if (length(nodata) == 1L) as.numeric(nodata)
+                else numeric(0),
+       dtype = wspec$dtype)
+}
+
+# Quantize one sink chunk value on device (g_quantize: the ONE write
+# quantizer, so every route yields byte-identical digital numbers).
+# Already-quantized payloads pass through -- distributed producers
+# quantize sink store values at the source, and the host tail must
+# not double-apply.
+.exec_quantize_value <- function(v, wq) {
+  if (is.null(wq) || .sv_is_int(v)) return(v)
+  if (is.integer(v)) return(v)
+  dev <- if (.sv_is(v)) {
+    g_upload_raw(v, attr(v, "gdt"), .sv_dim(v))
+  } else {
+    g_upload(v, "f32")
+  }
+  q <- g_quantize(dev, wq$scale, wq$offset, wq$nodata, wq$dtype)
+  if (.sv_is(v)) g_download_raw(q) else g_download(q)
+}
+
 # Write sink chunks to a GTiff (single-threaded executor; the
 # distributed scheduler streams chunks through .exec_write_chunk as
 # they land instead).
@@ -496,11 +541,11 @@ NULL
                            offset = wspec$offset %||% numeric(0))
   on.exit(ds$close(), add = TRUE)
   wdt <- wspec$dtype %||% sink@grid@dtype
+  wq <- .exec_wq(wspec, nodata)
   for (j in seq_len(nrow(it))) {
-    .exec_write_chunk(ds, it$x_off[j], it$y_off[j], chunks[[j]],
-                      sink_pad, wdt, nodata,
-                      scale = wspec$scale %||% numeric(0),
-                      offset = wspec$offset %||% numeric(0))
+    ch <- .exec_quantize_value(chunks[[j]], wq)
+    .exec_write_chunk(ds, it$x_off[j], it$y_off[j], ch,
+                      sink_pad, wdt, nodata)
   }
   invisible(path)
 }

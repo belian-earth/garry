@@ -244,6 +244,40 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # daemon processes do not inherit host options, so the flag rides in
   # every task payload.
   use_raw <- .exec_use_raw_store()
+  # Producer-side write quantization (g_quantize, the one quantizer;
+  # collect.R routes quantizing plans off the cd/gd fast paths).
+  # `wq_keys_of[[stage key]]` lists the stage's sink exports CLEARED
+  # for producer quantization: sink nodes no other stage consumes (a
+  # store value another stage still reads must stay f32). Uncleared
+  # or unfused sinks are not streamed; they fall to the host tail,
+  # where .exec_write_sink applies the same device quantizer. Built
+  # BEFORE the task loop: fused read tasks bind fuse$wq at build time.
+  wq <- .exec_wq(wspec, if (is.null(nodata)) numeric(0)
+                        else as.numeric(nodata))
+  wq_keys_of <- list()
+  if (!is.null(wq)) {
+    snk <- plan@stages[[plan@sink]]
+    all_nids <- if (length(plan@sinks) > 0L) plan@sinks
+      else snk@members[[length(snk@members)]]
+    consumed <- unique(unlist(lapply(plan@stages, function(s2)
+      vapply(s2@input_nodes, .key, character(1)))))
+    for (nid in unique(all_nids)) {
+      if (.key(nid) %in% consumed) next
+      st <- plan@stages[[max(which(vapply(plan@stages, function(s2)
+        nid %in% s2@members, logical(1))))]]
+      k <- .key(st@id)
+      wq_keys_of[[k]] <- unique(c(wq_keys_of[[k]], .key(nid)))
+    }
+  }
+  # Streaming requires the writer to receive READY bytes: with wq
+  # active, only cleared compute/reduce_partial sinks (quantized in
+  # .daemon_run_compute_shm) and fused sinks (quantized in
+  # .apply_fuse) may stream.
+  .wq_stream_ok <- function(st, nid) {
+    is.null(wq) ||
+      (.key(nid) %in% (wq_keys_of[[.key(st@id)]] %||% character(0)) &&
+         st@kind %in% c("compute", "reduce_partial"))
+  }
   # Inter-stage store is POSIX shared memory (mori): daemons pin every
   # region they created for this run and release them once the host is done
   # (regions outlive tasks, not the run); host-side handles die with
@@ -468,6 +502,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       if (!is.null(fspec)) {
         oid <- fspec$cid
         skey <- fspec$out_key
+        # Fused SINK: quantize in .apply_fuse when this fused export is
+        # a cleared sink (no other consumer reads the store value).
+        if (!is.null(wq) &&
+            fspec$out_key %in%
+              (wq_keys_of[[.key(fspec$cid)]] %||% character(0)))
+          fspec$wq <- wq[c("scale", "offset", "nodata", "dtype")]
       }
       # Raw read gate (D21): halo-free windows whose consumers see f32
       # values — the node's own dtype for pure reads, the fused
@@ -691,6 +731,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- .glue("s{sid}_c{jj}")
           sr <- use_raw
+          wqs <- if (!is.null(wq) &&
+                     length(wq_keys_of[[.key(s@id)]] %||% character(0)))
+            c(wq, list(keys = wq_keys_of[[.key(s@id)]])) else NULL
           add_task(key, unique(in_deps), "comp", mb = task_mb,
                    store_mb = store_mb_comp,
                    scan = has_scan,
@@ -709,13 +752,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
                                              out_keys = ok,
                                              device = dv,
                                              store_raw = sr,
-                                             edge = eg),
+                                             edge = eg, wq = wqt),
               ck = ck, fn = if (with_fn) fn else NULL,
               in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
               in_keys = shm_keys,
               trims = trims, dtypes = dtypes,
               reg = .glue("r{run_id}_{key}"),
-              ok = out_keys, dv = sdev, sr = sr, eg = edge,
+              ok = out_keys, dv = sdev, sr = sr, eg = edge, wqt = wqs,
               .compute = prof)
           })
           # Refcount every store input this task consumes (read windows
@@ -906,6 +949,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           silent = TRUE)
     }, add = TRUE, after = FALSE)
   sink_ds <- NULL
+  if (stream_write && !is.null(wq)) {
+    snid <- sink@members[[length(sink@members)]]
+    fused_sink <- !is.null(fuse_of[[.key(sink@id)]])
+    if (!(.wq_stream_ok(sink, snid) ||
+          (fused_sink &&
+             .key(snid) %in% (wq_keys_of[[.key(sink@id)]] %||% character(0)))))
+      stream_write <- FALSE
+  }
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
     sink_it <- chunk_iter(sink@chunks)
@@ -933,6 +984,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       st <- plan@stages[[max(which(vapply(plan@stages, function(s)
         nid %in% s@members, logical(1))))]]
       if (st@kind == "reduce_combine") next
+      if (!is.null(wq) &&
+          !(.wq_stream_ok(st, nid) ||
+            (!is.null(fuse_of[[.key(st@id)]]) &&
+               .key(nid) %in% (wq_keys_of[[.key(st@id)]] %||% character(0)))))
+        next                    # unquantizable stream: host tail writes it
       p <- if (length(path) == 1L && dir.exists(path))
         file.path(path, paste0(nm, ".tif")) else path[[nm]]
       ngrid <- graph_get(plan@graph, nid)@grid
@@ -1223,13 +1279,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       rk = ref$rk,
       h = mirai::mirai(
         garry::.daemon_write_chunk(wpath, xo, yo, val, skey, el, pad,
-                                   dtype, nodata = nd, n_chunks = nc,
-                                   scale = wsc, offset = wof),
+                                   dtype, nodata = nd, n_chunks = nc),
         wpath = wpath, xo = it$x_off[[j]], yo = it$y_off[[j]],
         val = ref$v, skey = skey, el = ref$el, pad = pad,
         dtype = dtype, nd = wnodata, nc = nrow(it),
-        wsc = wspec$scale %||% numeric(0),
-        wof = wspec$offset %||% numeric(0),
         .compute = "garry_write"))
     invisible(NULL)
   }
@@ -1440,9 +1493,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
               .exec_check_writable(ch, nrow(sink_it))
               .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
                                 ch, sink_spad,
-                                wspec$dtype %||% sink@grid@dtype, wnodata,
-                                scale = wspec$scale %||% numeric(0),
-                                offset = wspec$offset %||% numeric(0))
+                                wspec$dtype %||% sink@grid@dtype, wnodata)
             }
           }
           log_line("write", k)
@@ -1457,9 +1508,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
               ch <- chunk_of(sp$sid, j)[[sp$key]]
               .exec_check_writable(ch, nrow(sp$it))
               .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
-                                ch, sp$pad, sp$dtype, wnodata,
-                                scale = wspec$scale %||% numeric(0),
-                                offset = wspec$offset %||% numeric(0))
+                                ch, sp$pad, sp$dtype, wnodata)
             }
           }
           log_line("write", k)

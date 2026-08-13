@@ -88,8 +88,14 @@ collect <- function(x, plan_only = FALSE,
       cli::cli_abort(c(
         "{.arg distributed} is TRUE but no garry daemon pools are running.",
         "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."))
-    spec <- .cd_spec(p)               # pure composite fast path (fetch-ordered pipeline)
-    decomp <- if (is.null(spec)) .gd_decompose(p) else NULL   # reduce-decomposition
+    # Quantized writes (wspec with scale) bypass the cd/gd fast paths:
+    # their band kernels do not yet fold g_quantize, and the one-
+    # device-quantizer invariant (byte-identical digital numbers on
+    # every route) is worth more than the fast path here. Folding wq
+    # into the cd/gd kernels is the follow-up (ir-extensions-todo #12).
+    quantizing <- !is.null(wspec) && length(wspec$scale) == 1L
+    spec <- if (quantizing) NULL else .cd_spec(p)  # composite fast path
+    decomp <- if (is.null(spec) && !quantizing) .gd_decompose(p) else NULL
     # Record which route ran (garry_last_route()): the selection is
     # silent, and a plan silently changing route is exactly the
     # regression class the equivalence suite must be able to observe.

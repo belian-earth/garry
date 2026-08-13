@@ -4,17 +4,7 @@
 \alias{gdal_write_window}
 \title{Write a garry-oriented matrix into an open output dataset.}
 \usage{
-gdal_write_window(
-  ds,
-  x_off,
-  y_off,
-  m,
-  dtype,
-  nodata = numeric(0),
-  band = 1L,
-  scale = numeric(0),
-  offset = numeric(0)
-)
+gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
 }
 \arguments{
 \item{ds}{Open dataset from \code{\link[=gdal_create_output]{gdal_create_output()}}.}
