@@ -61,6 +61,28 @@ test_that("cog = TRUE produces COG layout and leaves no temps", {
   unlink(p)
 })
 
+test_that("cog = TRUE under pools writes the same values as a plain write", {
+  # End-to-end guard for the streamed-writer + translate composition:
+  # a broken interaction anywhere in stream/close/translate would leave
+  # the pre-created (zero-filled) temp as the COG's content.
+  local_pools(2, 1)
+  s <- .wt_src()
+  x <- lazy_source(s$f) + 0
+  pp <- file.path(tempdir(), "wt-pools-plain.tif")
+  pc <- file.path(tempdir(), "wt-pools-cog.tif")
+  write_tif(x, pp, dtype = "i16", scale = 1e-4, offset = -0.1,
+            nodata = -32768, distributed = TRUE)
+  write_tif(x, pc, dtype = "i16", scale = 1e-4, offset = -0.1,
+            nodata = -32768, cog = TRUE, distributed = TRUE)
+  d <- methods::new(gdalraster::GDALRaster, pc)
+  expect_identical(d$getMetadataItem(0, "LAYOUT", "IMAGE_STRUCTURE"), "COG")
+  d$close()
+  a <- collect(lazy_source(pp)); b <- collect(lazy_source(pc))
+  expect_identical(unclass(unname(a)), unclass(unname(b)))
+  expect_gt(stats::sd(b, na.rm = TRUE), 0)     # not a constant-fill file
+  unlink(c(pp, pc))
+})
+
 test_that("multi-export list form writes one file per sink (dir and cog)", {
   s <- .wt_src()
   x <- lazy_source(s$f) + 0
