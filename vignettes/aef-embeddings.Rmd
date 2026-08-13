@@ -106,27 +106,46 @@ km$size
 
 **Assign.** Every 30 m pixel goes to its nearest centroid:
 `argmax_k (x . c_k - |c_k|^2 / 2)`, and `x . c_k` is a linear combination of
-bands -- exactly the `band_project()` reducer from the
-[PCA article](hls-harmonized-pca.html). Six reducers stacked along the band
-axis make ONE lazy plan: the full-resolution 64-band cube is read once, the
-projections fuse onto the reads, and only a `(y, x, 6)` score stack ever
-reaches R. The constant and the argmax are three lines of host arithmetic.
+bands -- the `band_project()` reducer from the
+[PCA article](hls-harmonized-pca.html). The argmax is expressible in the
+same public vocabulary, so the WHOLE assignment runs inside the graph: a
+custom band reducer composes six projections with a comparison chain, and
+`collect()` returns the finished cluster map. This is ordinary user code --
+garry's shipped verbs are built from exactly these pieces, with no
+privileged access to the engine.
 
 
 ``` r
-cube   <- stack_bands(embeddings)
-scores <- lazy_stack(
-  lapply(seq_len(nrow(km$centers)), function(k)
-    reduce_over(cube, band_project(km$centers[k, ]), over = "band")),
-  along = "band")
-s <- collect(scores)                          # (y, x, 6)
-garry_daemons(0, 0)
+nearest_center <- function(centers) {
+  ct   <- unname(as.matrix(centers))            # k x band
+  half <- rowSums(ct^2) / 2
+  proj <- lapply(seq_len(nrow(ct)), function(k) band_project(ct[k, ]))
+  function(x, dims) {
+    s1   <- proj[[1]](x, dims) - half[[1]]      # score against centre 1
+    best <- s1
+    cl   <- s1 * 0 + 1                          # current best label
+    for (k in 2:nrow(ct)) {
+      sk   <- proj[[k]](x, dims) - half[[k]]
+      hit  <- sk > best
+      cl   <- g_ifelse(hit, k, cl)
+      best <- g_ifelse(hit, sk, best)
+    }
+    g_ifelse(g_is_nodata(s1), NaN, cl)          # nodata stays nodata
+  }
+}
 
-sm <- sweep(matrix(s, ncol = dim(s)[[3]]), 2, rowSums(km$centers^2) / 2)
-cl <- max.col(sm)
-cl[is.na(sm[, 1])] <- NA_integer_
-clmap <- matrix(cl, dim(s)[[1]], dim(s)[[2]])
-g <- attr(s, "gis"); g$dim[3] <- 1L; attr(clmap, "gis") <- g
+clusters <- reduce_over(stack_bands(embeddings),
+                        nearest_center(km$centers), over = "band")
+clmap <- collect(clusters)
+garry_daemons(0, 0)
+```
+
+One fused kernel reads the full-resolution 64-band cube once, computes all
+six projections and the argmax per pixel, and only the finished single-band
+cluster map ever reaches R. (Want the raw scores instead? Stack six plain
+`band_project()` reducers with `lazy_stack(along = "band")` and take
+`max.col()` host-side -- same digital numbers.)
+
 ```
 
 
