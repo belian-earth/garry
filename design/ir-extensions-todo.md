@@ -418,7 +418,7 @@ median B04/B03/B02, cpu): garry 22.05 s vs ODC 27.59 s -- 1.25x
 faster. Previously parity-to-slightly-behind (~1.0-1.2x of ODC);
 the closed drain is the differentiator.
 
-## 12. Writer-daemon quantize serialization (2026-08-12)
+## 12. Writer-daemon quantize serialization (2026-08-12) -- DONE 2026-08-13
 
 The write_tif tail on a 64-band AEF cube decomposes as: streamed
 drain 41 s (reads + fused dequant, fully overlapped), then ~57 s of
@@ -429,10 +429,140 @@ the translate 44 -> 13 s but did NOT move the 57 s, so that phase is
 writer-side R work, not compression. Dequantize itself was measured
 innocent (9 comp tasks; it fuses onto the warp reads).
 
-Levers, unbuilt: (a) quantize at the producer -- fold the wspec
+Levers: (a) quantize at the producer -- fold the wspec
 scale/offset/dtype into the fused kernel output (or the raw-store
 download), so sink chunks arrive as ready-to-write integer bytes and
 the writer daemon only does RasterIO; (b) per-band temp files with
 parallel writers, single COG translate collecting them (GTiff is
-single-writer PER FILE only). (a) is the natural fit with the D19
-raw store and keeps one writer.
+single-writer PER FILE only).
+
+RESOLVED 2026-08-13 with (a) (PR #17): `g_quantize()` on device at the
+chunk producers -- the ONE quantizer for every route, so digital
+numbers are exactly identical across single/distributed and
+streamed/host-tail writes. Sink-only integer raw-store payloads
+(store ABI 2); wq rides compute-task payloads and fuse specs, applied
+only to sink nodes with no other consumer; quantized plans bypass the
+cd/gd fast paths for now (folding g_quantize into those band kernels
+is the remaining follow-up). Measured on the 64-band AEF cube: writer
+phase 57 -> 20.5 s, COG translate 44 -> 9.6 s (compression threading
+plus the lighter payload), total 156 -> ~79 s. The residual ~20 s is
+genuine single-process IO; lever (b) stays available if it ever
+matters.
+
+## 13. Sample sink: point sampling + polygon subsetting (2026-08-13)
+
+FULL DESIGN: design/sample-sink.md. Summary: a non-raster sink that
+gathers values at plan-time-computed cell indices, so model FITS can
+consume a streamed sample instead of a materialised intermediate
+raster. Points transform to cells on the host (geometry stays at the
+GDAL/PROJ boundary); polygons rasterize to a zone raster. The planner
+keeps only chunks containing points; the chunk kernel gains a gather
+export (`prim_gather` exists upstream); the host concatenates in
+original point order.
+
+Unlocks tiers: T1 host-fit-on-streamed-sample (needs only the sink;
+kills fit-path disk in ramet47 SI and the AEF vignette's coarse-read
+workaround), T2 differentiable device fits (gradient tape exists), T3
+in-graph iterative fits (k-means Lloyd = nearest_center + reduce-by-key
++ While -- both missing pieces are already roadmap items #1 and the
+zonal candidate).
+
+Open: sampling semantics (nearest only; align/focal first for anything
+else), sparse-point read granularity, unbounded polygon extraction
+(needs a cap or a parquet exit), out-of-extent rows.
+
+## 14. Predict adapters for fitted R models (2026-08-13)
+
+Proposal (Hugh): `predict_ranger(fit)` and friends -- generics that
+take a FITTED model from a common R package and return a reducer for
+`reduce_over(over = "band")`, re-expressing that model's INFERENCE in
+the g_* vocabulary. The bar is far lower than porting training: no
+optimiser, no autograd, no data loading, no distributed anything --
+just a pure function, golden-testable against the package's own
+`predict()`.
+
+The pattern already ships: `band_mlp()`/`mlp_project()` IS this for
+torch MLPs (weights in as plain matrices), and `band_project()` is it
+for linear models. The OCM port is the extreme case (two U-Nets hand-
+written in g_* vocabulary, exact to 4e-6).
+
+By model family, in increasing difficulty:
+- **lm/glm**: `band_project(coef, center)` plus a link (sigmoid, exp).
+  Nearly free; a good first demonstration.
+- **GAM (mgcv)**: a smooth is a basis expansion -- re-implement the
+  basis evaluation (cr/ps/tp) elementwise, then it is a linear
+  combination. The sleeper hit: mgcv is everywhere in ecology/EO.
+- **Random forest (ranger) / boosted trees (xgboost, lightgbm)**: the
+  interesting one, and a SOLVED problem shape (this is what NVIDIA
+  FIL / Treelite do). Do NOT unroll the tree into nested ifelse
+  (2^depth). Instead flatten the forest to arrays -- left child, right
+  child, split feature, threshold, leaf value -- upload as constants
+  (~a few MB for 500 trees x depth 20), then iterate `max_depth`
+  times: gather the feature index and threshold for each pixel's
+  current node, compare, update the node index. Trees batch along a
+  leading axis; leaf values average (RF) or sum-then-link (GBM). Needs
+  a `g_gather` wrapper over `prim_gather`.
+- **SVM / kernel methods**: expressible (dot products + RBF) but cost
+  scales with the support-vector count; probably not worth it.
+
+**Torch specifically, and the generic-import question (2026-08-13
+probe).** An `nn_sequential` IS fully recoverable from the live R
+object: `$children` returns layers in order with their classes and
+`$parameters`. So `as_band_fn.nn_sequential` is feasible TODAY and
+strictly generalises `band_mlp()` (reads the architecture instead of
+being handed weights + activations). A CUSTOM `nn_module` is NOT: its
+children enumerate, but `forward` is an arbitrary R closure -- the
+residual adds, reshapes and control flow are invisible, and deparsing
+it would be parsing arbitrary R (the standing scope line) as well as
+fragile. Custom modules should error clearly: declare the layer list,
+or export a graph.
+
+Operator-overload tracing (call `forward` with recording arrays, as
+anvl traces R functions) does NOT work here: torch layers bottom out
+in C++-backed `nnf_*` calls that will not accept a fake tensor.
+Shadowing that namespace IS the torch-xla job -- someone else's, and
+big.
+
+The real generic import is therefore an EXPORTED GRAPH, and ONNX beats
+TorchScript as the target: a versioned spec, ~40 operators covering
+most real models, and garry already has most primitives from the OCM
+port (g_conv2d/g_upsample2x/g_pad_rb/g_transpose/g_erf + arithmetic).
+Two costs, one solved: R torch has NO onnx export (confirmed), and
+ONNX is protobuf with no R reader. Both are handled by the pattern the
+OCM port already proved -- a one-time OFFLINE conversion (a `uv run`
+tool, cf. tools/ocm_make_fixture.py) emitting a JSON graph + a
+safetensors blob, which garry reads with the existing pure-R
+`safetensors_read()`. Model-preparation dependency, not a runtime one.
+
+STRATEGIC NOTE: ONNX is not a torch adapter -- sklearn (skl2onnx),
+xgboost/lightgbm (onnxmltools), keras and torch all export to it. One
+importer could subsume most per-library adapters above, so the
+sequencing is: lm/glm (free demo) -> ONNX import -> hand-written
+adapters only where ONNX export is awkward (mgcv notably has none).
+
+SHAPE: an S3 generic on the FITTED OBJECT, not `predict_*` functions.
+`predict` itself belongs to the model packages, so a distinct verb --
+`as_band_fn(fit, ...)` -- dispatching to `as_band_fn.ranger`,
+`.nn_sequential`, `.lm`, `.onnx_model`. The payoff is extensibility: a
+third party adds a method for their own model class in their own
+package, with no privileged access to garry. OPEN: not every model is
+a BAND reducer -- a CNN is a patch kernel (PatchNode, from the OCM
+work), so either the generic returns a tagged object the consuming
+verb interprets, or there are two generics (`as_band_fn` /
+`as_patch_fn`). Decide before the first method ships; it is the
+hard-to-change part.
+
+WHERE IT SHOULD LIVE: a COMPANION PACKAGE, not garry. These adapters
+are ordinary compositions in the public vocabulary with no privileged
+engine access -- which is exactly the scope doc's test for "does not
+belong in the engine" -- and each carries a dependency (ranger, mgcv,
+xgboost) garry must not take on. A downstream package that Imports
+garry and Suggests the model packages keeps garry's closed primitive
+set clean, and makes the work delegable.
+
+RISK: these read a fitted object's INTERNAL structure (`fit$forest`,
+mgcv's smooth objects), which is not public API and can drift between
+versions. Mitigate with pinned-version golden tests that fail loudly,
+and keep extraction narrow. Second risk: per-pixel gather cost over a
+large forest is unmeasured -- benchmark before promising parity with
+a CPU `predict()`.

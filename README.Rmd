@@ -13,7 +13,7 @@ knitr::opts_chunk$set(
 )
 ```
 
-# garry
+# garry <a href="https://belian-earth.github.io/garry/"><img src="man/figures/logo.png" align="right" height="127" alt="garry website" /></a>
 
 <!-- badges: start -->
 [![R-CMD-check](https://github.com/belian-earth/garry/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/belian-earth/garry/actions/workflows/R-CMD-check.yaml)
@@ -114,14 +114,14 @@ computes only at the final `collect()`.
 ```{r example, eval = TRUE}
 library(garry)
 
-# 1. Discover: HLS S30 over an AOI, all of 2023, pre-signed for the PC.
+# 1. Discover: HLS S30 over an AOI, Jan-March of 2023, pre-signed for the PC.
 aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
 src <- stac_query(
   bbox        = aoi,
   stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
   collection  = "hls2-s30",
   start_date  = "2023-01-01", 
-  end_date = "2023-12-31"
+  end_date = "2023-03-31"
 ) |>
   stac_sign_mpc() |> 
   stac_filter_cloud(30) |> 

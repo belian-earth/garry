@@ -1,7 +1,7 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# garry
+# garry <a href="https://belian-earth.github.io/garry/"><img src="man/figures/logo.png" align="right" height="127" alt="garry website" /></a>
 
 <!-- badges: start -->
 
@@ -91,7 +91,7 @@ pjrt::install_pjrt()               # CPU plugin (~250 MB unpacked, cached per us
 # pjrt::install_pjrt(cuda = TRUE)  # instead, for a CUDA-capable GPU
 ```
 
-garry also needs GDAL >= 3.9 on the system (the GTI mosaic driver
+garry also needs GDAL \>= 3.9 on the system (the GTI mosaic driver
 behind `lazy_dataset()`); `gdalraster` reports yours with
 `gdalraster::gdal_version()`.
 
@@ -105,14 +105,14 @@ lazy: it reads and computes only at the final `collect()`.
 library(garry)
 #> garry: GDAL 3.13.0 "Iowa City", released 2026/05/04
 
-# 1. Discover: HLS S30 over an AOI, all of 2023, pre-signed for the PC.
+# 1. Discover: HLS S30 over an AOI, Jan-March of 2023, pre-signed for the PC.
 aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
 src <- stac_query(
   bbox        = aoi,
   stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
   collection  = "hls2-s30",
   start_date  = "2023-01-01", 
-  end_date = "2023-12-31"
+  end_date = "2023-03-31"
 ) |>
   stac_sign_mpc() |> 
   stac_filter_cloud(30) |> 
@@ -151,25 +151,25 @@ composite[["ndvi"]] <- (composite[["B08"]] - composite[["B04"]]) /
 print(composite)
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
 #>   bands  B04 B03 B02 B08 ndvi
-#>   time   44 slices
+#>   time   15 slices
 #>   grid   2536 x 1480 • f32
 #>   crs    Lambert Azimuthal Equal Area
-#>   graph  583 nodes • lazy
+#>   graph  206 nodes • lazy
 #>   ℹ draw(x) to see the pipeline
 draw(composite)              # the dataset's pipeline steps
 #> ── <LazyDataset> pipeline ──────────────────────────────────────────────────────
-#>   ◈ source    B04 B03 B02 B08 ndvi  •  44 slices • 2536×1480 f32
+#>   ◈ source    B04 B03 B02 B08 ndvi  •  15 slices • 2536×1480 f32
 #>   ✕ mask      from Fmask • bits 0–3 • open 2 • dilate 3
 #>   ▸ reduce    median over t
 #>   ⊕ derive    ndvi
-#>   ─ 583 nodes • crs Lambert Azimuthal Equal Area
+#>   ─ 206 nodes • crs Lambert Azimuthal Equal Area
 draw(composite[["ndvi"]])    # the NDVI band's node tree
 #> ── <LazyRaster> 2536 x 1480 • f32 ──────────────────────────────────────────────
 #> ƒ map  (2 inputs)
 #> └─ ƒ map  (2 inputs)  ×2
 #>    └─ ▸ median  over t  ×2
 #>       └─ ⬚ stack  along t
-#>          └─ ƒ map  (2 inputs)  ×44
+#>          └─ ƒ map  (2 inputs)  ×15
 #>             ├─ ◈ source  2536×1480 f32
 #>             └─ ◫ focal  r=3
 #>                └─ ◫ focal  r=2
