@@ -418,7 +418,7 @@ median B04/B03/B02, cpu): garry 22.05 s vs ODC 27.59 s -- 1.25x
 faster. Previously parity-to-slightly-behind (~1.0-1.2x of ODC);
 the closed drain is the differentiator.
 
-## 12. Writer-daemon quantize serialization (2026-08-12)
+## 12. Writer-daemon quantize serialization (2026-08-12) -- DONE 2026-08-13
 
 The write_tif tail on a 64-band AEF cube decomposes as: streamed
 drain 41 s (reads + fused dequant, fully overlapped), then ~57 s of
@@ -429,13 +429,25 @@ the translate 44 -> 13 s but did NOT move the 57 s, so that phase is
 writer-side R work, not compression. Dequantize itself was measured
 innocent (9 comp tasks; it fuses onto the warp reads).
 
-Levers, unbuilt: (a) quantize at the producer -- fold the wspec
+Levers: (a) quantize at the producer -- fold the wspec
 scale/offset/dtype into the fused kernel output (or the raw-store
 download), so sink chunks arrive as ready-to-write integer bytes and
 the writer daemon only does RasterIO; (b) per-band temp files with
 parallel writers, single COG translate collecting them (GTiff is
-single-writer PER FILE only). (a) is the natural fit with the D19
-raw store and keeps one writer.
+single-writer PER FILE only).
+
+RESOLVED 2026-08-13 with (a) (PR #17): `g_quantize()` on device at the
+chunk producers -- the ONE quantizer for every route, so digital
+numbers are exactly identical across single/distributed and
+streamed/host-tail writes. Sink-only integer raw-store payloads
+(store ABI 2); wq rides compute-task payloads and fuse specs, applied
+only to sink nodes with no other consumer; quantized plans bypass the
+cd/gd fast paths for now (folding g_quantize into those band kernels
+is the remaining follow-up). Measured on the 64-band AEF cube: writer
+phase 57 -> 20.5 s, COG translate 44 -> 9.6 s (compression threading
+plus the lighter payload), total 156 -> ~79 s. The residual ~20 s is
+genuine single-process IO; lever (b) stays available if it ever
+matters.
 
 ## 13. Sample sink: point sampling + polygon subsetting (2026-08-13)
 
