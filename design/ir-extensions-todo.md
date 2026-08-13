@@ -474,6 +474,53 @@ By model family, in increasing difficulty:
 - **SVM / kernel methods**: expressible (dot products + RBF) but cost
   scales with the support-vector count; probably not worth it.
 
+**Torch specifically, and the generic-import question (2026-08-13
+probe).** An `nn_sequential` IS fully recoverable from the live R
+object: `$children` returns layers in order with their classes and
+`$parameters`. So `as_band_fn.nn_sequential` is feasible TODAY and
+strictly generalises `band_mlp()` (reads the architecture instead of
+being handed weights + activations). A CUSTOM `nn_module` is NOT: its
+children enumerate, but `forward` is an arbitrary R closure -- the
+residual adds, reshapes and control flow are invisible, and deparsing
+it would be parsing arbitrary R (the standing scope line) as well as
+fragile. Custom modules should error clearly: declare the layer list,
+or export a graph.
+
+Operator-overload tracing (call `forward` with recording arrays, as
+anvl traces R functions) does NOT work here: torch layers bottom out
+in C++-backed `nnf_*` calls that will not accept a fake tensor.
+Shadowing that namespace IS the torch-xla job -- someone else's, and
+big.
+
+The real generic import is therefore an EXPORTED GRAPH, and ONNX beats
+TorchScript as the target: a versioned spec, ~40 operators covering
+most real models, and garry already has most primitives from the OCM
+port (g_conv2d/g_upsample2x/g_pad_rb/g_transpose/g_erf + arithmetic).
+Two costs, one solved: R torch has NO onnx export (confirmed), and
+ONNX is protobuf with no R reader. Both are handled by the pattern the
+OCM port already proved -- a one-time OFFLINE conversion (a `uv run`
+tool, cf. tools/ocm_make_fixture.py) emitting a JSON graph + a
+safetensors blob, which garry reads with the existing pure-R
+`safetensors_read()`. Model-preparation dependency, not a runtime one.
+
+STRATEGIC NOTE: ONNX is not a torch adapter -- sklearn (skl2onnx),
+xgboost/lightgbm (onnxmltools), keras and torch all export to it. One
+importer could subsume most per-library adapters above, so the
+sequencing is: lm/glm (free demo) -> ONNX import -> hand-written
+adapters only where ONNX export is awkward (mgcv notably has none).
+
+SHAPE: an S3 generic on the FITTED OBJECT, not `predict_*` functions.
+`predict` itself belongs to the model packages, so a distinct verb --
+`as_band_fn(fit, ...)` -- dispatching to `as_band_fn.ranger`,
+`.nn_sequential`, `.lm`, `.onnx_model`. The payoff is extensibility: a
+third party adds a method for their own model class in their own
+package, with no privileged access to garry. OPEN: not every model is
+a BAND reducer -- a CNN is a patch kernel (PatchNode, from the OCM
+work), so either the generic returns a tagged object the consuming
+verb interprets, or there are two generics (`as_band_fn` /
+`as_patch_fn`). Decide before the first method ships; it is the
+hard-to-change part.
+
 WHERE IT SHOULD LIVE: a COMPANION PACKAGE, not garry. These adapters
 are ordinary compositions in the public vocabulary with no privileged
 engine access -- which is exactly the scope doc's test for "does not
