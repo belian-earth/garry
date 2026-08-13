@@ -15,3 +15,9 @@
 ^Rplots\.pdf$
 ^\.Rprofile$
 ^codecov\.yml$
+^scratch\.R$
+^src/.*\.o$
+^src/.*\.so$
+^src/.*\.gcda$
+^src/.*\.gcno$
+^covr/$
