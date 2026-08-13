@@ -21,3 +21,4 @@
 ^src/.*\.gcda$
 ^src/.*\.gcno$
 ^covr/$
+^garry-logo\.png$

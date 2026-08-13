@@ -26,3 +26,5 @@ covr/
 # scratch files
 scratch.R
 km*.tif
+garry-logo.png
+/.quarto/
