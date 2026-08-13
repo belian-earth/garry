@@ -22,31 +22,32 @@
 # pixels with any invalid band) so the caller can NaN-mask the output.
 .ocm_channel_norm <- function(x) {
   sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
-  h <- sh[[2L]]; w <- sh[[3L]]
-  bad <- g_cast(g_is_nodata(x), "f32")             # (3,H,W)
-  ok  <- 1 - bad
-  x0  <- g_ifelse(bad > 0, 0, x)
-  n   <- g_sum(ok, dims = c(2L, 3L))               # (3,)
-  n1  <- g_ifelse(n > 0, n, 1)                     # all-invalid band: avoid 0/0
-  m   <- g_sum(x0, dims = c(2L, 3L)) / n1
-  mf  <- g_expand(g_expand(m, 2L, h), 3L, w)       # (3,H,W)
+  h <- sh[[2L]]
+  w <- sh[[3L]]
+  bad <- g_cast(g_is_nodata(x), "f32") # (3,H,W)
+  ok <- 1 - bad
+  x0 <- g_ifelse(bad > 0, 0, x)
+  n <- g_sum(ok, dims = c(2L, 3L)) # (3,)
+  n1 <- g_ifelse(n > 0, n, 1) # all-invalid band: avoid 0/0
+  m <- g_sum(x0, dims = c(2L, 3L)) / n1
+  mf <- g_expand(g_expand(m, 2L, h), 3L, w) # (3,H,W)
   dev <- (x0 - mf) * ok
-  v   <- g_sum(dev * dev, dims = c(2L, 3L)) / n1
-  sd  <- sqrt(v)
-  sd  <- g_ifelse(sd > 0, sd, 1)                   # channel_norm: std 0 -> 1
+  v <- g_sum(dev * dev, dims = c(2L, 3L)) / n1
+  sd <- sqrt(v)
+  sd <- g_ifelse(sd > 0, sd, 1) # channel_norm: std 0 -> 1
   sdf <- g_expand(g_expand(sd, 2L, h), 3L, w)
-  xn  <- g_ifelse(bad > 0, 0, (x - mf) / sdf)
-  invalid <- g_max(bad, dims = 1L)                 # (H,W): any band invalid
+  xn <- g_ifelse(bad > 0, 0, (x - mf) / sdf)
+  invalid <- g_max(bad, dims = 1L) # (H,W): any band invalid
   list(x = xn, invalid = invalid)
 }
 
 # Squeeze-and-excitation: global average, two 1x1 convs (run on the
 # (C,1,1) pooled "image" so the same conv op serves), sigmoid gate.
 .ocm_se <- function(x, fc1, fc2) {
-  s <- g_mean(x, dims = c(2L, 3L))                 # (C,)
-  s <- g_expand(g_expand(s, 2L, 1L), 3L, 1L)       # (C,1,1)
+  s <- g_mean(x, dims = c(2L, 3L)) # (C,)
+  s <- g_expand(g_expand(s, 2L, 1L), 3L, 1L) # (C,1,1)
   z <- .ocm_relu(g_conv2d(s, fc1$w, fc1$b))
-  z <- .ocm_sigmoid(g_conv2d(z, fc2$w, fc2$b))     # (C,1,1)
+  z <- .ocm_sigmoid(g_conv2d(z, fc2$w, fc2$b)) # (C,1,1)
   b <- g_broadcast_arrays(x, z)
   b[[1L]] * b[[2L]]
 }
@@ -57,13 +58,21 @@
 .ocm_regnety_block <- function(x, blk) {
   s <- if (!is.null(blk$downsample)) 2L else 1L
   h <- .ocm_relu(g_conv2d(x, blk$conv1$w, blk$conv1$b))
-  h <- .ocm_relu(g_conv2d(h, blk$conv2$w, blk$conv2$b, stride = s,
-                          padding = 1L, groups = blk$groups))
+  h <- .ocm_relu(g_conv2d(
+    h,
+    blk$conv2$w,
+    blk$conv2$b,
+    stride = s,
+    padding = 1L,
+    groups = blk$groups
+  ))
   h <- .ocm_se(h, blk$se_fc1, blk$se_fc2)
   h <- g_conv2d(h, blk$conv3$w, blk$conv3$b)
-  idn <- if (!is.null(blk$downsample))
+  idn <- if (!is.null(blk$downsample)) {
     g_conv2d(x, blk$downsample$w, blk$downsample$b, stride = 2L)
-  else x
+  } else {
+    x
+  }
   .ocm_relu(idn + h)
 }
 
@@ -71,13 +80,14 @@
 # pyramid the SMP decoder consumes: list(stem 1/2, s1 1/4, s2 1/8,
 # s3 1/16, s4 1/32).
 .ocm_regnety_encoder <- function(x, W) {
-  f0 <- .ocm_relu(g_conv2d(x, W$stem$w, W$stem$b, stride = 2L,
-                           padding = 1L))
+  f0 <- .ocm_relu(g_conv2d(x, W$stem$w, W$stem$b, stride = 2L, padding = 1L))
   feats <- vector("list", 5L)
   feats[[1L]] <- f0
   h <- f0
   for (s in 1:4) {
-    for (blk in W$stages[[s]]) h <- .ocm_regnety_block(h, blk)
+    for (blk in W$stages[[s]]) {
+      h <- .ocm_regnety_block(h, blk)
+    }
     feats[[s + 1L]] <- h
   }
   feats
@@ -87,7 +97,9 @@
 # level has one), two 3x3 conv+ReLU (BN folded).
 .ocm_decoder_block <- function(x, skip, blk) {
   h <- g_upsample2x(x)
-  if (!is.null(skip)) h <- g_concat_t(list(h, skip))
+  if (!is.null(skip)) {
+    h <- g_concat_t(list(h, skip))
+  }
   h <- .ocm_relu(g_conv2d(h, blk$conv1$w, blk$conv1$b, padding = 1L))
   .ocm_relu(g_conv2d(h, blk$conv2$w, blk$conv2$b, padding = 1L))
 }
@@ -98,7 +110,9 @@
   f <- .ocm_regnety_encoder(x, W)
   h <- f[[5L]]
   skips <- list(f[[4L]], f[[3L]], f[[2L]], f[[1L]], NULL)
-  for (i in 1:5) h <- .ocm_decoder_block(h, skips[[i]], W$decoder[[i]])
+  for (i in 1:5) {
+    h <- .ocm_decoder_block(h, skips[[i]], W$decoder[[i]])
+  }
   g_conv2d(h, W$head$w, W$head$b, padding = 1L)
 }
 
@@ -107,11 +121,11 @@
 # challenger wins).
 .ocm_argmax4 <- function(logits) {
   best <- g_squeeze1(g_slice_t(logits, 1L, 1L))
-  cls  <- best * 0
+  cls <- best * 0
   for (k in 1:3) {
     ck <- g_squeeze1(g_slice_t(logits, k + 1L, k + 1L))
-    m  <- ck > best
-    cls  <- g_ifelse(m, k, cls)
+    m <- ck > best
+    cls <- g_ifelse(m, k, cls)
     best <- g_ifelse(m, ck, best)
   }
   cls
@@ -124,17 +138,20 @@
 # `weights` is ocm_load_weights()$weights. Returns (H, W) classes.
 .ocm_infer <- function(x, weights) {
   sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
-  h <- sh[[2L]]; w <- sh[[3L]]
+  h <- sh[[2L]]
+  w <- sh[[3L]]
   dy <- (32L - h %% 32L) %% 32L
   dx <- (32L - w %% 32L) %% 32L
   cn <- .ocm_channel_norm(x)
   xn <- if (dy > 0L || dx > 0L) g_pad_rb(cn$x, dy, dx, value = 0) else cn$x
   logits <- NULL
   for (W in weights) {
-    l <- switch(W$arch,
-      regnety_004    = .ocm_forward_regnety(xn, W),
+    l <- switch(
+      W$arch,
+      regnety_004 = .ocm_forward_regnety(xn, W),
       edgenext_small = .ocm_forward_edgenext(xn, W),
-      cli::cli_abort("unknown OCM arch {.val {W$arch}}"))
+      cli::cli_abort("unknown OCM arch {.val {W$arch}}")
+    )
     logits <- if (is.null(logits)) l else logits + l
   }
   logits <- logits / length(weights)

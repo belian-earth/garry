@@ -22,24 +22,29 @@
 .mb_weiszfeld <- function(x, dims, iters, eps) {
   td <- as.integer(dims)
   sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
-  if (length(sh) != 4L || !identical(td, 2L))
+  if (length(sh) != 4L || !identical(td, 2L)) {
     cli::cli_abort(c(
       "multivariate reducers need a (band, t, y, x) cube reduced over {.val t}.",
-      "i" = paste("build it with {.code lazy_stack(per_band_stacks,",
-                  "along = \"band\")} and {.code reduce_over(cube, fn,",
-                  "over = \"t\")}")))
-  B <- sh[[1L]]; T_ <- sh[[2L]]
+      "i" = paste(
+        "build it with {.code lazy_stack(per_band_stacks,",
+        "along = \"band\")} and {.code reduce_over(cube, fn,",
+        "over = \"t\")}"
+      )
+    ))
+  }
+  B <- sh[[1L]]
+  T_ <- sh[[2L]]
 
-  x0   <- g_ifelse(g_is_nodata(x), 0, x)               # NaN-free copy
-  badt <- g_cast(g_is_nodata(g_sum(x, dims = 1L)), "f32")  # (t,y,x): any band NaN
-  m    <- g_mean(x, dims = td, nan_rm = TRUE)          # init: per-band mean (B,y,x)
+  x0 <- g_ifelse(g_is_nodata(x), 0, x) # NaN-free copy
+  badt <- g_cast(g_is_nodata(g_sum(x, dims = 1L)), "f32") # (t,y,x): any band NaN
+  m <- g_mean(x, dims = td, nan_rm = TRUE) # init: per-band mean (B,y,x)
   for (k in seq_len(iters)) {
-    mf <- g_expand(m, 2L, T_)                          # (band,t,y,x)
-    d2 <- g_sum((x - mf) * (x - mf), dims = 1L)        # (t,y,x), NaN at masked t
-    w  <- g_ifelse(badt > 0, 0, 1 / (sqrt(d2) + eps))  # (t,y,x)
-    num <- g_sum(g_expand(w, 1L, B) * x0, dims = td)   # (B,y,x)
-    den <- g_sum(w, dims = 1L)                         # (y,x)
-    m <- num / g_expand(den, 1L, B)                    # all-masked: 0/0 = NaN
+    mf <- g_expand(m, 2L, T_) # (band,t,y,x)
+    d2 <- g_sum((x - mf) * (x - mf), dims = 1L) # (t,y,x), NaN at masked t
+    w <- g_ifelse(badt > 0, 0, 1 / (sqrt(d2) + eps)) # (t,y,x)
+    num <- g_sum(g_expand(w, 1L, B) * x0, dims = td) # (B,y,x)
+    den <- g_sum(w, dims = 1L) # (y,x)
+    m <- num / g_expand(den, 1L, B) # all-masked: 0/0 = NaN
   }
   list(m = m, x0 = x0, badt = badt, B = B, T_ = T_, td = td)
 }
@@ -71,11 +76,14 @@
 #' @export
 geomedian <- function(iters = 12L, eps = 1e-7) {
   iters <- as.integer(iters)
-  if (length(iters) != 1L || is.na(iters) || iters < 1L)
+  if (length(iters) != 1L || is.na(iters) || iters < 1L) {
     cli::cli_abort("{.arg iters} must be a positive integer")
-  if (!is.numeric(eps) || length(eps) != 1L || !is.finite(eps) || eps <= 0)
+  }
+  if (!is.numeric(eps) || length(eps) != 1L || !is.finite(eps) || eps <= 0) {
     cli::cli_abort("{.arg eps} must be a finite positive scalar")
-  force(iters); force(eps)
+  }
+  force(iters)
+  force(eps)
   function(x, dims) .mb_weiszfeld(x, dims, iters, eps)$m
 }
 
@@ -99,22 +107,25 @@ geomedian <- function(iters = 12L, eps = 1e-7) {
 #' @export
 medoid <- function(iters = 12L, eps = 1e-7) {
   iters <- as.integer(iters)
-  if (length(iters) != 1L || is.na(iters) || iters < 1L)
+  if (length(iters) != 1L || is.na(iters) || iters < 1L) {
     cli::cli_abort("{.arg iters} must be a positive integer")
-  if (!is.numeric(eps) || length(eps) != 1L || !is.finite(eps) || eps <= 0)
+  }
+  if (!is.numeric(eps) || length(eps) != 1L || !is.finite(eps) || eps <= 0) {
     cli::cli_abort("{.arg eps} must be a finite positive scalar")
-  force(iters); force(eps)
+  }
+  force(iters)
+  force(eps)
   function(x, dims) {
     p <- .mb_weiszfeld(x, dims, iters, eps)
-    mf <- g_expand(p$m, 2L, p$T_)                       # (band,t,y,x)
-    d2 <- g_sum((x - mf) * (x - mf), dims = 1L)         # (t,y,x)
-    d  <- g_ifelse(p$badt > 0, Inf, sqrt(d2))           # masked never wins
-    dmin <- g_min(d, dims = 1L)                         # (y,x)
-    sel  <- g_cast(d <= g_expand(dmin, 1L, p$T_), "f32")
-    cnt  <- g_sum(sel, dims = 1L)                       # (y,x), ties > 1
-    res  <- g_sum(g_expand(sel, 1L, p$B) * p$x0, dims = p$td) /
+    mf <- g_expand(p$m, 2L, p$T_) # (band,t,y,x)
+    d2 <- g_sum((x - mf) * (x - mf), dims = 1L) # (t,y,x)
+    d <- g_ifelse(p$badt > 0, Inf, sqrt(d2)) # masked never wins
+    dmin <- g_min(d, dims = 1L) # (y,x)
+    sel <- g_cast(d <= g_expand(dmin, 1L, p$T_), "f32")
+    cnt <- g_sum(sel, dims = 1L) # (y,x), ties > 1
+    res <- g_sum(g_expand(sel, 1L, p$B) * p$x0, dims = p$td) /
       g_expand(cnt, 1L, p$B)
-    nv <- g_sum(1 - p$badt, dims = 1L)                  # (y,x) valid count
+    nv <- g_sum(1 - p$badt, dims = 1L) # (y,x) valid count
     g_ifelse(g_expand(nv, 1L, p$B) > 0, res, NaN)
   }
 }

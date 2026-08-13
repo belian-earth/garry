@@ -16,31 +16,46 @@ NULL
 .project_bbox <- function(bbox_ll, projection, ellps) {
   lon <- (bbox_ll[[1L]] + bbox_ll[[3L]]) / 2
   lat <- (bbox_ll[[2L]] + bbox_ll[[4L]]) / 2
-  crs <- switch(projection,
+  crs <- switch(
+    projection,
     utm = {
       zone <- floor((lon + 180) / 6) %% 60L + 1L
       paste0("EPSG:", (if (lat >= 0) 32600L else 32700L) + zone)
     },
-    laea = .glue("+proj=laea +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
-                 "+ellps={ellps} +no_defs"),
-    aeqd = .glue("+proj=aeqd +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
-                 "+ellps={ellps} +no_defs"),
-    pconic = .glue("+proj=pconic +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
-                   "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
-                   "+ellps={ellps} +no_defs"),
-    eqdc = .glue("+proj=eqdc +lon_0={.g10(lon)} ",
-                 "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
-                 "+ellps={ellps} +no_defs"))
+    laea = .glue(
+      "+proj=laea +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
+      "+ellps={ellps} +no_defs"
+    ),
+    aeqd = .glue(
+      "+proj=aeqd +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
+      "+ellps={ellps} +no_defs"
+    ),
+    pconic = .glue(
+      "+proj=pconic +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
+      "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
+      "+ellps={ellps} +no_defs"
+    ),
+    eqdc = .glue(
+      "+proj=eqdc +lon_0={.g10(lon)} ",
+      "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
+      "+ellps={ellps} +no_defs"
+    )
+  )
   wkt <- gdalraster::srs_to_wkt(crs)
-  te <- gdalraster::transform_bounds(bbox_ll, gdalraster::srs_to_wkt("EPSG:4326"),
-                                     wkt)
+  te <- gdalraster::transform_bounds(
+    bbox_ll,
+    gdalraster::srs_to_wkt("EPSG:4326"),
+    wkt
+  )
   list(crs = wkt, extent = as.numeric(te))
 }
 
 # extent snapped out to whole multiples of res, with matching integer dims.
 .grid_from_extent <- function(crs, extent, res, buffer, dtype) {
   res <- rep(as.numeric(res), length.out = 2L)
-  if (any(res <= 0)) cli::cli_abort("{.arg res} must be positive.")
+  if (any(res <= 0)) {
+    cli::cli_abort("{.arg res} must be positive.")
+  }
   e <- extent + c(-buffer, -buffer, buffer, buffer)
   xmin <- floor(e[[1L]] / res[[1L]]) * res[[1L]]
   xmax <- ceiling(e[[3L]] / res[[1L]]) * res[[1L]]
@@ -80,14 +95,25 @@ NULL
 #' @seealso [grid_from_src()] to build a grid from a raster or vector
 #'   source; [grid_spec()] to build one from an explicit extent.
 #' @export
-grid_from_bbox <- function(bbox, res,
-                           projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-                           ellps = "WGS84", buffer = 0, dtype = "f32") {
-  if (!is.numeric(bbox) || length(bbox) != 4L ||
-      bbox[[1L]] >= bbox[[3L]] || bbox[[2L]] >= bbox[[4L]])
+grid_from_bbox <- function(
+  bbox,
+  res,
+  projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
+  ellps = "WGS84",
+  buffer = 0,
+  dtype = "f32"
+) {
+  if (
+    !is.numeric(bbox) ||
+      length(bbox) != 4L ||
+      bbox[[1L]] >= bbox[[3L]] ||
+      bbox[[2L]] >= bbox[[4L]]
+  ) {
     cli::cli_abort(paste(
       "{.arg bbox} must be numeric c(xmin, ymin, xmax, ymax)",
-      "with xmin < xmax and ymin < ymax."))
+      "with xmin < xmax and ymin < ymax."
+    ))
+  }
   projection <- rlang::arg_match(projection)
   proj <- .project_bbox(as.numeric(bbox), projection, ellps)
   .grid_from_extent(proj$crs, proj$extent, res, buffer, dtype)
@@ -127,11 +153,19 @@ grid_from_bbox <- function(bbox, res,
 #' g <- grid_from_src("s3://.../embedding.tif", res = 30)
 #' }
 #' @export
-grid_from_src <- function(x, res,
-                          projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-                          ellps = "WGS84", buffer = 0, dtype = "f32") {
-  if (!is.character(x) || length(x) != 1L || !nzchar(x))
-    cli::cli_abort("{.arg x} must be a single path or URL to a raster or vector source.")
+grid_from_src <- function(
+  x,
+  res,
+  projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
+  ellps = "WGS84",
+  buffer = 0,
+  dtype = "f32"
+) {
+  if (!is.character(x) || length(x) != 1L || !nzchar(x)) {
+    cli::cli_abort(
+      "{.arg x} must be a single path or URL to a raster or vector source."
+    )
+  }
   # A raster keeps its native CRS/extent (just re-gridded to res); anything else
   # is treated as a vector footprint to be reprojected. The probe reads the
   # header only, so remote sources are not downloaded.
@@ -139,6 +173,12 @@ grid_from_src <- function(x, res,
     g <- gdal_grid_spec(x)$grid
     return(.grid_from_extent(g@crs, g@extent, res, buffer, dtype))
   }
-  grid_from_bbox(gdal_vector_bbox_ll(x), res, projection = rlang::arg_match(projection),
-                 ellps = ellps, buffer = buffer, dtype = dtype)
+  grid_from_bbox(
+    gdal_vector_bbox_ll(x),
+    res,
+    projection = rlang::arg_match(projection),
+    ellps = ellps,
+    buffer = buffer,
+    dtype = dtype
+  )
 }

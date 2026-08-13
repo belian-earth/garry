@@ -71,23 +71,37 @@
 #' @return A scan body `fn(xs, margin)` for [scan_over()].
 #' @seealso [kalman_smooth()], [scan_over()], [g_scan()]
 #' @export
-kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
-                       output = c("mean", "sd"),
-                       robust_iters = 0L, robust_threshold = 3,
-                       robust_inflation = 100,
-                       kappa = 1e7, out_dtype = "f32") {
+kalman_llt <- function(
+  sigma_lvl,
+  sigma_slp,
+  sigma_obs = 1,
+  output = c("mean", "sd"),
+  robust_iters = 0L,
+  robust_threshold = 3,
+  robust_inflation = 100,
+  kappa = 1e7,
+  out_dtype = "f32"
+) {
   output <- match.arg(output)
-  for (v in c(sigma_lvl = sigma_lvl, sigma_slp = sigma_slp,
-              sigma_obs = sigma_obs, kappa = kappa))
-    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0)
+  for (v in c(
+    sigma_lvl = sigma_lvl,
+    sigma_slp = sigma_slp,
+    sigma_obs = sigma_obs,
+    kappa = kappa
+  )) {
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0) {
       cli::cli_abort("hyperparameters must be finite positive scalars")
+    }
+  }
   robust_iters <- as.integer(robust_iters)
   stopifnot(dtype_valid(out_dtype))
-  force(robust_threshold); force(robust_inflation)
+  force(robust_threshold)
+  force(robust_inflation)
 
   function(xs, margin) {
-    if (!identical(as.integer(margin), 1L))
+    if (!identical(as.integer(margin), 1L)) {
       cli::cli_abort("kalman_llt() scans dim 1 (margin 1); got margin {margin}")
+    }
     y <- g_cast(xs[[1L]], "f64")
     rrel <- if (length(xs) >= 2L) g_cast(xs[[2L]], "f64") else NULL
     T_ <- if (.g_traced(y)) .g_shape(y)[[1L]] else dim(y)[[1L]]
@@ -97,49 +111,65 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
     # f64 constant injection (R double literals would round through f32).
     kv <- function(v) if (.g_traced(zero)) .g_scalar_like(zero, v) else v
     q_lvl0 <- kv(sigma_lvl^2)
-    q_slp  <- kv(sigma_slp^2)
-    h0     <- kv(sigma_obs^2)
-    kap    <- kv(kappa)
+    q_slp <- kv(sigma_slp^2)
+    h0 <- kv(sigma_obs^2)
+    kap <- kv(kappa)
 
-    ok <- g_count(y, dims = 1L) >= 3   # hutan: < 3 valid obs -> all-NaN
+    ok <- g_count(y, dims = 1L) >= 3 # hutan: < 3 valid obs -> all-NaN
 
     # One filter+smoother pass. q_scale: NULL (plain) or a (t, y, x)
     # per-year level-noise multiplier (robust reweighting). Returns
     # (t, y, x) cubes of the smoothed level mean and sd, gap-masked.
     smooth_llt <- function(q_scale) {
       fxs <- list(y = y)
-      if (!is.null(rrel)) fxs$r <- rrel
-      if (!is.null(q_scale)) fxs$qs <- q_scale
+      if (!is.null(rrel)) {
+        fxs$r <- rrel
+      }
+      if (!is.null(q_scale)) {
+        fxs$qs <- q_scale
+      }
 
       fwd <- g_scan(
-        init = list(a1 = zero, a2 = zero,
-                    P11 = zero + kap, P12 = zero, P22 = zero + kap),
+        init = list(
+          a1 = zero,
+          a2 = zero,
+          P11 = zero + kap,
+          P12 = zero,
+          P22 = zero + kap
+        ),
         body = function(carry, s) {
           q_lvl <- if (!is.null(s$qs)) q_lvl0 * s$qs else q_lvl0
-          h_t   <- if (!is.null(s$r)) h0 * s$r else h0
+          h_t <- if (!is.null(s$r)) h0 * s$r else h0
           # predict: x <- F x, P <- F P F' + Q  (F = [[1,1],[0,1]])
-          a1p  <- carry$a1 + carry$a2
-          a2p  <- carry$a2
+          a1p <- carry$a1 + carry$a2
+          a2p <- carry$a2
           P11p <- carry$P11 + 2 * carry$P12 + carry$P22 + q_lvl
           P12p <- carry$P12 + carry$P22
           P22p <- carry$P22 + q_slp
           # update (analytic gain, Z = [1, 0]); NaN y flows through the
           # update terms and the select keeps the prediction.
-          v  <- s$y - a1p
+          v <- s$y - a1p
           Fv <- P11p + h_t
           K1 <- P11p / Fv
           K2 <- P12p / Fv
           miss <- g_is_nodata(s$y)
-          a1  <- g_ifelse(miss, a1p,  a1p + K1 * v)
-          a2  <- g_ifelse(miss, a2p,  a2p + K2 * v)
+          a1 <- g_ifelse(miss, a1p, a1p + K1 * v)
+          a2 <- g_ifelse(miss, a2p, a2p + K2 * v)
           P11 <- g_ifelse(miss, P11p, (1 - K1) * P11p)
           P12 <- g_ifelse(miss, P12p, (1 - K1) * P12p)
           P22 <- g_ifelse(miss, P22p, P22p - K2 * P12p)
-          list(carry = list(a1 = a1, a2 = a2,
-                            P11 = P11, P12 = P12, P22 = P22),
-               out = list(a1f = a1, a2f = a2,
-                          a1p = a1p, a2p = a2p,
-                          P11p = P11p, P12p = P12p, P22p = P22p))
+          list(
+            carry = list(a1 = a1, a2 = a2, P11 = P11, P12 = P12, P22 = P22),
+            out = list(
+              a1f = a1,
+              a2f = a2,
+              a1p = a1p,
+              a2p = a2p,
+              P11p = P11p,
+              P12p = P12p,
+              P22p = P22p
+            )
+          )
         },
         xs = fxs
       )
@@ -149,10 +179,13 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
         sd <- sqrt(g_ifelse(P11s > 0, P11s, 0))
         list(m = g_ifelse(ok, a1s, NaN), s = g_ifelse(ok, sd, NaN))
       }
-      last <- emit(fwd$carry$a1, fwd$carry$P11)   # smoothed(T) = filtered(T)
-      if (T_ == 1L)
-        return(list(mean = g_concat_t(list(last$m)),
-                    sd   = g_concat_t(list(last$s))))
+      last <- emit(fwd$carry$a1, fwd$carry$P11) # smoothed(T) = filtered(T)
+      if (T_ == 1L) {
+        return(list(
+          mean = g_concat_t(list(last$m)),
+          sd = g_concat_t(list(last$s))
+        ))
+      }
 
       # backward RTS over t = T-1 .. 1: step t reads filtered means at t
       # and the PREDICTED state at t+1 (the series shifted by one),
@@ -164,17 +197,23 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
       bxs <- list(
         a1f = g_slice_t(f$a1f, 1L, T_ - 1L),
         a2f = g_slice_t(f$a2f, 1L, T_ - 1L),
-        a1pn  = g_slice_t(f$a1p,  2L, T_),
-        a2pn  = g_slice_t(f$a2p,  2L, T_),
+        a1pn = g_slice_t(f$a1p, 2L, T_),
+        a2pn = g_slice_t(f$a2p, 2L, T_),
         P11pn = g_slice_t(f$P11p, 2L, T_),
         P12pn = g_slice_t(f$P12p, 2L, T_),
         P22pn = g_slice_t(f$P22p, 2L, T_)
       )
-      if (!is.null(q_scale)) bxs$qsn <- g_slice_t(q_scale, 2L, T_)
+      if (!is.null(q_scale)) {
+        bxs$qsn <- g_slice_t(q_scale, 2L, T_)
+      }
       bwd <- g_scan(
-        init = list(a1s = fwd$carry$a1, a2s = fwd$carry$a2,
-                    P11s = fwd$carry$P11, P12s = fwd$carry$P12,
-                    P22s = fwd$carry$P22),
+        init = list(
+          a1s = fwd$carry$a1,
+          a2s = fwd$carry$a2,
+          P11s = fwd$carry$P11,
+          P12s = fwd$carry$P12,
+          P22s = fwd$carry$P22
+        ),
         body = function(carry, s) {
           q1 <- if (!is.null(s$qsn)) q_lvl0 * s$qsn else q_lvl0
           det <- s$P11pn * s$P22pn - s$P12pn * s$P12pn
@@ -207,15 +246,24 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
           P11s <- E11 + JP11 * J11 + JP12 * J12
           P12s <- E12 + JP11 * J21 + JP12 * J22
           P22s <- E22 + JP21 * J21 + JP22 * J22
-          list(carry = list(a1s = a1s, a2s = a2s,
-                            P11s = P11s, P12s = P12s, P22s = P22s),
-               out = emit(a1s, P11s))
+          list(
+            carry = list(
+              a1s = a1s,
+              a2s = a2s,
+              P11s = P11s,
+              P12s = P12s,
+              P22s = P22s
+            ),
+            out = emit(a1s, P11s)
+          )
         },
         xs = bxs,
         reverse = TRUE
       )
-      list(mean = g_concat_t(list(bwd$out$m, last$m)),
-           sd   = g_concat_t(list(bwd$out$s, last$s)))
+      list(
+        mean = g_concat_t(list(bwd$out$m, last$m)),
+        sd = g_concat_t(list(bwd$out$s, last$s))
+      )
     }
 
     sm <- smooth_llt(NULL)
@@ -230,16 +278,16 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
     # bit-identical results on every further pass and the fixed
     # maximum count gives exactly the early-exited value.
     if (robust_iters > 0L && T_ >= 2L) {
-      thr    <- kv(robust_threshold)
-      infl   <- kv(robust_inflation)
-      one    <- kv(1)
-      madc   <- kv(1.4826)                    # stats::mad constant
+      thr <- kv(robust_threshold)
+      infl <- kv(robust_inflation)
+      one <- kv(1)
+      madc <- kv(1.4826) # stats::mad constant
       for (pass in seq_len(robust_iters)) {
         m <- sm$mean
         inn <- g_slice_t(m, 2L, T_) - g_slice_t(m, 1L, T_ - 1L)
         med <- g_median(inn, dims = 1L, nan_rm = TRUE)
-        mad <- madc * g_median(abs(inn - g_rep_t(med, T_ - 1L)),
-                               dims = 1L, nan_rm = TRUE)
+        mad <- madc *
+          g_median(abs(inn - g_rep_t(med, T_ - 1L)), dims = 1L, nan_rm = TRUE)
         # z_1 = 0 (first year never inflated), z_t = |inn_{t-1}| / mad
         z <- abs(g_concat_t(list(zero, inn))) / g_rep_t(mad, T_)
         qs <- g_ifelse(z > thr, infl, one)
@@ -277,15 +325,35 @@ kalman_llt <- function(sigma_lvl, sigma_slp, sigma_obs = 1,
 #' @seealso [hampel_smooth()] for outlier removal, [fill_gaps()] for
 #'   simple gap filling, [scan_over()] for custom scans.
 #' @export
-kalman_smooth <- function(x, sigma_lvl, sigma_slp, sigma_obs = 1,
-                          obs_var = NULL, outputs = c("mean", "sd"),
-                          dtype = "f32", ...) {
+kalman_smooth <- function(
+  x,
+  sigma_lvl,
+  sigma_slp,
+  sigma_obs = 1,
+  obs_var = NULL,
+  outputs = c("mean", "sd"),
+  dtype = "f32",
+  ...
+) {
   outputs <- match.arg(outputs, several.ok = TRUE)
   target <- if (is.null(obs_var)) x else list(x, obs_var)
-  stats::setNames(lapply(outputs, function(o) {
-    scan_over(target,
-              kalman_llt(sigma_lvl, sigma_slp, sigma_obs, output = o,
-                         out_dtype = dtype, ...),
-              over = "t", direction = "bidir", dtype = dtype)
-  }), outputs)
+  stats::setNames(
+    lapply(outputs, function(o) {
+      scan_over(
+        target,
+        kalman_llt(
+          sigma_lvl,
+          sigma_slp,
+          sigma_obs,
+          output = o,
+          out_dtype = dtype,
+          ...
+        ),
+        over = "t",
+        direction = "bidir",
+        dtype = dtype
+      )
+    }),
+    outputs
+  )
 }

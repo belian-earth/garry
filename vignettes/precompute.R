@@ -12,14 +12,19 @@ GITHUB_RAW_BASE <-
 # figure/foo.png -> <raw base>figure/foo.png, in ![](...) and src="..."/src='...'
 fix_image_paths <- function(filename) {
   rmd <- readLines(filename)
-  rmd <- gsub('(src=["\']|]\\()figure/',
-              paste0("\\1", GITHUB_RAW_BASE, "figure/"), rmd)
+  rmd <- gsub(
+    '(src=["\']|]\\()figure/',
+    paste0("\\1", GITHUB_RAW_BASE, "figure/"),
+    rmd
+  )
   writeLines(rmd, filename)
 }
 
 prerender_it <- function(filename) {
   withr::with_dir("vignettes", {
-    if (file.exists(filename)) file.remove(filename)
+    if (file.exists(filename)) {
+      file.remove(filename)
+    }
     knitr::knit(paste0(filename, ".orig"), filename)
     fix_image_paths(filename)
   })

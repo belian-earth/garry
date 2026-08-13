@@ -62,28 +62,37 @@ NULL
 Stage <- S7::new_class(
   "Stage",
   properties = list(
-    id          = S7::class_integer,
-    kind        = S7::class_character,
-    members     = S7::class_integer,
-    fn          = S7::class_function,
-    halo        = S7::class_integer,
-    grid        = GridSpec,
-    chunks      = ChunkGrid,
-    device      = S7::class_character,
-    inputs      = S7::class_integer,
+    id = S7::class_integer,
+    kind = S7::class_character,
+    members = S7::class_integer,
+    fn = S7::class_function,
+    halo = S7::class_integer,
+    grid = GridSpec,
+    chunks = ChunkGrid,
+    device = S7::class_character,
+    inputs = S7::class_integer,
     input_nodes = S7::class_integer,
-    exports     = S7::class_integer,
-    out_pad     = S7::new_property(S7::class_integer, default = 0L),
-    export_pads = S7::new_property(S7::class_integer,
-                                   default = quote(integer(0)))
+    exports = S7::class_integer,
+    out_pad = S7::new_property(S7::class_integer, default = 0L),
+    export_pads = S7::new_property(
+      S7::class_integer,
+      default = quote(integer(0))
+    )
   ),
   validator = function(self) {
-    kinds <- c("source_read", "compute", "reduce_partial",
-               "reduce_combine", "warp")
-    if (length(self@kind) != 1L || !self@kind %in% kinds)
+    kinds <- c(
+      "source_read",
+      "compute",
+      "reduce_partial",
+      "reduce_combine",
+      "warp"
+    )
+    if (length(self@kind) != 1L || !self@kind %in% kinds) {
       return(paste0("`kind` must be one of: ", paste(kinds, collapse = ", ")))
-    if (length(self@halo) != 1L || self@halo < 0L)
+    }
+    if (length(self@halo) != 1L || self@halo < 0L) {
       return("`halo` must be a single non-negative integer")
+    }
     NULL
   }
 )
@@ -101,23 +110,28 @@ Plan <- S7::new_class(
   "Plan",
   properties = list(
     stages = S7::class_list,
-    sink   = S7::class_integer,
+    sink = S7::class_integer,
     # Multi-export (design/multi-export-collect.md): named NODE ids, one
     # per requested sink. Length <= 1 means the classic single-sink plan.
-    sinks  = S7::new_property(S7::class_integer, default = quote(integer(0))),
-    graph  = Graph
+    sinks = S7::new_property(S7::class_integer, default = quote(integer(0))),
+    graph = Graph
   )
 )
 
 S7::method(print, Plan) <- function(x, ...) {
   cat("<Plan>", length(x@stages), "stages, sink =", x@sink, "\n")
   for (s in x@stages) {
-    cat(.glue(
-      "  [{s@id}] {formatC(s@kind, width = -14)} ",
-      "members=({paste(s@members, collapse = ',')}) halo={s@halo}",
-      "{if (s@out_pad > 0L) .glue(' pad={s@out_pad}') else ''}",
-      " chunks={s@chunks@chunk_dim[1L]}x{s@chunks@chunk_dim[2L]}",
-      " inputs=({paste(s@inputs, collapse = ',')})"), "\n", sep = "")
+    cat(
+      .glue(
+        "  [{s@id}] {formatC(s@kind, width = -14)} ",
+        "members=({paste(s@members, collapse = ',')}) halo={s@halo}",
+        "{if (s@out_pad > 0L) .glue(' pad={s@out_pad}') else ''}",
+        " chunks={s@chunks@chunk_dim[1L]}x{s@chunks@chunk_dim[2L]}",
+        " inputs=({paste(s@inputs, collapse = ',')})"
+      ),
+      "\n",
+      sep = ""
+    )
   }
   invisible(x)
 }

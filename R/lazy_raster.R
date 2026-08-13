@@ -23,17 +23,23 @@ NULL
 LazyRaster <- S7::new_class(
   "LazyRaster",
   properties = list(
-    graph   = Graph,
+    graph = Graph,
     node_id = S7::class_integer,
-    grid    = GridSpec
+    grid = GridSpec
   )
 )
 
 # Friendly type guard for public entry points.
-.assert_class <- function(x, cls, name, arg = rlang::caller_arg(x),
-                          call = rlang::caller_env()) {
-  if (!S7::S7_inherits(x, cls))
+.assert_class <- function(
+  x,
+  cls,
+  name,
+  arg = rlang::caller_arg(x),
+  call = rlang::caller_env()
+) {
+  if (!S7::S7_inherits(x, cls)) {
     cli::cli_abort("{.arg {arg}} must be a {.cls {name}}.", call = call)
+  }
 }
 
 # Grid accessors forward to the cached GridSpec (generics in grid.R).
@@ -90,13 +96,24 @@ S7::method(res, LazyRaster) <- function(x) res(x@grid)
 #' @return A `LazyRaster`.
 #' @seealso [collect()], [lazy_dataset()]
 #' @export
-lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
-                        open_options = character(0), grid = NULL,
-                        block_dim = NULL, resampling = "near",
-                        scale = FALSE, offset = NULL) {
+lazy_source <- function(
+  path,
+  band = 1L,
+  graph = graph_new(),
+  nodata = NULL,
+  open_options = character(0),
+  grid = NULL,
+  block_dim = NULL,
+  resampling = "near",
+  scale = FALSE,
+  offset = NULL
+) {
   if (is.null(grid)) {
-    meta <- gdal_grid_spec(path, band = as.integer(band),
-                           open_options = open_options)
+    meta <- gdal_grid_spec(
+      path,
+      band = as.integer(band),
+      open_options = open_options
+    )
     grid <- meta$grid
     nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
     block_dim <- meta$block_dim
@@ -106,28 +123,40 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
     block_dim <- if (is.null(block_dim)) integer(0) else as.integer(block_dim)
     meta <- NULL
   }
-  aff <- .resolve_scale(scale, offset, function() {
-    if (is.null(meta))
-      meta <<- gdal_grid_spec(path, band = as.integer(band),
-                              open_options = open_options)
-    meta
-  }, what = path)
-  if ((length(nodata) == 1L || length(aff$scale) == 1L) &&
-      .dtype_family(grid@dtype) != "float")
+  aff <- .resolve_scale(
+    scale,
+    offset,
+    function() {
+      if (is.null(meta)) {
+        meta <<- gdal_grid_spec(
+          path,
+          band = as.integer(band),
+          open_options = open_options
+        )
+      }
+      meta
+    },
+    what = path
+  )
+  if (
+    (length(nodata) == 1L || length(aff$scale) == 1L) &&
+      .dtype_family(grid@dtype) != "float"
+  ) {
     grid <- .grid_retype(grid, "f32")
+  }
   id <- graph_add(
     graph,
     SourceNode,
-    parents      = integer(0),
-    grid         = grid,
-    path         = path,
-    band         = as.integer(band),
-    nodata       = nodata,
-    block_dim    = block_dim,
+    parents = integer(0),
+    grid = grid,
+    path = path,
+    band = as.integer(band),
+    nodata = nodata,
+    block_dim = block_dim,
     open_options = open_options,
-    resampling   = as.character(resampling),
-    scale        = aff$scale,
-    offset       = aff$offset
+    resampling = as.character(resampling),
+    scale = aff$scale,
+    offset = aff$offset
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
@@ -137,24 +166,31 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
 # `probe` is a zero-arg closure returning a gdal_grid_spec() list, called
 # only when scale = TRUE needs discovery.
 .resolve_scale <- function(scale, offset, probe, what) {
-  if (isFALSE(scale)) return(list(scale = numeric(0), offset = numeric(0)))
+  if (isFALSE(scale)) {
+    return(list(scale = numeric(0), offset = numeric(0)))
+  }
   if (isTRUE(scale)) {
     meta <- probe()
     if (length(meta$scale) != 1L) {
       cli::cli_inform(c(
-        "i" = "{.arg scale}: no scale/offset metadata on {.file {what}}; reading raw values."))
+        "i" = "{.arg scale}: no scale/offset metadata on {.file {what}}; reading raw values."
+      ))
       return(list(scale = numeric(0), offset = numeric(0)))
     }
     return(list(scale = meta$scale, offset = meta$offset))
   }
-  if (!is.numeric(scale) || length(scale) != 1L)
+  if (!is.numeric(scale) || length(scale) != 1L) {
     cli::cli_abort(
-      "{.arg scale} must be `FALSE`, `TRUE`, or a length-1 numeric.")
+      "{.arg scale} must be `FALSE`, `TRUE`, or a length-1 numeric."
+    )
+  }
   off <- if (is.null(offset)) 0 else as.numeric(offset)
-  if (length(off) != 1L)
+  if (length(off) != 1L) {
     cli::cli_abort("{.arg offset} must be a length-1 numeric.")
-  if (scale == 1 && off == 0)
+  }
+  if (scale == 1 && off == 0) {
     return(list(scale = numeric(0), offset = numeric(0)))
+  }
   list(scale = as.numeric(scale), offset = off)
 }
 
@@ -185,35 +221,53 @@ lazy_source <- function(path, band = 1L, graph = graph_new(), nodata = NULL,
 lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   xs <- list(...)
   stopifnot(length(xs) >= 1L, is.function(fn))
-  if (S7::S7_inherits(xs[[1L]], LazyDataset)) return(.ds_map(xs, fn, dtype, bands))
+  if (S7::S7_inherits(xs[[1L]], LazyDataset)) {
+    return(.ds_map(xs, fn, dtype, bands))
+  }
   graph <- xs[[1L]]@graph
   .outer_dims <- function(g) g@dims[!names(g@dims) %in% c("x", "y")]
-  ids <- vapply(seq_along(xs), function(i) {
-    x <- xs[[i]]
-    if (!S7::S7_inherits(x, LazyRaster))
-      cli::cli_abort("input {i} must be a {.cls LazyRaster}")
-    # Inputs normally share the WHOLE grid. The one relaxation: a purely
-    # spatial (y, x) input may join a cube input, so a per-pixel plane can
-    # be applied across a (t/band, y, x) cube -- e.g. gating every band of
-    # a stack by one QA plane. `fn` must broadcast it itself (see
-    # [g_rep_t()]); nothing here reshapes. Without this the caller has to
-    # apply the plane per band BEFORE stacking, which leaves the stack's
-    # parents computed rather than bare sources and so blocks multi-band
-    # read coalescing.
-    ok <- grid_equal(xs[[1L]]@grid, x@grid) ||
-      (length(.outer_dims(x@grid)) == 0L &&
-         .spatial_equal(xs[[1L]]@grid, x@grid))
-    if (!ok)
-      cli::cli_abort(paste0(
-        "input {i} is not on the same grid ",
-        "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"))
-    if (identical(graph@nodes, x@graph@nodes)) x@node_id
-    else graph_import(graph, x@graph, x@node_id)
-  }, integer(1))
+  ids <- vapply(
+    seq_along(xs),
+    function(i) {
+      x <- xs[[i]]
+      if (!S7::S7_inherits(x, LazyRaster)) {
+        cli::cli_abort("input {i} must be a {.cls LazyRaster}")
+      }
+      # Inputs normally share the WHOLE grid. The one relaxation: a purely
+      # spatial (y, x) input may join a cube input, so a per-pixel plane can
+      # be applied across a (t/band, y, x) cube -- e.g. gating every band of
+      # a stack by one QA plane. `fn` must broadcast it itself (see
+      # [g_rep_t()]); nothing here reshapes. Without this the caller has to
+      # apply the plane per band BEFORE stacking, which leaves the stack's
+      # parents computed rather than bare sources and so blocks multi-band
+      # read coalescing.
+      ok <- grid_equal(xs[[1L]]@grid, x@grid) ||
+        (length(.outer_dims(x@grid)) == 0L &&
+          .spatial_equal(xs[[1L]]@grid, x@grid))
+      if (!ok) {
+        cli::cli_abort(paste0(
+          "input {i} is not on the same grid ",
+          "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"
+        ))
+      }
+      if (identical(graph@nodes, x@graph@nodes)) {
+        x@node_id
+      } else {
+        graph_import(graph, x@graph, x@node_id)
+      }
+    },
+    integer(1)
+  )
 
-  out_dtype <- dtype %||% Reduce(dtype_promote, vapply(
-    seq_along(ids), function(i) graph_get(graph, ids[[i]])@grid@dtype,
-    character(1)))
+  out_dtype <- dtype %||%
+    Reduce(
+      dtype_promote,
+      vapply(
+        seq_along(ids),
+        function(i) graph_get(graph, ids[[i]])@grid@dtype,
+        character(1)
+      )
+    )
   grid <- .grid_retype(xs[[1L]]@grid, out_dtype)
   id <- graph_add(graph, MapNode, parents = ids, grid = grid, fn = fn)
   LazyRaster(graph = graph, node_id = id, grid = grid)
@@ -238,21 +292,35 @@ lazy_stack <- function(xs, along = "t") {
   stopifnot(is.list(xs), length(xs) >= 1L)
   along <- rlang::arg_match(along, c("t", "band"))
   graph <- xs[[1L]]@graph
-  ids <- vapply(seq_along(xs), function(i) {
-    x <- xs[[i]]
-    if (!S7::S7_inherits(x, LazyRaster))
-      cli::cli_abort("layer {i} must be a {.cls LazyRaster}")
-    if (!grid_equal(xs[[1L]]@grid, x@grid))
-      cli::cli_abort(paste0(
-        "layer {i} is not on the same grid ",
-        "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"))
-    if (identical(graph@nodes, x@graph@nodes)) x@node_id
-    else graph_import(graph, x@graph, x@node_id)
-  }, integer(1))
+  ids <- vapply(
+    seq_along(xs),
+    function(i) {
+      x <- xs[[i]]
+      if (!S7::S7_inherits(x, LazyRaster)) {
+        cli::cli_abort("layer {i} must be a {.cls LazyRaster}")
+      }
+      if (!grid_equal(xs[[1L]]@grid, x@grid)) {
+        cli::cli_abort(paste0(
+          "layer {i} is not on the same grid ",
+          "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"
+        ))
+      }
+      if (identical(graph@nodes, x@graph@nodes)) {
+        x@node_id
+      } else {
+        graph_import(graph, x@graph, x@node_id)
+      }
+    },
+    integer(1)
+  )
 
   grids <- lapply(seq_along(ids), function(i) graph_get(graph, ids[[i]])@grid)
-  node_tmp <- StackNode(id = 0L, parents = ids, grid = grids[[1L]],
-                        along = along)
+  node_tmp <- StackNode(
+    id = 0L,
+    parents = ids,
+    grid = grids[[1L]],
+    along = along
+  )
   grid <- output_grid(node_tmp, grids)
   # Layer names become the stacked axis's labels (slice dates on t,
   # band names on band): metadata the planner never reads, carried so
@@ -263,8 +331,8 @@ lazy_stack <- function(xs, along = "t") {
     graph,
     StackNode,
     parents = ids,
-    grid    = grid,
-    along   = along
+    grid = grid,
+    along = along
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
@@ -276,36 +344,52 @@ lazy_stack <- function(xs, along = "t") {
 .axis_sel <- function(x, axis, sel) {
   .assert_class(x, LazyRaster, "LazyRaster")
   labs <- x@grid@labels[[axis]]
-  if (is.null(labs))
+  if (is.null(labs)) {
     cli::cli_abort(c(
       "no {.val {axis}} labels on this raster.",
-      "i" = paste0("labels come from the layer NAMES given to ",
-                   "{.fn lazy_stack} (or a dataset's slice dates)")))
+      "i" = paste0(
+        "labels come from the layer NAMES given to ",
+        "{.fn lazy_stack} (or a dataset's slice dates)"
+      )
+    ))
+  }
   node <- graph_get(x@graph, x@node_id)
-  if (!S7::S7_inherits(node, StackNode) || !identical(node@along, axis))
+  if (!S7::S7_inherits(node, StackNode) || !identical(node@along, axis)) {
     cli::cli_abort(paste0(
       "label selection needs the raster to be a {.fn lazy_stack} ",
-      "along {.val {axis}} (got {.cls {class(node)[[1L]]}})"))
+      "along {.val {axis}} (got {.cls {class(node)[[1L]]}})"
+    ))
+  }
   keep <- if (is.character(sel)) {
-    m <- labs %in% sel                       # exact labels first
-    if (!any(m))                             # else prefix ("2023-06")
+    m <- labs %in% sel # exact labels first
+    if (!any(m)) {
+      # else prefix ("2023-06")
       m <- Reduce(`|`, lapply(sel, function(s) startsWith(labs, s)))
+    }
     which(m)
   } else if (is.logical(sel)) {
     which(rep_len(sel, length(labs)))
   } else {
     as.integer(sel)
   }
-  if (!length(keep) || any(keep < 1L) || any(keep > length(labs)))
+  if (!length(keep) || any(keep < 1L) || any(keep > length(labs))) {
     cli::cli_abort("no {.val {axis}} slices match {.val {sel}}")
+  }
   if (length(keep) == 1L) {
     pid <- node@parents[[keep]]
-    return(LazyRaster(graph = x@graph, node_id = pid,
-                      grid = graph_get(x@graph, pid)@grid))
+    return(LazyRaster(
+      graph = x@graph,
+      node_id = pid,
+      grid = graph_get(x@graph, pid)@grid
+    ))
   }
-  layers <- lapply(node@parents[keep], function(pid)
-    LazyRaster(graph = x@graph, node_id = pid,
-               grid = graph_get(x@graph, pid)@grid))
+  layers <- lapply(node@parents[keep], function(pid) {
+    LazyRaster(
+      graph = x@graph,
+      node_id = pid,
+      grid = graph_get(x@graph, pid)@grid
+    )
+  })
   lazy_stack(stats::setNames(layers, labs[keep]), along = axis)
 }
 
@@ -341,40 +425,53 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 # D8's cousin); graph mismatch auto-merges by importing b's subgraph into
 # a's graph (decision D6) — users never manage graphs by hand.
 .lazy_binop <- function(a, b, op, divide = FALSE, dtype = NULL) {
-  if (!grid_equal(a@grid, b@grid))
+  if (!grid_equal(a@grid, b@grid)) {
     cli::cli_abort(paste0(
       "grids differ ({grid_diff(a@grid, b@grid)}); ",
-      "use {.code align(a, b, to = ...)} first"))
+      "use {.code align(a, b, to = ...)} first"
+    ))
+  }
   graph <- a@graph
-  b_id <- if (identical(graph@nodes, b@graph@nodes)) b@node_id
-          else graph_import(graph, b@graph, b@node_id)
+  b_id <- if (identical(graph@nodes, b@graph@nodes)) {
+    b@node_id
+  } else {
+    graph_import(graph, b@graph, b@node_id)
+  }
   grid <- .grid_retype(
     a@grid,
-    dtype %||% dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide))
+    dtype %||% dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide)
+  )
   id <- graph_add(
     graph,
     MapNode,
     parents = c(a@node_id, b_id),
-    grid    = grid,
-    fn      = op
+    grid = grid,
+    fn = op
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
 
 # Scalar op helper: scalar on one side. Scalars are weakly typed: they
 # never widen the raster dtype; only division forces a float result.
-.lazy_scalar_op <- function(lr, s, op, scalar_first, divide = FALSE,
-                            dtype = NULL) {
+.lazy_scalar_op <- function(
+  lr,
+  s,
+  op,
+  scalar_first,
+  divide = FALSE,
+  dtype = NULL
+) {
   fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
   grid <- .grid_retype(
     lr@grid,
-    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = divide))
+    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = divide)
+  )
   id <- graph_add(
     lr@graph,
     MapNode,
     parents = lr@node_id,
-    grid    = grid,
-    fn      = fn
+    grid = grid,
+    fn = fn
   )
   LazyRaster(graph = lr@graph, node_id = id, grid = grid)
 }
@@ -386,17 +483,20 @@ for (op_name in c("+", "-", "*", "/")) {
   is_div <- op_name == "/"
   S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
     local({
-      f <- op_fn; d <- is_div
+      f <- op_fn
+      d <- is_div
       function(e1, e2) .lazy_binop(e1, e2, f, divide = d)
     })
   S7::method(op_fn, list(LazyRaster, S7::class_numeric)) <-
     local({
-      f <- op_fn; d <- is_div
+      f <- op_fn
+      d <- is_div
       function(e1, e2) .lazy_scalar_op(e1, e2, f, FALSE, divide = d)
     })
   S7::method(op_fn, list(S7::class_numeric, LazyRaster)) <-
     local({
-      f <- op_fn; d <- is_div
+      f <- op_fn
+      d <- is_div
       function(e1, e2) .lazy_scalar_op(e2, e1, f, TRUE, divide = d)
     })
 }
@@ -408,20 +508,40 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
   S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
     local({
       f <- op_fn
-      function(e1, e2) .lazy_binop(
-        e1, e2, function(x, y) g_cast(f(x, y), "f32"), dtype = "f32")
+      function(e1, e2) {
+        .lazy_binop(
+          e1,
+          e2,
+          function(x, y) g_cast(f(x, y), "f32"),
+          dtype = "f32"
+        )
+      }
     })
   S7::method(op_fn, list(LazyRaster, S7::class_numeric)) <-
     local({
       f <- op_fn
-      function(e1, e2) .lazy_scalar_op(
-        e1, e2, function(x, y) g_cast(f(x, y), "f32"), FALSE, dtype = "f32")
+      function(e1, e2) {
+        .lazy_scalar_op(
+          e1,
+          e2,
+          function(x, y) g_cast(f(x, y), "f32"),
+          FALSE,
+          dtype = "f32"
+        )
+      }
     })
   S7::method(op_fn, list(S7::class_numeric, LazyRaster)) <-
     local({
       f <- op_fn
-      function(e1, e2) .lazy_scalar_op(
-        e2, e1, function(x, y) g_cast(f(x, y), "f32"), TRUE, dtype = "f32")
+      function(e1, e2) {
+        .lazy_scalar_op(
+          e2,
+          e1,
+          function(x, y) g_cast(f(x, y), "f32"),
+          TRUE,
+          dtype = "f32"
+        )
+      }
     })
 }
 
@@ -432,17 +552,20 @@ for (op_name in c("^", "%%")) {
   is_pow <- op_name == "^"
   S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
     local({
-      f <- op_fn; d <- is_pow
+      f <- op_fn
+      d <- is_pow
       function(e1, e2) .lazy_binop(e1, e2, f, divide = d)
     })
   S7::method(op_fn, list(LazyRaster, S7::class_numeric)) <-
     local({
-      f <- op_fn; d <- is_pow
+      f <- op_fn
+      d <- is_pow
       function(e1, e2) .lazy_scalar_op(e1, e2, f, FALSE, divide = d)
     })
   S7::method(op_fn, list(S7::class_numeric, LazyRaster)) <-
     local({
-      f <- op_fn; d <- is_pow
+      f <- op_fn
+      d <- is_pow
       function(e1, e2) .lazy_scalar_op(e2, e1, f, TRUE, divide = d)
     })
 }
@@ -453,18 +576,26 @@ for (op_name in c("^", "%%")) {
 # Registered as an S3 group method in NAMESPACE (S7 instances carry
 # class "garry::LazyRaster").
 .lazy_math <- function(x, generic, ...) {
-  if (startsWith(generic, "cum"))
+  if (startsWith(generic, "cum")) {
     cli::cli_abort(paste0(
-      "{.fn ", generic, "} is cumulative; use {.fn scan_over} ",
-      "for running values along an axis"))
+      "{.fn ",
+      generic,
+      "} is cumulative; use {.fn scan_over} ",
+      "for running values along an axis"
+    ))
+  }
   fn <- get(generic, envir = baseenv())
   dots <- list(...)
-  keeps_dtype <- generic %in% c("abs", "sign", "floor", "ceiling",
-                                "trunc", "round", "signif")
-  body_fn <- if (length(dots)) function(v) do.call(fn, c(list(v), dots))
-             else function(v) fn(v)
-  dtype <- if (S7::S7_inherits(x, LazyRaster) && !keeps_dtype)
+  keeps_dtype <- generic %in%
+    c("abs", "sign", "floor", "ceiling", "trunc", "round", "signif")
+  body_fn <- if (length(dots)) {
+    function(v) do.call(fn, c(list(v), dots))
+  } else {
+    function(v) fn(v)
+  }
+  dtype <- if (S7::S7_inherits(x, LazyRaster) && !keeps_dtype) {
     dtype_promote(x@grid@dtype, x@grid@dtype, divide = TRUE)
+  }
   lazy_map(x, fn = body_fn, dtype = dtype)
 }
 
@@ -501,17 +632,24 @@ for (op_name in c("^", "%%")) {
 #' @seealso [focal_kernel()], [bilateral_focal()], [shrink_footprint()]
 #' @export
 focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
-  if (S7::S7_inherits(x, LazyDataset))
-    return(.ds_focal(x, fn, radius, rlang::arg_match(boundary, "nodata"), bands))
+  if (S7::S7_inherits(x, LazyDataset)) {
+    return(.ds_focal(
+      x,
+      fn,
+      radius,
+      rlang::arg_match(boundary, "nodata"),
+      bands
+    ))
+  }
   .assert_class(x, LazyRaster, "LazyRaster")
   boundary <- rlang::arg_match(boundary, "nodata")
   id <- graph_add(
     x@graph,
     FocalNode,
-    parents  = x@node_id,
-    grid     = x@grid,
-    fn       = fn,
-    radius   = as.integer(radius),
+    parents = x@node_id,
+    grid = x@grid,
+    fn = fn,
+    radius = as.integer(radius),
     boundary = boundary
   )
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
@@ -538,10 +676,12 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
 #' @export
 shrink_footprint <- function(x, radius = 1L, bands = NULL) {
   radius <- as.integer(radius)
-  if (length(radius) != 1L || is.na(radius) || radius < 1L)
+  if (length(radius) != 1L || is.na(radius) || radius < 1L) {
     cli::cli_abort("{.arg radius} must be a positive integer")
-  focal(x, radius = radius, bands = bands,
-        fn = function(sh) sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh))
+  }
+  focal(x, radius = radius, bands = bands, fn = function(sh) {
+    sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh)
+  })
 }
 
 #' Whole-window model op (advanced): apply `fn` to the raw padded chunk.
@@ -571,28 +711,42 @@ shrink_footprint <- function(x, radius = 1L, bands = NULL) {
 #' @param flops_px Compute estimate, flops per core pixel.
 #' @return A `LazyRaster` on the spatial grid (plus `out_bands` bands).
 #' @export
-lazy_patch <- function(x, fn, radius, out_bands = 0L, dtype = "f32",
-                       kernel_id, bytes_px = 512, flops_px = 1e4) {
+lazy_patch <- function(
+  x,
+  fn,
+  radius,
+  out_bands = 0L,
+  dtype = "f32",
+  kernel_id,
+  bytes_px = 512,
+  flops_px = 1e4
+) {
   .assert_class(x, LazyRaster, "LazyRaster")
-  node_tmp <- PatchNode(id = 0L, parents = x@node_id, grid = x@grid, fn = fn,
-                        radius = as.integer(radius),
-                        out_bands = as.integer(out_bands),
-                        dtype = dtype, kernel_id = as.character(kernel_id),
-                        bytes_px = as.numeric(bytes_px),
-                        flops_px = as.numeric(flops_px))
+  node_tmp <- PatchNode(
+    id = 0L,
+    parents = x@node_id,
+    grid = x@grid,
+    fn = fn,
+    radius = as.integer(radius),
+    out_bands = as.integer(out_bands),
+    dtype = dtype,
+    kernel_id = as.character(kernel_id),
+    bytes_px = as.numeric(bytes_px),
+    flops_px = as.numeric(flops_px)
+  )
   grid <- output_grid(node_tmp, list(x@grid))
   id <- graph_add(
     x@graph,
     PatchNode,
-    parents   = x@node_id,
-    grid      = grid,
-    fn        = fn,
-    radius    = as.integer(radius),
+    parents = x@node_id,
+    grid = grid,
+    fn = fn,
+    radius = as.integer(radius),
     out_bands = as.integer(out_bands),
-    dtype     = dtype,
+    dtype = dtype,
     kernel_id = as.character(kernel_id),
-    bytes_px  = as.numeric(bytes_px),
-    flops_px  = as.numeric(flops_px)
+    bytes_px = as.numeric(bytes_px),
+    flops_px = as.numeric(flops_px)
   )
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
@@ -621,12 +775,24 @@ lazy_patch <- function(x, fn, radius, out_bands = 0L, dtype = "f32",
 #' @return A focal body `fn(shifts)` for [focal()].
 #' @export
 bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
-  if (!is.numeric(sigma_r) || length(sigma_r) < 1L ||
-      !all(is.finite(sigma_r)) || any(sigma_r <= 0))
-    cli::cli_abort("{.arg sigma_r} must be finite positive (scalar or per-channel vector)")
-  if (!is.numeric(sigma_d) || length(sigma_d) != 1L ||
-      !is.finite(sigma_d) || sigma_d <= 0)
+  if (
+    !is.numeric(sigma_r) ||
+      length(sigma_r) < 1L ||
+      !all(is.finite(sigma_r)) ||
+      any(sigma_r <= 0)
+  ) {
+    cli::cli_abort(
+      "{.arg sigma_r} must be finite positive (scalar or per-channel vector)"
+    )
+  }
+  if (
+    !is.numeric(sigma_d) ||
+      length(sigma_d) != 1L ||
+      !is.finite(sigma_d) ||
+      sigma_d <= 0
+  ) {
     cli::cli_abort("{.arg sigma_d} must be a finite positive scalar")
+  }
   r <- as.integer(radius)
   # spatial weights in focal()'s shift order (expand.grid(dx, dy) row-major)
   off <- expand.grid(dx = -r:r, dy = -r:r)
@@ -636,19 +802,29 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
   # cube and the inverse-variance broadcasts along the leading axis, so
   # ONE FocalNode filters every channel with its own range sigma.
   per_channel <- length(sigma_r) > 1L
-  force(inv2sr2); force(per_channel)
+  force(inv2sr2)
+  force(per_channel)
   function(shifts) {
-    inv2 <- if (!per_channel) inv2sr2 else {
+    inv2 <- if (!per_channel) {
+      inv2sr2
+    } else {
       centre0 <- shifts[[(length(shifts) + 1L) %/% 2L]]
-      rank <- if (.g_traced(centre0)) length(.g_shape(centre0))
-              else length(dim(centre0))
-      if (rank < 3L)
+      rank <- if (.g_traced(centre0)) {
+        length(.g_shape(centre0))
+      } else {
+        length(dim(centre0))
+      }
+      if (rank < 3L) {
         cli::cli_abort("per-channel sigma_r needs a (channel, y, x) cube input")
+      }
       a <- array(inv2sr2, c(length(inv2sr2), rep(1L, rank - 1L)))
       if (.g_traced(centre0)) g_upload(a, "f32") else a
     }
-    if (length(shifts) != length(sw))
-      cli::cli_abort("bilateral_focal(radius = {r}) got {length(shifts)} shifts; pass the same radius to focal()")
+    if (length(shifts) != length(sw)) {
+      cli::cli_abort(
+        "bilateral_focal(radius = {r}) got {length(shifts)} shifts; pass the same radius to focal()"
+      )
+    }
     centre <- shifts[[(length(shifts) + 1L) %/% 2L]]
     num <- 0
     den <- 0
@@ -700,10 +876,12 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 #'   [scan_over()] for order-preserving passes.
 #' @export
 reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
-  if (S7::S7_inherits(x, LazyDatasetGroups))
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
     return(.dsg_reduce(x, op, over, isTRUE(nan_rm), bands))
-  if (S7::S7_inherits(x, LazyDataset))
+  }
+  if (S7::S7_inherits(x, LazyDataset)) {
     return(.ds_reduce(x, op, over, isTRUE(nan_rm), bands))
+  }
   .assert_class(x, LazyRaster, "LazyRaster")
   # A custom reducer arrives as a function: an anvl kernel `fn(x, dims)`
   # collapsing `dims` (e.g. per-pixel OLS/harmonic fit over time). Carried on
@@ -713,16 +891,16 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
     fn <- list(op)
     op <- "custom"
   }
-  grid <- .reduce_grid(x@grid, op, over)   # validates `over`, applies D7
+  grid <- .reduce_grid(x@grid, op, over) # validates `over`, applies D7
   id <- graph_add(
     x@graph,
     ReduceNode,
     parents = x@node_id,
-    grid    = grid,
-    op      = op,
-    over    = over,
-    nan_rm  = isTRUE(nan_rm),
-    fn      = fn
+    grid = grid,
+    op = op,
+    over = over,
+    nan_rm = isTRUE(nan_rm),
+    fn = fn
   )
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
@@ -755,36 +933,58 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
 #' @param bands `LazyDataset` only: bands to scan (default: all).
 #' @return A `LazyRaster` on the unchanged grid, or a `LazyDataset`.
 #' @export
-scan_over <- function(x, fn, over = "t", direction = "forward",
-                      dtype = NULL, bands = NULL) {
-  if (S7::S7_inherits(x, LazyDataset))
+scan_over <- function(
+  x,
+  fn,
+  over = "t",
+  direction = "forward",
+  dtype = NULL,
+  bands = NULL
+) {
+  if (S7::S7_inherits(x, LazyDataset)) {
     return(.ds_scan(x, fn, over, direction, dtype, bands))
+  }
   xs <- if (is.list(x)) x else list(x)
-  for (lr in xs) .assert_class(lr, LazyRaster, "LazyRaster")
+  for (lr in xs) {
+    .assert_class(lr, LazyRaster, "LazyRaster")
+  }
   lead <- xs[[1L]]
   graph <- lead@graph
-  parents <- vapply(xs, function(lr) {
-    if (!grid_equal(lead@grid, lr@grid))
-      cli::cli_abort(paste0(
-        "all scan inputs must share one grid ",
-        "({grid_diff(lead@grid, lr@grid)})"))
-    if (identical(graph@nodes, lr@graph@nodes)) lr@node_id
-    else graph_import(graph, lr@graph, lr@node_id)
-  }, integer(1))
-  if (!is.function(fn))
-    cli::cli_abort("{.arg fn} must be a scan body function {.code fn(xs, margin)}")
-  if (length(over) != 1L || !over %in% names(lead@grid@dims))
+  parents <- vapply(
+    xs,
+    function(lr) {
+      if (!grid_equal(lead@grid, lr@grid)) {
+        cli::cli_abort(paste0(
+          "all scan inputs must share one grid ",
+          "({grid_diff(lead@grid, lr@grid)})"
+        ))
+      }
+      if (identical(graph@nodes, lr@graph@nodes)) {
+        lr@node_id
+      } else {
+        graph_import(graph, lr@graph, lr@node_id)
+      }
+    },
+    integer(1)
+  )
+  if (!is.function(fn)) {
+    cli::cli_abort(
+      "{.arg fn} must be a scan body function {.code fn(xs, margin)}"
+    )
+  }
+  if (length(over) != 1L || !over %in% names(lead@grid@dims)) {
     cli::cli_abort("{.arg over} must name one dim of the input grid")
+  }
   grid <- if (is.null(dtype)) lead@grid else .grid_retype(lead@grid, dtype)
   id <- graph_add(
     graph,
     ScanNode,
-    parents   = parents,
-    grid      = grid,
-    over      = over,
+    parents = parents,
+    grid = grid,
+    over = over,
     direction = direction,
-    fn        = list(fn),
-    dtype     = dtype %||% character(0)
+    fn = list(fn),
+    dtype = dtype %||% character(0)
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
@@ -812,17 +1012,23 @@ scan_over <- function(x, fn, over = "t", direction = "forward",
 band_project <- function(weights, center = NULL) {
   w <- as.numeric(weights)
   ctr <- if (is.null(center)) NULL else as.numeric(center)
-  if (!is.null(ctr) && length(ctr) != length(w))
+  if (!is.null(ctr) && length(ctr) != length(w)) {
     cli::cli_abort("{.arg center} must be the same length as {.arg weights}.")
-  force(w); force(ctr)
+  }
+  force(w)
+  force(ctr)
   function(x, dims) {
     rank <- if (.g_traced(x)) length(.g_shape(x)) else length(dim(x))
-    lead <- function(v) {                       # v -> (length(v), 1, ..., 1)
+    lead <- function(v) {
+      # v -> (length(v), 1, ..., 1)
       a <- array(as.numeric(v), c(length(v), rep(1L, rank - 1L)))
       if (.g_traced(x)) g_upload(a, "f32") else a
     }
-    xc <- if (is.null(ctr)) x else {
-      b <- g_broadcast_arrays(x, lead(ctr)); b[[1L]] - b[[2L]]
+    xc <- if (is.null(ctr)) {
+      x
+    } else {
+      b <- g_broadcast_arrays(x, lead(ctr))
+      b[[1L]] - b[[2L]]
     }
     b <- g_broadcast_arrays(xc, lead(w))
     g_sum(b[[1L]] * b[[2L]], dims)
@@ -852,12 +1058,14 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
   id <- graph_add(
     x@graph,
     FocalNode,
-    parents  = x@node_id,
-    grid     = x@grid,
-    fn       = function(sh) cli::cli_abort("kernel focal is evaluated from weights", .internal = TRUE),
-    radius   = radius,
+    parents = x@node_id,
+    grid = x@grid,
+    fn = function(sh) {
+      cli::cli_abort("kernel focal is evaluated from weights", .internal = TRUE)
+    },
+    radius = radius,
     boundary = boundary,
-    weights  = w
+    weights = w
   )
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
 }
@@ -886,14 +1094,16 @@ align <- function(x, to, resampling = "bilinear") {
   target <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
   .assert_class(target, GridSpec, "GridSpec", arg = "to")
   target <- .grid_retype(target, x@grid@dtype)
-  if (grid_equal(x@grid, target)) return(x)
+  if (grid_equal(x@grid, target)) {
+    return(x)
+  }
   id <- graph_add(
     x@graph,
     WarpNode,
-    parents     = x@node_id,
-    grid        = target,
+    parents = x@node_id,
+    grid = target,
     target_grid = target,
-    resampling  = resampling
+    resampling = resampling
   )
   LazyRaster(graph = x@graph, node_id = id, grid = target)
 }

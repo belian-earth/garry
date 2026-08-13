@@ -11,15 +11,23 @@ NULL
 #' @seealso [draw()], the user-facing pipeline visualisation.
 #' @export
 plan_dot <- function(plan) {
-  shape <- c(source_read = "cylinder", compute = "box",
-             reduce_partial = "trapezium", reduce_combine = "invtrapezium",
-             warp = "parallelogram")
+  shape <- c(
+    source_read = "cylinder",
+    compute = "box",
+    reduce_partial = "trapezium",
+    reduce_combine = "invtrapezium",
+    warp = "parallelogram"
+  )
   lines <- c("digraph plan {", "  rankdir=LR;")
   for (s in plan@stages) {
-    label <- .glue("[{s@id}] {s@kind}\\nnodes: ",
-                   "{paste(s@members, collapse = ',')}\\nhalo: {s@halo}")
-    lines <- c(lines,
-               .glue("  s{s@id} [shape={shape[[s@kind]]}, label=\"{label}\"];"))
+    label <- .glue(
+      "[{s@id}] {s@kind}\\nnodes: ",
+      "{paste(s@members, collapse = ',')}\\nhalo: {s@halo}"
+    )
+    lines <- c(
+      lines,
+      .glue("  s{s@id} [shape={shape[[s@kind]]}, label=\"{label}\"];")
+    )
   }
   for (s in plan@stages) {
     for (i in s@inputs) {

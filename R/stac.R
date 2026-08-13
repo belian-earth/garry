@@ -41,20 +41,30 @@ NULL
 #'   the usual next steps.
 #' @family stac helpers
 #' @export
-stac_query <- function(bbox, stac_source, collection, start_date, end_date,
-                       limit = 999) {
+stac_query <- function(
+  bbox,
+  stac_source,
+  collection,
+  start_date,
+  end_date,
+  limit = 999
+) {
   .require_rstac()
   datetime <- paste0(
-    format(as.POSIXct(start_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ"), "/",
-    format(as.POSIXct(end_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ"))
+    format(as.POSIXct(start_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
+    "/",
+    format(as.POSIXct(end_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
+  )
   search <- rstac::stac_search(
     rstac::stac(stac_source),
     collections = collection,
     bbox = bbox,
     datetime = datetime,
-    limit = limit)
-  res <- tryCatch(rstac::get_request(search),
-                  error = function(e) rstac::post_request(search))
+    limit = limit
+  )
+  res <- tryCatch(rstac::get_request(search), error = function(e) {
+    rstac::post_request(search)
+  })
   rstac::items_fetch(res)
 }
 
@@ -77,10 +87,15 @@ stac_query <- function(bbox, stac_source, collection, start_date, end_date,
 #' @return `items` with every asset href signed.
 #' @family stac helpers
 #' @export
-stac_sign_mpc <- function(items,
-                          subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)) {
+stac_sign_mpc <- function(
+  items,
+  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)
+) {
   .require_rstac()
-  rlang::check_installed("httr2", reason = "to request Planetary Computer tokens.")
+  rlang::check_installed(
+    "httr2",
+    reason = "to request Planetary Computer tokens."
+  )
   if (!length(items$features)) {
     cli::cli_warn("No STAC items to sign.")
     return(items)
@@ -88,7 +103,8 @@ stac_sign_mpc <- function(items,
   token <- .mpc_token(items$features[[1L]]$collection, subscription_key)
   items$features <- lapply(items$features, function(f) {
     f$assets <- lapply(f$assets, function(a) {
-      a$href <- paste0(a$href, "?", token); a
+      a$href <- paste0(a$href, "?", token)
+      a
     })
     f
   })
@@ -99,7 +115,9 @@ stac_sign_mpc <- function(items,
 # absent/unparseable.
 .sas_expiry <- function(q) {
   m <- regmatches(q, regexec("(?:^|&)se=([^&]+)", q))[[1L]]
-  if (length(m) < 2L) return(NA_real_)
+  if (length(m) < 2L) {
+    return(NA_real_)
+  }
   v <- utils::URLdecode(m[[2L]])
   for (fmt in c("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%MZ")) {
     t <- as.POSIXct(v, format = fmt, tz = "UTC")
@@ -120,34 +138,65 @@ stac_sign_mpc <- function(items,
 # pass through untouched; so do failures (the read retry / read_fail
 # contract still applies downstream).
 .mpc_resign <- function(url, margin = 600) {
-  if (!is.character(url) || !length(url)) return(url)
-  vapply(url, function(u) {
-    parts <- regmatches(u, regexec(
-      "^(/vsicurl/)?https://([^./]+)\\.blob\\.core\\.windows\\.net/([^/?]+)/",
-      u))[[1L]]
-    if (length(parts) < 4L) return(u)
-    if (!grepl("?", u, fixed = TRUE)) return(u)   # never signed: leave it
-    q <- sub("^[^?]*\\?", "", u)
-    se <- .sas_expiry(q)
-    if (is.na(se) || se - margin > as.numeric(Sys.time())) return(u)
-    tok <- tryCatch(.mpc_token(paste0(parts[[3L]], "/", parts[[4L]])),
-                    error = function(e) NULL)
-    if (is.null(tok)) return(u)
-    paste0(sub("\\?.*$", "", u), "?", tok)
-  }, character(1), USE.NAMES = FALSE)
+  if (!is.character(url) || !length(url)) {
+    return(url)
+  }
+  vapply(
+    url,
+    function(u) {
+      parts <- regmatches(
+        u,
+        regexec(
+          "^(/vsicurl/)?https://([^./]+)\\.blob\\.core\\.windows\\.net/([^/?]+)/",
+          u
+        )
+      )[[1L]]
+      if (length(parts) < 4L) {
+        return(u)
+      }
+      if (!grepl("?", u, fixed = TRUE)) {
+        return(u)
+      } # never signed: leave it
+      q <- sub("^[^?]*\\?", "", u)
+      se <- .sas_expiry(q)
+      if (is.na(se) || se - margin > as.numeric(Sys.time())) {
+        return(u)
+      }
+      tok <- tryCatch(
+        .mpc_token(paste0(parts[[3L]], "/", parts[[4L]])),
+        error = function(e) NULL
+      )
+      if (is.null(tok)) {
+        return(u)
+      }
+      paste0(sub("\\?.*$", "", u), "?", tok)
+    },
+    character(1),
+    USE.NAMES = FALSE
+  )
 }
 
 # The collection SAS token: memory cache, then disk cache, then a fresh request
 # (saved to both). Reused until msft:expiry.
-.mpc_token <- function(collection,
-                       subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)) {
+.mpc_token <- function(
+  collection,
+  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)
+) {
   hit <- .mpc_token_lookup(collection)
-  if (!is.null(hit)) return(hit)
-  url <- paste0("https://planetarycomputer.microsoft.com/api/sas/v1/token/",
-                collection)
+  if (!is.null(hit)) {
+    return(hit)
+  }
+  url <- paste0(
+    "https://planetarycomputer.microsoft.com/api/sas/v1/token/",
+    collection
+  )
   req <- httr2::req_headers(httr2::request(url), Accept = "application/json")
-  if (!is.na(subscription_key))
-    req <- httr2::req_headers(req, "Ocp-Apim-Subscription-Key" = subscription_key)
+  if (!is.na(subscription_key)) {
+    req <- httr2::req_headers(
+      req,
+      "Ocp-Apim-Subscription-Key" = subscription_key
+    )
+  }
   tok <- httr2::resp_body_json(httr2::req_perform(req))
   assign(collection, tok, envir = .mpc_token_cache)
   saveRDS(tok, .mpc_token_file(collection))
@@ -158,13 +207,18 @@ stac_sign_mpc <- function(items,
 # are dropped from memory as a side effect.
 .mpc_token_lookup <- function(collection) {
   unexpired <- function(tok) {
-    exp <- as.POSIXct(tok[["msft:expiry"]], format = "%Y-%m-%dT%H:%M:%SZ",
-                      tz = "UTC")
+    exp <- as.POSIXct(
+      tok[["msft:expiry"]],
+      format = "%Y-%m-%dT%H:%M:%SZ",
+      tz = "UTC"
+    )
     !is.na(exp) && exp > Sys.time()
   }
   if (exists(collection, envir = .mpc_token_cache, inherits = FALSE)) {
     tok <- get(collection, envir = .mpc_token_cache)
-    if (unexpired(tok)) return(tok$token)
+    if (unexpired(tok)) {
+      return(tok$token)
+    }
     rm(list = collection, envir = .mpc_token_cache)
   }
   f <- .mpc_token_file(collection)
@@ -181,8 +235,10 @@ stac_sign_mpc <- function(items,
 .mpc_token_file <- function(collection) {
   dir <- tools::R_user_dir("garry", "cache")
   dir.create(dir, showWarnings = FALSE, recursive = TRUE)
-  file.path(dir, paste0(gsub("[^A-Za-z0-9_.-]", "_", collection),
-                        "_mpc_token.rds"))
+  file.path(
+    dir,
+    paste0(gsub("[^A-Za-z0-9_.-]", "_", collection), "_mpc_token.rds")
+  )
 }
 
 #' Rectangularise STAC items into a source table.
@@ -207,8 +263,12 @@ stac_sources <- function(items, assets = NULL) {
   stopifnot(length(feats) > 0L)
   rows <- lapply(feats, function(ft) {
     anames <- names(ft$assets)
-    if (!is.null(assets)) anames <- intersect(anames, assets)
-    if (length(anames) == 0L) return(NULL)
+    if (!is.null(assets)) {
+      anames <- intersect(anames, assets)
+    }
+    if (length(anames) == 0L) {
+      return(NULL)
+    }
     hrefs <- vapply(ft$assets[anames], function(a) a$href, character(1))
     cc <- ft$properties[["eo:cloud_cover"]]
     data.frame(
@@ -217,8 +277,10 @@ stac_sources <- function(items, assets = NULL) {
       location = vapply(hrefs, .gdal_href, character(1), USE.NAMES = FALSE),
       datetime = ft$properties$datetime %||% NA_character_,
       cloud_cover = if (is.null(cc)) NA_real_ else as.numeric(cc),
-      xmin = ft$bbox[[1L]], ymin = ft$bbox[[2L]],
-      xmax = ft$bbox[[3L]], ymax = ft$bbox[[4L]],
+      xmin = ft$bbox[[1L]],
+      ymin = ft$bbox[[2L]],
+      xmax = ft$bbox[[3L]],
+      ymax = ft$bbox[[4L]],
       row.names = NULL
     )
   })
@@ -269,10 +331,13 @@ stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
   }
   if (inherits(sources, "doc_items")) {
     .require_rstac()
-    return(rstac::items_filter(sources, filter_fn = function(x)
-      frac(x$bbox[[1L]], x$bbox[[2L]], x$bbox[[3L]], x$bbox[[4L]]) >= min_coverage))
+    return(rstac::items_filter(sources, filter_fn = function(x) {
+      frac(x$bbox[[1L]], x$bbox[[2L]], x$bbox[[3L]], x$bbox[[4L]]) >=
+        min_coverage
+    }))
   }
-  keep <- frac(sources$xmin, sources$ymin, sources$xmax, sources$ymax) >= min_coverage
+  keep <- frac(sources$xmin, sources$ymin, sources$xmax, sources$ymax) >=
+    min_coverage
   sources[keep, , drop = FALSE]
 }
 
@@ -287,16 +352,21 @@ stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
 #' @return The filtered `doc_items`.
 #' @family stac helpers
 #' @export
-stac_filter_orbit <- function(sources,
-                              orbit_state = c("descending", "ascending")) {
+stac_filter_orbit <- function(
+  sources,
+  orbit_state = c("descending", "ascending")
+) {
   orbit_state <- rlang::arg_match(orbit_state, multiple = TRUE)
-  if (!inherits(sources, "doc_items"))
+  if (!inherits(sources, "doc_items")) {
     cli::cli_abort(c(
       "{.fn stac_filter_orbit} needs a STAC {.cls doc_items}.",
-      "i" = "The orbit state is not in the {.fn stac_sources} table; filter before converting."))
+      "i" = "The orbit state is not in the {.fn stac_sources} table; filter before converting."
+    ))
+  }
   .require_rstac()
-  rstac::items_filter(sources, filter_fn = function(x)
-    isTRUE(x$properties[["sat:orbit_state"]] %in% orbit_state))
+  rstac::items_filter(sources, filter_fn = function(x) {
+    isTRUE(x$properties[["sat:orbit_state"]] %in% orbit_state)
+  })
 }
 
 #' Keep only the named assets in a STAC item collection (or sources table).
@@ -315,17 +385,22 @@ stac_filter_orbit <- function(sources,
 stac_filter_assets <- function(sources, assets) {
   if (inherits(sources, "doc_items")) {
     .require_rstac()
-    present <- unique(unlist(lapply(sources$features,
-                                    function(ft) names(ft$assets))))
+    present <- unique(unlist(lapply(sources$features, function(ft) {
+      names(ft$assets)
+    })))
     miss <- setdiff(assets, present)
-    if (length(miss))
-      cli::cli_warn("asset{?s} not present in any item (ignored): {.val {miss}}")
+    if (length(miss)) {
+      cli::cli_warn(
+        "asset{?s} not present in any item (ignored): {.val {miss}}"
+      )
+    }
     sources$features <- Filter(
       function(ft) length(ft$assets) > 0L,
       lapply(sources$features, function(ft) {
         ft$assets <- ft$assets[names(ft$assets) %in% assets]
         ft
-      }))
+      })
+    )
     return(sources)
   }
   sources[sources$asset %in% assets, , drop = FALSE]
@@ -344,15 +419,28 @@ stac_filter_assets <- function(sources, assets) {
 stac_drop_duplicates <- function(sources) {
   if (inherits(sources, "doc_items")) {
     .require_rstac()
-    keys <- vapply(sources$features, function(x) paste(
-      x$properties$platform %||% "", x$properties$datetime %||% "",
-      x$properties[["sat:orbit_state"]] %||% "",
-      paste(round(x$bbox, 4L), collapse = ",")), character(1))
+    keys <- vapply(
+      sources$features,
+      function(x) {
+        paste(
+          x$properties$platform %||% "",
+          x$properties$datetime %||% "",
+          x$properties[["sat:orbit_state"]] %||% "",
+          paste(round(x$bbox, 4L), collapse = ",")
+        )
+      },
+      character(1)
+    )
     return(rstac::items_select(sources, which(!duplicated(keys))))
   }
-  key <- paste(sources$asset, sources$datetime,
-               round(sources$xmin, 4), round(sources$ymin, 4),
-               round(sources$xmax, 4), round(sources$ymax, 4))
+  key <- paste(
+    sources$asset,
+    sources$datetime,
+    round(sources$xmin, 4),
+    round(sources$ymin, 4),
+    round(sources$xmax, 4),
+    round(sources$ymax, 4)
+  )
   sources[!duplicated(key), , drop = FALSE]
 }
 
@@ -378,12 +466,14 @@ stac_drop_duplicates <- function(sources) {
 #' @return The table with a `slice` column.
 #' @family stac helpers
 #' @export
-stac_time_slices <- function(sources, granularity = c("day", "month",
-                                                      "exact",
-                                                      "solar_day"),
-                             lon = NULL) {
+stac_time_slices <- function(
+  sources,
+  granularity = c("day", "month", "exact", "solar_day"),
+  lon = NULL
+) {
   granularity <- rlang::arg_match(granularity)
-  sources$slice <- switch(granularity,
+  sources$slice <- switch(
+    granularity,
     day = substr(sources$datetime, 1L, 10L),
     month = substr(sources$datetime, 1L, 7L),
     exact = sources$datetime,
@@ -396,7 +486,8 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
       stopifnot(length(lon) == 1L, is.finite(lon))
       utc <- .stac_parse_datetime(sources$datetime)
       format(utc + round(lon * 240), "%Y-%m-%d", tz = "UTC")
-    })
+    }
+  )
   sources
 }
 
@@ -423,33 +514,46 @@ stac_time_slices <- function(sources, granularity = c("day", "month",
 #' @family stac helpers
 #' @export
 stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
-  if (!is.character(mapping) || is.null(names(mapping)) || anyNA(names(mapping)))
-    cli::cli_abort("{.arg mapping} must be a named character vector {.code c(old = new)}.")
+  if (
+    !is.character(mapping) || is.null(names(mapping)) || anyNA(names(mapping))
+  ) {
+    cli::cli_abort(
+      "{.arg mapping} must be a named character vector {.code c(old = new)}."
+    )
+  }
   warn_missing <- function(present) {
     m <- setdiff(names(mapping), present)
-    if (length(m))
-      cli::cli_warn("mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}")
+    if (length(m)) {
+      cli::cli_warn(
+        "mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}"
+      )
+    }
   }
   if (inherits(sources, "doc_items")) {
     .require_rstac()
-    warn_missing(unique(unlist(lapply(sources$features,
-                                      function(ft) names(ft$assets)))))
+    warn_missing(unique(unlist(lapply(sources$features, function(ft) {
+      names(ft$assets)
+    }))))
     sources$features <- lapply(sources$features, function(ft) {
-      an  <- names(ft$assets)
+      an <- names(ft$assets)
       hit <- match(an, names(mapping))
       if (isTRUE(drop_unmapped)) {
-        keep <- !is.na(hit); ft$assets <- ft$assets[keep]
-        an <- an[keep]; hit <- hit[keep]
+        keep <- !is.na(hit)
+        ft$assets <- ft$assets[keep]
+        an <- an[keep]
+        hit <- hit[keep]
       }
-      if (length(ft$assets))
+      if (length(ft$assets)) {
         names(ft$assets) <- ifelse(is.na(hit), an, unname(mapping)[hit])
+      }
       ft
     })
     return(sources)
   }
   warn_missing(sources$asset)
-  if (isTRUE(drop_unmapped))
+  if (isTRUE(drop_unmapped)) {
     sources <- sources[sources$asset %in% names(mapping), , drop = FALSE]
+  }
   hit <- match(sources$asset, names(mapping))
   sources$asset <- ifelse(is.na(hit), sources$asset, unname(mapping)[hit])
   rownames(sources) <- NULL
@@ -471,25 +575,37 @@ stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
 stac_merge <- function(...) {
   tabs <- list(...)
   # unwrap a single list-of-tables arg (but not a single doc_items, itself a list)
-  if (length(tabs) == 1L && !is.data.frame(tabs[[1L]]) &&
-      is.list(tabs[[1L]]) && !inherits(tabs[[1L]], "doc_items"))
+  if (
+    length(tabs) == 1L &&
+      !is.data.frame(tabs[[1L]]) &&
+      is.list(tabs[[1L]]) &&
+      !inherits(tabs[[1L]], "doc_items")
+  ) {
     tabs <- tabs[[1L]]
+  }
   tabs <- Filter(Negate(is.null), tabs)
   is_di <- vapply(tabs, function(t) inherits(t, "doc_items"), logical(1))
   if (any(is_di)) {
-    if (!all(is_di))
-      cli::cli_abort("{.fn stac_merge} cannot mix {.cls doc_items} and source tables.")
+    if (!all(is_di)) {
+      cli::cli_abort(
+        "{.fn stac_merge} cannot mix {.cls doc_items} and source tables."
+      )
+    }
     .require_rstac()
     merged <- tabs[[1L]]
     merged$features <- do.call(c, lapply(tabs, function(t) t$features))
     return(merged)
   }
   tabs <- Filter(function(t) nrow(t) > 0L, tabs)
-  if (length(tabs) < 1L) cli::cli_abort("{.fn stac_merge} needs at least one non-empty table.")
+  if (length(tabs) < 1L) {
+    cli::cli_abort("{.fn stac_merge} needs at least one non-empty table.")
+  }
   cols <- names(tabs[[1L]])
-  for (t in tabs)
-    if (!setequal(names(t), cols))
+  for (t in tabs) {
+    if (!setequal(names(t), cols)) {
       cli::cli_abort("all source tables must have the same columns.")
+    }
+  }
   out <- do.call(rbind, lapply(tabs, function(t) t[, cols, drop = FALSE]))
   out <- out[order(out$datetime, out$item_id, out$asset), , drop = FALSE]
   rownames(out) <- NULL
@@ -502,11 +618,15 @@ stac_merge <- function(...) {
   x <- sub("Z$", "+0000", x)
   x <- sub("([+-]\\d{2}):(\\d{2})$", "\\1\\2", x)
   out <- as.POSIXct(x, format = "%Y-%m-%dT%H:%M:%OS%z", tz = "UTC")
-  if (anyNA(out))
-    .garry_error(paste0("unparseable STAC datetime(s): ",
-                        paste(utils::head(x[is.na(out)], 3L),
-                              collapse = ", ")),
-                 "garry_stac_error")
+  if (anyNA(out)) {
+    .garry_error(
+      paste0(
+        "unparseable STAC datetime(s): ",
+        paste(utils::head(x[is.na(out)], 3L), collapse = ", ")
+      ),
+      "garry_stac_error"
+    )
+  }
   out
 }
 
@@ -529,26 +649,45 @@ stac_merge <- function(...) {
 #' @return The index path, invisibly.
 #' @family stac helpers
 #' @export
-stac_gti_index <- function(sources, asset,
-                           path = tempfile(fileext = ".gti.fgb"),
-                           crs = "EPSG:4326") {
+stac_gti_index <- function(
+  sources,
+  asset,
+  path = tempfile(fileext = ".gti.fgb"),
+  crs = "EPSG:4326"
+) {
   stopifnot("slice" %in% names(sources))
   rows <- sources[sources$asset == asset, , drop = FALSE]
-  if (nrow(rows) == 0L) cli::cli_abort("no rows for asset: {.val {asset}}")
-  entries <- rows[, c("location", "datetime", "slice", "cloud_cover",
-                      "xmin", "ymin", "xmax", "ymax")]
+  if (nrow(rows) == 0L) {
+    cli::cli_abort("no rows for asset: {.val {asset}}")
+  }
+  entries <- rows[, c(
+    "location",
+    "datetime",
+    "slice",
+    "cloud_cover",
+    "xmin",
+    "ymin",
+    "xmax",
+    "ymax"
+  )]
   entries$cloud_cover[is.na(entries$cloud_cover)] <- -1
-  if (!crs_equal(gdalraster::srs_to_wkt(crs),
-                 gdalraster::srs_to_wkt("EPSG:4326"))) {
+  if (
+    !crs_equal(gdalraster::srs_to_wkt(crs), gdalraster::srs_to_wkt("EPSG:4326"))
+  ) {
     # PROJ selects coordinate operations per bbox (~ms each), but tiled
     # collections repeat a handful of footprints (HLS: fixed MGRS
     # squares), so transform the unique bboxes and fan back out.
     bb <- as.matrix(entries[, c("xmin", "ymin", "xmax", "ymax")])
     key <- do.call(paste, c(as.data.frame(bb), sep = "\x1f"))
     first <- !duplicated(key)
-    b <- gdalraster::transform_bounds(bb[first, , drop = FALSE],
-                                      "EPSG:4326", crs)
-    if (!is.matrix(b)) b <- matrix(b, nrow = 1L)   # one unique bbox
+    b <- gdalraster::transform_bounds(
+      bb[first, , drop = FALSE],
+      "EPSG:4326",
+      crs
+    )
+    if (!is.matrix(b)) {
+      b <- matrix(b, nrow = 1L)
+    } # one unique bbox
     entries[, c("xmin", "ymin", "xmax", "ymax")] <-
       b[match(key, key[first]), , drop = FALSE]
   }
@@ -582,11 +721,17 @@ stac_gti_index <- function(sources, asset,
 #'   higher-level multi-band interface most users want.
 #' @family stac helpers
 #' @export
-lazy_stac_stack <- function(sources, grid, asset,
-                            granularity = "day",
-                            sort_field = "datetime",
-                            nodata = NULL, lon = NULL,
-                            scale = FALSE, offset = NULL) {
+lazy_stac_stack <- function(
+  sources,
+  grid,
+  asset,
+  granularity = "day",
+  sort_field = "datetime",
+  nodata = NULL,
+  lon = NULL,
+  scale = FALSE,
+  offset = NULL
+) {
   sources <- stac_time_slices(sources, granularity, lon = lon)
   idx <- stac_gti_index(sources, asset, crs = grid@crs)
   slices <- sort(unique(sources$slice[sources$asset == asset]))
@@ -594,14 +739,24 @@ lazy_stac_stack <- function(sources, grid, asset,
   # same index pinned to the same grid, so the only unknowns (source
   # dtype, native block, file nodata) are shared. Per-slice discovery
   # costs a remote COG header fetch each, serially, on the host.
-  meta <- gdal_grid_spec(paste0("GTI:", idx),
-                         open_options = gti_open_options(grid))
-  if (is.null(nodata) && length(meta$nodata) == 1L)
+  meta <- gdal_grid_spec(
+    paste0("GTI:", idx),
+    open_options = gti_open_options(grid)
+  )
+  if (is.null(nodata) && length(meta$nodata) == 1L) {
     nodata <- meta$nodata
-  aff <- .resolve_scale(scale, offset, function() {
-    if (length(meta$scale) == 1L) return(meta)
-    gdal_grid_spec(sources$location[sources$asset == asset][[1L]])
-  }, what = asset)
+  }
+  aff <- .resolve_scale(
+    scale,
+    offset,
+    function() {
+      if (length(meta$scale) == 1L) {
+        return(meta)
+      }
+      gdal_grid_spec(sources$location[sources$asset == asset][[1L]])
+    },
+    what = asset
+  )
   graph <- graph_new()
   layers <- lapply(slices, function(sl) {
     lazy_source(
@@ -611,11 +766,13 @@ lazy_stac_stack <- function(sources, grid, asset,
       open_options = gti_open_options(
         grid,
         filter = .glue("slice = '{sl}'"),
-        sort_field = sort_field),
+        sort_field = sort_field
+      ),
       grid = meta$grid,
       block_dim = meta$block_dim,
       scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-      offset = if (length(aff$offset) == 1L) aff$offset else NULL)
+      offset = if (length(aff$offset) == 1L) aff$offset else NULL
+    )
   })
   list(stack = lazy_stack(layers), slices = slices, index = idx)
 }

@@ -12,9 +12,20 @@ NULL
 
 # Reduction vocabulary. Named ops (not arbitrary functions) so the
 # planner can decide algebraic decomposition (D12) and output dtype.
-.reduce_ops <- c("sum", "mean", "min", "max", "prod",
-                 "median", "quantile", "sd", "var",
-                 "count", "any", "all")
+.reduce_ops <- c(
+  "sum",
+  "mean",
+  "min",
+  "max",
+  "prod",
+  "median",
+  "quantile",
+  "sd",
+  "var",
+  "count",
+  "any",
+  "all"
+)
 
 #' Abstract IR node.
 #'
@@ -27,9 +38,9 @@ Node <- S7::new_class(
   "Node",
   abstract = TRUE,
   properties = list(
-    id      = S7::class_integer,
-    parents = S7::class_integer,   # parent ids (may be empty)
-    grid    = GridSpec
+    id = S7::class_integer,
+    parents = S7::class_integer, # parent ids (may be empty)
+    grid = GridSpec
   )
 )
 
@@ -59,27 +70,30 @@ SourceNode <- S7::new_class(
   "SourceNode",
   parent = Node,
   properties = list(
-    path         = S7::class_character,
-    band         = S7::class_integer,
-    nodata       = S7::class_numeric,
-    block_dim    = S7::class_integer,
+    path = S7::class_character,
+    band = S7::class_integer,
+    nodata = S7::class_numeric,
+    block_dim = S7::class_integer,
     open_options = S7::class_character,
     # GDAL resampling used when the read reprojects/rescales onto the analysis
     # grid ("near" preserves exact values; the default, and forced for QA masks).
-    resampling   = S7::new_property(S7::class_character, default = "near"),
+    resampling = S7::new_property(S7::class_character, default = "near"),
     # Band affine (v * scale + offset) applied inside the read kernel AFTER
     # the nodata sentinel is promoted to NaN. Length 0 = absent; when active
     # both are length 1 (offset 0 for pure scaling).
-    scale        = S7::new_property(S7::class_numeric, default = numeric(0)),
-    offset       = S7::new_property(S7::class_numeric, default = numeric(0))
+    scale = S7::new_property(S7::class_numeric, default = numeric(0)),
+    offset = S7::new_property(S7::class_numeric, default = numeric(0))
   ),
   validator = function(self) {
-    if (length(self@nodata) > 1L)
+    if (length(self@nodata) > 1L) {
       return("`nodata` must be length 0 (absent) or 1")
-    if (length(self@scale) > 1L || length(self@offset) > 1L)
+    }
+    if (length(self@scale) > 1L || length(self@offset) > 1L) {
       return("`scale`/`offset` must be length 0 (absent) or 1")
-    if (length(self@scale) != length(self@offset))
+    }
+    if (length(self@scale) != length(self@offset)) {
       return("`scale` and `offset` must be both absent or both set")
+    }
     NULL
   }
 )
@@ -121,15 +135,16 @@ FocalNode <- S7::new_class(
   "FocalNode",
   parent = Node,
   properties = list(
-    fn       = S7::class_function,
-    radius   = S7::class_integer,
+    fn = S7::class_function,
+    radius = S7::class_integer,
     boundary = S7::class_character,
-    weights  = S7::class_numeric
+    weights = S7::class_numeric
   ),
   validator = function(self) {
     k <- (2L * self@radius + 1L)^2
-    if (length(self@weights) > 0L && length(self@weights) != k)
+    if (length(self@weights) > 0L && length(self@weights) != k) {
       return(.glue("`weights` must have length {k} for radius {self@radius}"))
+    }
     NULL
   }
 )
@@ -163,19 +178,25 @@ ReduceNode <- S7::new_class(
   "ReduceNode",
   parent = Node,
   properties = list(
-    op     = S7::class_character,
-    over   = S7::class_character,
+    op = S7::class_character,
+    over = S7::class_character,
     nan_rm = S7::class_logical,
-    fn     = S7::class_list
+    fn = S7::class_list
   ),
   validator = function(self) {
     custom <- length(self@fn) > 0L
-    if (custom && (length(self@fn) != 1L || !is.function(self@fn[[1L]])))
+    if (custom && (length(self@fn) != 1L || !is.function(self@fn[[1L]]))) {
       return("`fn` must be a length-1 list holding a reducer function")
-    if (!custom && (length(self@op) != 1L || !self@op %in% .reduce_ops))
-      return(paste0("`op` must be one of: ", paste(.reduce_ops, collapse = ", ")))
-    if (length(self@over) < 1L)
+    }
+    if (!custom && (length(self@op) != 1L || !self@op %in% .reduce_ops)) {
+      return(paste0(
+        "`op` must be one of: ",
+        paste(.reduce_ops, collapse = ", ")
+      ))
+    }
+    if (length(self@over) < 1L) {
       return("`over` must name at least one dim")
+    }
     NULL
   }
 )
@@ -218,25 +239,36 @@ ScanNode <- S7::new_class(
   "ScanNode",
   parent = Node,
   properties = list(
-    over      = S7::class_character,
+    over = S7::class_character,
     direction = S7::class_character,
-    fn        = S7::class_list,
-    dtype     = S7::class_character
+    fn = S7::class_list,
+    dtype = S7::class_character
   ),
   validator = function(self) {
-    if (length(self@over) != 1L)
+    if (length(self@over) != 1L) {
       return("`over` must name exactly one dim")
-    if (self@over %in% c("x", "y"))
+    }
+    if (self@over %in% c("x", "y")) {
       return("scanning over a spatial dim is not supported (chunks tile x/y)")
-    if (length(self@direction) != 1L ||
-        !self@direction %in% c("forward", "backward", "bidir"))
+    }
+    if (
+      length(self@direction) != 1L ||
+        !self@direction %in% c("forward", "backward", "bidir")
+    ) {
       return("`direction` must be one of: forward, backward, bidir")
-    if (length(self@fn) != 1L || !is.function(self@fn[[1L]]))
+    }
+    if (length(self@fn) != 1L || !is.function(self@fn[[1L]])) {
       return("`fn` must be a length-1 list holding the scan body function")
-    if (length(self@dtype) > 1L ||
-        (length(self@dtype) == 1L && !dtype_valid(self@dtype)))
-      return(paste0("`dtype` must be empty or one of: ",
-                    paste(.garry_dtypes, collapse = ", ")))
+    }
+    if (
+      length(self@dtype) > 1L ||
+        (length(self@dtype) == 1L && !dtype_valid(self@dtype))
+    ) {
+      return(paste0(
+        "`dtype` must be empty or one of: ",
+        paste(.garry_dtypes, collapse = ", ")
+      ))
+    }
     NULL
   }
 )
@@ -256,7 +288,7 @@ WarpNode <- S7::new_class(
   parent = Node,
   properties = list(
     target_grid = GridSpec,
-    resampling  = S7::class_character  # "nearest", "bilinear", "cubic", ...
+    resampling = S7::class_character # "nearest", "bilinear", "cubic", ...
   )
 )
 
@@ -292,9 +324,9 @@ FusedNode <- S7::new_class(
   "FusedNode",
   parent = Node,
   properties = list(
-    fn      = S7::class_function,
-    members = S7::class_integer,     # ids of absorbed nodes
-    halo    = S7::class_integer
+    fn = S7::class_function,
+    members = S7::class_integer, # ids of absorbed nodes
+    halo = S7::class_integer
   )
 )
 
@@ -337,32 +369,51 @@ PatchNode <- S7::new_class(
   "PatchNode",
   parent = Node,
   properties = list(
-    fn        = S7::class_function,
-    radius    = S7::class_integer,
+    fn = S7::class_function,
+    radius = S7::class_integer,
     out_bands = S7::class_integer,
-    dtype     = S7::class_character,
+    dtype = S7::class_character,
     kernel_id = S7::class_character,
-    bytes_px  = S7::class_numeric,
-    flops_px  = S7::class_numeric
+    bytes_px = S7::class_numeric,
+    flops_px = S7::class_numeric
   ),
   validator = function(self) {
-    if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 1L)
+    if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 1L) {
       return("`radius` must be a positive integer")
-    if (length(self@out_bands) != 1L || is.na(self@out_bands) ||
-        self@out_bands < 0L)
+    }
+    if (
+      length(self@out_bands) != 1L ||
+        is.na(self@out_bands) ||
+        self@out_bands < 0L
+    ) {
       return("`out_bands` must be a non-negative integer")
-    if (length(self@dtype) > 1L ||
-        (length(self@dtype) == 1L && !dtype_valid(self@dtype)))
-      return(paste0("`dtype` must be empty or one of: ",
-                    paste(.garry_dtypes, collapse = ", ")))
-    if (length(self@kernel_id) != 1L || !nzchar(self@kernel_id))
+    }
+    if (
+      length(self@dtype) > 1L ||
+        (length(self@dtype) == 1L && !dtype_valid(self@dtype))
+    ) {
+      return(paste0(
+        "`dtype` must be empty or one of: ",
+        paste(.garry_dtypes, collapse = ", ")
+      ))
+    }
+    if (length(self@kernel_id) != 1L || !nzchar(self@kernel_id)) {
       return("`kernel_id` must be a non-empty string")
-    if (length(self@bytes_px) != 1L || !is.finite(self@bytes_px) ||
-        self@bytes_px < 0)
+    }
+    if (
+      length(self@bytes_px) != 1L ||
+        !is.finite(self@bytes_px) ||
+        self@bytes_px < 0
+    ) {
       return("`bytes_px` must be a finite non-negative number")
-    if (length(self@flops_px) != 1L || !is.finite(self@flops_px) ||
-        self@flops_px < 0)
+    }
+    if (
+      length(self@flops_px) != 1L ||
+        !is.finite(self@flops_px) ||
+        self@flops_px < 0
+    ) {
       return("`flops_px` must be a finite non-negative number")
+    }
     NULL
   }
 )

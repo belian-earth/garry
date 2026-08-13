@@ -38,18 +38,23 @@ NULL
 LazyDataset <- S7::new_class(
   "LazyDataset",
   properties = list(
-    graph      = Graph,
-    bands      = S7::class_list,
+    graph = Graph,
+    bands = S7::class_list,
     mask_asset = S7::class_character,
-    steps      = S7::class_list
+    steps = S7::class_list
   ),
   validator = function(self) {
-    if (length(self@bands) < 1L || is.null(names(self@bands)))
+    if (length(self@bands) < 1L || is.null(names(self@bands))) {
       return("`bands` must be a non-empty named list")
-    if (length(self@mask_asset) > 1L)
+    }
+    if (length(self@mask_asset) > 1L) {
       return("`mask_asset` must be length 0 or 1")
-    if (length(self@mask_asset) == 1L && !self@mask_asset %in% names(self@bands))
+    }
+    if (
+      length(self@mask_asset) == 1L && !self@mask_asset %in% names(self@bands)
+    ) {
       return("`mask_asset` must name one of `bands`")
+    }
     NULL
   }
 )
@@ -69,20 +74,31 @@ LazyDataset <- S7::new_class(
 # c(0,1,2,3,8,9,10,11) -> "0-3, 8-11". Uses an en dash when UTF-8.
 .rng <- function(v) {
   v <- sort(unique(as.integer(v)))
-  if (!length(v)) return("")
+  if (!length(v)) {
+    return("")
+  }
   dash <- if (cli::is_utf8_output()) "\u2013" else "-"
   brk <- c(0L, which(diff(v) != 1L), length(v))
-  parts <- vapply(seq_len(length(brk) - 1L), function(i) {
-    seg <- v[(brk[i] + 1L):brk[i + 1L]]
-    if (length(seg) == 1L) as.character(seg)
-    else paste0(seg[1L], dash, seg[length(seg)])
-  }, character(1))
+  parts <- vapply(
+    seq_len(length(brk) - 1L),
+    function(i) {
+      seg <- v[(brk[i] + 1L):brk[i + 1L]]
+      if (length(seg) == 1L) {
+        as.character(seg)
+      } else {
+        paste0(seg[1L], dash, seg[length(seg)])
+      }
+    },
+    character(1)
+  )
   paste(parts, collapse = ", ")
 }
 
 # Re-home a LazyRaster onto graph `g` (no-op if already there).
 .ds_reimport <- function(lr, g) {
-  if (identical(g@nodes, lr@graph@nodes)) return(lr)
+  if (identical(g@nodes, lr@graph@nodes)) {
+    return(lr)
+  }
   id <- graph_import(g, lr@graph, lr@node_id)
   LazyRaster(graph = g, node_id = id, grid = lr@grid)
 }
@@ -159,46 +175,92 @@ LazyDataset <- S7::new_class(
 #' @return A `LazyDataset`.
 #' @seealso [group_by_time()], [collect()]
 #' @export
-lazy_dataset <- function(sources, grid = NULL, assets = NULL,
-                         mask_asset = NULL,
-                         granularity = "day", sort_field = "datetime",
-                         nodata = NULL, lon = NULL, resampling = "near",
-                         scale = FALSE, offset = NULL, bands = NULL) {
-  if (is.character(sources))
-    return(.ds_from_files(sources, grid, assets, mask_asset, bands,
-                          resampling, nodata, scale, offset))
-  if (!is.null(bands))
+lazy_dataset <- function(
+  sources,
+  grid = NULL,
+  assets = NULL,
+  mask_asset = NULL,
+  granularity = "day",
+  sort_field = "datetime",
+  nodata = NULL,
+  lon = NULL,
+  resampling = "near",
+  scale = FALSE,
+  offset = NULL,
+  bands = NULL
+) {
+  if (is.character(sources)) {
+    return(.ds_from_files(
+      sources,
+      grid,
+      assets,
+      mask_asset,
+      bands,
+      resampling,
+      nodata,
+      scale,
+      offset
+    ))
+  }
+  if (!is.null(bands)) {
     cli::cli_abort(
-      "{.arg bands} applies to the file form only; use {.arg assets} to select from a source table.")
+      "{.arg bands} applies to the file form only; use {.arg assets} to select from a source table."
+    )
+  }
   .assert_class(grid, GridSpec, "GridSpec")
-  if (length(assets) < 1L)
+  if (length(assets) < 1L) {
     cli::cli_abort("{.arg assets} must name at least one asset.")
+  }
   all_assets <- unique(c(assets, mask_asset))
   # Accept a STAC `doc_items` directly (the discovery/filter object), converting
   # it to the sources table internally -- so the STAC pipeline stays on the rstac
   # object end to end. A plain data.frame (non-STAC / manual sources) passes
   # through unchanged.
-  if (inherits(sources, "doc_items"))
+  if (inherits(sources, "doc_items")) {
     sources <- stac_sources(sources, assets = all_assets)
+  }
   sources <- stac_time_slices(sources, granularity, lon = lon)
 
   resolve_nodata <- function(a, meta_nodata) {
     file_nd <- if (length(meta_nodata) == 1L) meta_nodata else NULL
-    if (is.null(nodata)) return(file_nd)
-    if (!is.null(names(nodata)))
+    if (is.null(nodata)) {
+      return(file_nd)
+    }
+    if (!is.null(names(nodata))) {
       return(if (a %in% names(nodata)) unname(nodata[[a]]) else file_nd)
-    as.numeric(nodata)                     # scalar for every asset
+    }
+    as.numeric(nodata) # scalar for every asset
   }
 
-  .valid_resampling <- c("near", "bilinear", "cubic", "cubicspline", "lanczos",
-                         "average", "rms", "mode", "max", "min", "med",
-                         "q1", "q3", "sum")
-  if (!all(resampling %in% .valid_resampling))
-    cli::cli_abort(c("Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .valid_resampling)}}.",
-                     "i" = "One of {.val {.valid_resampling}}."))
+  .valid_resampling <- c(
+    "near",
+    "bilinear",
+    "cubic",
+    "cubicspline",
+    "lanczos",
+    "average",
+    "rms",
+    "mode",
+    "max",
+    "min",
+    "med",
+    "q1",
+    "q3",
+    "sum"
+  )
+  if (!all(resampling %in% .valid_resampling)) {
+    cli::cli_abort(c(
+      "Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .valid_resampling)}}.",
+      "i" = "One of {.val {.valid_resampling}}."
+    ))
+  }
   resolve_resampling <- function(a) {
-    if (!is.null(mask_asset) && a %in% mask_asset) return("near")  # QA never interpolates
-    if (is.null(names(resampling))) return(unname(resampling[[1L]]))  # scalar for all
+    if (!is.null(mask_asset) && a %in% mask_asset) {
+      return("near")
+    } # QA never interpolates
+    if (is.null(names(resampling))) {
+      return(unname(resampling[[1L]]))
+    } # scalar for all
     if (a %in% names(resampling)) unname(resampling[[a]]) else "near"
   }
 
@@ -208,64 +270,93 @@ lazy_dataset <- function(sources, grid = NULL, assets = NULL,
   # scale/offset. One asset per band; the collection is assumed
   # homogeneous (documented caveat, e.g. the S2 baseline-04 cutover).
   resolve_affine <- function(a, meta) {
-    if (!is.null(mask_asset) && a %in% mask_asset)
+    if (!is.null(mask_asset) && a %in% mask_asset) {
       return(list(scale = numeric(0), offset = numeric(0)))
+    }
     pick <- function(x, default = NULL) {
-      if (is.null(x)) return(default)
-      if (!is.null(names(x)))
+      if (is.null(x)) {
+        return(default)
+      }
+      if (!is.null(names(x))) {
         return(if (a %in% names(x)) unname(x[[a]]) else default)
+      }
       unname(x[[1L]])
     }
-    if (isFALSE(scale)) return(list(scale = numeric(0), offset = numeric(0)))
+    if (isFALSE(scale)) {
+      return(list(scale = numeric(0), offset = numeric(0)))
+    }
     if (isTRUE(scale)) {
-      if (length(meta$scale) == 1L)
+      if (length(meta$scale) == 1L) {
         return(list(scale = meta$scale, offset = meta$offset))
+      }
       probe <- gdal_grid_spec(sources$location[sources$asset == a][[1L]])
-      if (length(probe$scale) == 1L)
+      if (length(probe$scale) == 1L) {
         return(list(scale = probe$scale, offset = probe$offset))
+      }
       cli::cli_inform(c(
-        "i" = "{.arg scale}: no scale/offset metadata on asset {.val {a}}; reading raw values."))
+        "i" = "{.arg scale}: no scale/offset metadata on asset {.val {a}}; reading raw values."
+      ))
       return(list(scale = numeric(0), offset = numeric(0)))
     }
     sc <- pick(scale)
-    if (is.null(sc)) return(list(scale = numeric(0), offset = numeric(0)))
-    of <- pick(offset, default = 0)
-    if (sc == 1 && of == 0)
+    if (is.null(sc)) {
       return(list(scale = numeric(0), offset = numeric(0)))
+    }
+    of <- pick(offset, default = 0)
+    if (sc == 1 && of == 0) {
+      return(list(scale = numeric(0), offset = numeric(0)))
+    }
     list(scale = as.numeric(sc), offset = as.numeric(of))
   }
-  if (!isFALSE(scale) && !isTRUE(scale) && !is.numeric(scale))
+  if (!isFALSE(scale) && !isTRUE(scale) && !is.numeric(scale)) {
     cli::cli_abort(
-      "{.arg scale} must be `FALSE`, `TRUE`, or numeric (scalar or named by asset).")
+      "{.arg scale} must be `FALSE`, `TRUE`, or numeric (scalar or named by asset)."
+    )
+  }
 
   graph <- graph_new()
   bands <- list()
   for (a in all_assets) {
-    idx  <- stac_gti_index(sources, a, crs = grid@crs)
-    meta <- gdal_grid_spec(paste0("GTI:", idx),
-                           open_options = gti_open_options(grid))
+    idx <- stac_gti_index(sources, a, crs = grid@crs)
+    meta <- gdal_grid_spec(
+      paste0("GTI:", idx),
+      open_options = gti_open_options(grid)
+    )
     nd <- resolve_nodata(a, meta$nodata)
     aff <- resolve_affine(a, meta)
     slices <- sort(unique(sources$slice[sources$asset == a]))
     rs <- resolve_resampling(a)
     layers <- lapply(slices, function(sl) {
       lazy_source(
-        paste0("GTI:", idx), graph = graph, nodata = nd,
+        paste0("GTI:", idx),
+        graph = graph,
+        nodata = nd,
         open_options = gti_open_options(
-          grid, filter = .glue("slice = '{sl}'"), sort_field = sort_field),
-        grid = meta$grid, block_dim = meta$block_dim, resampling = rs,
+          grid,
+          filter = .glue("slice = '{sl}'"),
+          sort_field = sort_field
+        ),
+        grid = meta$grid,
+        block_dim = meta$block_dim,
+        resampling = rs,
         scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-        offset = if (length(aff$offset) == 1L) aff$offset else NULL)
+        offset = if (length(aff$offset) == 1L) aff$offset else NULL
+      )
     })
     names(layers) <- slices
     bands[[a]] <- layers
   }
-  bands <- bands[all_assets]               # preserve requested order
-  LazyDataset(graph = graph, bands = bands,
-              mask_asset = if (is.null(mask_asset)) character(0)
-                           else as.character(mask_asset),
-              steps = list(.step("source", "source",
-                                 detail = max(vapply(bands, length, 1L)))))
+  bands <- bands[all_assets] # preserve requested order
+  LazyDataset(
+    graph = graph,
+    bands = bands,
+    mask_asset = if (is.null(mask_asset)) {
+      character(0)
+    } else {
+      as.character(mask_asset)
+    },
+    steps = list(.step("source", "source", detail = max(lengths(bands))))
+  )
 }
 
 # File form of lazy_dataset(): one band per (selected) file band, one time
@@ -276,11 +367,22 @@ lazy_dataset <- function(sources, grid = NULL, assets = NULL,
 # SourceNode: at collect() the scheduler fans per-band read tasks across the
 # reader pool -- N independent handles issuing range requests concurrently,
 # the measured fastest remote shape (design/gdal-multiband-fanout.md).
-.ds_from_files <- function(paths, grid, assets, mask_asset, bands,
-                           resampling, nodata, scale, offset) {
-  if (!is.null(assets) && !is.null(bands))
+.ds_from_files <- function(
+  paths,
+  grid,
+  assets,
+  mask_asset,
+  bands,
+  resampling,
+  nodata,
+  scale,
+  offset
+) {
+  if (!is.null(assets) && !is.null(bands)) {
     cli::cli_abort(
-      "Give {.arg assets} (band names) or {.arg bands} (indices), not both.")
+      "Give {.arg assets} (band names) or {.arg bands} (indices), not both."
+    )
+  }
   # Prefix bare http(s) with /vsicurl/ HERE, so the stored SourceNode path
   # is GDAL-safe on every seam. The read path (.gdal_handle) prefixes
   # defensively at open, but the warp seam consumes the path directly --
@@ -289,7 +391,9 @@ lazy_dataset <- function(sources, grid = NULL, assets = NULL,
   paths <- vapply(as.character(paths), .gdal_href, "", USE.NAMES = FALSE)
   path <- if (length(paths) > 1L) {
     gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
-  } else paths[[1L]]
+  } else {
+    paths[[1L]]
+  }
 
   meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path)
@@ -297,50 +401,79 @@ lazy_dataset <- function(sources, grid = NULL, assets = NULL,
   descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), "")
 
   idx <- if (is.null(bands)) seq_len(nb) else as.integer(bands)
-  if (any(idx < 1L | idx > nb))
+  if (any(idx < 1L | idx > nb)) {
     cli::cli_abort("{.arg bands} must index 1..{nb} (file has {nb} band{?s}).")
+  }
   nms <- ifelse(nzchar(descs[idx]), descs[idx], paste0("b", idx))
-  if (anyDuplicated(nms))
-    nms <- paste0("b", idx)                # degenerate descriptions: index names
+  if (anyDuplicated(nms)) {
+    nms <- paste0("b", idx)
+  } # degenerate descriptions: index names
   if (!is.null(assets)) {
     want <- unique(c(assets, mask_asset))
     miss <- setdiff(want, nms)
-    if (length(miss))
+    if (length(miss)) {
       cli::cli_abort(c(
         "Band name(s) not found in the file: {.val {miss}}.",
-        "i" = "Available: {.val {nms}}."))
+        "i" = "Available: {.val {nms}}."
+      ))
+    }
     keep <- match(want, nms)
     idx <- idx[keep]
     nms <- nms[keep]
   }
-  if (!is.null(mask_asset) && !mask_asset %in% nms)
+  if (!is.null(mask_asset) && !mask_asset %in% nms) {
     cli::cli_abort("{.arg mask_asset} must name one of the selected bands.")
+  }
 
   resolve_nd <- function(nm, b) {
     fnd <- ds$getNoDataValue(b)
     fnd <- if (is.na(fnd)) NULL else as.numeric(fnd)
-    if (is.null(nodata)) return(fnd)
-    if (!is.null(names(nodata)))
+    if (is.null(nodata)) {
+      return(fnd)
+    }
+    if (!is.null(names(nodata))) {
       return(if (nm %in% names(nodata)) unname(nodata[[nm]]) else fnd)
+    }
     as.numeric(nodata)
   }
   resolve_rs <- function(nm) {
-    if (!is.null(mask_asset) && nm %in% mask_asset) return("near")
-    if (is.null(names(resampling))) return(unname(resampling[[1L]]))
+    if (!is.null(mask_asset) && nm %in% mask_asset) {
+      return("near")
+    }
+    if (is.null(names(resampling))) {
+      return(unname(resampling[[1L]]))
+    }
     if (nm %in% names(resampling)) unname(resampling[[nm]]) else "near"
   }
 
-  if (!is.null(grid)) .assert_class(grid, GridSpec, "GridSpec")
+  if (!is.null(grid)) {
+    .assert_class(grid, GridSpec, "GridSpec")
+  }
   g <- graph_new()
-  layers <- Map(function(b, nm) {
-    x <- lazy_source(path, band = b, graph = g, grid = meta$grid,
-                     block_dim = meta$block_dim, nodata = resolve_nd(nm, b),
-                     scale = if (is.null(mask_asset) || !nm %in% mask_asset)
-                       scale else FALSE,
-                     offset = offset)
-    if (!is.null(grid)) x <- align(x, grid, resampling = resolve_rs(nm))
-    x
-  }, idx, nms)
+  layers <- Map(
+    function(b, nm) {
+      x <- lazy_source(
+        path,
+        band = b,
+        graph = g,
+        grid = meta$grid,
+        block_dim = meta$block_dim,
+        nodata = resolve_nd(nm, b),
+        scale = if (is.null(mask_asset) || !nm %in% mask_asset) {
+          scale
+        } else {
+          FALSE
+        },
+        offset = offset
+      )
+      if (!is.null(grid)) {
+        x <- align(x, grid, resampling = resolve_rs(nm))
+      }
+      x
+    },
+    idx,
+    nms
+  )
   as_dataset(stats::setNames(layers, nms), mask_asset = mask_asset)
 }
 
@@ -356,18 +489,24 @@ lazy_dataset <- function(sources, grid = NULL, assets = NULL,
 #' @seealso [lazy_dataset()]
 #' @export
 as_dataset <- function(bands, mask_asset = NULL) {
-  if (!is.list(bands) || length(bands) < 1L || is.null(names(bands)))
+  if (!is.list(bands) || length(bands) < 1L || is.null(names(bands))) {
     cli::cli_abort("{.arg bands} must be a non-empty named list.")
+  }
   norm <- lapply(bands, function(b) {
     if (S7::S7_inherits(b, LazyRaster)) list(b) else as.list(b)
   })
   g <- norm[[1L]][[1L]]@graph
   bands2 <- lapply(norm, function(layers) lapply(layers, .ds_reimport, g = g))
-  LazyDataset(graph = g, bands = bands2,
-              mask_asset = if (is.null(mask_asset)) character(0)
-                           else as.character(mask_asset),
-              steps = list(.step("source", "source",
-                                 detail = max(vapply(bands2, length, 1L)))))
+  LazyDataset(
+    graph = g,
+    bands = bands2,
+    mask_asset = if (is.null(mask_asset)) {
+      character(0)
+    } else {
+      as.character(mask_asset)
+    },
+    steps = list(.step("source", "source", detail = max(lengths(bands2))))
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -378,16 +517,21 @@ as_dataset <- function(bands, mask_asset = NULL) {
 # stack of its slices.
 S7::method(`[[`, LazyDataset) <- function(x, i) {
   b <- x@bands[[i]]
-  if (is.null(b)) cli::cli_abort("no such band: {.val {i}}")
+  if (is.null(b)) {
+    cli::cli_abort("no such band: {.val {i}}")
+  }
   if (length(b) == 1L) b[[1L]] else lazy_stack(b, along = "t")
 }
 
 # A subset of bands -> a sub-dataset.
 S7::method(`[`, LazyDataset) <- function(x, i) {
   sub <- x@bands[i]
-  LazyDataset(graph = x@graph, bands = sub,
-              mask_asset = intersect(x@mask_asset, names(sub)),
-              steps = x@steps)
+  LazyDataset(
+    graph = x@graph,
+    bands = sub,
+    mask_asset = intersect(x@mask_asset, names(sub)),
+    steps = x@steps
+  )
 }
 
 # Assign a derived band into the dataset: `ds[["ndvi"]] <- (nir - red)/(nir + red)`.
@@ -400,22 +544,31 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 # and halts.
 #' @rawNamespace S3method("[[<-", "garry::LazyDataset", .lazy_dataset_assign)
 .lazy_dataset_assign <- function(x, i, value) {
-  layers <- if (S7::S7_inherits(value, LazyRaster)) list(value)
-            else if (is.list(value)) value
-            else cli::cli_abort(
-              "assigned value must be a {.cls LazyRaster} or a list of them.")
+  layers <- if (S7::S7_inherits(value, LazyRaster)) {
+    list(value)
+  } else if (is.list(value)) {
+    value
+  } else {
+    cli::cli_abort(
+      "assigned value must be a {.cls LazyRaster} or a list of them."
+    )
+  }
   sp <- .ds_grid(x)
   layers <- lapply(layers, function(lr) {
     .assert_class(lr, LazyRaster, "LazyRaster", arg = "value")
-    if (!.spatial_equal(sp, lr@grid))
+    if (!.spatial_equal(sp, lr@grid)) {
       cli::cli_abort("assigned band {.val {i}} is not on the dataset's grid.")
+    }
     .ds_reimport(lr, x@graph)
   })
   bands <- x@bands
   bands[[i]] <- layers
-  LazyDataset(graph = x@graph, bands = bands, mask_asset = x@mask_asset,
-              steps = c(x@steps,
-                        list(.step("derive", "derive", detail = i))))
+  LazyDataset(
+    graph = x@graph,
+    bands = bands,
+    mask_asset = x@mask_asset,
+    steps = c(x@steps, list(.step("derive", "derive", detail = i)))
+  )
 }
 
 # print() cards and draw() live in draw.R.
@@ -427,38 +580,65 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 
 .ds_map <- function(xs, fn, dtype, bands) {
   x <- xs[[1L]]
-  if (length(xs) > 1L)
+  if (length(xs) > 1L) {
     cli::cli_abort(c(
       "{.fn lazy_map} over a LazyDataset takes one dataset.",
-      "i" = "Extract bands with {.code ds[[\"B04\"]]} for cross-band math."))
+      "i" = "Extract bands with {.code ds[[\"B04\"]]} for cross-band math."
+    ))
+  }
   sel <- bands %||% .ds_value_bands(x)
   newbands <- x@bands
-  for (a in sel)
-    newbands[[a]] <- lapply(x@bands[[a]],
-                            function(lr) lazy_map(lr, fn = fn, dtype = dtype))
-  LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset,
-              steps = c(x@steps, list(.step("map", "map",
-                        detail = paste(sel, collapse = " ")))))
+  for (a in sel) {
+    newbands[[a]] <- lapply(x@bands[[a]], function(lr) {
+      lazy_map(lr, fn = fn, dtype = dtype)
+    })
+  }
+  LazyDataset(
+    graph = x@graph,
+    bands = newbands,
+    mask_asset = x@mask_asset,
+    steps = c(
+      x@steps,
+      list(.step("map", "map", detail = paste(sel, collapse = " ")))
+    )
+  )
 }
 
 .ds_focal <- function(x, fn, radius, boundary, bands) {
   sel <- bands %||% .ds_value_bands(x)
   newbands <- x@bands
-  for (a in sel)
-    newbands[[a]] <- lapply(x@bands[[a]],
-                            function(lr) focal(lr, fn = fn, radius = radius,
-                                               boundary = boundary))
-  LazyDataset(graph = x@graph, bands = newbands, mask_asset = x@mask_asset,
-              steps = c(x@steps, list(.step("focal", "focal",
-                        detail = .glue(
-                          "r={radius} {cli::symbol$bullet %||% '-'} ",
-                          "{paste(sel, collapse = ' ')}")))))
+  for (a in sel) {
+    newbands[[a]] <- lapply(x@bands[[a]], function(lr) {
+      focal(lr, fn = fn, radius = radius, boundary = boundary)
+    })
+  }
+  LazyDataset(
+    graph = x@graph,
+    bands = newbands,
+    mask_asset = x@mask_asset,
+    steps = c(
+      x@steps,
+      list(.step(
+        "focal",
+        "focal",
+        detail = .glue(
+          "r={radius} {cli::symbol$bullet %||% '-'} ",
+          "{paste(sel, collapse = ' ')}"
+        )
+      ))
+    )
+  )
 }
 
 .ds_reduce <- function(x, op, over, nan_rm, bands) {
-  if (identical(over, "band"))
-    return(reduce_over(stack_bands(if (is.null(bands)) x else x[bands]),
-                       op, "band", nan_rm = nan_rm))
+  if (identical(over, "band")) {
+    return(reduce_over(
+      stack_bands(if (is.null(bands)) x else x[bands]),
+      op,
+      "band",
+      nan_rm = nan_rm
+    ))
+  }
   sel <- bands %||% names(x@bands)
   newbands <- x@bands
   for (a in sel) {
@@ -467,30 +647,52 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
     lr <- lazy_stack(x@bands[[a]], along = "t")
     newbands[[a]] <- list(reduce_over(lr, op, over, nan_rm = nan_rm))
   }
-  LazyDataset(graph = x@graph, bands = newbands,
-              mask_asset = intersect(x@mask_asset, names(newbands)),
-              steps = c(x@steps, list(.step("reduce", "reduce",
-                        detail = .glue(
-                          "{if (is.function(op)) 'custom' else op}",
-                          " over {paste(over, collapse = ',')}")))))
+  LazyDataset(
+    graph = x@graph,
+    bands = newbands,
+    mask_asset = intersect(x@mask_asset, names(newbands)),
+    steps = c(
+      x@steps,
+      list(.step(
+        "reduce",
+        "reduce",
+        detail = .glue(
+          "{if (is.function(op)) 'custom' else op}",
+          " over {paste(over, collapse = ',')}"
+        )
+      ))
+    )
+  )
 }
 
 .ds_scan <- function(x, fn, over, direction, dtype, bands) {
-  if (!identical(over, "t"))
+  if (!identical(over, "t")) {
     cli::cli_abort(c(
       "{.fn scan_over} over a LazyDataset supports {.code over = \"t\"} only.",
-      "i" = "Use {.fn stack_bands} + {.fn scan_over} for a band scan."))
+      "i" = "Use {.fn stack_bands} + {.fn scan_over} for a band scan."
+    ))
+  }
   sel <- bands %||% names(x@bands)
   newbands <- x@bands
   for (a in sel) {
     lr <- lazy_stack(x@bands[[a]], along = "t")
-    newbands[[a]] <- list(scan_over(lr, fn, over = over,
-                                    direction = direction, dtype = dtype))
+    newbands[[a]] <- list(scan_over(
+      lr,
+      fn,
+      over = over,
+      direction = direction,
+      dtype = dtype
+    ))
   }
-  LazyDataset(graph = x@graph, bands = newbands,
-              mask_asset = intersect(x@mask_asset, names(newbands)),
-              steps = c(x@steps, list(.step("scan", "scan",
-                        detail = .glue("{direction} over {over}")))))
+  LazyDataset(
+    graph = x@graph,
+    bands = newbands,
+    mask_asset = intersect(x@mask_asset, names(newbands)),
+    steps = c(
+      x@steps,
+      list(.step("scan", "scan", detail = .glue("{direction} over {over}")))
+    )
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -507,11 +709,18 @@ LazyDatasetGroups <- S7::new_class(
   "LazyDatasetGroups",
   properties = list(groups = S7::class_list, by = S7::class_character),
   validator = function(self) {
-    if (length(self@groups) < 1L || is.null(names(self@groups)))
+    if (length(self@groups) < 1L || is.null(names(self@groups))) {
       return("`groups` must be a non-empty named list")
-    if (!all(vapply(self@groups, function(g) S7::S7_inherits(g, LazyDataset),
-                    logical(1))))
+    }
+    if (
+      !all(vapply(
+        self@groups,
+        function(g) S7::S7_inherits(g, LazyDataset),
+        logical(1)
+      ))
+    ) {
       return("every group must be a LazyDataset")
+    }
     NULL
   }
 )
@@ -523,39 +732,62 @@ LazyDatasetGroups <- S7::new_class(
 .lr_as_dataset <- function(x) {
   labs <- x@grid@labels[["t"]]
   node <- graph_get(x@graph, x@node_id)
-  if (is.null(labs) || !S7::S7_inherits(node, StackNode) ||
-      !identical(node@along, "t"))
+  if (
+    is.null(labs) ||
+      !S7::S7_inherits(node, StackNode) ||
+      !identical(node@along, "t")
+  ) {
     cli::cli_abort(c(
       "grouping a bare raster needs a {.fn lazy_stack} along {.val t} ",
       "with labelled (named) layers.",
-      "i" = "name the layers by date, or use a {.cls LazyDataset}"))
-  slices <- stats::setNames(lapply(node@parents, function(pid)
-    LazyRaster(graph = x@graph, node_id = pid,
-               grid = graph_get(x@graph, pid)@grid)), labs)
+      "i" = "name the layers by date, or use a {.cls LazyDataset}"
+    ))
+  }
+  slices <- stats::setNames(
+    lapply(node@parents, function(pid) {
+      LazyRaster(
+        graph = x@graph,
+        node_id = pid,
+        grid = graph_get(x@graph, pid)@grid
+      )
+    }),
+    labs
+  )
   as_dataset(list(value = slices))
 }
 
 # Slice name -> group label. Presets truncate the (date) name; a function maps
 # the slice name to a label verbatim.
 .time_group <- function(slices, by) {
-  if (is.function(by)) return(vapply(slices, by, character(1), USE.NAMES = FALSE))
-  switch(by,
-    year    = substr(slices, 1L, 4L),
-    month   = substr(slices, 1L, 7L),
-    day     = substr(slices, 1L, 10L),
+  if (is.function(by)) {
+    return(vapply(slices, by, character(1), USE.NAMES = FALSE))
+  }
+  switch(
+    by,
+    year = substr(slices, 1L, 4L),
+    month = substr(slices, 1L, 7L),
+    day = substr(slices, 1L, 10L),
     quarter = {
       d <- .slice_dates(slices)
-      .glue("{format(d, '%Y')}-Q{(as.integer(format(d, '%m')) - 1L) %/% 3L + 1L}")
+      .glue(
+        "{format(d, '%Y')}-Q{(as.integer(format(d, '%m')) - 1L) %/% 3L + 1L}"
+      )
     },
-    week    = format(.slice_dates(slices), "%G-W%V"),
-    cli::cli_abort("unknown {.arg by} {.val {by}}: use year/quarter/month/week/day or a function."))
+    week = format(.slice_dates(slices), "%G-W%V"),
+    cli::cli_abort(
+      "unknown {.arg by} {.val {by}}: use year/quarter/month/week/day or a function."
+    )
+  )
 }
 
 .slice_dates <- function(slices) {
   d <- as.Date(slices, format = "%Y-%m-%d")
-  if (anyNA(d))
-    cli::cli_abort(c("{.arg by = \"quarter\"/\"week\"} needs day-granularity (YYYY-MM-DD) slices.",
-                     "i" = "Build the dataset with {.code granularity = \"day\"}."))
+  if (anyNA(d)) {
+    cli::cli_abort(c(
+      "{.arg by = \"quarter\"/\"week\"} needs day-granularity (YYYY-MM-DD) slices.",
+      "i" = "Build the dataset with {.code granularity = \"day\"}."
+    ))
+  }
   d
 }
 
@@ -581,22 +813,33 @@ group_by_time <- function(x, by = "month") {
   # A bare labelled (t,y,x) cube groups too: rebuild the per-slice
   # layers from its StackNode (labels carry the dates) as a one-band
   # dataset, then group as usual.
-  if (S7::S7_inherits(x, LazyRaster)) x <- .lr_as_dataset(x)
+  if (S7::S7_inherits(x, LazyRaster)) {
+    x <- .lr_as_dataset(x)
+  }
   .assert_class(x, LazyDataset, "LazyDataset")
-  if (!is.function(by))
+  if (!is.function(by)) {
     by <- rlang::arg_match(by, c("year", "quarter", "month", "week", "day"))
+  }
   labels <- sort(unique(unlist(
-    lapply(x@bands, function(b) .time_group(names(b), by)), use.names = FALSE)))
-  if (!length(labels))
+    lapply(x@bands, function(b) .time_group(names(b), by)),
+    use.names = FALSE
+  )))
+  if (!length(labels)) {
     cli::cli_abort("no time groups: are the band slices named by date?")
+  }
   lab <- if (is.function(by)) "custom" else by
   groups <- lapply(labels, function(g) {
     nb <- lapply(x@bands, function(b) b[.time_group(names(b), by) == g])
-    nb <- nb[vapply(nb, length, integer(1)) > 0L]        # drop bands empty this group
-    LazyDataset(graph = x@graph, bands = nb,
-                mask_asset = intersect(x@mask_asset, names(nb)),
-                steps = c(x@steps, list(.step("group", "group",
-                          detail = .glue("{lab} = {g}")))))
+    nb <- nb[lengths(nb) > 0L] # drop bands empty this group
+    LazyDataset(
+      graph = x@graph,
+      bands = nb,
+      mask_asset = intersect(x@mask_asset, names(nb)),
+      steps = c(
+        x@steps,
+        list(.step("group", "group", detail = .glue("{lab} = {g}")))
+      )
+    )
   })
   names(groups) <- labels
   LazyDatasetGroups(groups = groups, by = lab)
@@ -621,20 +864,24 @@ group_by_time <- function(x, by = "month") {
 #' @return The filled object, same class as `x`.
 #' @family time series smoothers
 #' @export
-fill_gaps <- function(x, method = c("ffill", "bfill", "linear"),
-                      over = "t") {
+fill_gaps <- function(x, method = c("ffill", "bfill", "linear"), over = "t") {
   method <- rlang::arg_match(method)
   if (S7::S7_inherits(x, LazyDataset)) {
     newbands <- x@bands
     for (a in setdiff(names(x@bands), x@mask_asset)) {
-      lr <- if (length(x@bands[[a]]) == 1L) x@bands[[a]][[1L]]
-            else lazy_stack(x@bands[[a]], along = "t")
+      lr <- if (length(x@bands[[a]]) == 1L) {
+        x@bands[[a]][[1L]]
+      } else {
+        lazy_stack(x@bands[[a]], along = "t")
+      }
       newbands[[a]] <- list(fill_gaps(lr, method, over))
     }
-    return(LazyDataset(graph = x@graph, bands = newbands,
-                       mask_asset = x@mask_asset,
-                       steps = c(x@steps, list(.step("fill", "fill_gaps",
-                                                     detail = method)))))
+    return(LazyDataset(
+      graph = x@graph,
+      bands = newbands,
+      mask_asset = x@mask_asset,
+      steps = c(x@steps, list(.step("fill", "fill_gaps", detail = method)))
+    ))
   }
   .assert_class(x, LazyRaster, "LazyRaster")
   # Carry the last valid value; a NaN carry (init) means "none yet".
@@ -643,40 +890,59 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"),
   carry_body <- function(reverse) {
     force(reverse)
     function(xs, margin) {
-      g_scan(init = NaN, body = function(carry, v) {
-        nv <- g_ifelse(g_is_nodata(v), carry, v)
-        list(carry = nv, out = nv)
-      }, xs = xs[[1L]], reverse = reverse)$out
+      g_scan(
+        init = NaN,
+        body = function(carry, v) {
+          nv <- g_ifelse(g_is_nodata(v), carry, v)
+          list(carry = nv, out = nv)
+        },
+        xs = xs[[1L]],
+        reverse = reverse
+      )$out
     }
   }
-  if (method == "ffill")
-    return(scan_over(x, carry_body(FALSE), over = over,
-                     direction = "forward"))
-  if (method == "bfill")
-    return(scan_over(x, carry_body(TRUE), over = over,
-                     direction = "backward"))
+  if (method == "ffill") {
+    return(scan_over(x, carry_body(FALSE), over = over, direction = "forward"))
+  }
+  if (method == "bfill") {
+    return(scan_over(x, carry_body(TRUE), over = over, direction = "backward"))
+  }
   # linear: nearest-valid value and distance in both directions, then a
   # distance-weighted combination per pixel. The zero branch is v * 0
   # (an ARRAY) so the carried distance is array-shaped from step one.
   dist_body <- function(reverse) {
     force(reverse)
     function(xs, margin) {
-      g_scan(init = 1e30, body = function(carry, v) {
-        d <- g_ifelse(g_is_nodata(v), carry + 1, v * 0)
-        list(carry = d, out = d)
-      }, xs = xs[[1L]], reverse = reverse)$out
+      g_scan(
+        init = 1e30,
+        body = function(carry, v) {
+          d <- g_ifelse(g_is_nodata(v), carry + 1, v * 0)
+          list(carry = d, out = d)
+        },
+        xs = xs[[1L]],
+        reverse = reverse
+      )$out
     }
   }
   vf <- scan_over(x, carry_body(FALSE), over = over, direction = "forward")
   vb <- scan_over(x, carry_body(TRUE), over = over, direction = "backward")
-  df <- scan_over(x, dist_body(FALSE), over = over, direction = "forward",
-                  dtype = "f32")
-  db <- scan_over(x, dist_body(TRUE), over = over, direction = "backward",
-                  dtype = "f32")
+  df <- scan_over(
+    x,
+    dist_body(FALSE),
+    over = over,
+    direction = "forward",
+    dtype = "f32"
+  )
+  db <- scan_over(
+    x,
+    dist_body(TRUE),
+    over = over,
+    direction = "backward",
+    dtype = "f32"
+  )
   lazy_map(x, vf, vb, df, db, fn = function(v, f, b, dfv, dbv) {
     interp <- (f * dbv + b * dfv) / (dfv + dbv)
-    fill <- g_ifelse(g_is_nodata(f), b,
-                     g_ifelse(g_is_nodata(b), f, interp))
+    fill <- g_ifelse(g_is_nodata(f), b, g_ifelse(g_is_nodata(b), f, interp))
     g_ifelse(g_is_nodata(v), fill, v)
   })
 }
@@ -684,9 +950,11 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"),
 # reduce_over() dispatch for grouped datasets: reduce each group independently.
 .dsg_reduce <- function(x, op, over, nan_rm, bands) {
   LazyDatasetGroups(
-    groups = lapply(x@groups, function(g)
-      reduce_over(g, op, over, nan_rm = nan_rm, bands = bands)),
-    by = x@by)
+    groups = lapply(x@groups, function(g) {
+      reduce_over(g, op, over, nan_rm = nan_rm, bands = bands)
+    }),
+    by = x@by
+  )
 }
 
 # ---------------------------------------------------------------------------
@@ -707,15 +975,21 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"),
 #' @export
 stack_bands <- function(x) {
   .assert_class(x, LazyDataset, "LazyDataset")
-  nl <- vapply(x@bands, length, integer(1))
-  if (any(nl != 1L))
+  nl <- lengths(x@bands)
+  if (any(nl != 1L)) {
     cli::cli_abort(c(
       "{.fn stack_bands} needs one layer per band.",
       "i" = "Reduce time first, e.g. {.code reduce_over(ds, \"median\", \"t\")}.",
-      "i" = paste("Stacking bands over a time dimension (4D) is not yet",
-                  "supported.")))
+      "i" = paste(
+        "Stacking bands over a time dimension (4D) is not yet",
+        "supported."
+      )
+    ))
+  }
   layers <- lapply(x@bands, function(b) b[[1L]])
-  if (length(layers) == 1L) return(layers[[1L]])
+  if (length(layers) == 1L) {
+    return(layers[[1L]])
+  }
   lazy_stack(layers, along = "band")
 }
 
@@ -752,50 +1026,81 @@ stack_bands <- function(x) {
 #'   dropped.
 #' @return A `LazyDataset` with masked value bands.
 #' @export
-mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE,
-                 join = "exact") {
+mask <- function(
+  x,
+  from = NULL,
+  where,
+  open = 0L,
+  dilate = 0L,
+  drop = TRUE,
+  join = "exact"
+) {
   .assert_class(x, LazyDataset, "LazyDataset")
   if (is.null(from)) {
-    if (length(x@mask_asset) == 0L)
-      cli::cli_abort("no {.arg from} band given and the dataset has no mask_asset")
+    if (length(x@mask_asset) == 0L) {
+      cli::cli_abort(
+        "no {.arg from} band given and the dataset has no mask_asset"
+      )
+    }
     from <- x@mask_asset
   }
-  if (length(from) != 1L || !from %in% names(x@bands))
+  if (length(from) != 1L || !from %in% names(x@bands)) {
     cli::cli_abort("{.arg from} must name one band: {.val {names(x@bands)}}.")
+  }
   pred <- .mask_predicate(where)
 
   masks <- lapply(x@bands[[from]], function(qlr) {
     m <- lazy_map(qlr, fn = pred, dtype = "f32")
-    if (open   > 0L) m <- .morph_open(m, as.integer(open))
-    if (dilate > 0L) m <- .morph_dilate(m, as.integer(dilate))
+    if (open > 0L) {
+      m <- .morph_open(m, as.integer(open))
+    }
+    if (dilate > 0L) {
+      m <- .morph_dilate(m, as.integer(dilate))
+    }
     m
   })
 
-  apply_mask <- function(v, m)
-    lazy_map(v, m, fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
-             dtype = "f32")
+  apply_mask <- function(v, m) {
+    lazy_map(
+      v,
+      m,
+      fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
+      dtype = "f32"
+    )
+  }
 
   newbands <- list()
   for (a in setdiff(names(x@bands), from)) {
     layers <- x@bands[[a]]
-    pair   <- .ds_align_slices(layers, masks, a, from, join = join)
+    pair <- .ds_align_slices(layers, masks, a, from, join = join)
     # names ride on the pairs: an inner join may drop slices, so
     # names(layers) can no longer be assumed to match.
     nm <- names(pair) %||% names(layers)
     newbands[[a]] <- stats::setNames(
-      lapply(pair, function(p) apply_mask(p$v, p$m)), nm)
+      lapply(pair, function(p) apply_mask(p$v, p$m)),
+      nm
+    )
   }
-  if (!drop) newbands[[from]] <- x@bands[[from]]
+  if (!drop) {
+    newbands[[from]] <- x@bands[[from]]
+  }
 
   where_desc <- attr(where, "garry_desc") %||%
     if (is.numeric(where)) paste0("values ", .rng(where)) else "predicate"
-  morph <- c(if (open   > 0L) .glue("open {open}"),
-             if (dilate > 0L) .glue("dilate {dilate}"))
-  detail <- paste(c(.glue("from {from}"), where_desc, morph),
-                  collapse = .glue(" {cli::symbol$bullet %||% '-'} "))
-  LazyDataset(graph = x@graph, bands = newbands,
-              mask_asset = if (drop) character(0) else x@mask_asset,
-              steps = c(x@steps, list(.step("mask", "mask", detail = detail))))
+  morph <- c(
+    if (open > 0L) .glue("open {open}"),
+    if (dilate > 0L) .glue("dilate {dilate}")
+  )
+  detail <- paste(
+    c(.glue("from {from}"), where_desc, morph),
+    collapse = .glue(" {cli::symbol$bullet %||% '-'} ")
+  )
+  LazyDataset(
+    graph = x@graph,
+    bands = newbands,
+    mask_asset = if (drop) character(0) else x@mask_asset,
+    steps = c(x@steps, list(.step("mask", "mask", detail = detail)))
+  )
 }
 
 # Pair each value-band layer with the mask for its slice, by slice name when
@@ -803,11 +1108,16 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE,
 .ds_align_slices <- function(layers, masks, band, from, join = "exact") {
   join <- rlang::arg_match0(join, c("exact", "inner"))
   sl <- names(layers)
-  named <- !is.null(sl) && all(nzchar(sl)) &&
-    !is.null(names(masks)) && all(nzchar(names(masks)))
-  if (named && all(sl %in% names(masks)))
+  named <- !is.null(sl) &&
+    all(nzchar(sl)) &&
+    !is.null(names(masks)) &&
+    all(nzchar(names(masks)))
+  if (named && all(sl %in% names(masks))) {
     return(stats::setNames(
-      lapply(sl, function(s) list(v = layers[[s]], m = masks[[s]])), sl))
+      lapply(sl, function(s) list(v = layers[[s]], m = masks[[s]])),
+      sl
+    ))
+  }
   if (named) {
     # Both sides carry slice names but neither covers the other. The
     # old fall-through paired POSITIONALLY when the counts happened to
@@ -817,24 +1127,32 @@ mask <- function(x, from = NULL, where, open = 0L, dilate = 0L, drop = TRUE,
     common <- intersect(sl, names(masks))
     if (join == "inner" && length(common)) {
       dropped <- c(setdiff(sl, common), setdiff(names(masks), common))
-      if (length(dropped))
+      if (length(dropped)) {
         cli::cli_inform(paste0(
           "aligning {.val {band}} with {.val {from}} on ",
           "{length(common)} shared slice{?s}; dropped: ",
-          "{.val {unique(dropped)}}"))
+          "{.val {unique(dropped)}}"
+        ))
+      }
       return(stats::setNames(
         lapply(common, function(s) list(v = layers[[s]], m = masks[[s]])),
-        common))
+        common
+      ))
     }
     cli::cli_abort(c(
-      paste0("band {.val {band}} and {.val {from}} carry different ",
-             "slice names; slices do not align"),
-      "i" = "pass {.code join = \"inner\"} to pair on the shared dates"))
+      paste0(
+        "band {.val {band}} and {.val {from}} carry different ",
+        "slice names; slices do not align"
+      ),
+      "i" = "pass {.code join = \"inner\"} to pair on the shared dates"
+    ))
   }
-  if (length(layers) != length(masks))
+  if (length(layers) != length(masks)) {
     cli::cli_abort(paste0(
       "band {.val {band}} has {length(layers)} slices but mask band ",
-      "{.val {from}} has {length(masks)}; slices do not align"))
+      "{.val {from}} has {length(masks)}; slices do not align"
+    ))
+  }
   Map(function(v, m) list(v = v, m = m), layers, masks)
 }
 
@@ -863,7 +1181,9 @@ qa_bits <- function(bits) {
 
 # Resolve `where` to a predicate fn(traced array) -> 0/1 f32 mask.
 .mask_predicate <- function(where) {
-  if (is.function(where)) return(where)
+  if (is.function(where)) {
+    return(where)
+  }
   if (is.numeric(where)) {
     vals <- as.numeric(where)
     return(function(f) {
@@ -872,7 +1192,8 @@ qa_bits <- function(bits) {
     })
   }
   cli::cli_abort(
-    "{.arg where} must be a predicate function, a numeric value set, or {.fn qa_bits}")
+    "{.arg where} must be a predicate function, a numeric value set, or {.fn qa_bits}"
+  )
 }
 
 # Binary morphology on a 0/1 mask, disk structuring element. Erosion of a 0/1
@@ -889,10 +1210,11 @@ qa_bits <- function(bits) {
 }
 .dilate <- function(x, r) {
   sel <- .disk_sel(r)
-  focal(x, radius = as.integer(r), fn = function(sh)
-    1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s)))
+  focal(x, radius = as.integer(r), fn = function(sh) {
+    1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))
+  })
 }
-.morph_open   <- function(x, r) .dilate(.erode(x, r), r)
+.morph_open <- function(x, r) .dilate(.erode(x, r), r)
 .morph_dilate <- function(x, r) .dilate(x, r)
 
 # ---------------------------------------------------------------------------
@@ -904,44 +1226,86 @@ qa_bits <- function(bits) {
 
 .ds_scalar_arith <- function(ds, s, op, sym, scalar_first) {
   newbands <- ds@bands
-  for (a in .ds_value_bands(ds))
-    newbands[[a]] <- lapply(ds@bands[[a]], function(lr)
-      if (scalar_first) op(s, lr) else op(lr, s))
-  detail <- if (scalar_first) .glue("{s} {sym} bands")
-            else .glue("bands {sym} {s}")
-  LazyDataset(graph = ds@graph, bands = newbands, mask_asset = ds@mask_asset,
-              steps = c(ds@steps, list(.step("math", "math", detail = detail))))
+  for (a in .ds_value_bands(ds)) {
+    newbands[[a]] <- lapply(ds@bands[[a]], function(lr) {
+      if (scalar_first) op(s, lr) else op(lr, s)
+    })
+  }
+  detail <- if (scalar_first) {
+    .glue("{s} {sym} bands")
+  } else {
+    .glue("bands {sym} {s}")
+  }
+  LazyDataset(
+    graph = ds@graph,
+    bands = newbands,
+    mask_asset = ds@mask_asset,
+    steps = c(ds@steps, list(.step("math", "math", detail = detail)))
+  )
 }
 
 .ds_ds_arith <- function(a, b, op, sym) {
   common <- intersect(.ds_value_bands(a), .ds_value_bands(b))
-  if (length(common) == 0L)
+  if (length(common) == 0L) {
     cli::cli_abort("datasets share no value bands to combine")
+  }
   newbands <- list()
   for (nm in common) {
     la <- a@bands[[nm]]
     lb <- lapply(b@bands[[nm]], .ds_reimport, g = a@graph)
     pair <- .ds_align_slices(la, lb, nm, nm)
     newbands[[nm]] <- stats::setNames(
-      lapply(pair, function(p) op(p$v, p$m)), names(la))
+      lapply(pair, function(p) op(p$v, p$m)),
+      names(la)
+    )
   }
-  LazyDataset(graph = a@graph, bands = newbands, mask_asset = character(0),
-              steps = c(a@steps, list(.step("math", "math",
-                        detail = .glue("bands {sym} dataset")))))
+  LazyDataset(
+    graph = a@graph,
+    bands = newbands,
+    mask_asset = character(0),
+    steps = c(
+      a@steps,
+      list(.step("math", "math", detail = .glue("bands {sym} dataset")))
+    )
+  )
 }
 
 # Comparisons, ^ and %% ride the same per-slice machinery: `f` here is
 # the BASE operator, whose per-slice application dispatches back to the
 # LazyRaster method (comparisons -> f32 0/1 masks there).
-for (op_name in c("+", "-", "*", "/",
-                  ">", "<", ">=", "<=", "==", "!=", "^", "%%")) {
+for (op_name in c(
+  "+",
+  "-",
+  "*",
+  "/",
+  ">",
+  "<",
+  ">=",
+  "<=",
+  "==",
+  "!=",
+  "^",
+  "%%"
+)) {
   op_fn <- get(op_name, envir = baseenv())
   S7::method(op_fn, list(LazyDataset, LazyDataset)) <-
-    local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_ds_arith(e1, e2, f, s) })
+    local({
+      f <- op_fn
+      s <- op_name
+      function(e1, e2) .ds_ds_arith(e1, e2, f, s)
+    })
   S7::method(op_fn, list(LazyDataset, S7::class_numeric)) <-
-    local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_scalar_arith(e1, e2, f, s, FALSE) })
+    local({
+      f <- op_fn
+      s <- op_name
+      function(e1, e2) .ds_scalar_arith(e1, e2, f, s, FALSE)
+    })
   S7::method(op_fn, list(S7::class_numeric, LazyDataset)) <-
-    local({ f <- op_fn; s <- op_name; function(e1, e2) .ds_scalar_arith(e2, e1, f, s, TRUE) })
+    local({
+      f <- op_fn
+      s <- op_name
+      function(e1, e2) .ds_scalar_arith(e2, e1, f, s, TRUE)
+    })
 }
 
 #' @rawNamespace S3method(Math, "garry::LazyDataset", .lazy_math_dataset)

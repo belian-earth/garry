@@ -45,8 +45,11 @@ NULL
       cls = class(n)[[1L]],
       parents = unname(local[as.character(n@parents)]),
       dtype = n@grid@dtype,
-      pdims = names(graph_get(graph, n@parents[[1L]])@grid@dims))
-    if (S7::S7_inherits(n, MapNode)) base$fn <- norm_fn(n@fn)
+      pdims = names(graph_get(graph, n@parents[[1L]])@grid@dims)
+    )
+    if (S7::S7_inherits(n, MapNode)) {
+      base$fn <- norm_fn(n@fn)
+    }
     if (S7::S7_inherits(n, FocalNode)) {
       base$fn <- norm_fn(n@fn)
       base$radius <- n@radius
@@ -79,10 +82,14 @@ NULL
     }
     base
   })
-  sig <- list(kind = s@kind, halo = s@halo, out_pad = s@out_pad,
-              parts = parts,
-              n_inputs = length(s@input_nodes),
-              exports = unname(local[as.character(s@exports)]))
+  sig <- list(
+    kind = s@kind,
+    halo = s@halo,
+    out_pad = s@out_pad,
+    parts = parts,
+    n_inputs = length(s@input_nodes),
+    exports = unname(local[as.character(s@exports)])
+  )
   # In-memory hash: the previous tempfile + tools::md5sum round-trip
   # cost a file write/read/unlink per call, and the fuse-eligibility
   # loop calls this once per single-input compute stage.
@@ -100,9 +107,12 @@ NULL
 # is 8 whether raw or doubles (the old use_raw flag booked f64 regions
 # at half their size).
 .store_region_mb <- function(chunk_dim, grid_dims, pad, nb, bytes) {
-  prod(pmin(as.numeric(chunk_dim),
-            as.numeric(grid_dims[c("x", "y")])) + 2 * pad) *
-    max(1, nb) * bytes / 2^20
+  prod(
+    pmin(as.numeric(chunk_dim), as.numeric(grid_dims[c("x", "y")])) + 2 * pad
+  ) *
+    max(1, nb) *
+    bytes /
+    2^20
 }
 
 # Element bytes a stored region of `dtype` costs under the run's store
@@ -129,17 +139,26 @@ NULL
 #' @return As [execute_plan()].
 #' @seealso [collect()], [garry_daemons()]
 #' @export
-execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NULL,
-                               wspec = NULL) {
+execute_plan_mirai <- function(
+  plan,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL
+) {
   .garry_opt_check()
   # Distributed execution runs on the garry_daemons() split pools: read/warp
   # tasks route to the read pool — where anvl/PJRT never loads, so a reader
   # stays at ~60 MB — and compute tasks to a small pool of fat daemons,
   # confining per-chunk working sets to few processes.
-  if (!garry_daemons_set())
-    .garry_error(paste0(
-      "no garry daemon pools are running; call garry_daemons() first"),
-      "garry_scheduler_error")
+  if (!garry_daemons_set()) {
+    .garry_error(
+      paste0(
+        "no garry daemon pools are running; call garry_daemons() first"
+      ),
+      "garry_scheduler_error"
+    )
+  }
   n_read <- .gd_n_compute("garry_read")
   n_comp <- .comp_n()
   read_prof <- "garry_read"
@@ -156,47 +175,72 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # EVERY daemon to the scan working set).
   prof_depth <- 2L
   prof_slots <- new.env(parent = emptyenv())
-  for (p in comp_profs) prof_slots[[p]] <- 0L
-  prof_warm <- new.env(parent = emptyenv())      # "prof\x1fck" -> TRUE
+  for (p in comp_profs) {
+    prof_slots[[p]] <- 0L
+  }
+  prof_warm <- new.env(parent = emptyenv()) # "prof\x1fck" -> TRUE
   prof_cold_busy <- new.env(parent = emptyenv()) # prof -> TRUE while compiling
-  scan_profs <- character(0)                     # set after plan_has_scan
+  scan_profs <- character(0) # set after plan_has_scan
   .pw_key <- function(p, ck) paste0(p, "\x1f", ck)
   pick_comp_prof <- function(t) {
     is_cold <- !is.null(t$ck) && isTRUE(t$scan)
-    cands <- if (is_cold && length(scan_profs)) scan_profs
-             else if (length(scan_profs) &&
-                      length(comp_profs) > length(scan_profs) && !is_cold)
-               # ordinary kernels prefer the non-scan profiles (keeps
-               # them lean); scan profiles remain a fallback
-               c(setdiff(comp_profs, scan_profs), scan_profs)
-             else comp_profs
+    cands <- if (is_cold && length(scan_profs)) {
+      scan_profs
+    } else if (
+      length(scan_profs) &&
+        length(comp_profs) > length(scan_profs) &&
+        !is_cold
+    ) {
+      # ordinary kernels prefer the non-scan profiles (keeps
+      # them lean); scan profiles remain a fallback
+      c(setdiff(comp_profs, scan_profs), scan_profs)
+    } else {
+      comp_profs
+    }
     if (is_cold) {
       # a warm profile first (exact key-only launch), least-loaded
-      best <- NULL; bn <- prof_depth
+      best <- NULL
+      bn <- prof_depth
       for (p in cands) {
         v <- prof_slots[[p]]
         if (v < bn && isTRUE(prof_warm[[.pw_key(p, t$ck)]])) {
-          bn <- v; best <- p
+          bn <- v
+          best <- p
         }
       }
-      if (!is.null(best)) return(best)
+      if (!is.null(best)) {
+        return(best)
+      }
       # else a designated profile not currently compiling
       for (p in cands) {
-        if (prof_slots[[p]] < prof_depth &&
-            !isTRUE(prof_cold_busy[[p]])) return(p)
+        if (
+          prof_slots[[p]] < prof_depth &&
+            !isTRUE(prof_cold_busy[[p]])
+        ) {
+          return(p)
+        }
       }
       return(NULL)
     }
-    best <- NULL; bn <- prof_depth
+    best <- NULL
+    bn <- prof_depth
     for (p in cands) {
       v <- prof_slots[[p]]
-      if (v < bn) { bn <- v; best <- p }
+      if (v < bn) {
+        bn <- v
+        best <- p
+      }
     }
     best
   }
-  .garry_abi_check(unique(c(profiles,
-    if (tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE))
-      "garry_write")))
+  .garry_abi_check(unique(c(
+    profiles,
+    if (
+      tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE)
+    ) {
+      "garry_write"
+    }
+  )))
   # Back-pressure: reads throttle on slots + resident-store bytes;
   # compute launches are gated by a BYTE budget (below) — per-task
   # resident estimates against the live RAM pool — so many small
@@ -204,8 +248,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # width while big fused medians (~350 MB each) self-limit.
   # compute_inflight remains an optional hard count cap on top.
   cap_read <- max(2L * n_read, 4L)
-  cap_comp <- 2L * n_comp                    # comp-pool slot depth
-  cap_comp_opt <- garry_opt("compute_inflight")  # optional hard cap
+  cap_comp <- 2L * n_comp # comp-pool slot depth
+  cap_comp_opt <- garry_opt("compute_inflight") # optional hard cap
   # In-flight compute is bounded by the RAM pool (refresh_mem_budgets,
   # below) and the cap_comp slot count -- NOT a fixed per-daemon constant.
   # ram_budget_mb is the per-CHUNK size target (the chunking pass, passes.R);
@@ -231,12 +275,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # back what the previous plan's arenas are hoarding — a tail plan
   # otherwise starts with the fleet standing at the predict plan's
   # high-water).
-  .pool_broadcast(quote({
-    suppressMessages(library(garry))
-    options(garry.read_fail = rf, garry.read_retry = rr)
-    garry::.daemon_hygiene()
-  }), profiles = profiles, rf = garry_opt("read_fail"),
-  rr = garry_opt("read_retry"))
+  .pool_broadcast(
+    quote({
+      suppressMessages(library(garry))
+      options(garry.read_fail = rf, garry.read_retry = rr)
+      garry::.daemon_hygiene()
+    }),
+    profiles = profiles,
+    rf = garry_opt("read_fail"),
+    rr = garry_opt("read_retry")
+  )
 
   graph <- plan@graph
   run_id <- as.integer(stats::runif(1, 1, 1e8))
@@ -252,19 +300,36 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # or unfused sinks are not streamed; they fall to the host tail,
   # where .exec_write_sink applies the same device quantizer. Built
   # BEFORE the task loop: fused read tasks bind fuse$wq at build time.
-  wq <- .exec_wq(wspec, if (is.null(nodata)) numeric(0)
-                        else as.numeric(nodata))
+  wq <- .exec_wq(
+    wspec,
+    if (is.null(nodata)) {
+      numeric(0)
+    } else {
+      as.numeric(nodata)
+    }
+  )
   wq_keys_of <- list()
   if (!is.null(wq)) {
     snk <- plan@stages[[plan@sink]]
-    all_nids <- if (length(plan@sinks) > 0L) plan@sinks
-      else snk@members[[length(snk@members)]]
-    consumed <- unique(unlist(lapply(plan@stages, function(s2)
-      vapply(s2@input_nodes, .key, character(1)))))
+    all_nids <- if (length(plan@sinks) > 0L) {
+      plan@sinks
+    } else {
+      snk@members[[length(snk@members)]]
+    }
+    consumed <- unique(unlist(lapply(plan@stages, function(s2) {
+      vapply(s2@input_nodes, .key, character(1))
+    })))
     for (nid in unique(all_nids)) {
-      if (.key(nid) %in% consumed) next
-      st <- plan@stages[[max(which(vapply(plan@stages, function(s2)
-        nid %in% s2@members, logical(1))))]]
+      if (.key(nid) %in% consumed) {
+        next
+      }
+      st <- plan@stages[[max(which(vapply(
+        plan@stages,
+        function(s2) {
+          nid %in% s2@members
+        },
+        logical(1)
+      )))]]
       k <- .key(st@id)
       wq_keys_of[[k]] <- unique(c(wq_keys_of[[k]], .key(nid)))
     }
@@ -275,18 +340,25 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # .apply_fuse) may stream.
   .wq_stream_ok <- function(st, nid) {
     is.null(wq) ||
-      (.key(nid) %in% (wq_keys_of[[.key(st@id)]] %||% character(0)) &&
-         st@kind %in% c("compute", "reduce_partial"))
+      (.key(nid) %in%
+        (wq_keys_of[[.key(st@id)]] %||% character(0)) &&
+        st@kind %in% c("compute", "reduce_partial"))
   }
   # Inter-stage store is POSIX shared memory (mori): daemons pin every
   # region they created for this run and release them once the host is done
   # (regions outlive tasks, not the run); host-side handles die with
   # `chunk_vals`. Both pools pin regions (readers: windows; computers:
   # results).
-  on.exit(for (p in profiles)
-    try(mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
-        silent = TRUE), add = TRUE)
-  chunk_vals <- new.env(parent = emptyenv())   # task key -> shared value
+  on.exit(
+    for (p in profiles) {
+      try(
+        mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
+        silent = TRUE
+      )
+    },
+    add = TRUE
+  )
+  chunk_vals <- new.env(parent = emptyenv()) # task key -> shared value
 
   # ---- fetch/assemble split (phase 12) --------------------------------
   # GTI source stages over remote locations split into per-item-asset
@@ -297,30 +369,48 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # local speed. Requires the index sidecar gti_index_create() writes
   # and garry's own "slice = '...'" FILTER form; anything else falls
   # back to direct remote reads.
-  fetch_mode <- rlang::arg_match0(garry_opt("fetch"), c("auto", "direct", "force"),
-                                  arg_nm = "garry.fetch")
+  fetch_mode <- rlang::arg_match0(
+    garry_opt("fetch"),
+    c("auto", "direct", "force"),
+    arg_nm = "garry.fetch"
+  )
   fetch_root <- NULL
-  fetch_state <- new.env(parent = emptyenv())  # orig index -> local info
+  fetch_state <- new.env(parent = emptyenv()) # orig index -> local info
   fetch_n_idx <- 0L
-  fetch_made <- new.env(parent = emptyenv())   # fetch task key -> TRUE
-  fetch_files_of <- new.env(parent = emptyenv())  # sid -> files to unlink
-  fetch_reads_left <- new.env(parent = emptyenv())  # sid -> open read tasks
-  on.exit(if (!is.null(fetch_root))
-    unlink(fetch_root, recursive = TRUE), add = TRUE)
+  fetch_made <- new.env(parent = emptyenv()) # fetch task key -> TRUE
+  fetch_files_of <- new.env(parent = emptyenv()) # sid -> files to unlink
+  fetch_reads_left <- new.env(parent = emptyenv()) # sid -> open read tasks
+  on.exit(
+    if (!is.null(fetch_root)) {
+      unlink(fetch_root, recursive = TRUE)
+    },
+    add = TRUE
+  )
 
   prepare_fetch <- function(rpath, roo, rnodata, grid) {
-    if (fetch_mode == "direct" || !startsWith(rpath, "GTI:")) return(NULL)
+    if (fetch_mode == "direct" || !startsWith(rpath, "GTI:")) {
+      return(NULL)
+    }
     ipath <- sub("^GTI:", "", rpath)
     st <- fetch_state[[ipath]]
     if (is.null(st)) {
       meta_f <- paste0(ipath, ".meta.rds")
-      if (!file.exists(meta_f)) return(NULL)
+      if (!file.exists(meta_f)) {
+        return(NULL)
+      }
       meta <- readRDS(meta_f)
       ent <- meta$entries
-      if (!all(c("slice", "location") %in% names(ent))) return(NULL)
-      do_fetch <- if (fetch_mode == "force") rep(TRUE, nrow(ent))
-                  else grepl("^/vsi", ent$location)
-      if (!any(do_fetch)) return(NULL)
+      if (!all(c("slice", "location") %in% names(ent))) {
+        return(NULL)
+      }
+      do_fetch <- if (fetch_mode == "force") {
+        rep(TRUE, nrow(ent))
+      } else {
+        grepl("^/vsi", ent$location)
+      }
+      if (!any(do_fetch)) {
+        return(NULL)
+      }
       if (is.null(fetch_root)) {
         base <- if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
         fetch_root <<- file.path(base, .glue("garry-fetch-{run_id}"))
@@ -329,72 +419,112 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       fetch_n_idx <<- fetch_n_idx + 1L
       sub <- file.path(fetch_root, .glue("i{fetch_n_idx}"))
       dir.create(sub)
-      dst <- file.path(sub, .glue(
-        "r{formatC(seq_len(nrow(ent)), width = 4, flag = '0')}.tif"))
+      dst <- file.path(
+        sub,
+        .glue(
+          "r{formatC(seq_len(nrow(ent)), width = 4, flag = '0')}.tif"
+        )
+      )
       lent <- ent
       lent$location <- ifelse(do_fetch, dst, ent$location)
       lpath <- file.path(sub, basename(ipath))
-      gti_index_create(lent, lpath, crs = meta$crs,
-                       layer = meta$layer %||% "index")
-      st <- list(id = fetch_n_idx, local = paste0("GTI:", lpath),
-                 src = ent$location, dst = dst, do = do_fetch,
-                 slice = ent$slice)
+      gti_index_create(
+        lent,
+        lpath,
+        crs = meta$crs,
+        layer = meta$layer %||% "index"
+      )
+      st <- list(
+        id = fetch_n_idx,
+        local = paste0("GTI:", lpath),
+        src = ent$location,
+        dst = dst,
+        do = do_fetch,
+        slice = ent$slice
+      )
       fetch_state[[ipath]] <- st
     }
     fl <- grep("^FILTER=", roo, value = TRUE)
-    if (length(fl) != 1L) return(NULL)
+    if (length(fl) != 1L) {
+      return(NULL)
+    }
     slval <- regmatches(fl, regexec("^FILTER=slice = '(.*)'$", fl))[[1]][[2]]
-    if (is.na(slval)) return(NULL)
+    if (is.na(slval)) {
+      return(NULL)
+    }
     rows <- which(st$slice == slval & st$do)
     keys <- .glue("f{st$id}_{rows}")
     for (k in seq_along(rows)) {
       key <- keys[[k]]
-      if (!is.null(fetch_made[[key]])) next
+      if (!is.null(fetch_made[[key]])) {
+        next
+      }
       fetch_made[[key]] <- TRUE
       local({
-        src <- st$src[[rows[[k]]]]; dst <- st$dst[[rows[[k]]]]
-        ex <- grid@extent; cr <- grid@crs; nd <- rnodata
-        tr <- grid@transform[[2L]]      # target x resolution: decimate coarse fetches
-        add_task(key, character(0), "read", prio = 1L,
-                 launch = function(prof) {
+        src <- st$src[[rows[[k]]]]
+        dst <- st$dst[[rows[[k]]]]
+        ex <- grid@extent
+        cr <- grid@crs
+        nd <- rnodata
+        tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
+        add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
           mirai::mirai(
-            garry::.daemon_fetch_window(src, dst, ex, cr, nodata = nd,
-                                        target_res = tr),
+            garry::.daemon_fetch_window(
+              src,
+              dst,
+              ex,
+              cr,
+              nodata = nd,
+              target_res = tr
+            ),
             # dispatch-time hook: a fetch launched deep into a long
             # drain re-signs a near-expiry MPC token (io R4)
-            src = .mpc_resign(src), dst = dst, ex = ex, cr = cr, nd = nd,
-            tr = tr, .compute = prof)
+            src = .mpc_resign(src),
+            dst = dst,
+            ex = ex,
+            cr = cr,
+            nd = nd,
+            tr = tr,
+            .compute = prof
+          )
         })
       })
     }
-    list(deps = keys, local = st$local,
-         files = st$dst[rows])
+    list(deps = keys, local = st$local, files = st$dst[rows])
   }
-
 
   # Consumer index in ONE pass over the stage list. Per-stage Filter
   # scans are O(stages^2) in S7 accessor calls — tens of seconds at
   # the ~2000-stage scale of a many-band multi-export plan.
   stage_kind <- vapply(plan@stages, function(s) s@kind, character(1))
   consumers_of <- vector("list", length(plan@stages))
-  for (t2 in plan@stages)
-    for (i in t2@inputs)
+  for (t2 in plan@stages) {
+    for (i in t2@inputs) {
       consumers_of[[i]] <- c(consumers_of[[i]], t2@id)
+    }
+  }
   # Node id -> producing stage id (first-wins, matching .exec_in_meta's
   # Find over creation order: a spatially-reduced root is a member of
   # both its partial and combine stages, and the PARTIAL produces it).
   node_stage <- integer(length(plan@graph@nodes))
-  for (t2 in rev(plan@stages)) node_stage[t2@members] <- t2@id
-  warp_only <- vapply(plan@stages, function(s) {
-    cons <- consumers_of[[s@id]]
-    s@kind == "source_read" && length(cons) > 0L &&
-      all(stage_kind[cons] == "warp") &&
-      plan@sink != s@id &&
-      # A source that is itself a requested sink still needs reading
-      # even when its only consumers are warps (matches execute_plan's
-      # guard; without it multi-export sink retrieval finds no chunks).
-      !any(plan@sinks %in% s@members)
-  }, logical(1))
+  for (t2 in rev(plan@stages)) {
+    node_stage[t2@members] <- t2@id
+  }
+  warp_only <- vapply(
+    plan@stages,
+    function(s) {
+      cons <- consumers_of[[s@id]]
+      s@kind == "source_read" &&
+        length(cons) > 0L &&
+        all(stage_kind[cons] == "warp") &&
+        plan@sink != s@id &&
+        # A source that is itself a requested sink still needs reading
+        # even when its only consumers are warps (matches execute_plan's
+        # guard; without it multi-export sink retrieval finds no chunks).
+        !any(plan@sinks %in% s@members)
+    },
+    logical(1)
+  )
 
   # Build the task table. Combine stages are host-side, handled at
   # drain. The table is an ENVIRONMENT: named-list `[[<-` inserts do a
@@ -404,15 +534,32 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # which the launch order below uses as its tie-break.
   tasks <- new.env(parent = emptyenv())
   n_task <- 0L
-  add_task <- function(key, deps, pool, launch, mb = 0, prio = 2L,
-                       dev = "cpu", store_mb = 0, ck = NULL,
-                       scan = FALSE) {
+  add_task <- function(
+    key,
+    deps,
+    pool,
+    launch,
+    mb = 0,
+    prio = 2L,
+    dev = "cpu",
+    store_mb = 0,
+    ck = NULL,
+    scan = FALSE
+  ) {
     n_task <<- n_task + 1L
-    tasks[[key]] <- list(deps = deps, pool = pool, launch = launch,
-                         mb = mb, prio = prio, dev = dev,
-                         store_mb = store_mb, seq = n_task, ck = ck,
-                         scan = scan,
-                         state = "pending")
+    tasks[[key]] <- list(
+      deps = deps,
+      pool = pool,
+      launch = launch,
+      mb = mb,
+      prio = prio,
+      dev = dev,
+      store_mb = store_mb,
+      seq = n_task,
+      ck = ck,
+      scan = scan,
+      state = "pending"
+    )
   }
   # For coarse-reading (split) source stages: task key per compute chunk,
   # and (mori store) each compute chunk's element name in the shared
@@ -429,9 +576,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # execution — a multi-stage tail over a 22-band cube accumulates
   # gigabytes of dead regions and OOMs where its live frontier is
   # small.
-  task_ins <- new.env(parent = emptyenv())       # task -> store deps consumed
-  store_users <- new.env(parent = emptyenv())    # task -> n consumers left
-  task_stage_of <- new.env(parent = emptyenv())  # task -> store stage id
+  task_ins <- new.env(parent = emptyenv()) # task -> store deps consumed
+  store_users <- new.env(parent = emptyenv()) # task -> n consumers left
+  task_stage_of <- new.env(parent = emptyenv()) # task -> store stage id
   stage_store_mb <- new.env(parent = emptyenv()) # read stage -> window MB
 
   # Compute-on-read (phase 12b, CPU only): a compute stage with ONE
@@ -445,26 +592,45 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # returned as a side table the task build consumes.
   # Shape the compute pool for THIS plan before costing placement
   # against it (scan plans get fat masks, kernel fleets narrow ones).
-  plan_has_scan <- any(vapply(plan@stages, function(s)
-    any(vapply(s@members, function(id)
-      S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1))),
-    logical(1)))
+  plan_has_scan <- any(vapply(
+    plan@stages,
+    function(s) {
+      any(vapply(
+        s@members,
+        function(id) {
+          S7::S7_inherits(graph_get(graph, id), ScanNode)
+        },
+        logical(1)
+      ))
+    },
+    logical(1)
+  ))
   # Scan confinement: the first K = garry.scan_profiles profiles are
   # designated for scan tasks; pick_comp_prof routes them nowhere
   # else, so scan live/retained memory is K x working set by
   # construction (workstream B).
-  scan_profs <- if (plan_has_scan)
-    comp_profs[seq_len(min(as.integer(garry_opt("scan_profiles")),
-                           length(comp_profs)))] else character(0)
+  scan_profs <- if (plan_has_scan) {
+    comp_profs[seq_len(min(
+      as.integer(garry_opt("scan_profiles")),
+      length(comp_profs)
+    ))]
+  } else {
+    character(0)
+  }
   .comp_pool_shape(n_comp, plan_has_scan, n_scan = length(scan_profs))
-  placement <- .plan_placement(plan, consumers_of, warp_only,
-                               n_read = n_read, n_comp = n_comp,
-                               reader_threads = .garry_state$reader_threads,
-                               comp_threads = .garry_state$comp_threads,
-                               avail_mb = .garry_ram_avail_mb(),
-                               mode = garry_opt("placement"))
-  fuse_of <- placement$by_source     # source sid -> fuse spec
-  fused_cid <- placement$fused       # fused compute sid -> TRUE
+  placement <- .plan_placement(
+    plan,
+    consumers_of,
+    warp_only,
+    n_read = n_read,
+    n_comp = n_comp,
+    reader_threads = .garry_state$reader_threads,
+    comp_threads = .garry_state$comp_threads,
+    avail_mb = .garry_ram_avail_mb(),
+    mode = garry_opt("placement")
+  )
+  fuse_of <- placement$by_source # source sid -> fuse spec
+  fused_cid <- placement$fused # fused compute sid -> TRUE
 
   # Jit warm-up specs, one per compute stage: the modal
   # (full) chunk shape, compiled on every compute daemon at run start.
@@ -475,50 +641,73 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # producer subtrees (e.g. per-band reads) enqueue contiguously and
   # each band's fused tail overlaps the next band's read drain.
   for (s in plan@stages[.stage_launch_order(plan)]) {
-    if (s@kind == "reduce_combine") next
-    if (s@kind == "source_read" && warp_only[[s@id]]) next
-    if (!is.null(fused_cid[[.key(s@id)]])) next   # runs on its read
+    if (s@kind == "reduce_combine") {
+      next
+    }
+    if (s@kind == "source_read" && warp_only[[s@id]]) {
+      next
+    }
+    if (!is.null(fused_cid[[.key(s@id)]])) {
+      next
+    } # runs on its read
     it <- chunk_iter(s@chunks)
 
     if (s@kind %in% c("source_read", "warp")) {
       if (s@kind == "warp") {
         wnode <- graph_get(graph, s@members[[1L]])
         snode <- graph_get(graph, wnode@parents[[1L]])
-        vrt <- gdal_warp_vrt(snode@path, snode@band, wnode@target_grid,
-                             wnode@resampling, src_nodata = snode@nodata)
-        rpath <- vrt; rband <- 1L; rnodata <- snode@nodata
+        vrt <- gdal_warp_vrt(
+          snode@path,
+          snode@band,
+          wnode@target_grid,
+          wnode@resampling,
+          src_nodata = snode@nodata
+        )
+        rpath <- vrt
+        rband <- 1L
+        rnodata <- snode@nodata
         roo <- character(0)
-        rsc <- snode@scale; rof <- snode@offset
+        rsc <- snode@scale
+        rof <- snode@offset
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
-        rband <- node@band; rnodata <- node@nodata
+        rband <- node@band
+        rnodata <- node@nodata
         roo <- node@open_options
-        rsc <- node@scale; rof <- node@offset
+        rsc <- node@scale
+        rof <- node@offset
       }
       skey <- .key(s@members[[1L]])
       fspec <- fuse_of[[.key(s@id)]]
-      oid <- s@id                    # store identity: fused stage id
+      oid <- s@id # store identity: fused stage id
       if (!is.null(fspec)) {
         oid <- fspec$cid
         skey <- fspec$out_key
         # Fused SINK: quantize in .apply_fuse when this fused export is
         # a cleared sink (no other consumer reads the store value).
-        if (!is.null(wq) &&
+        if (
+          !is.null(wq) &&
             fspec$out_key %in%
-              (wq_keys_of[[.key(fspec$cid)]] %||% character(0)))
+              (wq_keys_of[[.key(fspec$cid)]] %||% character(0))
+        ) {
           fspec$wq <- wq[c("scale", "offset", "nodata", "dtype")]
+        }
       }
       # Raw read gate (D21): halo-free windows whose consumers see f32
       # values — the node's own dtype for pure reads, the fused
       # kernel's input dtype for compute-on-read. Non-f32 dtypes keep
       # the matrix path (bitwise consumers, integer exactness).
-      raw_in <- use_raw && s@chunks@halo == 0L &&
-        identical(if (is.null(fspec)) {
-          graph_get(graph, s@members[[1L]])@grid@dtype
-        } else {
-          fspec$dtype
-        }, "f32")
+      raw_in <- use_raw &&
+        s@chunks@halo == 0L &&
+        identical(
+          if (is.null(fspec)) {
+            graph_get(graph, s@members[[1L]])@grid@dtype
+          } else {
+            fspec$dtype
+          },
+          "f32"
+        )
       fetch_deps <- character(0)
       read_pool <- "read"
       # A FUSED read's kernel working set rides the in-flight compute
@@ -538,8 +727,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           read_pool <- "comp"
           task_mb_read <- max(
             task_mb_read,
-            prod(pmin(as.numeric(s@chunks@chunk_dim),
-                      as.numeric(s@grid@dims[c("x", "y")]))) * 24 / 2^20)
+            prod(pmin(
+              as.numeric(s@chunks@chunk_dim),
+              as.numeric(s@grid@dims[c("x", "y")])
+            )) *
+              24 /
+              2^20
+          )
         }
       }
       # Bytes this read pins in the store from launch until its last
@@ -552,46 +746,93 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # the export's planes, or a fused multi-band read is over-charged
       # by the band count and the budget serialises the fleet.
       store_mb_read <- if (is.null(fspec)) {
-        .store_region_mb(s@chunks@chunk_dim, s@grid@dims, s@chunks@halo,
-                         .node_outer_nb(graph, s@members[[1L]]),
-                         .store_bytes_of(
-                           graph_get(graph, s@members[[1L]])@grid@dtype,
-                           use_raw))
+        .store_region_mb(
+          s@chunks@chunk_dim,
+          s@grid@dims,
+          s@chunks@halo,
+          .node_outer_nb(graph, s@members[[1L]]),
+          .store_bytes_of(
+            graph_get(graph, s@members[[1L]])@grid@dtype,
+            use_raw
+          )
+        )
       } else {
-        .store_region_mb(s@chunks@chunk_dim, s@grid@dims,
-                         fspec$out_pad %||% 0L, fspec$out_nb %||% 1,
-                         .store_bytes_of(fspec$out_dtype %||% "f32",
-                                         use_raw))
+        .store_region_mb(
+          s@chunks@chunk_dim,
+          s@grid@dims,
+          fspec$out_pad %||% 0L,
+          fspec$out_nb %||% 1,
+          .store_bytes_of(fspec$out_dtype %||% "f32", use_raw)
+        )
       }
       stage_store_mb[[.key(oid)]] <- store_mb_read
       split_cg <- .exec_split_cg(plan, s, consumers_of[[s@id]])
       if (is.null(split_cg)) {
-        if (length(fetch_deps))
+        if (length(fetch_deps)) {
           fetch_reads_left[[.key(s@id)]] <- nrow(it)
-        if (!is.null(fspec))
+        }
+        if (!is.null(fspec)) {
           source_deps[[.key(oid)]] <-
             .glue("s{s@id}_c{seq_len(nrow(it))}")
+        }
         for (j in seq_len(nrow(it))) {
           local({
-            sid <- s@id; jj <- j; cg <- s@chunks; core <- it[jj, ]
-            p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-            fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
-            sc <- rsc; of <- rof
+            sid <- s@id
+            jj <- j
+            cg <- s@chunks
+            core <- it[jj, ]
+            p2 <- rpath
+            b2 <- rband
+            nd <- rnodata
+            k2 <- skey
+            oo <- roo
+            fs <- fspec
+            oid2 <- oid
+            rr <- raw_in
+            sr <- use_raw
+            sc <- rsc
+            of <- rof
             key <- .glue("s{sid}_c{jj}")
-            add_task(key, fetch_deps, read_pool, mb = task_mb_read,
-                     store_mb = store_mb_read,
-                     launch = function(prof) {
-              mirai::mirai(
-                garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
-                                              reg, open_options = oo,
-                                              fuse = fs, read_raw = rr,
-                                              store_raw = sr,
-                                              scale = sc, offset = of),
-                p2 = p2, b2 = b2, nd = nd, cg = cg, core = core, k2 = k2,
-                oo = oo, reg = .glue("r{run_id}_{key}"), fs = fs,
-                rr = rr, sr = sr, sc = sc, of = of,
-                .compute = prof)
-            })
+            add_task(
+              key,
+              fetch_deps,
+              read_pool,
+              mb = task_mb_read,
+              store_mb = store_mb_read,
+              launch = function(prof) {
+                mirai::mirai(
+                  garry::.daemon_run_source_shm(
+                    p2,
+                    b2,
+                    nd,
+                    cg,
+                    core,
+                    k2,
+                    reg,
+                    open_options = oo,
+                    fuse = fs,
+                    read_raw = rr,
+                    store_raw = sr,
+                    scale = sc,
+                    offset = of
+                  ),
+                  p2 = p2,
+                  b2 = b2,
+                  nd = nd,
+                  cg = cg,
+                  core = core,
+                  k2 = k2,
+                  oo = oo,
+                  reg = .glue("r{run_id}_{key}"),
+                  fs = fs,
+                  rr = rr,
+                  sr = sr,
+                  sc = sc,
+                  of = of,
+                  .compute = prof
+                )
+              }
+            )
             task_stage_of[[key]] <- oid2
           })
         }
@@ -603,62 +844,115 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         its <- chunk_iter(split_cg)
         # A fused kernel consumes the halo; its output carries the
         # fused stage's out_pad ring (D22), 0 in the common case.
-        H2 <- if (is.null(fspec)) 2L * split_cg@halo
-              else 2L * (fspec$out_pad %||% 0L)
+        H2 <- if (is.null(fspec)) {
+          2L * split_cg@halo
+        } else {
+          2L * (fspec$out_pad %||% 0L)
+        }
         dep_of <- character(nrow(its))
         elt_of <- .glue("{skey}\x1f{seq_len(nrow(its))}")
-        if (length(fetch_deps))
+        if (length(fetch_deps)) {
           fetch_reads_left[[.key(s@id)]] <- nrow(it)
+        }
         for (r in seq_len(nrow(it))) {
           members <- .exec_split_members(its, it[r, ])
           dep_of[members] <- .glue("s{s@id}_r{r}")
           local({
-            sid <- s@id; rr2 <- r; cg <- s@chunks; core <- it[rr2, ]
-            p2 <- rpath; b2 <- rband; nd <- rnodata; k2 <- skey; oo <- roo
-            fs <- fspec; oid2 <- oid; rr <- raw_in; sr <- use_raw
-            sc <- rsc; of <- rof
+            sid <- s@id
+            rr2 <- r
+            cg <- s@chunks
+            core <- it[rr2, ]
+            p2 <- rpath
+            b2 <- rband
+            nd <- rnodata
+            k2 <- skey
+            oo <- roo
+            fs <- fspec
+            oid2 <- oid
+            rr <- raw_in
+            sr <- use_raw
+            sc <- rsc
+            of <- rof
             key <- .glue("s{sid}_r{rr2}")
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
             parts <- lapply(members, function(j) {
-              list(r0 = its$y_off[[j]] - core$y_off,
-                   c0 = its$x_off[[j]] - core$x_off,
-                   nr = its$y_size[[j]] + H2, nc = its$x_size[[j]] + H2,
-                   elt = elt_of[[j]])
+              list(
+                r0 = its$y_off[[j]] - core$y_off,
+                c0 = its$x_off[[j]] - core$x_off,
+                nr = its$y_size[[j]] + H2,
+                nc = its$x_size[[j]] + H2,
+                elt = elt_of[[j]]
+              )
             })
-            add_task(key, fetch_deps, read_pool, mb = task_mb_read,
-                     store_mb = store_mb_read,
-                     launch = function(prof) {
-              mirai::mirai(
-                garry::.daemon_run_source_shm(p2, b2, nd, cg, core, k2,
-                                              reg, parts = parts,
-                                              open_options = oo,
-                                              fuse = fs, read_raw = rr,
-                                              store_raw = sr,
-                                              scale = sc, offset = of),
-                p2 = p2, b2 = b2, nd = nd, cg = cg, core = core,
-                k2 = k2, oo = oo, parts = parts, fs = fs,
-                rr = rr, sr = sr, sc = sc, of = of,
-                reg = .glue("r{run_id}_{key}"),
-                .compute = prof)
-            })
+            add_task(
+              key,
+              fetch_deps,
+              read_pool,
+              mb = task_mb_read,
+              store_mb = store_mb_read,
+              launch = function(prof) {
+                mirai::mirai(
+                  garry::.daemon_run_source_shm(
+                    p2,
+                    b2,
+                    nd,
+                    cg,
+                    core,
+                    k2,
+                    reg,
+                    parts = parts,
+                    open_options = oo,
+                    fuse = fs,
+                    read_raw = rr,
+                    store_raw = sr,
+                    scale = sc,
+                    offset = of
+                  ),
+                  p2 = p2,
+                  b2 = b2,
+                  nd = nd,
+                  cg = cg,
+                  core = core,
+                  k2 = k2,
+                  oo = oo,
+                  parts = parts,
+                  fs = fs,
+                  rr = rr,
+                  sr = sr,
+                  sc = sc,
+                  of = of,
+                  reg = .glue("r{run_id}_{key}"),
+                  .compute = prof
+                )
+              }
+            )
             task_stage_of[[key]] <- oid2
           })
         }
         source_deps[[.key(oid)]] <- dep_of
         source_elts[[.key(oid)]] <- elt_of
       }
-
-    } else {  # compute / reduce_partial
+    } else {
+      # compute / reduce_partial
       in_meta <- .exec_in_meta(graph, s, plan@stages, node_stage)
-      max_set_mb <- max(max_set_mb, sum(vapply(in_meta, function(m)
-        stage_store_mb[[.key(m$id)]] %||% 0, numeric(1))))
+      max_set_mb <- max(
+        max_set_mb,
+        sum(vapply(
+          in_meta,
+          function(m) {
+            stage_store_mb[[.key(m$id)]] %||% 0
+          },
+          numeric(1)
+        ))
+      )
       sig <- paste0(.stage_kernel_sig(graph, s), "@", s@device)
       okeys <- vapply(s@exports, .key, character(1))
       cd <- s@chunks@chunk_dim
       need <- s@halo + s@out_pad
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
-        prod(as.numeric(cd) + 2 * need) / 2^20
+        prod(as.numeric(cd) + 2 * need) /
+        2^20
       # The /2 discount reflects mori's zero-copy shared INPUT mappings:
       # the per-px estimate is calibrated for private R-double inputs, but
       # under mori the inputs are shared and the resident cost is mostly
@@ -667,9 +961,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       # not its inputs -- halving those under-counted the robust Kalman
       # tail's working set and let the budget over-admit concurrent scan
       # chunks. The planner's chunk sizing keeps the full figure.
-      has_scan <- any(vapply(s@members, function(id)
-        S7::S7_inherits(graph_get(graph, id), ScanNode), logical(1)))
-      if (!has_scan) task_mb <- task_mb / 2
+      has_scan <- any(vapply(
+        s@members,
+        function(id) {
+          S7::S7_inherits(graph_get(graph, id), ScanNode)
+        },
+        logical(1)
+      ))
+      if (!has_scan) {
+        task_mb <- task_mb / 2
+      }
       # Scan kernels pre-warm too: the broadcast is TARGETED at the
       # K designated scan profiles only (the validated <= 2 concurrent
       # pre-drain compiles, daemon-exact at any pool width).
@@ -682,92 +983,159 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         # Outer-dim product per input: a coalesced multi-band source
         # (or a cross-stage cube intermediate) warms with the rank-3
         # shape the real chunks arrive in.
-        outers = vapply(s@input_nodes, function(nid) {
-          d <- .node_grid(graph_get(graph, nid))@dims
-          as.integer(max(1, prod(d[!names(d) %in% c("x", "y")])))
-        }, integer(1)),
+        outers = vapply(
+          s@input_nodes,
+          function(nid) {
+            d <- .node_grid(graph_get(graph, nid))@dims
+            as.integer(max(1, prod(d[!names(d) %in% c("x", "y")])))
+          },
+          integer(1)
+        ),
         nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * need,
-        nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * need)
+        nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * need
+      )
       # Compute outputs pin store regions exactly like read windows —
       # from launch until the last consumer retires (or, for host_keep
       # stages, until end of run) — but previously carried store_mb = 0
       # and were invisible to the residency gate: a chain of compute
       # stages could flood the store unbudgeted.
-      epads_all <- if (length(s@export_pads)) as.integer(s@export_pads)
-                   else integer(length(s@exports))
-      store_mb_comp <- sum(vapply(seq_along(s@exports), function(ei) {
-        e <- s@exports[[ei]]
-        .store_region_mb(cd, s@grid@dims, epads_all[[ei]],
-                         .node_outer_nb(graph, e),
-                         .store_bytes_of(graph_get(graph, e)@grid@dtype,
-                                         use_raw))
-      }, numeric(1)))
+      epads_all <- if (length(s@export_pads)) {
+        as.integer(s@export_pads)
+      } else {
+        integer(length(s@exports))
+      }
+      store_mb_comp <- sum(vapply(
+        seq_along(s@exports),
+        function(ei) {
+          e <- s@exports[[ei]]
+          .store_region_mb(
+            cd,
+            s@grid@dims,
+            epads_all[[ei]],
+            .node_outer_nb(graph, e),
+            .store_bytes_of(graph_get(graph, e)@grid@dtype, use_raw)
+          )
+        },
+        numeric(1)
+      ))
       stage_store_mb[[.key(s@id)]] <- store_mb_comp
       for (j in seq_len(nrow(it))) {
         local({
-          sid <- s@id; jj <- j; fn <- s@fn; need <- s@halo + s@out_pad
-          epads <- if (length(s@export_pads)) stats::setNames(
-            as.integer(s@export_pads),
-            vapply(s@exports, .key, character(1))) else integer(0)
-          edge <- if (any(epads > 0L)) list(
-            pads = epads[epads > 0L], core = it[jj, ],
-            gdims = s@grid@dims)
+          sid <- s@id
+          jj <- j
+          fn <- s@fn
+          need <- s@halo + s@out_pad
+          epads <- if (length(s@export_pads)) {
+            stats::setNames(
+              as.integer(s@export_pads),
+              vapply(s@exports, .key, character(1))
+            )
+          } else {
+            integer(0)
+          }
+          edge <- if (any(epads > 0L)) {
+            list(
+              pads = epads[epads > 0L],
+              core = it[jj, ],
+              gdims = s@grid@dims
+            )
+          }
           meta <- in_meta
-          ck <- sig                       # content-addressed jit key
+          ck <- sig # content-addressed jit key
           out_keys <- okeys
           sdev <- s@device
-          in_deps <- vapply(meta, function(m) {
-            dep <- source_deps[[.key(m$id)]]
-            if (is.null(dep)) .glue("s{m$id}_c{jj}") else dep[[jj]]
-          }, character(1))
+          in_deps <- vapply(
+            meta,
+            function(m) {
+              dep <- source_deps[[.key(m$id)]]
+              if (is.null(dep)) .glue("s{m$id}_c{jj}") else dep[[jj]]
+            },
+            character(1)
+          )
           in_keys <- vapply(s@input_nodes, .key, character(1))
           # Mori store: coarse-read inputs address their part element.
-          shm_keys <- vapply(seq_along(meta), function(i) {
-            el <- source_elts[[.key(meta[[i]]$id)]]
-            if (is.null(el)) in_keys[[i]] else el[[jj]]
-          }, character(1))
-          trims <- vapply(meta, function(m)
-            as.integer(m$pad - need), integer(1))
+          shm_keys <- vapply(
+            seq_along(meta),
+            function(i) {
+              el <- source_elts[[.key(meta[[i]]$id)]]
+              if (is.null(el)) in_keys[[i]] else el[[jj]]
+            },
+            character(1)
+          )
+          trims <- vapply(
+            meta,
+            function(m) {
+              as.integer(m$pad - need)
+            },
+            integer(1)
+          )
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- .glue("s{sid}_c{jj}")
           sr <- use_raw
-          wqs <- if (!is.null(wq) &&
-                     length(wq_keys_of[[.key(s@id)]] %||% character(0)))
-            c(wq, list(keys = wq_keys_of[[.key(s@id)]])) else NULL
-          add_task(key, unique(in_deps), "comp", mb = task_mb,
-                   store_mb = store_mb_comp,
-                   scan = has_scan,
-                   dev = sdev, ck = sig,
-                   launch = function(prof, with_fn = TRUE) {
-            # Handles resolve at launch time: dependencies are done, so
-            # `chunk_vals` holds every input's shared object (a ~30-byte
-            # name over the wire). `with_fn = FALSE` sends the jit
-            # cache key alone: daemons already hold every distinct
-            # stage closure from the warm-up broadcast, and re-shipping
-            # it costs MBs of host serialization per task (the 145-band
-            # predict closure measured 3.36 MB).
-            mirai::mirai(
-              garry::.daemon_run_compute_shm(ck, fn, in_vals, in_keys,
-                                             trims, dtypes, reg,
-                                             out_keys = ok,
-                                             device = dv,
-                                             store_raw = sr,
-                                             edge = eg, wq = wqt),
-              ck = ck, fn = if (with_fn) fn else NULL,
-              in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
-              in_keys = shm_keys,
-              trims = trims, dtypes = dtypes,
-              reg = .glue("r{run_id}_{key}"),
-              ok = out_keys, dv = sdev, sr = sr, eg = edge, wqt = wqs,
-              .compute = prof)
-          })
+          wqs <- if (
+            !is.null(wq) &&
+              length(wq_keys_of[[.key(s@id)]] %||% character(0))
+          ) {
+            c(wq, list(keys = wq_keys_of[[.key(s@id)]]))
+          } else {
+            NULL
+          }
+          add_task(
+            key,
+            unique(in_deps),
+            "comp",
+            mb = task_mb,
+            store_mb = store_mb_comp,
+            scan = has_scan,
+            dev = sdev,
+            ck = sig,
+            launch = function(prof, with_fn = TRUE) {
+              # Handles resolve at launch time: dependencies are done, so
+              # `chunk_vals` holds every input's shared object (a ~30-byte
+              # name over the wire). `with_fn = FALSE` sends the jit
+              # cache key alone: daemons already hold every distinct
+              # stage closure from the warm-up broadcast, and re-shipping
+              # it costs MBs of host serialization per task (the 145-band
+              # predict closure measured 3.36 MB).
+              mirai::mirai(
+                garry::.daemon_run_compute_shm(
+                  ck,
+                  fn,
+                  in_vals,
+                  in_keys,
+                  trims,
+                  dtypes,
+                  reg,
+                  out_keys = ok,
+                  device = dv,
+                  store_raw = sr,
+                  edge = eg,
+                  wq = wqt
+                ),
+                ck = ck,
+                fn = if (with_fn) fn else NULL,
+                in_vals = lapply(in_deps, function(d) chunk_vals[[d]]),
+                in_keys = shm_keys,
+                trims = trims,
+                dtypes = dtypes,
+                reg = .glue("r{run_id}_{key}"),
+                ok = out_keys,
+                dv = sdev,
+                sr = sr,
+                eg = edge,
+                wqt = wqs,
+                .compute = prof
+              )
+            }
+          )
           # Refcount every store input this task consumes (read windows
           # AND upstream compute outputs); a region frees when its last
           # consuming task retires.
           rk <- unique(in_deps)
           task_ins[[key]] <- rk
-          for (r2 in rk)
+          for (r2 in rk) {
             store_users[[r2]] <- (store_users[[r2]] %||% 0L) + 1L
+          }
           task_stage_of[[key]] <- sid
         })
       }
@@ -791,11 +1159,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   pending_drop_mb <- 0
   queue_drop <- function(keys) {
     for (rk in keys) {
-      if ((store_users[[rk]] %||% 0L) > 0L) next
+      if ((store_users[[rk]] %||% 0L) > 0L) {
+        next
+      }
       sid <- task_stage_of[[rk]]
-      if (is.null(sid)) next                       # no store region (fetch)
-      if (isTRUE(host_keep[[.key(sid)]])) next
-      task_stage_of[[rk]] <- NULL                  # drop at most once
+      if (is.null(sid)) {
+        next
+      } # no store region (fetch)
+      if (isTRUE(host_keep[[.key(sid)]])) {
+        next
+      }
+      task_stage_of[[rk]] <- NULL # drop at most once
       mb_store_resident <<- mb_store_resident - (tasks[[rk]]$store_mb %||% 0)
       pending_drop <<- c(pending_drop, rk)
       pending_drop_mb <<- pending_drop_mb + (tasks[[rk]]$store_mb %||% 0)
@@ -812,26 +1186,42 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # budget by everything launched inside one flush window.
   last_flush <- Sys.time()
   flush_drops <- function(force = FALSE) {
-    if (length(pending_drop) == 0L) return(invisible(NULL))
-    if (!force &&
-        pending_drop_mb < 0.25 * read_budget_mb &&
-        difftime(Sys.time(), last_flush, units = "secs") < 5)
+    if (length(pending_drop) == 0L) {
       return(invisible(NULL))
-    for (p in profiles)
-      try(mirai::everywhere(garry::.daemon_shm_drop(regs),
-                            regs = .glue("r{run_id}_{pending_drop}"),
-                            .compute = p),
-          silent = TRUE)
+    }
+    if (
+      !force &&
+        pending_drop_mb < 0.25 * read_budget_mb &&
+        difftime(Sys.time(), last_flush, units = "secs") < 5
+    ) {
+      return(invisible(NULL))
+    }
+    for (p in profiles) {
+      try(
+        mirai::everywhere(
+          garry::.daemon_shm_drop(regs),
+          regs = .glue("r{run_id}_{pending_drop}"),
+          .compute = p
+        ),
+        silent = TRUE
+      )
+    }
     # Per-key exists() filter: ls() on the store env sorts every key
     # (~40 ms at 20k entries) once per flush.
-    rm(list = pending_drop[vapply(pending_drop, exists,
-                                  logical(1), envir = chunk_vals,
-                                  inherits = FALSE)],
-       envir = chunk_vals)
+    rm(
+      list = pending_drop[vapply(
+        pending_drop,
+        exists,
+        logical(1),
+        envir = chunk_vals,
+        inherits = FALSE
+      )],
+      envir = chunk_vals
+    )
     pending_drop <<- character(0)
     pending_drop_mb <<- 0
     last_flush <<- Sys.time()
-    gc(FALSE)   # host munmaps its handles; regions free once unlinked
+    gc(FALSE) # host munmaps its handles; regions free once unlinked
     invisible(NULL)
   }
 
@@ -841,9 +1231,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   release_store <- function(k) {
     queue_drop(k)
     deps <- task_ins[[k]]
-    if (is.null(deps) || length(deps) == 0L) return(invisible(NULL))
-    for (rk in deps)
+    if (is.null(deps) || length(deps) == 0L) {
+      return(invisible(NULL))
+    }
+    for (rk in deps) {
       store_users[[rk]] <- store_users[[rk]] - 1L
+    }
     queue_drop(deps)
   }
 
@@ -861,17 +1254,26 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # scan profiles. Warmth is recorded PER PROFILE — key-only
     # launches are exact, not probabilistic (the resend covers a
     # profile whose warm-up failed, clearing its mark).
-    warm_specs <- warm_specs[!duplicated(
-      vapply(warm_specs, `[[`, character(1), "ck"))]
+    warm_specs <- warm_specs[
+      !duplicated(
+        vapply(warm_specs, `[[`, character(1), "ck")
+      )
+    ]
     scan_sp <- Filter(function(sp) isTRUE(sp$scan), warm_specs)
     map_sp <- Filter(function(sp) !isTRUE(sp$scan), warm_specs)
     wh <- list()
     for (p in comp_profs) {
       sp_p <- c(map_sp, if (p %in% scan_profs) scan_sp)
-      if (!length(sp_p)) next
-      wh <- c(wh, mirai::everywhere(garry::.daemon_warm_jit(sp),
-                                    sp = sp_p, .compute = p))
-      for (sp in sp_p) prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
+      if (!length(sp_p)) {
+        next
+      }
+      wh <- c(
+        wh,
+        mirai::everywhere(garry::.daemon_warm_jit(sp), sp = sp_p, .compute = p)
+      )
+      for (sp in sp_p) {
+        prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
+      }
     }
     warm_handle <- wh
   }
@@ -887,11 +1289,16 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # defect hunt H1, 2026-07-30.)
   chunk_of <- function(sid, j) {
     deps <- source_deps[[.key(sid)]]
-    if (is.null(deps)) return(chunk_vals[[.glue("s{sid}_c{j}")]])
+    if (is.null(deps)) {
+      return(chunk_vals[[.glue("s{sid}_c{j}")]])
+    }
     v <- chunk_vals[[deps[[j]]]]
     el <- source_elts[[.key(sid)]]
-    if (is.null(el)) v
-    else stats::setNames(list(v[[el[[j]]]]), sub("\x1f.*$", "", el[[j]]))
+    if (is.null(el)) {
+      v
+    } else {
+      stats::setNames(list(v[[el[[j]]]]), sub("\x1f.*$", "", el[[j]]))
+    }
   }
   # Un-extracted form for writer-daemon dispatch: the SHARED value (a
   # ~30-byte region name over the wire), the element to extract on the
@@ -903,8 +1310,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
       return(list(v = chunk_vals[[rk]], el = NULL, rk = rk))
     }
     el <- source_elts[[.key(sid)]]
-    list(v = chunk_vals[[deps[[j]]]],
-         el = if (!is.null(el)) el[[j]], rk = deps[[j]])
+    list(
+      v = chunk_vals[[deps[[j]]]],
+      el = if (!is.null(el)) el[[j]],
+      rk = deps[[j]]
+    )
   }
   # Task -> sink chunk map for a streaming writer: which chunks of
   # stage `st_id` land when task `key` completes. One chunk per task
@@ -912,8 +1322,11 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # a read window's chunks at once.
   sink_task_map <- function(st_id, n_chunks) {
     deps <- source_deps[[.key(st_id)]]
-    keys <- if (is.null(deps))
-      .glue("s{st_id}_c{seq_len(n_chunks)}") else deps
+    keys <- if (is.null(deps)) {
+      .glue("s{st_id}_c{seq_len(n_chunks)}")
+    } else {
+      deps
+    }
     split(seq_len(n_chunks), keys)
   }
 
@@ -934,7 +1347,7 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # oscillating host anon on a 4.2 Mpx multi-export scan tail).
   writer_on <- (stream_write || (!is.null(path) && multi)) &&
     tryCatch(.gd_n_compute("garry_write") > 0L, error = function(e) FALSE)
-  if (writer_on)
+  if (writer_on) {
     # Abort path: queued writer tasks still map store regions by name,
     # so this handler must run BEFORE the earlier-registered
     # .daemon_shm_clear handler unlinks them (`after = FALSE` prepends;
@@ -942,35 +1355,61 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # writes with errors tolerated — the run has already failed; the
     # writes either land or fail quietly — then close the writer's
     # handles so the partial output is closed and deletable.
-    on.exit({
-      try(for (w in wr_inflight) mirai::call_mirai(w$h), silent = TRUE)
-      try(mirai::everywhere(garry::.daemon_write_close(),
-                            .compute = "garry_write"),
-          silent = TRUE)
-    }, add = TRUE, after = FALSE)
+    on.exit(
+      {
+        try(
+          for (w in wr_inflight) {
+            mirai::call_mirai(w$h)
+          },
+          silent = TRUE
+        )
+        try(
+          mirai::everywhere(
+            garry::.daemon_write_close(),
+            .compute = "garry_write"
+          ),
+          silent = TRUE
+        )
+      },
+      add = TRUE,
+      after = FALSE
+    )
+  }
   sink_ds <- NULL
   if (stream_write && !is.null(wq)) {
     snid <- sink@members[[length(sink@members)]]
     fused_sink <- !is.null(fuse_of[[.key(sink@id)]])
-    if (!(.wq_stream_ok(sink, snid) ||
-          (fused_sink &&
-             .key(snid) %in% (wq_keys_of[[.key(sink@id)]] %||% character(0)))))
+    if (
+      !(.wq_stream_ok(sink, snid) ||
+        (fused_sink &&
+          .key(snid) %in% (wq_keys_of[[.key(sink@id)]] %||% character(0))))
+    ) {
       stream_write <- FALSE
+    }
   }
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
     sink_it <- chunk_iter(sink@chunks)
     sink_spad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
     sink_task_j <- sink_task_map(sink@id, nrow(sink_it))
-    sink_ds <- gdal_create_output(path, sink@grid, nodata = wnodata,
-                                  band_names = band_names,
-                                  dtype = wspec$dtype,
-                                  options = wspec$options,
-                                  scale = wspec$scale %||% numeric(0),
-                                  offset = wspec$offset %||% numeric(0))
-    if (writer_on) { sink_ds$close(); sink_ds <- NULL }
-    on.exit(if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
-            add = TRUE)
+    sink_ds <- gdal_create_output(
+      path,
+      sink@grid,
+      nodata = wnodata,
+      band_names = band_names,
+      dtype = wspec$dtype,
+      options = wspec$options,
+      scale = wspec$scale %||% numeric(0),
+      offset = wspec$offset %||% numeric(0)
+    )
+    if (writer_on) {
+      sink_ds$close()
+      sink_ds <- NULL
+    }
+    on.exit(
+      if (!is.null(sink_ds)) try(sink_ds$close(), silent = TRUE),
+      add = TRUE
+    )
   }
   # Multi-export streaming: every non-combine sink gets its own open
   # output and writes each chunk the moment its stage task lands (for
@@ -981,35 +1420,62 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     for (kk in seq_along(plan@sinks)) {
       nid <- plan@sinks[[kk]]
       nm <- names(plan@sinks)[[kk]]
-      st <- plan@stages[[max(which(vapply(plan@stages, function(s)
-        nid %in% s@members, logical(1))))]]
-      if (st@kind == "reduce_combine") next
-      if (!is.null(wq) &&
+      st <- plan@stages[[max(which(vapply(
+        plan@stages,
+        function(s) {
+          nid %in% s@members
+        },
+        logical(1)
+      )))]]
+      if (st@kind == "reduce_combine") {
+        next
+      }
+      if (
+        !is.null(wq) &&
           !(.wq_stream_ok(st, nid) ||
             (!is.null(fuse_of[[.key(st@id)]]) &&
-               .key(nid) %in% (wq_keys_of[[.key(st@id)]] %||% character(0)))))
-        next                    # unquantizable stream: host tail writes it
-      p <- if (length(path) == 1L && dir.exists(path))
-        file.path(path, paste0(nm, ".tif")) else path[[nm]]
+              .key(nid) %in% (wq_keys_of[[.key(st@id)]] %||% character(0))))
+      ) {
+        next
+      } # unquantizable stream: host tail writes it
+      p <- if (length(path) == 1L && dir.exists(path)) {
+        file.path(path, paste0(nm, ".tif"))
+      } else {
+        path[[nm]]
+      }
       ngrid <- graph_get(plan@graph, nid)@grid
       it <- chunk_iter(st@chunks)
-      ds <- gdal_create_output(p, ngrid, nodata = wnodata,
-                               band_names = .sink_band_names(band_names,
-                                                             nm, ngrid),
-                               dtype = wspec$dtype,
-                               options = wspec$options,
-                               scale = wspec$scale %||% numeric(0),
-                               offset = wspec$offset %||% numeric(0))
-      if (writer_on) { ds$close(); ds <- NULL }
+      ds <- gdal_create_output(
+        p,
+        ngrid,
+        nodata = wnodata,
+        band_names = .sink_band_names(band_names, nm, ngrid),
+        dtype = wspec$dtype,
+        options = wspec$options,
+        scale = wspec$scale %||% numeric(0),
+        offset = wspec$offset %||% numeric(0)
+      )
+      if (writer_on) {
+        ds$close()
+        ds <- NULL
+      }
       stream_sinks[[nm]] <- list(
         sid = st@id,
-        key = .key(nid), it = it, pad = .exec_export_pad(st, nid), ds = ds,
-        dtype = wspec$dtype %||% ngrid@dtype, path = p,
-        task_j = sink_task_map(st@id, nrow(it)))
+        key = .key(nid),
+        it = it,
+        pad = .exec_export_pad(st, nid),
+        ds = ds,
+        dtype = wspec$dtype %||% ngrid@dtype,
+        path = p,
+        task_j = sink_task_map(st@id, nrow(it))
+      )
     }
-    on.exit(for (sp in stream_sinks)
-      if (!is.null(sp$ds)) try(sp$ds$close(), silent = TRUE),
-      add = TRUE)
+    on.exit(
+      for (sp in stream_sinks) {
+        if (!is.null(sp$ds)) try(sp$ds$close(), silent = TRUE)
+      },
+      add = TRUE
+    )
   }
 
   # Post-drain needs: combine closures run host-side on their partial
@@ -1017,18 +1483,31 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # assembled host-side from its stage's chunks. Those stages' regions
   # must survive consumer refcounting; everything else is dropped as
   # the frontier passes.
-  for (s in plan@stages)
-    if (s@kind == "reduce_combine")
+  for (s in plan@stages) {
+    if (s@kind == "reduce_combine") {
       host_keep[[.key(s@inputs[[1L]])]] <- TRUE
-  sink_nids <- if (length(plan@sinks) > 0L) plan@sinks
-    else sink@members[[length(sink@members)]]
+    }
+  }
+  sink_nids <- if (length(plan@sinks) > 0L) {
+    plan@sinks
+  } else {
+    sink@members[[length(sink@members)]]
+  }
   for (nid in unique(sink_nids)) {
-    st <- plan@stages[[max(which(vapply(plan@stages, function(s)
-      nid %in% s@members, logical(1))))]]
-    if (st@kind == "reduce_combine") next          # parts kept above
+    st <- plan@stages[[max(which(vapply(
+      plan@stages,
+      function(s) {
+        nid %in% s@members
+      },
+      logical(1)
+    )))]]
+    if (st@kind == "reduce_combine") {
+      next
+    } # parts kept above
     streamed <- (stream_write && st@id == sink@id) ||
-      (multi && !is.null(path) &&
-         names(plan@sinks)[match(nid, plan@sinks)] %in% names(stream_sinks))
+      (multi &&
+        !is.null(path) &&
+        names(plan@sinks)[match(nid, plan@sinks)] %in% names(stream_sinks))
     if (!streamed) host_keep[[.key(st@id)]] <- TRUE
   }
 
@@ -1055,10 +1534,20 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   task_mb_max <- 0
   for (k in ls(tasks)) {
     t2 <- tasks[[k]]
-    if (identical(t2$pool, "comp")) task_mb_max <- max(task_mb_max, t2$mb %||% 0)
+    if (identical(t2$pool, "comp")) {
+      task_mb_max <- max(task_mb_max, t2$mb %||% 0)
+    }
   }
-  store_mb_max <- max(c(0, vapply(ls(stage_store_mb), function(k)
-    stage_store_mb[[k]] %||% 0, numeric(1))))
+  store_mb_max <- max(c(
+    0,
+    vapply(
+      ls(stage_store_mb),
+      function(k) {
+        stage_store_mb[[k]] %||% 0
+      },
+      numeric(1)
+    )
+  ))
   mem_last_check <- Sys.time()
   rss_excess_seen <- 0
   # Fleet anon at RUN START, plus a trailing window of unmanaged samples
@@ -1076,11 +1565,15 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # underestimated working sets) it exists to catch. The shm clamp and
   # the avail-RAM pool remain the hard backstops for slow leaks.
   rss_baseline <- .garry_fleet_anon_mb(.garry_state$pool_pids)
-  if (!is.finite(rss_baseline)) rss_baseline <- 0
-  rss_hist <- rep(NA_real_, 6L)   # trailing (anon - inflight) samples
+  if (!is.finite(rss_baseline)) {
+    rss_baseline <- 0
+  }
+  rss_hist <- rep(NA_real_, 6L) # trailing (anon - inflight) samples
   refresh_mem_budgets <- function(announce = FALSE) {
     avail <- .garry_ram_avail_mb()
-    if (is.na(avail) || !is.finite(mem_frac) || mem_frac <= 0) return(invisible(NULL))
+    if (is.na(avail) || !is.finite(mem_frac) || mem_frac <= 0) {
+      return(invisible(NULL))
+    }
     pool <- avail * mem_frac
     # Reads are cheap to hold and expensive to redo; give them at most a
     # third of the pool, compute the rest.
@@ -1100,12 +1593,12 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # inside a confined run and the scope thrashes at its ceiling.
     shm_free <- .garry_shm_free_mb()
     cg_free <- .garry_cgroup_avail_mb()
-    if (!is.na(cg_free))
+    if (!is.na(cg_free)) {
       shm_free <- if (is.na(shm_free)) cg_free else min(shm_free, cg_free)
+    }
     if (is.finite(shm_free)) {
       headroom <- garry_opt("shm_headroom_mb")
-      rb <- min(rb, max(store_mb_max,
-                        mb_store_resident + shm_free - headroom))
+      rb <- min(rb, max(store_mb_max, mb_store_resident + shm_free - headroom))
       if (shm_free < headroom) flush_drops(force = TRUE)
     }
     # Measured per-daemon memory correction (dask's managed-vs-process
@@ -1125,7 +1618,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         garry_opt("cost_xla_client_mb")
       unman <- anon - infl
       old_unman <- suppressWarnings(min(rss_hist, na.rm = TRUE))
-      if (!is.finite(old_unman)) old_unman <- rss_baseline
+      if (!is.finite(old_unman)) {
+        old_unman <- rss_baseline
+      }
       tolerated <- max(rss_baseline, old_unman)
       excess <- unman - (tolerated + allow)
       rss_hist <<- c(rss_hist[-1L], unman)
@@ -1137,7 +1632,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             "garry: fleet anon RSS {round(anon)} MB exceeds modelled ",
             "{round(infl + tolerated + allow)} MB (recent growth ",
             "{round(excess)} MB); compute budget tightened to ",
-            "{round(cb)} MB"))
+            "{round(cb)} MB"
+          ))
         }
       }
     }
@@ -1145,12 +1641,17 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # configured budget, or the pool cannot hold even two compute chunks.
     # (comp_budget_cfg is Inf by default -- compute is RAM-pool-driven --
     # so a bare "cb < cfg" would fire every refresh.)
-    if (announce && (rb < read_budget_cfg ||
-                     (task_mb_max > 0 && cb < 2 * task_mb_max)))
+    if (
+      announce &&
+        (rb < read_budget_cfg ||
+          (task_mb_max > 0 && cb < 2 * task_mb_max))
+    ) {
       cli::cli_inform(paste0(
         "garry: {round(avail/1024, 1)} GiB available; in-flight compute ",
         "budget {round(cb)} MB, resident reads {round(rb)} MB (configured ",
-        "{round(read_budget_cfg)})"))
+        "{round(read_budget_cfg)})"
+      ))
+    }
     comp_budget_mb <<- cb
     read_budget_mb <<- rb
     invisible(NULL)
@@ -1168,7 +1669,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         "a single compute chunk is estimated at {chunk_sz}, above the ",
         "{budget_sz} execution budget; ",
         "it will run one at a time. Lower {.code garry.chunk_target_px} or ",
-        "{.code garry.ram_budget_mb} to chunk finer."))
+        "{.code garry.ram_budget_mb} to chunk finer."
+      ))
     }
   })
 
@@ -1189,10 +1691,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # ~18 MB/s where pure fetching sustains 40-50 MB/s (a local
   # assemble idles its reader's connection for ~1 s).
   task_keys <- ls(tasks)
-  ord_win <- vapply(task_keys, function(k) {
-    n <- suppressWarnings(as.integer(sub("^s\\d+_[rc](\\d+)$", "\\1", k)))
-    if (is.na(n)) 0L else n
-  }, integer(1))
+  ord_win <- vapply(
+    task_keys,
+    function(k) {
+      n <- suppressWarnings(as.integer(sub("^s\\d+_[rc](\\d+)$", "\\1", k)))
+      if (is.na(n)) 0L else n
+    },
+    integer(1)
+  )
   ord_prio <- vapply(task_keys, function(k) tasks[[k]]$prio, integer(1))
   ord_seq <- vapply(task_keys, function(k) tasks[[k]]$seq, integer(1))
   task_order <- task_keys[order(ord_prio, ord_win, ord_seq)]
@@ -1206,8 +1712,8 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # XLA client there, reintroducing the thread contention and unbounded
   # per-daemon working set a small compute pool exists to avoid.
   inflight <- list()
-  n_inflight <- c(read = 0L, comp = 0L)   # by task TAG (byte budget)
-  n_slot <- c(read = 0L, comp = 0L)       # by launched PROFILE slot
+  n_inflight <- c(read = 0L, comp = 0L) # by task TAG (byte budget)
+  n_slot <- c(read = 0L, comp = 0L) # by launched PROFILE slot
   mb_inflight <- 0
   # Launches self-limit on RESIDENT store bytes, not in-flight count:
   # a store region (read window or compute output) lives until its
@@ -1255,8 +1761,13 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     # fused reads ride comp_ok for the byte budget but never count
     # toward the compute in-flight tally, so capping them against it
     # throttled ready reads for no resource reason (defect hunt L1).
-    if (!is.null(cap_comp_opt) && identical(t$pool, "comp") &&
-        n_inflight[["comp"]] >= cap_comp_opt) return(FALSE)
+    if (
+      !is.null(cap_comp_opt) &&
+        identical(t$pool, "comp") &&
+        n_inflight[["comp"]] >= cap_comp_opt
+    ) {
+      return(FALSE)
+    }
     mb_inflight == 0 ||
       mb_inflight + t$mb <= comp_budget_mb
   }
@@ -1278,24 +1789,47 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     wr_inflight[[as.character(wr_seq)]] <<- list(
       rk = ref$rk,
       h = mirai::mirai(
-        garry::.daemon_write_chunk(wpath, xo, yo, val, skey, el, pad,
-                                   dtype, nodata = nd, n_chunks = nc),
-        wpath = wpath, xo = it$x_off[[j]], yo = it$y_off[[j]],
-        val = ref$v, skey = skey, el = ref$el, pad = pad,
-        dtype = dtype, nd = wnodata, nc = nrow(it),
-        .compute = "garry_write"))
+        garry::.daemon_write_chunk(
+          wpath,
+          xo,
+          yo,
+          val,
+          skey,
+          el,
+          pad,
+          dtype,
+          nodata = nd,
+          n_chunks = nc
+        ),
+        wpath = wpath,
+        xo = it$x_off[[j]],
+        yo = it$y_off[[j]],
+        val = ref$v,
+        skey = skey,
+        el = ref$el,
+        pad = pad,
+        dtype = dtype,
+        nd = wnodata,
+        nc = nrow(it),
+        .compute = "garry_write"
+      )
+    )
     invisible(NULL)
   }
   harvest_writes <- function() {
     any_done <- FALSE
     for (wk in names(wr_inflight)) {
       w <- wr_inflight[[wk]]
-      if (mirai::unresolved(w$h)) next
-      if (inherits(w$h$data, c("miraiError", "errorValue")))
+      if (mirai::unresolved(w$h)) {
+        next
+      }
+      if (inherits(w$h$data, c("miraiError", "errorValue"))) {
         cli::cli_abort(
           "sink write failed on the writer daemon: {as.character(w$h$data)}",
           class = c("garry_write_error", "garry_error"),
-          region = w$rk)
+          region = w$rk
+        )
+      }
       store_users[[w$rk]] <- store_users[[w$rk]] - 1L
       queue_drop(w$rk)
       wr_inflight[[wk]] <<- NULL
@@ -1312,12 +1846,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # stage becomes ready. Allow one more in-flight task of a cold
   # kernel than have ever COMPLETED: the ramp is 1, 2, 3, ... and by
   # mid-ramp the early daemons hold the kernel warm.
-  dep_left <- new.env(parent = emptyenv())    # task -> unmet dep count
-  dependents <- new.env(parent = emptyenv())  # task -> tasks waiting on it
+  dep_left <- new.env(parent = emptyenv()) # task -> unmet dep count
+  dependents <- new.env(parent = emptyenv()) # task -> tasks waiting on it
   for (k in task_keys) {
     d <- unique(tasks[[k]]$deps)
     dep_left[[k]] <- length(d)
-    for (dk in d) dependents[[dk]] <- c(dependents[[dk]], k)
+    for (dk in d) {
+      dependents[[dk]] <- c(dependents[[dk]], k)
+    }
   }
   n_done <- 0L
   is_ready <- function(k) dep_left[[k]] == 0L
@@ -1330,17 +1866,38 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # store bytes, and the READY timestamp (deps satisfied) so queue-wait
   # separates from run time; rss rows sample one daemon's anon MB
   # (key = pid); model rows sample the modelled in-flight/resident MB.
-  log_line <- if (is.null(task_log)) function(...) NULL else {
-    if (!file.exists(task_log) || file.size(task_log) == 0)
-      cat("time,event,key,pool,slot,mb,store_mb,ready\n",
-          file = task_log, append = TRUE)
-    function(event, key, pool = "", slot = "", mb = "", store_mb = "",
-             ready = "")
-      cat(.glue("{formatC(unclass(Sys.time()), format = 'f', digits = 3)},",
-                "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"),
-          "\n", sep = "", file = task_log, append = TRUE)
+  log_line <- if (is.null(task_log)) {
+    function(...) NULL
+  } else {
+    if (!file.exists(task_log) || file.size(task_log) == 0) {
+      cat(
+        "time,event,key,pool,slot,mb,store_mb,ready\n",
+        file = task_log,
+        append = TRUE
+      )
+    }
+    function(
+      event,
+      key,
+      pool = "",
+      slot = "",
+      mb = "",
+      store_mb = "",
+      ready = ""
+    ) {
+      cat(
+        .glue(
+          "{formatC(unclass(Sys.time()), format = 'f', digits = 3)},",
+          "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"
+        ),
+        "\n",
+        sep = "",
+        file = task_log,
+        append = TRUE
+      )
+    }
   }
-  t_drain0 <- unclass(Sys.time())   # zero-dep tasks are ready at drain start
+  t_drain0 <- unclass(Sys.time()) # zero-dep tasks are ready at drain start
   n_total <- length(tasks)
   last_report <- Sys.time()
   # Launch cursor: window-major ordering makes launches near-sequential,
@@ -1356,75 +1913,113 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   scan_needed <- TRUE
   while (remaining()) {
     if (scan_needed) {
-    scan_needed <- FALSE
-    while (first_pending <= n_total &&
-           tasks[[task_order[[first_pending]]]]$state != "pending")
-      first_pending <- first_pending + 1L
-    for (k in task_order[seq.int(first_pending,
-                                 length.out = max(0L, n_total - first_pending + 1L))]) {
-      t <- tasks[[k]]
-      if (t$state != "pending") next
-      slot <- t$pool
-      if (t$pool == "read") {
-        if (n_slot[["read"]] >= cap_read) next
-        if (!read_ok(t)) next
-        # Fused reads carry a kernel working set: ride the compute
-        # byte budget too, or a cold fleet ramps N XLA working sets
-        # at once regardless of what else holds the machine.
-        if (t$mb > 0 && !comp_ok(t)) next
-      } else {
-        if (!comp_ok(t)) next
-        # Compute tasks pin their OUTPUT region from launch, and
-        # fetch-backed assembles pin read-store bytes like any read:
-        # gate both by the store budget, with the comp-pool escape so
-        # a saturated store still drains (see store_ok_comp).
-        if (t$store_mb > 0 && !store_ok_comp(t)) next
-        if (n_slot[["comp"]] >= cap_comp) next
-        cprof <- pick_comp_prof(t)
-        if (is.null(cprof)) next  # every eligible profile busy/at depth
-        slot <- "comp"
+      scan_needed <- FALSE
+      while (
+        first_pending <= n_total &&
+          tasks[[task_order[[first_pending]]]]$state != "pending"
+      ) {
+        first_pending <- first_pending + 1L
       }
-      if (!is_ready(k)) next
-      prof <- if (slot == "read") read_prof else cprof
-      inflight[[k]] <- if (is.null(t$ck)) t$launch(prof) else {
-        # Compute-pool launches of warmed kernels ship the cache key
-        # only when the CHOSEN profile provably holds the kernel; a
-        # cold profile gets the closure and compiles on first use.
-        warm_now <- slot == "comp" &&
-          isTRUE(prof_warm[[.pw_key(prof, t$ck)]])
-        t$launch(prof, with_fn = !warm_now)
+      for (k in task_order[seq.int(
+        first_pending,
+        length.out = max(0L, n_total - first_pending + 1L)
+      )]) {
+        t <- tasks[[k]]
+        if (t$state != "pending") {
+          next
+        }
+        slot <- t$pool
+        if (t$pool == "read") {
+          if (n_slot[["read"]] >= cap_read) {
+            next
+          }
+          if (!read_ok(t)) {
+            next
+          }
+          # Fused reads carry a kernel working set: ride the compute
+          # byte budget too, or a cold fleet ramps N XLA working sets
+          # at once regardless of what else holds the machine.
+          if (t$mb > 0 && !comp_ok(t)) next
+        } else {
+          if (!comp_ok(t)) {
+            next
+          }
+          # Compute tasks pin their OUTPUT region from launch, and
+          # fetch-backed assembles pin read-store bytes like any read:
+          # gate both by the store budget, with the comp-pool escape so
+          # a saturated store still drains (see store_ok_comp).
+          if (t$store_mb > 0 && !store_ok_comp(t)) {
+            next
+          }
+          if (n_slot[["comp"]] >= cap_comp) {
+            next
+          }
+          cprof <- pick_comp_prof(t)
+          if (is.null(cprof)) {
+            next
+          } # every eligible profile busy/at depth
+          slot <- "comp"
+        }
+        if (!is_ready(k)) {
+          next
+        }
+        prof <- if (slot == "read") read_prof else cprof
+        inflight[[k]] <- if (is.null(t$ck)) {
+          t$launch(prof)
+        } else {
+          # Compute-pool launches of warmed kernels ship the cache key
+          # only when the CHOSEN profile provably holds the kernel; a
+          # cold profile gets the closure and compiles on first use.
+          warm_now <- slot == "comp" &&
+            isTRUE(prof_warm[[.pw_key(prof, t$ck)]])
+          t$launch(prof, with_fn = !warm_now)
+        }
+        tasks[[k]]$slot <- slot
+        tasks[[k]]$prof <- prof
+        if (slot == "comp") {
+          prof_slots[[prof]] <- prof_slots[[prof]] + 1L
+          if (
+            !is.null(t$ck) &&
+              isTRUE(t$scan) &&
+              !isTRUE(prof_warm[[.pw_key(prof, t$ck)]])
+          ) {
+            prof_cold_busy[[prof]] <- TRUE
+          }
+        }
+        n_slot[[slot]] <- n_slot[[slot]] + 1L
+        n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
+        tasks[[k]]$mb_live <- t$mb
+        mb_inflight <- mb_inflight + tasks[[k]]$mb_live
+        # Read-producing tasks pin their region from launch, not from
+        # completion (fetch-backed assembles run on the compute pool but
+        # pin store bytes just the same).
+        mb_store_resident <- mb_store_resident + t$store_mb
+        tasks[[k]]$state <- "running"
+        log_line(
+          "launch",
+          k,
+          pool = t$pool,
+          # routed profiles put the daemon identity in the slot
+          # column: free per-daemon task attribution in
+          # garry_task_report (the observability gap the deep
+          # review deferred)
+          slot = if (slot == "comp") prof else slot,
+          mb = round(tasks[[k]]$mb_live, 1),
+          store_mb = round(t$store_mb %||% 0, 1),
+          ready = formatC(
+            tasks[[k]]$t_ready %||% t_drain0,
+            format = "f",
+            digits = 3
+          )
+        )
       }
-      tasks[[k]]$slot <- slot
-      tasks[[k]]$prof <- prof
-      if (slot == "comp") {
-        prof_slots[[prof]] <- prof_slots[[prof]] + 1L
-        if (!is.null(t$ck) && isTRUE(t$scan) &&
-            !isTRUE(prof_warm[[.pw_key(prof, t$ck)]]))
-          prof_cold_busy[[prof]] <- TRUE
-      }
-      n_slot[[slot]] <- n_slot[[slot]] + 1L
-      n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
-      tasks[[k]]$mb_live <- t$mb
-      mb_inflight <- mb_inflight + tasks[[k]]$mb_live
-      # Read-producing tasks pin their region from launch, not from
-      # completion (fetch-backed assembles run on the compute pool but
-      # pin store bytes just the same).
-      mb_store_resident <- mb_store_resident + t$store_mb
-      tasks[[k]]$state <- "running"
-      log_line("launch", k, pool = t$pool,
-               # routed profiles put the daemon identity in the slot
-               # column: free per-daemon task attribution in
-               # garry_task_report (the observability gap the deep
-               # review deferred)
-               slot = if (slot == "comp") prof else slot,
-               mb = round(tasks[[k]]$mb_live, 1),
-               store_mb = round(t$store_mb %||% 0, 1),
-               ready = formatC(tasks[[k]]$t_ready %||% t_drain0, format = "f", digits = 3))
     }
+    if (length(inflight) == 0L) {
+      .garry_error(
+        "scheduler deadlock: no runnable tasks",
+        "garry_scheduler_error"
+      )
     }
-    if (length(inflight) == 0L)
-      .garry_error("scheduler deadlock: no runnable tasks",
-                   "garry_scheduler_error")
     harvested <- FALSE
     for (k in names(inflight)) {
       h <- inflight[[k]]
@@ -1433,8 +2028,10 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
           # A key-only launch found the daemon's jit cache cold
           # (warm-up failed there, or the cache was wiped): resend
           # once with the full stage closure.
-          if (grepl("garry_jit_miss", as.character(h$data),
-                    fixed = TRUE) && !isTRUE(tasks[[k]]$resent)) {
+          if (
+            grepl("garry_jit_miss", as.character(h$data), fixed = TRUE) &&
+              !isTRUE(tasks[[k]]$resent)
+          ) {
             tasks[[k]]$resent <- TRUE
             # The daemon's cache was cold: the warm-up failed there or
             # was evicted, so this kernel is NOT warm — clear the mark
@@ -1442,28 +2039,31 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
             # bypasses the cold-kernel slow start and the scan-compile
             # surcharge exactly when memory is tightest (defect hunt
             # M2, 2026-07-30).
-            if (!is.null(tasks[[k]]$ck))
+            if (!is.null(tasks[[k]]$ck)) {
               prof_warm[[.pw_key(tasks[[k]]$prof, tasks[[k]]$ck)]] <- FALSE
+            }
             # resend to the SAME profile: the miss identifies the one
             # daemon whose cache is cold, and with routed profiles the
             # closure must land exactly there
-            inflight[[k]] <- tasks[[k]]$launch(tasks[[k]]$prof,
-                                               with_fn = TRUE)
+            inflight[[k]] <- tasks[[k]]$launch(tasks[[k]]$prof, with_fn = TRUE)
             next
           }
           cli::cli_abort(
             "task {k} failed on daemon: {as.character(h$data)}",
             class = c("garry_task_error", "garry_error"),
-            task = k, stage = task_stage_of[[k]],
-            pool = tasks[[k]]$pool)
+            task = k,
+            stage = task_stage_of[[k]],
+            pool = tasks[[k]]$pool
+          )
         }
         chunk_vals[[k]] <- h$data
         tasks[[k]]$state <- "done"
         n_done <- n_done + 1L
         for (k2 in dependents[[k]]) {
           dep_left[[k2]] <- dep_left[[k2]] - 1L
-          if (dep_left[[k2]] == 0L)
+          if (dep_left[[k2]] == 0L) {
             tasks[[k2]]$t_ready <- unclass(Sys.time())
+          }
         }
         inflight[[k]] <- NULL
         pool_k <- tasks[[k]]$pool
@@ -1486,29 +2086,58 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         if (stream_write && !is.null(sink_task_j[[k]])) {
           for (j in sink_task_j[[k]]) {
             if (writer_on) {
-              dispatch_write(sink@id, j, path, sink_it, sink_skey,
-                             sink_spad, wspec$dtype %||% sink@grid@dtype)
+              dispatch_write(
+                sink@id,
+                j,
+                path,
+                sink_it,
+                sink_skey,
+                sink_spad,
+                wspec$dtype %||% sink@grid@dtype
+              )
             } else {
               ch <- chunk_of(sink@id, j)[[sink_skey]]
               .exec_check_writable(ch, nrow(sink_it))
-              .exec_write_chunk(sink_ds, sink_it$x_off[j], sink_it$y_off[j],
-                                ch, sink_spad,
-                                wspec$dtype %||% sink@grid@dtype, wnodata)
+              .exec_write_chunk(
+                sink_ds,
+                sink_it$x_off[j],
+                sink_it$y_off[j],
+                ch,
+                sink_spad,
+                wspec$dtype %||% sink@grid@dtype,
+                wnodata
+              )
             }
           }
           log_line("write", k)
         }
         for (sp in stream_sinks) {
-          if (is.null(sp$task_j[[k]])) next
+          if (is.null(sp$task_j[[k]])) {
+            next
+          }
           for (j in sp$task_j[[k]]) {
             if (writer_on) {
-              dispatch_write(sp$sid, j, sp$path, sp$it, sp$key,
-                             sp$pad, sp$dtype)
+              dispatch_write(
+                sp$sid,
+                j,
+                sp$path,
+                sp$it,
+                sp$key,
+                sp$pad,
+                sp$dtype
+              )
             } else {
               ch <- chunk_of(sp$sid, j)[[sp$key]]
               .exec_check_writable(ch, nrow(sp$it))
-              .exec_write_chunk(sp$ds, sp$it$x_off[j], sp$it$y_off[j],
-                                ch, sp$pad, sp$dtype, wnodata)
+              .exec_write_chunk(
+                sp$ds,
+                sp$it$x_off[j],
+                sp$it$y_off[j],
+                ch,
+                sp$pad,
+                sp$dtype,
+                wnodata
+              )
             }
           }
           log_line("write", k)
@@ -1530,8 +2159,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         }
       }
     }
-    if (writer_on && length(wr_inflight) > 0L && harvest_writes())
+    if (writer_on && length(wr_inflight) > 0L && harvest_writes()) {
       harvested <- TRUE
+    }
     if (harvested) {
       flush_drops()
       scan_needed <- TRUE
@@ -1548,16 +2178,21 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
         if (!is.null(task_log)) {
           for (p in .garry_state$pool_pids) {
             a <- .garry_anon_mb_of(p)
-            if (is.finite(a)) log_line("rss", as.character(p),
-                                       mb = round(a, 1))
+            if (is.finite(a)) log_line("rss", as.character(p), mb = round(a, 1))
           }
-          log_line("model", "-", mb = round(mb_inflight, 1),
-                   store_mb = round(mb_store_resident, 1))
+          log_line(
+            "model",
+            "-",
+            mb = round(mb_inflight, 1),
+            store_mb = round(mb_store_resident, 1)
+          )
         }
       }
     }
-    if (progress &&
-        difftime(Sys.time(), last_report, units = "secs") > 5) {
+    if (
+      progress &&
+        difftime(Sys.time(), last_report, units = "secs") > 5
+    ) {
       n_inf <- length(inflight)
       cli::cli_inform("garry: {n_done}/{n_total} tasks done, {n_inf} in flight")
       last_report <- Sys.time()
@@ -1577,12 +2212,14 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
     while (length(wr_inflight) > 0L) {
       if (!harvest_writes()) Sys.sleep(0.002) else flush_drops()
     }
-    wcl <- mirai::everywhere(garry::.daemon_write_close(),
-                             .compute = "garry_write")
+    wcl <- mirai::everywhere(
+      garry::.daemon_write_close(),
+      .compute = "garry_write"
+    )
     invisible(lapply(wcl, function(m) m[]))
     flush_drops(force = TRUE)
   }
-  read_chunk <- chunk_of   # fused-aware (see chunk_of above)
+  read_chunk <- chunk_of # fused-aware (see chunk_of above)
   out_of <- function(s) {
     it <- chunk_iter(s@chunks)
     lapply(seq_len(nrow(it)), function(j) read_chunk(s@id, j))
@@ -1599,7 +2236,9 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
 
   combine_vals <- new.env(parent = emptyenv())
   for (s in plan@stages) {
-    if (s@kind != "reduce_combine") next
+    if (s@kind != "reduce_combine") {
+      next
+    }
     part <- plan@stages[[s@inputs[[1L]]]]
     key <- .key(s@members[[1L]])
     # Combine closures run host-side on R arrays.
@@ -1612,20 +2251,31 @@ execute_plan_mirai <- function(plan, path = NULL, nodata = NULL, band_names = NU
   # lookup and the streamed-sink short-circuit; the shape of the tail
   # itself is one implementation for both executors.
   chunks_of <- function(st) {
-    if (st@kind == "reduce_combine") list(combine_vals[[.key(st@id)]])
-    else out_of(st)
+    if (st@kind == "reduce_combine") {
+      list(combine_vals[[.key(st@id)]])
+    } else {
+      out_of(st)
+    }
   }
   streamed_path <- function(nm) {
     sp <- stream_sinks[[nm]]
-    if (is.null(sp)) return(NULL)
+    if (is.null(sp)) {
+      return(NULL)
+    }
     if (!is.null(sp$ds)) {
       sp$ds$close()
       stream_sinks[[nm]]$ds <<- NULL
     }
     sp$path
   }
-  .exec_sink_tail(plan, graph, chunks_of = chunks_of, path = path,
-                  wspec = wspec,
-                  nodata = nodata, band_names = band_names,
-                  streamed_path = streamed_path)
+  .exec_sink_tail(
+    plan,
+    graph,
+    chunks_of = chunks_of,
+    path = path,
+    wspec = wspec,
+    nodata = nodata,
+    band_names = band_names,
+    streamed_path = streamed_path
+  )
 }

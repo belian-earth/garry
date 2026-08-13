@@ -17,17 +17,28 @@
 
 # -- dtype vocabulary and promotion -----------------------------------------
 
-.garry_dtypes <- c("f32", "f64",
-                   "i8", "i16", "i32", "i64",
-                   "u8", "u16", "u32", "u64",
-                   "pred")
+.garry_dtypes <- c(
+  "f32",
+  "f64",
+  "i8",
+  "i16",
+  "i32",
+  "i64",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "pred"
+)
 
 .dtype_family <- function(dtype) {
   switch(substr(dtype, 1L, 1L), f = "float", i = "int", u = "uint", p = "pred")
 }
 
 .dtype_width <- function(dtype) {
-  if (dtype == "pred") return(1L)
+  if (dtype == "pred") {
+    return(1L)
+  }
   as.integer(sub("^[fiu]", "", dtype))
 }
 
@@ -60,11 +71,17 @@ dtype_valid <- function(dtype) {
 #' @return The promoted dtype string.
 #' @export
 dtype_promote <- function(a, b, divide = FALSE) {
-  if (!dtype_valid(a)) cli::cli_abort("invalid dtype: {.val {a}}")
-  if (!dtype_valid(b)) cli::cli_abort("invalid dtype: {.val {b}}")
+  if (!dtype_valid(a)) {
+    cli::cli_abort("invalid dtype: {.val {a}}")
+  }
+  if (!dtype_valid(b)) {
+    cli::cli_abort("invalid dtype: {.val {b}}")
+  }
 
-  fa <- .dtype_family(a); fb <- .dtype_family(b)
-  wa <- .dtype_width(a);  wb <- .dtype_width(b)
+  fa <- .dtype_family(a)
+  fb <- .dtype_family(b)
+  wa <- .dtype_width(a)
+  wb <- .dtype_width(b)
 
   out <- if (a == b) {
     a
@@ -84,8 +101,11 @@ dtype_promote <- function(a, b, divide = FALSE) {
     # signed vs unsigned
     uw <- if (fa == "uint") wa else wb
     sw <- if (fa == "int") wa else wb
-    if (uw >= 64L) "f64"
-    else paste0("i", min(64L, max(sw, uw * 2L)))
+    if (uw >= 64L) {
+      "f64"
+    } else {
+      paste0("i", min(64L, max(sw, uw * 2L)))
+    }
   }
 
   if (divide && .dtype_family(out) != "float") {
@@ -102,9 +122,13 @@ dtype_promote <- function(a, b, divide = FALSE) {
 
 .canon_crs <- function(crs) {
   hit <- .crs_cache[[crs]]
-  if (!is.null(hit)) return(hit)
+  if (!is.null(hit)) {
+    return(hit)
+  }
   wkt <- gdalraster::srs_to_wkt(crs)
-  if (!nzchar(wkt)) cli::cli_abort("cannot interpret CRS: {.val {crs}}")
+  if (!nzchar(wkt)) {
+    cli::cli_abort("cannot interpret CRS: {.val {crs}}")
+  }
   .crs_cache[[crs]] <- wkt
   wkt
 }
@@ -144,85 +168,119 @@ crs_equal <- function(a, b) {
 GridSpec <- S7::new_class(
   "GridSpec",
   properties = list(
-    crs       = S7::class_character,
-    transform = S7::class_numeric,   # length 6 (GDAL geotransform)
-    extent    = S7::class_numeric,   # xmin, ymin, xmax, ymax
-    dims       = S7::class_integer,   # nx, ny [, nt, nb]
-    dtype     = S7::class_character, # anvl-aligned: "f32", "i16", ...
+    crs = S7::class_character,
+    transform = S7::class_numeric, # length 6 (GDAL geotransform)
+    extent = S7::class_numeric, # xmin, ymin, xmax, ymax
+    dims = S7::class_integer, # nx, ny [, nt, nb]
+    dtype = S7::class_character, # anvl-aligned: "f32", "i16", ...
     # Optional per-axis labels for the NON-SPATIAL dims (slice dates on
     # t, band names on band): a named list of character vectors, each
     # length-matched to its dim. Labels are METADATA, not data: no
     # planner pass reads them (grid_equal ignores them), so planning
     # stays grid-identity-trivial while label selection, labelled
     # output and dt-aware scans become expressible.
-    labels    = S7::class_list
+    labels = S7::class_list
   ),
-  constructor = function(crs, transform, extent, dims, dtype,
-                         labels = list()) {
-    if (!is.character(crs) || length(crs) != 1L || !nzchar(crs))
+  constructor = function(crs, transform, extent, dims, dtype, labels = list()) {
+    if (!is.character(crs) || length(crs) != 1L || !nzchar(crs)) {
       cli::cli_abort("{.arg crs} must be a single non-empty string")
-    nm <- names(dims)              # as.integer() strips names; keep them
+    }
+    nm <- names(dims) # as.integer() strips names; keep them
     dims <- as.integer(dims)
     names(dims) <- if (is.null(nm)) .dim_names[seq_along(dims)] else nm
     S7::new_object(
       S7::S7_object(),
-      crs       = .canon_crs(crs),
+      crs = .canon_crs(crs),
       transform = as.numeric(transform),
-      extent    = as.numeric(extent),
-      dims      = dims,
-      dtype     = dtype,
-      labels    = labels
+      extent = as.numeric(extent),
+      dims = dims,
+      dtype = dtype,
+      labels = labels
     )
   },
   validator = function(self) {
     if (length(self@labels)) {
       lnm <- names(self@labels)
-      if (is.null(lnm) || anyDuplicated(lnm) ||
-          !all(lnm %in% setdiff(names(self@dims), c("x", "y"))))
-        return(paste0("`labels` must be named by non-spatial dims ",
-                      "present in `dims`"))
+      if (
+        is.null(lnm) ||
+          anyDuplicated(lnm) ||
+          !all(lnm %in% setdiff(names(self@dims), c("x", "y")))
+      ) {
+        return(paste0(
+          "`labels` must be named by non-spatial dims ",
+          "present in `dims`"
+        ))
+      }
       for (nm2 in lnm) {
         v <- self@labels[[nm2]]
-        if (!is.character(v) || length(v) != self@dims[[nm2]])
+        if (!is.character(v) || length(v) != self@dims[[nm2]]) {
           return(.glue(
             "`labels${nm2}` must be a character vector of length ",
-            "{self@dims[[nm2]]}"))
+            "{self@dims[[nm2]]}"
+          ))
+        }
       }
     }
-    if (length(self@transform) != 6L)
+    if (length(self@transform) != 6L) {
       return("`transform` must be length 6 (GDAL geotransform)")
-    if (length(self@extent) != 4L)
+    }
+    if (length(self@extent) != 4L) {
       return("`extent` must be length 4 (xmin, ymin, xmax, ymax)")
-    if (self@extent[1L] >= self@extent[3L] ||
-        self@extent[2L] >= self@extent[4L])
+    }
+    if (
+      self@extent[1L] >= self@extent[3L] ||
+        self@extent[2L] >= self@extent[4L]
+    ) {
       return("`extent` must satisfy xmin < xmax and ymin < ymax")
-    if (length(self@dims) < 2L || length(self@dims) > 4L ||
-        any(self@dims <= 0L))
+    }
+    if (
+      length(self@dims) < 2L || length(self@dims) > 4L || any(self@dims <= 0L)
+    ) {
       return("`dims` must have 2-4 positive entries")
+    }
     nm <- names(self@dims)
-    if (is.null(nm) || !identical(nm[1:2], c("x", "y")) ||
-        anyDuplicated(nm) || !all(nm %in% .dim_names))
-      return(paste0("`dims` must be named: first two \"x\", \"y\"; ",
-                    "extras from \"t\", \"band\""))
-    if (!dtype_valid(self@dtype))
-      return(paste0("`dtype` must be one of: ",
-                    paste(.garry_dtypes, collapse = ", ")))
+    if (
+      is.null(nm) ||
+        !identical(nm[1:2], c("x", "y")) ||
+        anyDuplicated(nm) ||
+        !all(nm %in% .dim_names)
+    ) {
+      return(paste0(
+        "`dims` must be named: first two \"x\", \"y\"; ",
+        "extras from \"t\", \"band\""
+      ))
+    }
+    if (!dtype_valid(self@dtype)) {
+      return(paste0(
+        "`dtype` must be one of: ",
+        paste(.garry_dtypes, collapse = ", ")
+      ))
+    }
     gt <- self@transform
-    if (gt[3L] != 0 || gt[5L] != 0)
-      return("rotated grids are not supported (transform[3] and transform[5] must be 0)")
-    if (gt[2L] <= 0 || gt[6L] >= 0)
+    if (gt[3L] != 0 || gt[5L] != 0) {
+      return(
+        "rotated grids are not supported (transform[3] and transform[5] must be 0)"
+      )
+    }
+    if (gt[2L] <= 0 || gt[6L] >= 0) {
       return("grids must be north-up (transform[2] > 0, transform[6] < 0)")
+    }
     # Coherence: extent must be derivable from transform + dim.
-    nx <- self@dims[1L]; ny <- self@dims[2L]
+    nx <- self@dims[1L]
+    ny <- self@dims[2L]
     tol <- 1e-6 * max(abs(gt[2L]), abs(gt[6L]))
-    derived <- c(gt[1L],                 # xmin
-                 gt[4L] + ny * gt[6L],   # ymin
-                 gt[1L] + nx * gt[2L],   # xmax
-                 gt[4L])                 # ymax
-    if (any(abs(derived - self@extent) > tol))
+    derived <- c(
+      gt[1L], # xmin
+      gt[4L] + ny * gt[6L], # ymin
+      gt[1L] + nx * gt[2L], # xmax
+      gt[4L]
+    ) # ymax
+    if (any(abs(derived - self@extent) > tol)) {
       return(.glue(
         "`extent` does not agree with `transform` + `dim` ",
-        "(expected [{paste(format(derived), collapse = ', ')}])"))
+        "(expected [{paste(format(derived), collapse = ', ')}])"
+      ))
+    }
     NULL
   }
 )
@@ -248,31 +306,44 @@ GridSpec <- S7::new_class(
 #' @export
 grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
   extent <- as.numeric(extent)
-  if (is.null(dims) == is.null(res))
+  if (is.null(dims) == is.null(res)) {
     cli::cli_abort(c(
       "Provide exactly one of {.arg dims} or {.arg res}.",
-      "i" = "{.arg dims} sets the pixel grid directly; {.arg res} derives it from {.arg extent}."))
+      "i" = "{.arg dims} sets the pixel grid directly; {.arg res} derives it from {.arg extent}."
+    ))
+  }
   if (!is.null(res)) {
-    res <- rep_len(as.numeric(res), 2L)      # scalar (square) or c(xres, yres)
-    if (any(res <= 0)) cli::cli_abort("{.arg res} must be positive.")
-    dims <- c(round((extent[3L] - extent[1L]) / res[1L]),
-              round((extent[4L] - extent[2L]) / res[2L]))
-    if (any(dims < 1L))
-      cli::cli_abort("{.arg res} is coarser than {.arg extent}; no whole pixels fit.")
+    res <- rep_len(as.numeric(res), 2L) # scalar (square) or c(xres, yres)
+    if (any(res <= 0)) {
+      cli::cli_abort("{.arg res} must be positive.")
+    }
+    dims <- c(
+      round((extent[3L] - extent[1L]) / res[1L]),
+      round((extent[4L] - extent[2L]) / res[2L])
+    )
+    if (any(dims < 1L)) {
+      cli::cli_abort(
+        "{.arg res} is coarser than {.arg extent}; no whole pixels fit."
+      )
+    }
     # Snap the extent to a whole number of `res` pixels, anchored at the
     # top-left (xmin, ymax), so the derived resolution is exactly `res`.
-    extent <- c(extent[1L], extent[4L] - dims[2L] * res[2L],
-                extent[1L] + dims[1L] * res[1L], extent[4L])
+    extent <- c(
+      extent[1L],
+      extent[4L] - dims[2L] * res[2L],
+      extent[1L] + dims[1L] * res[1L],
+      extent[4L]
+    )
   }
   dims <- as.integer(dims)
   dx <- (extent[3L] - extent[1L]) / dims[1L]
   dy <- (extent[4L] - extent[2L]) / dims[2L]
   GridSpec(
-    crs       = crs,
+    crs = crs,
     transform = c(extent[1L], dx, 0, extent[4L], 0, -dy),
-    extent    = extent,
-    dims      = dims,
-    dtype     = dtype
+    extent = extent,
+    dims = dims,
+    dtype = dtype
   )
 }
 
@@ -360,22 +431,30 @@ grid_equal <- function(a, b, tol = 1e-9) {
 #'   [grid_equal()] holds.
 #' @export
 grid_diff <- function(a, b, tol = 1e-9) {
-  if (!crs_equal(a@crs, b@crs))
+  if (!crs_equal(a@crs, b@crs)) {
     return("CRS differs")
+  }
   ra <- c(a@transform[[2L]], -a@transform[[6L]])
   rb <- c(b@transform[[2L]], -b@transform[[6L]])
-  if (any(abs(ra - rb) > tol))
-    return(.glue("resolution differs: {format(ra[[1L]])} x {format(ra[[2L]])}",
-                 " vs {format(rb[[1L]])} x {format(rb[[2L]])}"))
+  if (any(abs(ra - rb) > tol)) {
+    return(.glue(
+      "resolution differs: {format(ra[[1L]])} x {format(ra[[2L]])}",
+      " vs {format(rb[[1L]])} x {format(rb[[2L]])}"
+    ))
+  }
   if (any(abs(a@extent - b@extent) > tol)) {
     off <- (b@extent - a@extent) / c(ra[[1L]], ra[[2L]], ra[[1L]], ra[[2L]])
     return(.glue(
       "extents differ by {formatC(max(abs(off[c(1L, 3L)])), format = 'g', digits = 3, width = 1)}",
-      " px in x, {formatC(max(abs(off[c(2L, 4L)])), format = 'g', digits = 3, width = 1)} px in y"))
+      " px in x, {formatC(max(abs(off[c(2L, 4L)])), format = 'g', digits = 3, width = 1)} px in y"
+    ))
   }
-  if (length(a@dims) != length(b@dims) || any(a@dims != b@dims))
-    return(.glue("dims differ: ({paste(a@dims, collapse = ',')}) vs ",
-                 "({paste(b@dims, collapse = ',')})"))
+  if (length(a@dims) != length(b@dims) || any(a@dims != b@dims)) {
+    return(.glue(
+      "dims differ: ({paste(a@dims, collapse = ',')}) vs ",
+      "({paste(b@dims, collapse = ',')})"
+    ))
+  }
   "grids are equal"
 }
 
@@ -391,25 +470,41 @@ grid_diff <- function(a, b, tol = 1e-9) {
 # Internal: same grid, different dtype (dtype promotion on binary ops,
 # float promotion on reductions and nodata sources).
 .grid_retype <- function(grid, dtype) {
-  if (identical(grid@dtype, dtype)) return(grid)
-  GridSpec(crs = grid@crs, transform = grid@transform,
-           extent = grid@extent, dims = grid@dims, dtype = dtype,
-           labels = grid@labels)
+  if (identical(grid@dtype, dtype)) {
+    return(grid)
+  }
+  GridSpec(
+    crs = grid@crs,
+    transform = grid@transform,
+    extent = grid@extent,
+    dims = grid@dims,
+    dtype = dtype,
+    labels = grid@labels
+  )
 }
 
 # Internal: same grid with one non-spatial axis (re)labelled. NULL
 # labels (or a length mismatch, e.g. unnamed layers) leave the grid
 # unchanged rather than erroring: labels are best-effort metadata.
 .grid_relabel <- function(grid, dim, labels) {
-  if (is.null(labels) || !dim %in% names(grid@dims) ||
+  if (
+    is.null(labels) ||
+      !dim %in% names(grid@dims) ||
       length(labels) != grid@dims[[dim]] ||
-      !all(nzchar(labels)))
+      !all(nzchar(labels))
+  ) {
     return(grid)
+  }
   lb <- grid@labels
   lb[[dim]] <- as.character(labels)
-  GridSpec(crs = grid@crs, transform = grid@transform,
-           extent = grid@extent, dims = grid@dims, dtype = grid@dtype,
-           labels = lb)
+  GridSpec(
+    crs = grid@crs,
+    transform = grid@transform,
+    extent = grid@extent,
+    dims = grid@dims,
+    dtype = grid@dtype,
+    labels = lb
+  )
 }
 
 # Internal: the labels of a single-layer-axis grid, for labelled output
@@ -417,6 +512,8 @@ grid_diff <- function(a, b, tol = 1e-9) {
 # NULL when absent/ambiguous.
 .grid_layer_labels <- function(grid) {
   nsd <- setdiff(names(grid@dims), c("x", "y"))
-  if (length(nsd) != 1L) return(NULL)
+  if (length(nsd) != 1L) {
+    return(NULL)
+  }
   grid@labels[[nsd]]
 }

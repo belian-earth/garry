@@ -10,28 +10,42 @@
 # fn(xs, margin) for scan_over(): xs[[1]] is the (t, y, x) observation
 # cube; k window half-width; t0 the MAD threshold.
 .hampel_body <- function(k, t0) {
-  force(k); force(t0)
+  force(k)
+  force(t0)
   function(xs, margin) {
-    if (!identical(as.integer(margin), 1L))
-      cli::cli_abort("hampel filter scans dim 1 (margin 1); got margin {margin}")
+    if (!identical(as.integer(margin), 1L)) {
+      cli::cli_abort(
+        "hampel filter scans dim 1 (margin 1); got margin {margin}"
+      )
+    }
     y <- xs[[1L]]
     T_ <- if (.g_traced(y)) .g_shape(y)[[1L]] else dim(y)[[1L]]
-    if (T_ < 2L)
+    if (T_ < 2L) {
       cli::cli_abort("hampel filter needs at least 2 time slices; got {T_}")
+    }
     kk <- min(k, T_ - 1L)
     shifts <- lapply(seq(-kk, kk), function(d) {
-      if (d == 0L) return(y)
+      if (d == 0L) {
+        return(y)
+      }
       dd <- abs(d)
       pad <- g_slice_t(y, 1L, dd) * NaN
-      if (d > 0L) g_concat_t(list(g_slice_t(y, 1L + dd, T_), pad))
-      else        g_concat_t(list(pad, g_slice_t(y, 1L, T_ - dd)))
+      if (d > 0L) {
+        g_concat_t(list(g_slice_t(y, 1L + dd, T_), pad))
+      } else {
+        g_concat_t(list(pad, g_slice_t(y, 1L, T_ - dd)))
+      }
     })
-    S   <- g_stack(shifts)                      # (2k+1, t, y, x)
+    S <- g_stack(shifts) # (2k+1, t, y, x)
     med <- g_median(S, dims = 1L, nan_rm = TRUE)
-    mad <- g_median(abs(S - g_rep_t(med, length(shifts))),
-                    dims = 1L, nan_rm = TRUE) * 1.4826
+    mad <- g_median(
+      abs(S - g_rep_t(med, length(shifts))),
+      dims = 1L,
+      nan_rm = TRUE
+    ) *
+      1.4826
     out <- g_ifelse(abs(y - med) <= t0 * mad, y, med)
-    g_ifelse(g_is_nodata(y), NaN, out)          # gaps stay gaps
+    g_ifelse(g_is_nodata(y), NaN, out) # gaps stay gaps
   }
 }
 
@@ -65,10 +79,17 @@
 #' @export
 hampel_smooth <- function(x, k = 3L, t0 = 3, bands = NULL) {
   k <- as.integer(k)
-  if (length(k) != 1L || is.na(k) || k < 1L)
+  if (length(k) != 1L || is.na(k) || k < 1L) {
     cli::cli_abort("{.arg k} must be a positive integer")
-  if (!is.numeric(t0) || length(t0) != 1L || !is.finite(t0) || t0 < 0)
+  }
+  if (!is.numeric(t0) || length(t0) != 1L || !is.finite(t0) || t0 < 0) {
     cli::cli_abort("{.arg t0} must be a finite non-negative scalar")
-  scan_over(x, .hampel_body(k, t0), over = "t", direction = "bidir",
-            bands = bands)
+  }
+  scan_over(
+    x,
+    .hampel_body(k, t0),
+    over = "t",
+    direction = "bidir",
+    bands = bands
+  )
 }
