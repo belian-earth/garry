@@ -71,27 +71,42 @@ The clustering below uses all of them.
 
 An unsupervised k-means over the 64-dimensional embedding vectors segments
 the landscape without a single training label. The pattern is
-fit-small, predict-lazily:
+fit-small, predict-lazily -- and neither half needs the raster on disk:
 
-**Fit.** k-means needs pixels in R, but not all 7.5 million of them. AEF
-embeddings are built to average linearly (the read above already relies on
-that with `resampling = "average"`), so fit on a coarser 120 m read of the
-same tile: an overview-backed, light fetch of ~470k pixels.
+**Fit.** k-means needs pixels in R, but not all 7.5 million of them --
+100k scattered ones place five centroids perfectly well. `sample_points()`
+gathers exactly the pixels asked for, straight from the lazy graph: the
+reads stream and the dequant fuses onto them as usual, but only the
+sampled table ever reaches R. No raster is written, and none is held in
+memory.
+
+Points are a [wk](https://paleolimbot.github.io/wk/) `xy` vector carrying
+their own CRS, so they are placed on the grid explicitly rather than by
+assumption (`wk::as_xy()` converts points from sf, terra or a data frame).
 
 ```{r km-fit, message = FALSE, warning = FALSE}
-emb120 <- lazy_dataset(tile, grid_from_src(tile, 120),
-                       resampling = "average") |>
-  lazy_map(fn = dequantize_aef, dtype = "f32")
-
 garry_daemons()
-arr <- collect(stack_bands(emb120))          # (y, x, 64)
-px  <- matrix(arr, ncol = dim(arr)[[3]])
-px  <- px[stats::complete.cases(px), ]
 set.seed(42)
-px  <- px[sample(nrow(px), 1e5), ]           # 100k px place 6 centroids fine
-km  <- kmeans(px, centers = 5)
+n   <- 1e5
+pts <- wk::xy(
+  stats::runif(n, xmin(grid), xmax(grid)),
+  stats::runif(n, ymin(grid), ymax(grid)),
+  crs = grid@crs
+)
+
+px <- sample_points(embeddings, pts)         # (100000, 64), dequantised
+dim(px)
+px <- px[stats::complete.cases(px), ]
+km <- kmeans(px, centers = 5)
 km$size
 ```
+
+The same call is how a model gets its training table off any garry
+pipeline: give it the GEDI shots, the field plots or the labelled points
+instead of random ones. `method = "bilinear"` interpolates the four
+surrounding cell centres for continuous data measured off-grid,
+renormalising over whatever is valid so a point beside a cloud mask or a
+tile edge still returns a value.
 
 **Assign.** Every 30 m pixel goes to its nearest centroid:
 `argmax_k (x . c_k - |c_k|^2 / 2)`, and `x . c_k` is a linear combination of
