@@ -113,6 +113,43 @@ ir-extensions-todo #1, pending anvl's iteration work). Both missing
 pieces are ALREADY roadmap items; T3 is what falls out when they land,
 not a separate ask.
 
+## Measured: where the saving actually is (2026-08-14)
+
+Benchmark (`benchmarks/sample-points-bench.R`, AEF tile, 61 km window at 30 m,
+3 bands, 49 source tiles of 1024 px; each measurement in a FRESH process
+so no route inherits a warm vsicurl cache):
+
+| case | tiles touched | sample | collect | targeted |
+|---|---|---|---|---|
+| 200 clustered | 1/49 | 14.9 s | 16.2 s | 11.9 s |
+| 200 scattered | 36/49 | 15.7 s | 15.4 s | 43.7 s |
+| 5000 scattered | 42/49 | 15.1 s | 15.8 s | 35.8 s |
+
+("targeted" = `gdalraster::pixel_extract` straight off the remote COG:
+fetch only the tiles holding points, but read the SOURCE, no graph.)
+
+Three findings, and they redirect the roadmap:
+
+1. **Phase 1 gives NO fetch/compute saving** -- sample and collect are
+   within noise everywhere. Its value is no disk round-trip, no
+   whole-raster array in R, and the API. Do not claim speed for it.
+2. **Per-point targeted reads are the WRONG answer**: 2.8x SLOWER for
+   scattered points (43.7 vs 15.7 s), because a read per point trades
+   garry's few big parallel windowed reads for thousands of
+   latency-bound ones. This is the "per-point windowed reads" pattern
+   already listed under "Explicitly not", now measured.
+3. **Even at 1/49 tiles, targeted saved only 20%** -- the fixed cost of
+   opening this remote COG (64 bands x 13 overviews of header) dominates.
+   There is a floor under every strategy on headers this size.
+
+**So Phase 2's justification changes.** The win is not skipping COMPUTE,
+it is never ISSUING the read windows that hold no points -- keeping the
+parallel high-throughput read pattern while cutting volume. Worth it for
+spatially concentrated points (GEDI tracks, field plots); nothing helps
+scattered points, which genuinely need the data. TILE COVERAGE, not point
+count, is the number that predicts the saving, and it is cheap to compute
+at plan time -- so a future planner could pick the strategy from it.
+
 ## Open questions
 
 - **Sampling semantics.** Nearest cell by default. Bilinear/footprint
