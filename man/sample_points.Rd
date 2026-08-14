@@ -8,7 +8,8 @@ sample_points(
   x,
   pts,
   method = c("nearest", "bilinear"),
-  distributed = garry_daemons_set()
+  distributed = garry_daemons_set(),
+  window = TRUE
 )
 }
 \arguments{
@@ -25,6 +26,12 @@ with \code{\link[wk:as_xy]{wk::as_xy()}}.}
 
 \item{distributed}{Execute across the \code{\link[=garry_daemons]{garry_daemons()}} pools? Defaults
 to \code{\link[=garry_daemons_set]{garry_daemons_set()}}, as in \code{\link[=collect]{collect()}}.}
+
+\item{window}{Plan only the points' bounding box when it is a small
+enough part of the grid to be worth it (\code{garry.sample_window_fraction},
+default 0.5)? Spatially concentrated points then read a fraction of
+the data; scattered points span the raster anyway and the full grid is
+planned regardless. \code{FALSE} always plans the full grid.}
 }
 \value{
 A numeric matrix shaped like \code{\link[=collect]{collect()}}'s result without the

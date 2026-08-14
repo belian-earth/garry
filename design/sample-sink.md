@@ -158,7 +158,26 @@ still runs fetches everything anyway. Phase 2 must therefore control READ
 GRANULARITY, and the benchmark above brackets it: one big window is
 15.7 s but unprunable, one read per point is 43.7 s and latency-bound.
 
-**Preferred Phase 2 design: decompose the POINT SET, not the scheduler.**
+**Phase 2 SHIPPED 2026-08-14** as the sub-window rewrite below
+(`.sample_subwindow`, R/sample.R). Measured, honestly:
+
+| workload | windowed | full grid |
+|---|---|---|
+| AEF remote, 3 bands, 2048^2, 50 clustered pts | 13.8 s | 15.9 s (1.2x) |
+| AEF remote, 64 bands, 2048^2, same points | 10.7 / 21.1 s | 77.0 / 23.5 s |
+
+The 3-band case is only 1.2x because FIXED costs dominate it (daemon
+spawn, the remote COG open, XLA init) -- cutting 99.4% of the data
+cannot help what is not data. The 64-band case is where the variable
+cost is large enough to matter, and the rewrite is always at least as
+fast, but link variance across reps (full grid 77.0 vs 23.5 s) means
+the ratio is somewhere between 1.1x and 7x and this benchmark cannot
+pin it down. A local low-noise rerun OOM-killed a 24G scope on the
+full-grid arm, which is itself a data point about what is being
+avoided. Treat the win as "real, workload-dependent, never negative"
+until someone measures it on a quiet link.
+
+**Design: decompose the POINT SET, not the scheduler.**
 Cover the points with a few bounding boxes, run one ORDINARY sub-plan per
 box over that sub-grid, concatenate the tables. A smaller grid yields
 smaller read windows automatically, so granularity solves itself, and

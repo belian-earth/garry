@@ -46,6 +46,11 @@ NULL
 #' @param method `"nearest"` (default) or `"bilinear"`; see above.
 #' @param distributed Execute across the [garry_daemons()] pools? Defaults
 #'   to [garry_daemons_set()], as in [collect()].
+#' @param window Plan only the points' bounding box when it is a small
+#'   enough part of the grid to be worth it (`garry.sample_window_fraction`,
+#'   default 0.5)? Spatially concentrated points then read a fraction of
+#'   the data; scattered points span the raster anyway and the full grid is
+#'   planned regardless. `FALSE` always plans the full grid.
 #' @return A numeric matrix shaped like [collect()]'s result without the
 #'   spatial axes: one row per point, one column per layer of the sink's
 #'   non-spatial axis (bands after a dataset is stacked, or time slices
@@ -58,7 +63,8 @@ sample_points <- function(
   x,
   pts,
   method = c("nearest", "bilinear"),
-  distributed = garry_daemons_set()
+  distributed = garry_daemons_set(),
+  window = TRUE
 ) {
   method <- rlang::arg_match(method)
   if (S7::S7_inherits(x, LazyDatasetGroups)) {
@@ -72,6 +78,12 @@ sample_points <- function(
   }
   .assert_class(x, LazyRaster, "LazyRaster")
   xy <- .pts_xy(pts)
+  # Plan only the part of the grid the points fall in, when that is a real
+  # saving; the weights are recomputed against whatever grid survives, so
+  # the gather needs no offset bookkeeping.
+  if (isTRUE(window)) {
+    x <- .sample_subwindow(x, xy, method) %||% x
+  }
   .collect_impl(
     x,
     distributed = distributed,
@@ -216,4 +228,120 @@ sample_points <- function(
     dimnames(out) <- list(NULL, labels)
   }
   out
+}
+
+# ---------------------------------------------------------------------------
+# Sub-window rewrite (phase 2): plan only the part of the grid the points
+# actually fall in.
+#
+# Chunk pruning alone is cosmetic -- a 2048^2 grid plans ONE 5120^2 source
+# read window, so skipping compute chunks still fetches everything
+# (design/sample-sink.md, measured 2026-08-14). What cuts the fetch is a
+# SMALLER GRID: rebuild the graph over the points' bounding box and every
+# read window shrinks with it, with no scheduler surgery and none of the
+# drain hazards that pruning carries. Scattered points give a box covering
+# the whole raster, and the rewrite correctly declines.
+# ---------------------------------------------------------------------------
+
+# Window the spatial dims of a grid; non-spatial dims (band, t) ride along.
+.window_grid <- function(grid, x_off, y_off, nx, ny) {
+  gt <- grid@transform
+  x0 <- gt[[1L]] + x_off * gt[[2L]]
+  y0 <- gt[[4L]] + y_off * gt[[6L]]
+  dims <- grid@dims
+  dims[["x"]] <- as.integer(nx)
+  dims[["y"]] <- as.integer(ny)
+  GridSpec(
+    crs = grid@crs,
+    transform = c(x0, gt[[2L]], 0, y0, 0, gt[[6L]]),
+    extent = c(x0, y0 + ny * gt[[6L]], x0 + nx * gt[[2L]], y0),
+    dims = dims,
+    dtype = grid@dtype,
+    labels = grid@labels
+  )
+}
+
+# GTI sources pin their extent in the open options (gti_open_options), so a
+# windowed source must carry the window's extent. Resolution is unchanged.
+.window_open_options <- function(oo, wg) {
+  if (!length(oo)) {
+    return(oo)
+  }
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
+  keep <- oo[!grepl("^(MINX|MINY|MAXX|MAXY)=", oo)]
+  if (length(keep) == length(oo)) {
+    return(oo) # no extent pinned: nothing to rewrite
+  }
+  c(
+    keep,
+    paste0("MINX=", num(wg@extent[[1L]])),
+    paste0("MINY=", num(wg@extent[[2L]])),
+    paste0("MAXX=", num(wg@extent[[3L]])),
+    paste0("MAXY=", num(wg@extent[[4L]]))
+  )
+}
+
+# Rebuild `lr` over the bounding box of its sample points, or NULL when that
+# is not worth it (or not safe). NULL means "plan the full grid".
+.sample_subwindow <- function(lr, xy, method) {
+  grid <- lr@grid
+  w <- .sample_weights(xy, grid, method)
+  if (!nrow(w)) {
+    return(NULL)
+  }
+  x0 <- min(w$col)
+  y0 <- min(w$row)
+  nx <- max(w$col) - x0 + 1L
+  ny <- max(w$row) - y0 + 1L
+  full <- as.numeric(grid@dims[["x"]]) * as.numeric(grid@dims[["y"]])
+  if ((as.numeric(nx) * as.numeric(ny)) / full >
+        garry_opt("sample_window_fraction")) {
+    return(NULL) # points span most of the raster: nothing to save
+  }
+  g <- lr@graph
+  nodes <- lapply(.reachable(g, lr@node_id), function(i) graph_get(g, i))
+  # Window only the nodes living in the SINK's spatial frame. A WarpNode is
+  # the one node that bridges frames, so windowing its target while leaving
+  # its parent at native resolution is exactly right: the warp then reads
+  # only the source region covering the window. Every other node shares its
+  # parent's spatial grid, so a node in the sink frame never has an
+  # unwindowed parent, and shapes stay consistent.
+  in_frame <- function(n) .spatial_equal(n@grid, grid)
+  # A windowed SOURCE must have a read that follows the window. GTI sources
+  # pin their extent in the open options, so rewriting MINX/MINY genuinely
+  # windows the dataset; a plain file has no such handle -- its pixels stay
+  # put, so a windowed grid would read at offsets relative to the file
+  # origin and silently return the wrong region. Sources BELOW a warp are
+  # untouched, so this only gates the ones being rewritten. (Mirrors
+  # .preview_coarsen's RESX= guard.)
+  bad_src <- vapply(
+    nodes,
+    function(n) {
+      S7::S7_inherits(n, SourceNode) && in_frame(n) &&
+        !any(grepl("^MINX=", n@open_options))
+    },
+    logical(1)
+  )
+  if (any(bad_src)) {
+    return(NULL)
+  }
+  ng <- graph_new()
+  idmap <- new.env(parent = emptyenv())
+  for (n in nodes) {
+    ps <- vapply(n@parents, function(p) idmap[[.key(p)]], integer(1))
+    nid <- .regrid_node(
+      ng, n, ps,
+      if (in_frame(n)) .window_grid(n@grid, x0, y0, nx, ny) else n@grid,
+      .window_open_options
+    )
+    if (is.null(nid)) {
+      return(NULL) # a node type the rewrite cannot re-emit
+    }
+    idmap[[.key(n@id)]] <- nid
+  }
+  LazyRaster(
+    graph = ng,
+    node_id = idmap[[.key(lr@node_id)]],
+    grid = .window_grid(grid, x0, y0, nx, ny)
+  )
 }

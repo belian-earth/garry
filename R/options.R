@@ -315,6 +315,18 @@
     desc = "fraction of available RAM for pipeline compute working sets",
     check = .opt_num(min = 1e-300, max = 1)
   ),
+  # Largest fraction of the grid a point-sampling sub-window may cover
+  # before sample_points() gives up and plans the full grid. Rebuilding the
+  # graph over the points' bounding box is what actually cuts the FETCH
+  # (chunk pruning alone does not: a 2048^2 grid plans one 5120^2 source
+  # read window), but it only pays when the points are spatially
+  # concentrated -- scattered points span the raster and the rewrite is
+  # pure overhead. Measured 2026-08-14: 200 clustered points touched 1
+  # source tile of 49, 5000 scattered touched 42.
+  sample_window_fraction = list(
+    default = 0.5, tier = "tuning",
+    desc = "largest grid fraction a point-sample sub-window may cover",
+    check = .opt_num(min = 1e-300, max = 1)),
   # Multi-band composites (n_bands > 1): fan the per-band medians out to the
   # (XLA-pre-warmed) compute pool instead of one whole-grid kernel in-process.
   # On a garry_daemons SPLIT pool this uses the fetch-ordered pipeline (fetch

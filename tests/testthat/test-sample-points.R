@@ -155,3 +155,70 @@ test_that("a bilinear neighbourhood straddling a chunk boundary is exact", {
       sample_points(x, p, method = "bilinear", distributed = TRUE), ref)
   })
 })
+
+test_that("a clustered sample plans only its sub-window, with identical values", {
+  # GTI sources pin their extent in the open options, so the sub-window
+  # rewrite can genuinely window them; values must not move.
+  gti <- .gg_gti(list(a = .gg_val(0)))
+  x <- .gg_slice(gti, "a", graph_new())
+  set.seed(5)
+  clus <- wk::xy(stats::runif(40, 60, 180), stats::runif(40, 260, 380),
+                 crs = "EPSG:3857")
+  scat <- wk::xy(stats::runif(40, 0, 600), stats::runif(40, 0, 400),
+                 crs = "EPSG:3857")
+
+  sub <- garry:::.sample_subwindow(x, garry:::.pts_xy(clus), "nearest")
+  expect_false(is.null(sub))                       # clustered -> rewritten
+  expect_lt(prod(unname(sub@grid@dims[c("x", "y")])), 0.5 * 60 * 40)
+  expect_null(garry:::.sample_subwindow(x, garry:::.pts_xy(scat), "nearest"))
+
+  for (m in c("nearest", "bilinear")) {
+    expect_identical(
+      sample_points(x, clus, method = m, window = TRUE, distributed = FALSE),
+      sample_points(x, clus, method = m, window = FALSE, distributed = FALSE),
+      label = m
+    )
+  }
+  local_pools(2, 1)
+  expect_identical(
+    sample_points(x, clus, method = "bilinear", distributed = TRUE),
+    sample_points(x, clus, method = "bilinear", window = FALSE,
+                  distributed = FALSE)
+  )
+})
+
+test_that("a warp's target is windowed while its source stays native", {
+  # lazy_dataset(file, grid) puts a WarpNode between a native-resolution
+  # source and the analysis grid. Only the warp's target is windowed --
+  # the plain-file source below it must be left alone, or its reads would
+  # slide off the file origin.
+  dir <- withr::local_tempdir()
+  f <- file.path(dir, "native.tif")
+  d <- gdalraster::create("GTiff", f, 120, 80, 2, "Float32", return_obj = TRUE)
+  d$setGeoTransform(c(0, 5, 0, 400, 0, -5))       # 5 m native
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  nat <- outer(1:80, 1:120, `+`)                  # native-resolution values
+  for (b in 1:2) d$write(b, 0, 0, 120, 80, as.numeric(t(nat * b)))
+  d$close()
+  target <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400),
+                      dims = c(60L, 40L), dtype = "f32")   # 10 m analysis grid
+  x <- stack_bands(lazy_dataset(f, target))
+  kinds <- vapply(garry:::.reachable(x@graph, x@node_id),
+                  function(i) class(garry:::graph_get(x@graph, i))[[1L]], "")
+  expect_true(any(grepl("WarpNode", kinds)))       # the case under test
+
+  set.seed(9)
+  clus <- wk::xy(stats::runif(30, 40, 160), stats::runif(30, 280, 380),
+                 crs = "EPSG:3857")
+  sub <- garry:::.sample_subwindow(x, garry:::.pts_xy(clus), "nearest")
+  expect_false(is.null(sub))                       # warp target windowed
+  expect_lt(prod(unname(sub@grid@dims[c("x", "y")])), 0.5 * 60 * 40)
+
+  for (m in c("nearest", "bilinear")) {
+    expect_identical(
+      sample_points(x, clus, method = m, window = TRUE, distributed = FALSE),
+      sample_points(x, clus, method = m, window = FALSE, distributed = FALSE),
+      label = m
+    )
+  }
+})
