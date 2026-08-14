@@ -24,7 +24,8 @@ Imports:
     methods,
     mirai,
     mori,
-    rlang
+    rlang,
+    wk
 Remotes:
     hypertidy/vaster,
     firelab/gdalraster,
@@ -85,6 +86,7 @@ Collate:
     'preview.R'
     'reduce_multiband.R'
     'safetensors.R'
+    'sample.R'
     'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'

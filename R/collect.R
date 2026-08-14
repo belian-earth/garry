@@ -43,7 +43,8 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   nodata = NULL,
   distributed = garry_daemons_set(),
   band_names = NULL,
-  wspec = NULL
+  wspec = NULL,
+  sample = NULL
 ) {
   .garry_opt_check()
   # A grouped dataset materialises one result per time group (see
@@ -116,8 +117,12 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
     # every route) is worth more than the fast path here. Folding wq
     # into the cd/gd kernels is the follow-up (ir-extensions-todo #12).
     quantizing <- !is.null(wspec) && length(wspec$scale) == 1L
-    spec <- if (quantizing) NULL else .cd_spec(p) # composite fast path
-    decomp <- if (is.null(spec) && !quantizing) .gd_decompose(p) else NULL
+    # A sample sink gathers at the SHARED host tail (.exec_sink_tail); the
+    # cd/gd fast paths write/return through their own sink handling and
+    # never reach it, so a sampling plan takes the general route.
+    general <- quantizing || !is.null(sample)
+    spec <- if (general) NULL else .cd_spec(p) # composite fast path
+    decomp <- if (is.null(spec) && !general) .gd_decompose(p) else NULL
     # Record which route ran (garry_last_route()): the selection is
     # silent, and a plan silently changing route is exactly the
     # regression class the equivalence suite must be able to observe.
@@ -154,7 +159,8 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
         path = path,
         nodata = nodata,
         band_names = band_names,
-        wspec = wspec
+        wspec = wspec,
+        sample = sample
       )
     }
   } else {
@@ -164,11 +170,17 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
       path = path,
       nodata = nodata,
       band_names = band_names,
-      wspec = wspec
+      wspec = wspec,
+      sample = sample
     )
   }
   if (!is.null(path)) {
     return(invisible(res))
+  }
+  if (!is.null(sample)) {
+    # already a (point, layer) table -- not spatial, so no gis attribute
+    # (same reasoning as a scalar global reduction)
+    return(res)
   }
   out <- .collect_layout(res)
   # Self-describing result: a gdalraster read_ds()-style `gis` attribute from the

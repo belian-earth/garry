@@ -9,7 +9,8 @@ execute_plan_mirai(
   path = NULL,
   nodata = NULL,
   band_names = NULL,
-  wspec = NULL
+  wspec = NULL,
+  sample = NULL
 )
 }
 \arguments{

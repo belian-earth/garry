@@ -144,7 +144,8 @@ execute_plan_mirai <- function(
   path = NULL,
   nodata = NULL,
   band_names = NULL,
-  wspec = NULL
+  wspec = NULL,
+  sample = NULL
 ) {
   .garry_opt_check()
   # Distributed execution runs on the garry_daemons() split pools: read/warp
@@ -2274,6 +2275,7 @@ execute_plan_mirai <- function(
     chunks_of = chunks_of,
     path = path,
     wspec = wspec,
+    sample = sample,
     nodata = nodata,
     band_names = band_names,
     streamed_path = streamed_path

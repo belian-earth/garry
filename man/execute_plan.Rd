@@ -4,7 +4,14 @@
 \alias{execute_plan}
 \title{Execute a Plan on the anvl backend (single process).}
 \usage{
-execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL, wspec = NULL)
+execute_plan(
+  plan,
+  path = NULL,
+  nodata = NULL,
+  band_names = NULL,
+  wspec = NULL,
+  sample = NULL
+)
 }
 \arguments{
 \item{plan}{A \code{Plan}.}
