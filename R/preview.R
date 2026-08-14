@@ -420,13 +420,7 @@ NULL
   )
 }
 
-# Rebuild one node in a fresh graph on a different grid. Shared by the
-# preview coarsener and the point-sampling sub-window rewrite
-# (R/sample.R): both walk a reachable node set and re-emit it on a
-# transformed grid, differing only in how the source open options are
-# rewritten. Returns NULL for a node type it cannot re-emit, which the
-# callers treat as "do not transform this graph".
-.regrid_node <- function(ng, n, parents, cg, oo_fn = .coarsen_open_options) {
+.coarsen_node <- function(ng, n, parents, cg) {
   if (S7::S7_inherits(n, SourceNode)) {
     graph_add(
       ng,
@@ -437,7 +431,7 @@ NULL
       band = n@band,
       nodata = n@nodata,
       block_dim = n@block_dim,
-      open_options = oo_fn(n@open_options, cg)
+      open_options = .coarsen_open_options(n@open_options, cg)
     )
   } else if (S7::S7_inherits(n, MapNode)) {
     graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn)
@@ -515,7 +509,7 @@ NULL
   idmap <- new.env(parent = emptyenv())
   for (n in nodes) {
     ps <- vapply(n@parents, function(p) idmap[[.key(p)]], integer(1))
-    nid <- .regrid_node(ng, n, ps, .coarsen_grid(n@grid, factor))
+    nid <- .coarsen_node(ng, n, ps, .coarsen_grid(n@grid, factor))
     if (is.null(nid)) {
       return(NULL)
     }

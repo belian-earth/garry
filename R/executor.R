@@ -771,12 +771,8 @@ NULL
   nodata,
   band_names,
   streamed_path = NULL,
-  wspec = NULL,
-  sample = NULL
+  wspec = NULL
 ) {
-  if (!is.null(sample) && length(plan@sinks) > 1L) {
-    cli::cli_abort("sampling a multi-export plan is not supported yet.")
-  }
   if (length(plan@sinks) > 1L) {
     res <- lapply(seq_along(plan@sinks), function(k) {
       nid <- plan@sinks[[k]]
@@ -831,22 +827,6 @@ NULL
   chunks <- lapply(chunks_of(sink), `[[`, key)
   it <- chunk_iter(sink@chunks)
   sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
-  if (!is.null(sample)) {
-    # Sample sink: gather at the points instead of assembling a raster.
-    # Both executors converge here, so this one branch serves the
-    # single-process and scheduler routes alike.
-    g <- sink@grid
-    outer <- g@dims[!names(g@dims) %in% c("x", "y")]
-    return(.sample_gather(
-      chunks,
-      it,
-      .sample_weights(sample$xy, g, sample$method),
-      sink_pad,
-      n_pts = sample$xy$n,
-      outer_n = if (length(outer)) unname(outer[[1L]]) else 1L,
-      labels = .grid_layer_labels(g)
-    ))
-  }
   if (!is.null(path)) {
     return(.exec_write_sink(
       chunks,
@@ -898,8 +878,7 @@ execute_plan <- function(
   path = NULL,
   nodata = NULL,
   band_names = NULL,
-  wspec = NULL,
-  sample = NULL
+  wspec = NULL
 ) {
   .require_anvl()
   .garry_opt_check()
@@ -1069,8 +1048,7 @@ execute_plan <- function(
     path = path,
     nodata = nodata,
     band_names = band_names,
-    wspec = wspec,
-    sample = sample
+    wspec = wspec
   )
 
   if (

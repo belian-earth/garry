@@ -1132,6 +1132,22 @@ gdal_write_window <- function(
   invisible(NULL)
 }
 
+#' Extract raster values at points (adapter).
+#'
+#' D13: the only home for the `gdalraster::pixel_extract` call. Handles
+#' interpolation, kernel windows, point reprojection and the RAM guard
+#' itself, and reads only the blocks holding points -- so garry delegates
+#' rather than reimplementing any of it.
+#'
+#' @param raster Path or `GDALRaster` object.
+#' @param ... Passed to [gdalraster::pixel_extract()].
+#' @return As [gdalraster::pixel_extract()].
+#' @keywords internal
+#' @export
+gdal_pixel_extract <- function(raster, ...) {
+  gdalraster::pixel_extract(raster, ...)
+}
+
 # Whole-file gdal_translate (D13: the only home for the gdalraster call).
 # Used by write_tif(cog = TRUE) to finalise a streamed GeoTIFF into COG
 # layout. Returns TRUE on success.

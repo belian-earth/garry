@@ -86,10 +86,10 @@ Collate:
     'preview.R'
     'reduce_multiband.R'
     'safetensors.R'
+    'write_tif.R'
     'sample.R'
     'scan_hampel.R'
     'scan_kalman.R'
     'task_report.R'
-    'write_tif.R'
     'zzz.R'
 URL: https://belian-earth.github.io/garry/
