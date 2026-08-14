@@ -150,6 +150,34 @@ scattered points, which genuinely need the data. TILE COVERAGE, not point
 count, is the number that predicts the saving, and it is cheap to compute
 at plan time -- so a future planner could pick the strategy from it.
 
+**And chunk pruning alone is COSMETIC** (verified 2026-08-14): a 2048^2
+grid plans compute chunks of 1024^2 (4 chunks) against a source read
+stage of chunk_dim 5120x5120 -- ONE window over the whole raster, because
+read_target_px is 3.2e7. Skipping compute chunks while that single read
+still runs fetches everything anyway. Phase 2 must therefore control READ
+GRANULARITY, and the benchmark above brackets it: one big window is
+15.7 s but unprunable, one read per point is 43.7 s and latency-bound.
+
+**Preferred Phase 2 design: decompose the POINT SET, not the scheduler.**
+Cover the points with a few bounding boxes, run one ORDINARY sub-plan per
+box over that sub-grid, concatenate the tables. A smaller grid yields
+smaller read windows automatically, so granularity solves itself, and
+there is no scheduler surgery -- every sub-plan is a normal collect, so
+none of the drain hazards below apply. Cost: k boxes = k sequential
+drains (the pulsing multi-export fixed for grouped collects), so keep k
+small and fall back to the single-plan path when the boxes cover most of
+the raster anyway.
+
+**Fallback, only if measurement demands it: true chunk pruning.** Safe
+ONLY for sample sinks (a raster write needs every chunk, so the assembly
+and streaming paths stay untouched by construction) and only when no
+reduce_combine stage exists (a global x/y reduction needs every partial).
+Hazards to clear first: `dep_left` is built from dependencies with no
+existence check, so one skipped producer chunk hangs the drain forever;
+`dep_of`/`elt_of` are positional in j (scheduler.R:854-855);
+`fetch_reads_left` counts the full table; and out_of/.exec_assemble/
+.exec_write_sink/sink_task_map all iterate seq_len(nrow(it)).
+
 ## Open questions
 
 - **Sampling semantics.** Nearest cell by default. Bilinear/footprint
