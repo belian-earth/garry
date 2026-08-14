@@ -1,5 +1,11 @@
 # Sample sink: point sampling, polygon subsetting, in-graph fits
 
+> **OUTCOME 2026-08-14: the sample sink was BUILT, MEASURED and REMOVED.**
+> garry ships `extract_points()` instead -- a thin delegation to
+> `gdalraster::pixel_extract()`, scoped to materialised cubes. The
+> reasoning below is kept because the measurements are what settled it;
+> see "What the experiment settled" at the end.
+
 Date: 2026-08-13. Status: DESIGN, not scheduled. Origin: Hugh's
 observation that solving point sampling would let model FITS join the
 pipeline, removing intermediate disk from the fit path.
@@ -233,3 +239,38 @@ existence check, so one skipped producer chunk hangs the drain forever;
   way back INTO the graph.
 - design/fixed-point-note.md -- reduce-by-key zonal as an accepted
   scope candidate.
+
+
+## What the experiment settled (2026-08-14)
+
+The sample sink shipped as `sample_points()` (weights-table gather at the
+shared host tail) plus a Phase 2 sub-window rewrite, and both were then
+removed. Three measurements did it:
+
+1. **On a local cube, gathering is ~100x slower than GDAL.**
+   1000 points x 16 bands over a 2048^2 cube: `pixel_extract` 0.03 s vs
+   `sample_points` 3.35 s. Structural, not tuning -- GDAL reads only the
+   blocks holding points; the gather computed the whole raster to keep a
+   few thousand cells.
+2. **Per-point fetching loses on remote sources.** `pixel_extract`
+   straight off a remote COG was 2.8x SLOWER than garry's windowed reads
+   for scattered points (43.7 vs 15.7 s): thousands of latency-bound
+   range requests instead of a few big parallel ones. This also rules out
+   a "pushdown" design where the SOURCE read becomes a point extraction.
+3. **Real GEDI shots hit 100% of tiles.** Three cached shot sets
+   (122k-1.2M shots over 23-74 km AOIs), at 10 m and 30 m, with 512 px
+   and 1024 px tiles: EVERY configuration hit every tile in the bounding
+   box. GEDI's dense along-track sampling across many orbits means there
+   is no spatial concentration to exploit, so the sub-window rewrite
+   would have been a no-op and pushdown would fetch everything anyway --
+   by the slower route.
+
+**Conclusion.** Sampling does not need a bespoke read path. Materialise
+(the cube is wanted again anyway -- for the predict pass, for a second
+model, for inspection) and extract from it. `extract_points()` refuses an
+unmaterialised pipeline rather than writing a cube silently: the write is
+expensive and visible, so the caller owns it.
+
+**Still open, and untouched by this**: polygon subsetting and the
+reduce-by-key zonal candidate, which are about MASKS and GROUPS rather
+than scattered cells, and do not inherit the tile-coverage problem.

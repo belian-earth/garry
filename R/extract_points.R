@@ -3,36 +3,40 @@
 NULL
 
 # ---------------------------------------------------------------------------
-# pixel_extract(): gdalraster's point sampler, extended to garry objects.
+# extract_points(): sample a MATERIALISED cube at points.
 #
-# gdalraster::pixel_extract() already samples a raster at points properly --
+# gdalraster::pixel_extract() already samples a raster properly --
 # nearest/bilinear/cubic interpolation, kernel windows, point reprojection,
-# a RAM guard -- and it reads only the blocks holding points, which on a
-# local cube measured ~100x faster than gathering the whole raster
-# (design/sample-sink.md). What it cannot do is sample a lazy PIPELINE.
+# a RAM guard -- and reads only the blocks holding points, measured ~100x
+# faster than computing a whole raster to keep a few thousand cells
+# (design/sample-sink.md). garry therefore delegates rather than
+# reimplementing, and only adds what it uniquely knows: which local files a
+# lazy object reads.
 #
-# So garry does not reimplement sampling: it exports its own pixel_extract
-# which masks gdalraster's, hands anything that is not a garry object
-# straight through unchanged, and for a lazy object gives GDAL something to
-# read -- the source path when the graph is already a bare local source
-# (what materialise() returns), else a temporary materialised cube.
+# Deliberately NOT automatic: a lazy pipeline is refused rather than
+# quietly materialised. Writing a cube is an expensive, visible step and
+# the caller should own the decision (and keep the cube, which is almost
+# always wanted again). Hidden IO is the ambiguity this design removes.
 # ---------------------------------------------------------------------------
 
 #' Extract raster values at points.
 #'
-#' garry's extension of [gdalraster::pixel_extract()]: identical for every
-#' input that function already accepts (a path or a `GDALRaster`, passed
-#' through untouched), and additionally accepting a `LazyRaster` or
-#' `LazyDataset`.
+#' Samples a raster at points via [gdalraster::pixel_extract()], which reads
+#' only the blocks containing points. Accepts anything that function accepts
+#' (a path or a `GDALRaster`, passed through untouched) plus a garry
+#' `LazyRaster`/`LazyDataset` that is already **materialised** -- i.e. one
+#' whose graph is a bare source over local files, as [materialise()]
+#' returns.
 #'
-#' A lazy object has no pixels until it runs, so garry gives GDAL something
-#' to read. When the graph is already a bare source over local files -- what
-#' [materialise()] returns -- those files are read directly. Otherwise the
-#' pipeline is written to a temporary uncompressed cube, sampled, and the
-#' cube removed. Writing first is deliberate: GDAL reads only the
-#' blocks containing points, so extraction from a cube is far cheaper than
-#' computing a whole raster to keep a few thousand cells. If you want the
-#' cube as well, call [materialise()] yourself and pass the result.
+#' An unmaterialised pipeline is an error, not a silent cube write. Getting
+#' pixels onto disk costs real time and space, and the cube is almost always
+#' wanted again (for the predict pass, say), so the caller should own that
+#' step:
+#'
+#' ```r
+#' cube <- materialise(pipeline)     # explicit, reusable
+#' vals <- extract_points(cube, pts)
+#' ```
 #'
 #' `xy` may be a [wk::xy()] point vector, in which case its CRS supplies
 #' `xy_srs` and GDAL reprojects as needed; a matrix or data frame behaves
@@ -53,17 +57,15 @@ NULL
 #' @examples
 #' \dontrun{
 #' pts <- wk::xy(c(512300, 514800), c(4600100, 4601900), crs = "EPSG:32632")
-#' # a lazy pipeline: materialised to a temporary cube, then sampled
-#' pixel_extract(composite, pts, interp = "bilinear")
-#' # keep the cube if you want it for anything else
 #' cube <- materialise(composite)
-#' pixel_extract(cube, pts)
+#' extract_points(cube, pts, interp = "bilinear")
+#' extract_points("composite.tif", pts)   # a path works too
 #' }
 #' @export
-pixel_extract <- function(raster, xy, bands = NULL, interp = NULL, ...) {
+extract_points <- function(raster, xy, bands = NULL, interp = NULL, ...) {
   if (S7::S7_inherits(raster, LazyDatasetGroups)) {
     cli::cli_abort(c(
-      "{.fn pixel_extract} does not take a grouped dataset.",
+      "{.fn extract_points} does not take a grouped dataset.",
       "i" = "Extract from each group, or {.fn reduce_over} the groups first."
     ))
   }
@@ -79,16 +81,11 @@ pixel_extract <- function(raster, xy, bands = NULL, interp = NULL, ...) {
   }
   src <- .px_local_sources(raster)
   if (is.null(src)) {
-    # not already on disk: write a transient cube, sample it, drop it.
-    # Uncompressed because it lives for one call and compression would cost
-    # more than the read it serves.
-    tmp <- tempfile("garry-extract-", fileext = ".tif")
-    on.exit(unlink(tmp), add = TRUE)
-    write_tif(
-      raster, tmp,
-      creation_options = c("TILED=YES", "COMPRESS=NONE", "BIGTIFF=IF_SAFER")
-    )
-    src <- tmp
+    cli::cli_abort(c(
+      "{.arg raster} is a lazy pipeline with no pixels to read.",
+      "i" = "Materialise it first: {.code cube <- materialise(x)}, then extract from {.code cube}.",
+      "i" = "Extraction reads only the blocks holding points, so it needs the cube on disk -- and you almost always want to keep it."
+    ))
   }
   if (length(src) == 1L) {
     return(do.call(gdal_pixel_extract, c(list(unname(src)), args)))
