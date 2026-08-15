@@ -107,3 +107,29 @@ test_that("dir defaults to a unique announced temp directory", {
                collect(m2, distributed = FALSE), tolerance = 1e-6,
                ignore_attr = TRUE)
 })
+
+test_that("a single-slice dataset materialises to one cube", {
+  # A composite (reduce_over drops the time axis) and the file form of
+  # lazy_dataset() both leave one unnamed layer per band. There are no
+  # dates to key cubes by and none are needed: one cube, a band per band.
+  dir <- withr::local_tempdir()
+  f <- file.path(dir, "src.tif")
+  d <- gdalraster::create("GTiff", f, 40, 30, 3, "Float32", return_obj = TRUE)
+  d$setGeoTransform(c(0, 10, 0, 300, 0, -10))
+  d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  for (b in 1:3) {
+    d$setDescription(b, paste0("A0", b))
+    d$write(b, 0, 0, 40, 30, rep(b * 1.5, 40 * 30))
+  }
+  d$close()
+
+  x <- lazy_dataset(f) |> lazy_map(fn = function(v) v * 2, dtype = "f32")
+  m <- materialise(x, dir = file.path(dir, "cube"))
+  expect_named(m@bands, c("A01", "A02", "A03"))
+  expect_equal(unname(collect(m[["A02"]])[1, 1]), 6)
+  # and it is a plain local cube, so extraction reads it directly
+  pts <- wk::xy(c(15, 205), c(295, 105), crs = "EPSG:3857")
+  v <- extract_points(m, pts)
+  expect_equal(dim(v), c(2L, 3L))
+  expect_equal(as.numeric(v[1L, ]), c(3, 6, 9))
+})
