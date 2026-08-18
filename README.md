@@ -201,10 +201,11 @@ The plan itself is worth looking at. `plan_view()` renders it as an
 interactive DAG (static here; live in RStudio and on the pkgdown site):
 stages typed by what they compute, provenance on hover (assets,
 acquisition dates, reducers), and dashed edges where bands pass through
-into the output. It also shows something you cannot see from the code:
-masking connects the band chains through the shared QA reads, so the
-planner fuses the entire composite – NDVI included – into a single
-kernel per chunk.
+into the output. It shows the schedule you cannot see from the code:
+each QA slice’s mask predicate and morphological cleanup run as their
+own focal stages (halo work, kept narrow); each band’s masking, time
+stack, and median fuse into a single stage; and NDVI derives in its own
+stage before the write.
 
 ``` r
 plan_view(composite)

@@ -131,6 +131,12 @@ earning its keep: the structure you reason about (bands, masks, a
 derived index) and the structure the machine executes (one kernel) are
 both real, and `plan_view()` shows which one you will pay for.
 
+One thing keeps the collapse in check: focal work. Morphological mask
+cleanup (`mask(open = , dilate = )`) is focal, and the planner keeps
+focal members in narrow stages of their own so halo reads stay cheap.
+Add it and the plan splits back apart, into per-slice mask stages and
+per-band composite stages; that is the shape the README example shows.
+
 ## Reading the graph
 
 Nodes are stages, coloured by family and shaped by what they compute.
