@@ -50,14 +50,12 @@ nonlinear decode runs on-device, not as a separate pass.
 ## Collect three bands and plot
 
 Pick three arbitrary embedding dimensions and collect just those: the band-axis
-subset means only those three are ever read or computed.
+subset means only those three are ever read or computed or preview a coarser 
+overview of the tile to take a quick look.
 
 ```{r aef-plot, message = FALSE}
 garry_daemons()
-cube <- collect(embeddings[c("A09", "A10", "A11")])
-garry_daemons(0, 0)
-
-dim(cube)
+# cube <- collect(embeddings[c("A09", "A10", "A11")])
 
 preview(embeddings[c("A09", "A10", "A11")], bands=c(2,1,3))   # False-colour composite
 ```
@@ -79,7 +77,6 @@ expensive step, and it is explicit: the remote fetch and the dequant
 happen once, and everything after reads local pixels.
 
 ```{r km-cube, message = FALSE}
-garry_daemons()
 cube <- materialise(embeddings)   # pass dir= to keep it beyond the session
 ```
 
