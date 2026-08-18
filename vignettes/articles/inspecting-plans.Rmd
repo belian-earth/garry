@@ -20,10 +20,14 @@ library(garry)
 
 ## A first plan
 
-A single-raster chain: scale a band, smooth it, and reduce. The DAG
-shows how the planner fuses the map and the focal into one stage, and
-how a spatial reduction becomes a two-stage barrier (per-chunk partials,
-then a combine).
+A single-raster chain: double the band (a map), smooth it (a focal),
+and reduce over space. Note there is no separate node for the `* 2`:
+the planner fuses elementwise maps into their consumer, so it rides
+inside the focal stage, named in its label (`focal + map`). The
+spatial reduction is different: reducing over `x` and `y` needs values
+from every chunk, so it becomes a two-stage barrier. Each chunk emits
+a small partial (for a mean, a sum and a count), and a combine stage
+folds the partials into the final scalar.
 
 ```{r first-plan}
 tif <- file.path(tempdir(), "band.tif")
