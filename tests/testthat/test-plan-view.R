@@ -148,6 +148,25 @@ test_that("tooltips carry op parameters and dataset provenance", {
   expect_true(any(grepl("band: W · 2023-01-15", nodes2$title)))
 })
 
+test_that("mask() maps are tagged and read as mask in the plan", {
+  skip_if_not_installed("visNetwork")
+  f <- fixture_gradient_f32()
+  G <- graph_new()
+  v <- lazy_source(f, graph = G)
+  q <- lazy_source(f, graph = G)
+  ds <- as_dataset(list(V = v, Q = q), mask_asset = "Q") |>
+    mask(where = c(101, 102))
+  # the tagged maps classify as mask, and a mask-led stage takes the
+  # mask identity (crimson circle)
+  nodes <- plan_view(ds)$x$nodes
+  expect_true(any(grepl("mask", nodes$label)))
+  expect_true(any(nodes$shape == "circle"))
+  # draw()'s vocabulary sees the same role
+  masked_tail <- ds@bands$V[[1L]]@node_id
+  expect_identical(garry:::.node_kind(graph_get(ds@graph, masked_tail)),
+                   "mask")
+})
+
 test_that("derive stage keeps solid edges only from bands it reads", {
   skip_if_not_installed("visNetwork")
   f <- fixture_gradient_f32()

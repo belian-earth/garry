@@ -1052,7 +1052,7 @@ mask <- function(
   pred <- .mask_predicate(where)
 
   masks <- lapply(x@bands[[from]], function(qlr) {
-    m <- lazy_map(qlr, fn = pred, dtype = "f32")
+    m <- .with_role(lazy_map(qlr, fn = pred, dtype = "f32"), "mask")
     if (open > 0L) {
       m <- .morph_open(m, as.integer(open))
     }
@@ -1063,11 +1063,14 @@ mask <- function(
   })
 
   apply_mask <- function(v, m) {
-    lazy_map(
-      v,
-      m,
-      fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
-      dtype = "f32"
+    .with_role(
+      lazy_map(
+        v,
+        m,
+        fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
+        dtype = "f32"
+      ),
+      "mask"
     )
   }
 

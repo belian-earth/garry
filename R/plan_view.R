@@ -68,20 +68,21 @@ NULL
 # warn band and amber's low contrast are carried by shape and direct
 # labels. Borders are the fill darkened 25%.
 .pv_vocab <- data.frame(
-  key   = c("source", "map", "derive", "stack", "focal", "scan", "reduce",
-            "patch", "reduce_partial", "reduce_combine", "warp"),
-  label = c("source", "map", "derive", "stack", "focal", "scan", "reduce",
-            "patch", "reduce·partial", "reduce·combine", "warp"),
-  shape = c("database", "box", "square", "ellipse", "hexagon", "dot",
-            "triangle", "star", "triangle", "triangleDown", "diamond"),
-  hue   = c("#4D7962", "#005B69", "#005B69", "#005B69", "#9D3744", "#B28337",
-            "#B28337", "#9D3744", "#B28337", "#B28337", "#9D3744"),
-  fill  = c("#66a182", "#00798c", "#00798c", "#00798c", "#d1495b", "#edae49",
-            "#edae49", "#d1495b", "#edae49", "#edae49", "#d1495b"),
+  key   = c("source", "map", "derive", "stack", "mask", "focal", "scan",
+            "reduce", "patch", "reduce_partial", "reduce_combine", "warp"),
+  label = c("source", "map", "derive", "stack", "mask", "focal", "scan",
+            "reduce", "patch", "reduce·partial", "reduce·combine", "warp"),
+  shape = c("database", "box", "square", "ellipse", "circle", "hexagon",
+            "dot", "triangle", "star", "triangle", "triangleDown",
+            "diamond"),
+  hue   = c("#4D7962", "#005B69", "#005B69", "#005B69", "#9D3744", "#9D3744",
+            "#B28337", "#B28337", "#9D3744", "#B28337", "#B28337", "#9D3744"),
+  fill  = c("#66a182", "#00798c", "#00798c", "#00798c", "#d1495b", "#d1495b",
+            "#edae49", "#edae49", "#d1495b", "#edae49", "#edae49", "#d1495b"),
   # label colour: white inside the dark teal box/ellipse, ink elsewhere
   # (labels for the other shapes render outside the mark, on white)
-  ink   = c("#2e4057", "#FFFFFF", "#2e4057", "#FFFFFF", "#2e4057", "#2e4057",
-            "#2e4057", "#2e4057", "#2e4057", "#2e4057", "#2e4057"),
+  ink   = c("#2e4057", "#FFFFFF", "#2e4057", "#FFFFFF", "#FFFFFF", "#2e4057",
+            "#2e4057", "#2e4057", "#2e4057", "#2e4057", "#2e4057", "#2e4057"),
   stringsAsFactors = FALSE
 )
 .pv_ink <- "#2e4057"    # labels, controls, highlight chrome
@@ -93,8 +94,8 @@ NULL
 # reduce_partial barrier, so "reduce" ranks here too: a median-composite
 # stage reads as the reduce, not the stack it fused with. A derived
 # band's subgraph outranks stack for the same reason.
-.pv_priority <- c("patch", "scan", "reduce", "focal", "derive", "stack",
-                  "map")
+.pv_priority <- c("patch", "scan", "reduce", "focal", "derive", "mask",
+                  "stack", "map")
 
 # Dataset-level derive provenance: `ds[["ndvi"]] <- ...` records a
 # derive step, but the IR nodes are anonymous MapNodes. Recover the

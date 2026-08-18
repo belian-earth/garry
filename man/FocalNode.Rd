@@ -10,6 +10,7 @@ FocalNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   fn = function() NULL,
   radius = integer(0),
   boundary = character(0),

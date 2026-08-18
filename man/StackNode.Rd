@@ -9,6 +9,7 @@ StackNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   along = character(0)
 )
 }

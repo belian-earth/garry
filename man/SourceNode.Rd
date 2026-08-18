@@ -8,6 +8,7 @@ SourceNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   path = character(0),
   band = integer(0),
   nodata = integer(0),

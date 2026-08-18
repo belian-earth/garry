@@ -9,6 +9,7 @@ FusedNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   fn = function() NULL,
   members = integer(0),
   halo = integer(0)

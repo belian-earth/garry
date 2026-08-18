@@ -8,6 +8,7 @@ ScanNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   over = character(0),
   direction = character(0),
   fn = list(),

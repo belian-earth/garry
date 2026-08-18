@@ -40,9 +40,23 @@ Node <- S7::new_class(
   properties = list(
     id = S7::class_integer,
     parents = S7::class_integer, # parent ids (may be empty)
-    grid = GridSpec
+    grid = GridSpec,
+    # Semantic role of the node ("mask" for the maps mask() creates).
+    # Pure metadata: no planner pass or executor reads it; surfaced by
+    # draw() and plan_view(). Length 0 = none.
+    role = S7::new_property(S7::class_character,
+                            default = quote(character(0)))
   )
 )
+
+# Stamp a role on a LazyRaster's tail node (in place, via the graph
+# env). Returns the raster unchanged otherwise.
+.with_role <- function(lr, role) {
+  n <- graph_get(lr@graph, lr@node_id)
+  n@role <- role
+  graph_replace(lr@graph, lr@node_id, n)
+  lr
+}
 
 #' A GDAL-readable source: path + band + optional nodata sentinel.
 #'

@@ -4,7 +4,12 @@
 \alias{Node}
 \title{Abstract IR node.}
 \usage{
-Node(id = integer(0), parents = integer(0), grid = GridSpec())
+Node(
+  id = integer(0),
+  parents = integer(0),
+  grid = GridSpec(),
+  role = character(0)
+)
 }
 \arguments{
 \item{id}{Integer node id (assigned by \code{graph_add()}).}

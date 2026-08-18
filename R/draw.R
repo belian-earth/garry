@@ -82,7 +82,7 @@ NULL
   } else if (S7::S7_inherits(node, FocalNode)) {
     "focal"
   } else if (S7::S7_inherits(node, MapNode)) {
-    "map"
+    if (identical(node@role, "mask")) "mask" else "map"
   } else if (S7::S7_inherits(node, ReduceNode)) {
     "reduce"
   } else if (S7::S7_inherits(node, ScanNode)) {
