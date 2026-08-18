@@ -24,7 +24,7 @@ the left-to-right flow stays legible, floored by label clearance
 and capped for deep plans. Pass a number to override.}
 
 \item{node_spacing}{Distance between nodes within a level, in
-pixels — vertical, since levels run left to right. The tall
+pixels: vertical, since levels run left to right. The tall
 stretch of a wide plan (e.g. one source per time slice) is this
 times the widest level's node count; lower it to compress.}
 
@@ -41,16 +41,16 @@ Stages are labelled by what they compute, not just their scheduler
 kind: a compute stage is classified by the IR nodes fused into it
 (\code{focal}, \code{scan}, \code{patch}, \code{stack}, \code{map}, most informative first,
 the same vocabulary as \code{\link[=draw]{draw()}}), and reduce stages carry their
-reducer (\verb{reduce·median}). When a \code{LazyDataset} is passed, derived
+reducer (\verb{reduce\\u00b7median}). When a \code{LazyDataset} is passed, derived
 bands (\code{ds[["ndvi"]] <- ...}) are recovered from the dataset's step
 record and the stage computing one is labelled with the band name
-(\verb{derive·ndvi}); the derivation is bounded structurally at the first
+(\verb{derive\\u00b7ndvi}); the derivation is bounded structurally at the first
 non-elementwise node, so it survives subsetting (\code{ds["ndvi"]}).
 Hovering a stage shows its full op composition and any recoverable
-metadata — acquisition dates on slice sources and t-spans on
+metadata: acquisition dates on slice sources and t-spans on
 composites (from stack ordering and grid labels), the band a stage
 computes, source file and band, and op parameters (reducer and
-axis, focal radius, scan direction) — plus members, halo, device,
+axis, focal radius, scan direction): plus members, halo, device,
 and output grid; clicking
 highlights its neighbours; the sink stage is drawn with a heavy
 border. Where \code{\link[=plan_dot]{plan_dot()}} emits static Graphviz

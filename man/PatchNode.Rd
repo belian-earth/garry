@@ -25,6 +25,10 @@ PatchNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+Pure metadata: never read by the planner or executors; surfaced by
+\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
+
 \item{fn}{The model body \code{fn(xpad)}.}
 
 \item{radius}{Halo consumed per side, pixels.}

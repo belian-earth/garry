@@ -71,7 +71,7 @@ NULL
   key   = c("source", "map", "derive", "stack", "mask", "focal", "scan",
             "reduce", "patch", "reduce_partial", "reduce_combine", "warp"),
   label = c("source", "map", "derive", "stack", "mask", "focal", "scan",
-            "reduce", "patch", "reduce·partial", "reduce·combine", "warp"),
+            "reduce", "patch", "reduce\u00b7partial", "reduce\u00b7combine", "warp"),
   shape = c("database", "box", "square", "ellipse", "circle", "hexagon",
             "dot", "triangle", "star", "triangle", "triangleDown",
             "diamond"),
@@ -203,7 +203,7 @@ NULL
       lines <- c(lines, if (length(v) <= 4L) {
         .glue("{axis}: {paste(v, collapse = ', ')}")
       } else {
-        .glue("{axis}: {v[[1L]]} … {v[[length(v)]]} ({length(v)})")
+        .glue("{axis}: {v[[1L]]} \u2026 {v[[length(v)]]} ({length(v)})")
       })
     }
   }
@@ -217,9 +217,9 @@ NULL
     if (length(slices)) {
       slices <- sort(slices)
       ln <- if (length(slices) <= 3L) {
-        .glue("{ln} · {paste(slices, collapse = ', ')}")
+        .glue("{ln} \u00b7 {paste(slices, collapse = ', ')}")
       } else {
-        .glue("{ln} · {slices[[1L]]} … ",
+        .glue("{ln} \u00b7 {slices[[1L]]} \u2026 ",
               "{slices[[length(slices)]]} ({length(slices)})")
       }
     }
@@ -230,13 +230,13 @@ NULL
     if (is.null(n)) next
     if (S7::S7_inherits(n, SourceNode)) {
       ln <- if (length(n@name)) {
-        .glue("asset: {n@name} · {basename(n@path)}")
+        .glue("asset: {n@name} \u00b7 {basename(n@path)}")
       } else {
         .glue("file: {basename(n@path)} ",
               "(band {paste(n@band, collapse = ',')})")
       }
       if (length(n@scale)) {
-        ln <- .glue("{ln} · scale {n@scale}")
+        ln <- .glue("{ln} \u00b7 scale {n@scale}")
       }
       lines <- c(lines, ln)
     } else if (S7::S7_inherits(n, ReduceNode)) {
@@ -259,7 +259,7 @@ NULL
     lines <- c(lines, if (length(tl) <= 4L) {
       .glue("t: {paste(tl, collapse = ', ')}")
     } else {
-      .glue("t: {tl[[1L]]} … {tl[[length(tl)]]} ({length(tl)})")
+      .glue("t: {tl[[1L]]} \u2026 {tl[[length(tl)]]} ({length(tl)})")
     })
   }
   bl <- s@grid@labels[["band"]]
@@ -272,7 +272,7 @@ NULL
 # Classify one stage: vocabulary key, display label, and the member
 # composition ("focal + 2 map") built from the plan's graph.
 # `derive_map` (node id -> band name) relabels a derived band's members
-# as "derive·<band>".
+# as "derive\u00b7<band>".
 .pv_stage_info <- function(s, graph, derive_map = character(0),
                            members = NULL) {
   if (is.null(members)) {
@@ -287,13 +287,13 @@ NULL
   member_kinds <- vapply(members, function(id) {
     nm <- derive_map[.key(id)]
     if (!is.na(nm)) {
-      return(.glue("derive·{nm}"))
+      return(.glue("derive\u00b7{nm}"))
     }
     n <- graph_get(graph, id)
     if (is.null(n)) {
       "node"
     } else if (S7::S7_inherits(n, ReduceNode)) {
-      .glue("reduce·{if (length(n@fn)) 'custom' else n@op}")
+      .glue("reduce\u00b7{if (length(n@fn)) 'custom' else n@op}")
     } else {
       .node_kind(n)
     }
@@ -308,25 +308,25 @@ NULL
       }
     }
     verb <- if (s@kind == "reduce_partial") "reduce" else "combine"
-    return(list(key = s@kind, core = .glue("{verb}·{op}"),
+    return(list(key = s@kind, core = .glue("{verb}\u00b7{op}"),
                 comp = .pv_comp(member_kinds)))
   }
-  base <- sub("·.*$", "", member_kinds)
+  base <- sub("\u00b7.*$", "", member_kinds)
   key <- .pv_priority[.pv_priority %in% base][1L]
   if (is.na(key)) key <- "map"
   comp <- .pv_comp(member_kinds)
   list(key = key, core = comp, comp = comp)
 }
 
-# "reduce·median + stack + 2 map" from a vector of member kinds,
-# ordered most-informative-first (qualified kinds like "derive·ndvi"
+# "reduce\u00b7median + stack + 2 map" from a vector of member kinds,
+# ordered most-informative-first (qualified kinds like "derive\u00b7ndvi"
 # sort by their base kind); each derived band appears once, uncounted.
 .pv_comp <- function(kinds) {
   u <- unique(kinds)
-  pri <- match(sub("·.*$", "", u), .pv_priority)
+  pri <- match(sub("\u00b7.*$", "", u), .pv_priority)
   pri[is.na(pri)] <- length(.pv_priority) + 1L
   parts <- vapply(u[order(pri)], function(k) {
-    if (startsWith(k, "derive·")) {
+    if (startsWith(k, "derive\u00b7")) {
       return(k)
     }
     n <- sum(kinds == k)
@@ -344,16 +344,16 @@ NULL
 #' kind: a compute stage is classified by the IR nodes fused into it
 #' (`focal`, `scan`, `patch`, `stack`, `map`, most informative first,
 #' the same vocabulary as [draw()]), and reduce stages carry their
-#' reducer (`reduce·median`). When a `LazyDataset` is passed, derived
+#' reducer (`reduce\u00b7median`). When a `LazyDataset` is passed, derived
 #' bands (`ds[["ndvi"]] <- ...`) are recovered from the dataset's step
 #' record and the stage computing one is labelled with the band name
-#' (`derive·ndvi`); the derivation is bounded structurally at the first
+#' (`derive\u00b7ndvi`); the derivation is bounded structurally at the first
 #' non-elementwise node, so it survives subsetting (`ds["ndvi"]`).
 #' Hovering a stage shows its full op composition and any recoverable
-#' metadata — acquisition dates on slice sources and t-spans on
+#' metadata: acquisition dates on slice sources and t-spans on
 #' composites (from stack ordering and grid labels), the band a stage
 #' computes, source file and band, and op parameters (reducer and
-#' axis, focal radius, scan direction) — plus members, halo, device,
+#' axis, focal radius, scan direction): plus members, halo, device,
 #' and output grid; clicking
 #' highlights its neighbours; the sink stage is drawn with a heavy
 #' border. Where [plan_dot()] emits static Graphviz
@@ -369,7 +369,7 @@ NULL
 #'   the left-to-right flow stays legible, floored by label clearance
 #'   and capped for deep plans. Pass a number to override.
 #' @param node_spacing Distance between nodes within a level, in
-#'   pixels — vertical, since levels run left to right. The tall
+#'   pixels: vertical, since levels run left to right. The tall
 #'   stretch of a wide plan (e.g. one source per time slice) is this
 #'   times the widest level's node count; lower it to compress.
 #' @param height,width Widget size, as CSS units.
