@@ -197,6 +197,25 @@ preview(a)     # multi-band  -> RGB (first three bands)
 
 <img src="man/figures/README-example-2.png" alt="" width="100%" />
 
+The plan itself is worth looking at. `plan_view()` renders it as an
+interactive DAG (static here; live in RStudio and on the pkgdown site):
+stages typed by what they compute, provenance on hover (assets,
+acquisition dates, reducers), and dashed edges where bands pass through
+into the output. It also shows something you cannot see from the code:
+masking connects the band chains through the shared QA reads, so the
+planner fuses the entire composite – NDVI included – into a single
+kernel per chunk.
+
+``` r
+plan_view(composite)
+```
+
+<img src="man/figures/README-plan-view-1.png" alt="" width="100%" />
+
+See the [Inspecting
+plans](https://belian-earth.github.io/garry/articles/inspecting-plans.html)
+article for the full visual vocabulary and layout controls.
+
 To write to disk instead, `write_tif()` runs the same plan but streams
 each chunk into a GeoTIFF as it lands, so nothing is ever held whole in
 memory. `dtype` and `scale` quantise the f32 reflectance back to int16
