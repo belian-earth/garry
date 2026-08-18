@@ -4,13 +4,17 @@ NULL
 
 #' Render a Plan as DOT (Graphviz) text.
 #'
-#' A `Plan` is obtained from [plan_lazy()].
-#'
-#' @param plan A `Plan`, from [plan_lazy()].
+#' @param plan A `Plan` from [plan_lazy()], or anything [plan_lazy()]
+#'   accepts (a `LazyRaster`, a `LazyDataset`, or a named list of
+#'   `LazyRaster`s), which is planned first.
 #' @return A single DOT string.
-#' @seealso [draw()], the user-facing pipeline visualisation.
+#' @seealso [plan_view()] for the interactive DAG, [draw()] for the
+#'   user-facing pipeline visualisation.
 #' @export
 plan_dot <- function(plan) {
+  if (!S7::S7_inherits(plan, Plan)) {
+    plan <- plan_lazy(plan)
+  }
   shape <- c(
     source_read = "cylinder",
     compute = "box",

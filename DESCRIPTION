@@ -34,6 +34,8 @@ Remotes:
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
+    htmltools,
+    htmlwidgets,
     httr2,
     jsonlite,
     KFAS,
@@ -45,6 +47,7 @@ Suggests:
     terra,
     testthat (>= 3.0.0),
     vaster,
+    visNetwork,
     withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
@@ -85,6 +88,7 @@ Collate:
     'ocm_edgenext.R'
     'ocm_weights.R'
     'placement.R'
+    'plan_view.R'
     'preview.R'
     'reduce_multiband.R'
     'safetensors.R'
