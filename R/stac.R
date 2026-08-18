@@ -771,7 +771,8 @@ lazy_stac_stack <- function(
       grid = meta$grid,
       block_dim = meta$block_dim,
       scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-      offset = if (length(aff$offset) == 1L) aff$offset else NULL
+      offset = if (length(aff$offset) == 1L) aff$offset else NULL,
+      name = asset
     )
   })
   list(stack = lazy_stack(layers), slices = slices, index = idx)

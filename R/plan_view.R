@@ -186,8 +186,10 @@ NULL
 # (source path/band/scale, reduce op/axis, focal radius, scan
 # direction), t labels carried by member grids, and band labels on the
 # stage's output grid.
-.pv_stage_meta <- function(s, graph, band_map, axis_map = list()) {
-  lines <- character(0)
+.pv_stage_meta <- function(s, graph, band_map, axis_map = list(),
+                           drop_band_line = FALSE,
+                           extra = character(0)) {
+  lines <- extra
   mem <- lapply(s@members, function(id) graph_get(graph, id))
 
   # stack-ordering provenance: axis labels inherited by this stage's
@@ -226,8 +228,12 @@ NULL
   for (n in mem) {
     if (is.null(n)) next
     if (S7::S7_inherits(n, SourceNode)) {
-      ln <- .glue("file: {basename(n@path)} ",
-                  "(band {paste(n@band, collapse = ',')})")
+      ln <- if (length(n@name)) {
+        .glue("asset: {n@name} · {basename(n@path)}")
+      } else {
+        .glue("file: {basename(n@path)} ",
+              "(band {paste(n@band, collapse = ',')})")
+      }
       if (length(n@scale)) {
         ln <- .glue("{ln} · scale {n@scale}")
       }
@@ -256,7 +262,7 @@ NULL
     })
   }
   bl <- s@grid@labels[["band"]]
-  if (length(bl)) {
+  if (length(bl) && !drop_band_line) {
     lines <- c(lines, .glue("bands: {paste(bl, collapse = ', ')}"))
   }
   unique(lines)
@@ -444,6 +450,24 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   coords <- .pv_coords(p@stages, levels, sep, as.numeric(node_spacing))
   ki <- match(vapply(info, `[[`, "", "key"), .pv_vocab$key)
 
+  # A rerouted derive stage lists what its derivation reads (the bands
+  # behind its solid inputs) instead of the assembly's band roster,
+  # which the output node carries.
+  rerouted <- vapply(p@stages, function(s)
+    !is.null(reroute) && s@id == reroute$sid, TRUE)
+  reads_line <- character(0)
+  if (any(rerouted)) {
+    reads <- unique(unlist(lapply(reroute$solid, function(i) {
+      unlist(lapply(p@stages[[i]]@exports, function(e) {
+        ax <- axis_map[[.key(e)]]
+        unname(ax[names(ax) == "band"])
+      }))
+    })))
+    if (length(reads)) {
+      reads_line <- .glue("reads: {paste(sort(reads), collapse = ', ')}")
+    }
+  }
+
   rows <- lapply(seq_along(p@stages), function(i) {
     s <- p@stages[[i]]
     k <- .pv_vocab[ki[[i]], ]
@@ -465,7 +489,10 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
         "<b>stage {s@id}</b> &middot; {s@kind}",
         "{if (s@id == p@sink) ' &middot; sink' else ''}<br>",
         "ops: {info[[i]]$comp}<br>",
-        "{paste0(.pv_stage_meta(s, p@graph, band_map, axis_map),
+        "{paste0(.pv_stage_meta(s, p@graph, band_map, axis_map,
+                                drop_band_line = rerouted[[i]],
+                                extra = if (rerouted[[i]]) reads_line
+                                        else character(0)),
                  '<br>', collapse = '')}",
         "members: {paste(s@members, collapse = ', ')}<br>",
         "halo: {s@halo} &middot; device: {s@device}<br>",

@@ -340,7 +340,8 @@ lazy_dataset <- function(
         block_dim = meta$block_dim,
         resampling = rs,
         scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-        offset = if (length(aff$offset) == 1L) aff$offset else NULL
+        offset = if (length(aff$offset) == 1L) aff$offset else NULL,
+        name = a
       )
     })
     names(layers) <- slices
@@ -464,7 +465,8 @@ lazy_dataset <- function(
         } else {
           FALSE
         },
-        offset = offset
+        offset = offset,
+        name = nm
       )
       if (!is.null(grid)) {
         x <- align(x, grid, resampling = resolve_rs(nm))

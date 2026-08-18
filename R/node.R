@@ -82,7 +82,12 @@ SourceNode <- S7::new_class(
     # the nodata sentinel is promoted to NaN. Length 0 = absent; when active
     # both are length 1 (offset 0 for pure scaling).
     scale = S7::new_property(S7::class_numeric, default = numeric(0)),
-    offset = S7::new_property(S7::class_numeric, default = numeric(0))
+    offset = S7::new_property(S7::class_numeric, default = numeric(0)),
+    # Display name (asset/band name from the dataset builder). Pure
+    # metadata: no planner pass or executor reads it; surfaced by
+    # plan_view() and friends. Length 0 = absent.
+    name = S7::new_property(S7::class_character,
+                            default = quote(character(0)))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L) {

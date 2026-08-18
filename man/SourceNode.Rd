@@ -15,7 +15,8 @@ SourceNode(
   open_options = character(0),
   resampling = "near",
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  name = character(0)
 )
 }
 \arguments{
