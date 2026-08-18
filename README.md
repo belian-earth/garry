@@ -169,12 +169,12 @@ draw(composite[["ndvi"]])    # the NDVI band's node tree
 #> └─ ƒ map  (2 inputs)  ×2
 #>    └─ ▸ median  over t  ×2
 #>       └─ ⬚ stack  along t
-#>          └─ ƒ map  (2 inputs)  ×15
+#>          └─ ✕ node  ×15
 #>             ├─ ◈ source  2536×1480 f32
 #>             └─ ◫ focal  r=3
 #>                └─ ◫ focal  r=2
 #>                   └─ ◫ focal  r=2
-#>                      └─ ƒ map
+#>                      └─ ✕ node
 #>                         └─ ◈ source  2536×1480 f32
 
 # preview() estimates a coarse grid from the graph and device, runs the pipeline
@@ -198,8 +198,8 @@ preview(a)     # multi-band  -> RGB (first three bands)
 <img src="man/figures/README-example-2.png" alt="" width="100%" />
 
 The plan itself is worth looking at. `plan_view()` renders it as an
-interactive DAG (static here; live in RStudio and on the pkgdown site):
-stages typed by what they compute, provenance on hover (assets,
+interactive DAG (static here; live when interactive and on the pkgdown
+site): stages typed by what they compute, provenance on hover (assets,
 acquisition dates, reducers), and dashed edges where bands pass through
 into the output. It shows the schedule you cannot see from the code:
 each QA slice’s mask predicate and morphological cleanup run as their
