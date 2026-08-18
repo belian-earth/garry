@@ -8,6 +8,7 @@ SourceNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   path = character(0),
   band = integer(0),
   nodata = integer(0),
@@ -15,7 +16,8 @@ SourceNode(
   open_options = character(0),
   resampling = "near",
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  name = character(0)
 )
 }
 \arguments{
@@ -24,6 +26,10 @@ SourceNode(
 \item{parents}{Integer ids of parent nodes (may be empty).}
 
 \item{grid}{Output \code{GridSpec} of this node.}
+
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+Pure metadata: never read by the planner or executors; surfaced by
+\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{path}{Path or VSI URL readable by GDAL.}
 
@@ -41,6 +47,9 @@ source onto the analysis grid (default "near").}
 
 \item{scale, offset}{Length-0 (absent) or length-1 band affine applied
 inside the read kernel after sentinel -> NaN (see \code{\link[=lazy_source]{lazy_source()}}).}
+
+\item{name}{Optional display name (the asset or band name). Pure
+metadata, shown by \code{\link[=plan_view]{plan_view()}}; set by \code{\link[=lazy_dataset]{lazy_dataset()}}.}
 }
 \value{
 A \code{SourceNode}.

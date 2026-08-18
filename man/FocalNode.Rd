@@ -10,6 +10,7 @@ FocalNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   fn = function() NULL,
   radius = integer(0),
   boundary = character(0),
@@ -22,6 +23,10 @@ FocalNode(
 \item{parents}{Integer ids of parent nodes (may be empty).}
 
 \item{grid}{Output \code{GridSpec} of this node.}
+
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+Pure metadata: never read by the planner or executors; surfaced by
+\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{fn}{Neighbourhood function (over the list of shifted arrays).}
 

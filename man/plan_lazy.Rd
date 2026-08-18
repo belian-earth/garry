@@ -7,8 +7,10 @@
 plan_lazy(x)
 }
 \arguments{
-\item{x}{A \code{LazyRaster}, or a named list of them (multi-export: one
-graph, one execution, several sinks).}
+\item{x}{A \code{LazyRaster}, a \code{LazyDataset} (its bands are assembled
+along the band axis first, as in \code{\link[=collect]{collect()}}), or a named list of
+\code{LazyRaster}s (multi-export: one graph, one execution, several
+sinks).}
 }
 \value{
 A \code{Plan}.

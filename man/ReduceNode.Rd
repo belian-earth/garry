@@ -8,6 +8,7 @@ ReduceNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   op = character(0),
   over = character(0),
   nan_rm = logical(0),
@@ -20,6 +21,10 @@ ReduceNode(
 \item{parents}{Integer ids of parent nodes (may be empty).}
 
 \item{grid}{Output \code{GridSpec} of this node.}
+
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+Pure metadata: never read by the planner or executors; surfaced by
+\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{op}{Reduction name, e.g. "mean" (one of the names above), or
 "custom".}

@@ -1,5 +1,11 @@
 # Sample sink: point sampling, polygon subsetting, in-graph fits
 
+> **OUTCOME 2026-08-14: the sample sink was BUILT, MEASURED and REMOVED.**
+> garry ships `extract_points()` instead -- a thin delegation to
+> `gdalraster::pixel_extract()`, scoped to materialised cubes. The
+> reasoning below is kept because the measurements are what settled it;
+> see "What the experiment settled" at the end.
+
 Date: 2026-08-13. Status: DESIGN, not scheduled. Origin: Hugh's
 observation that solving point sampling would let model FITS join the
 pipeline, removing intermediate disk from the fit path.
@@ -113,6 +119,90 @@ ir-extensions-todo #1, pending anvl's iteration work). Both missing
 pieces are ALREADY roadmap items; T3 is what falls out when they land,
 not a separate ask.
 
+## Measured: where the saving actually is (2026-08-14)
+
+Benchmark (`benchmarks/sample-points-bench.R`, AEF tile, 61 km window at 30 m,
+3 bands, 49 source tiles of 1024 px; each measurement in a FRESH process
+so no route inherits a warm vsicurl cache):
+
+| case | tiles touched | sample | collect | targeted |
+|---|---|---|---|---|
+| 200 clustered | 1/49 | 14.9 s | 16.2 s | 11.9 s |
+| 200 scattered | 36/49 | 15.7 s | 15.4 s | 43.7 s |
+| 5000 scattered | 42/49 | 15.1 s | 15.8 s | 35.8 s |
+
+("targeted" = `gdalraster::pixel_extract` straight off the remote COG:
+fetch only the tiles holding points, but read the SOURCE, no graph.)
+
+Three findings, and they redirect the roadmap:
+
+1. **Phase 1 gives NO fetch/compute saving** -- sample and collect are
+   within noise everywhere. Its value is no disk round-trip, no
+   whole-raster array in R, and the API. Do not claim speed for it.
+2. **Per-point targeted reads are the WRONG answer**: 2.8x SLOWER for
+   scattered points (43.7 vs 15.7 s), because a read per point trades
+   garry's few big parallel windowed reads for thousands of
+   latency-bound ones. This is the "per-point windowed reads" pattern
+   already listed under "Explicitly not", now measured.
+3. **Even at 1/49 tiles, targeted saved only 20%** -- the fixed cost of
+   opening this remote COG (64 bands x 13 overviews of header) dominates.
+   There is a floor under every strategy on headers this size.
+
+**So Phase 2's justification changes.** The win is not skipping COMPUTE,
+it is never ISSUING the read windows that hold no points -- keeping the
+parallel high-throughput read pattern while cutting volume. Worth it for
+spatially concentrated points (GEDI tracks, field plots); nothing helps
+scattered points, which genuinely need the data. TILE COVERAGE, not point
+count, is the number that predicts the saving, and it is cheap to compute
+at plan time -- so a future planner could pick the strategy from it.
+
+**And chunk pruning alone is COSMETIC** (verified 2026-08-14): a 2048^2
+grid plans compute chunks of 1024^2 (4 chunks) against a source read
+stage of chunk_dim 5120x5120 -- ONE window over the whole raster, because
+read_target_px is 3.2e7. Skipping compute chunks while that single read
+still runs fetches everything anyway. Phase 2 must therefore control READ
+GRANULARITY, and the benchmark above brackets it: one big window is
+15.7 s but unprunable, one read per point is 43.7 s and latency-bound.
+
+**Phase 2 SHIPPED 2026-08-14** as the sub-window rewrite below
+(`.sample_subwindow`, R/sample.R). Measured, honestly:
+
+| workload | windowed | full grid |
+|---|---|---|
+| AEF remote, 3 bands, 2048^2, 50 clustered pts | 13.8 s | 15.9 s (1.2x) |
+| AEF remote, 64 bands, 2048^2, same points | 10.7 / 21.1 s | 77.0 / 23.5 s |
+
+The 3-band case is only 1.2x because FIXED costs dominate it (daemon
+spawn, the remote COG open, XLA init) -- cutting 99.4% of the data
+cannot help what is not data. The 64-band case is where the variable
+cost is large enough to matter, and the rewrite is always at least as
+fast, but link variance across reps (full grid 77.0 vs 23.5 s) means
+the ratio is somewhere between 1.1x and 7x and this benchmark cannot
+pin it down. A local low-noise rerun OOM-killed a 24G scope on the
+full-grid arm, which is itself a data point about what is being
+avoided. Treat the win as "real, workload-dependent, never negative"
+until someone measures it on a quiet link.
+
+**Design: decompose the POINT SET, not the scheduler.**
+Cover the points with a few bounding boxes, run one ORDINARY sub-plan per
+box over that sub-grid, concatenate the tables. A smaller grid yields
+smaller read windows automatically, so granularity solves itself, and
+there is no scheduler surgery -- every sub-plan is a normal collect, so
+none of the drain hazards below apply. Cost: k boxes = k sequential
+drains (the pulsing multi-export fixed for grouped collects), so keep k
+small and fall back to the single-plan path when the boxes cover most of
+the raster anyway.
+
+**Fallback, only if measurement demands it: true chunk pruning.** Safe
+ONLY for sample sinks (a raster write needs every chunk, so the assembly
+and streaming paths stay untouched by construction) and only when no
+reduce_combine stage exists (a global x/y reduction needs every partial).
+Hazards to clear first: `dep_left` is built from dependencies with no
+existence check, so one skipped producer chunk hangs the drain forever;
+`dep_of`/`elt_of` are positional in j (scheduler.R:854-855);
+`fetch_reads_left` counts the full table; and out_of/.exec_assemble/
+.exec_write_sink/sink_task_map all iterate seq_len(nrow(it)).
+
 ## Open questions
 
 - **Sampling semantics.** Nearest cell by default. Bilinear/footprint
@@ -149,3 +239,38 @@ not a separate ask.
   way back INTO the graph.
 - design/fixed-point-note.md -- reduce-by-key zonal as an accepted
   scope candidate.
+
+
+## What the experiment settled (2026-08-14)
+
+The sample sink shipped as `sample_points()` (weights-table gather at the
+shared host tail) plus a Phase 2 sub-window rewrite, and both were then
+removed. Three measurements did it:
+
+1. **On a local cube, gathering is ~100x slower than GDAL.**
+   1000 points x 16 bands over a 2048^2 cube: `pixel_extract` 0.03 s vs
+   `sample_points` 3.35 s. Structural, not tuning -- GDAL reads only the
+   blocks holding points; the gather computed the whole raster to keep a
+   few thousand cells.
+2. **Per-point fetching loses on remote sources.** `pixel_extract`
+   straight off a remote COG was 2.8x SLOWER than garry's windowed reads
+   for scattered points (43.7 vs 15.7 s): thousands of latency-bound
+   range requests instead of a few big parallel ones. This also rules out
+   a "pushdown" design where the SOURCE read becomes a point extraction.
+3. **Real GEDI shots hit 100% of tiles.** Three cached shot sets
+   (122k-1.2M shots over 23-74 km AOIs), at 10 m and 30 m, with 512 px
+   and 1024 px tiles: EVERY configuration hit every tile in the bounding
+   box. GEDI's dense along-track sampling across many orbits means there
+   is no spatial concentration to exploit, so the sub-window rewrite
+   would have been a no-op and pushdown would fetch everything anyway --
+   by the slower route.
+
+**Conclusion.** Sampling does not need a bespoke read path. Materialise
+(the cube is wanted again anyway -- for the predict pass, for a second
+model, for inspection) and extract from it. `extract_points()` refuses an
+unmaterialised pipeline rather than writing a cube silently: the write is
+expensive and visible, so the caller owns it.
+
+**Still open, and untouched by this**: polygon subsetting and the
+reduce-by-key zonal candidate, which are about MASKS and GROUPS rather
+than scattered cells, and do not inherit the tile-coverage problem.

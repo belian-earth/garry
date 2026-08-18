@@ -38,7 +38,7 @@ embeddings <- lazy_dataset(tile, grid, resampling = "average") |>
   lazy_map(fn = dequantize_aef, dtype = "f32")
 
 embeddings
-#> ── <LazyDataset> ───────────────────────────────────────────────────────────────
+#> ── <LazyDataset> ────────────────────────────────
 #>   bands  A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A10 A11 A12 A13 A14 A15 A16 A17 A18 A19 A20 A21 A22 A23 A24 A25 A26 A27 A28 A29 A30 A31 A32 A33 A34 A35 A36 A37 A38 A39 A40 A41 A42 A43 A44 A45 A46 A47 A48 A49 A50 A51 A52 A53 A54 A55 A56 A57 A58 A59 A60 A61 A62 A63
 #>   time   1 slice
 #>   grid   2732 x 2731 • f32
@@ -55,18 +55,15 @@ nonlinear decode runs on-device, not as a separate pass.
 ## Collect three bands and plot
 
 Pick three arbitrary embedding dimensions and collect just those: the band-axis
-subset means only those three are ever read or computed.
+subset means only those three are ever read or computed or preview a coarser 
+overview of the tile to take a quick look.
 
 
 ``` r
 garry_daemons()
-cube <- collect(embeddings[c("A09", "A10", "A11")])
-garry_daemons(0, 0)
+# cube <- collect(embeddings[c("A09", "A10", "A11")])
 
-dim(cube)
-#> [1] 2731 2732    3
-
-preview(cube, bands=c(2,1,3))   # False-colour composite
+preview(embeddings[c("A09", "A10", "A11")], bands=c(2,1,3))   # False-colour composite
 ```
 
 ![plot of chunk aef-plot](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/aef-plot-1.png)
@@ -80,29 +77,52 @@ The clustering below uses all of them.
 
 An unsupervised k-means over the 64-dimensional embedding vectors segments
 the landscape without a single training label. The pattern is
-fit-small, predict-lazily:
+fit-small, predict-lazily -- and neither half needs the raster on disk:
 
-**Fit.** k-means needs pixels in R, but not all 7.5 million of them. AEF
-embeddings are built to average linearly (the read above already relies on
-that with `resampling = "average"`), so fit on a coarser 120 m read of the
-same tile: an overview-backed, light fetch of ~470k pixels.
+**Materialise once.** Both halves below read all 64 bands, so decode the
+tile a single time into a local cube and work from that. This is the one
+expensive step, and it is explicit: the remote fetch and the dequant
+happen once, and everything after reads local pixels.
 
 
 ``` r
-emb120 <- lazy_dataset(tile, grid_from_src(tile, 120),
-                       resampling = "average") |>
-  lazy_map(fn = dequantize_aef, dtype = "f32")
-
-garry_daemons()
-arr <- collect(stack_bands(emb120))          # (y, x, 64)
-px  <- matrix(arr, ncol = dim(arr)[[3]])
-px  <- px[stats::complete.cases(px), ]
-set.seed(42)
-px  <- px[sample(nrow(px), 1e5), ]           # 100k px place 6 centroids fine
-km  <- kmeans(px, centers = 5)
-km$size
-#> [1] 14675 10598 30765 21419 22543
+cube <- materialise(embeddings)   # pass dir= to keep it beyond the session
 ```
+
+**Fit.** k-means needs pixels in R, but not all 7.5 million of them --
+100k scattered ones place five centroids perfectly well.
+`extract_points()` reads just those, straight out of the cube: GDAL
+touches only the blocks holding points, so this costs a fraction of a
+second rather than another pass over the raster.
+
+Points are a [wk](https://paleolimbot.github.io/wk/) `xy` vector carrying
+their own CRS, so they are placed on the grid explicitly rather than by
+assumption (`wk::as_xy()` converts points from sf, terra or a data frame).
+
+
+``` r
+set.seed(42)
+n   <- 1e5
+pts <- wk::xy(
+  stats::runif(n, xmin(grid), xmax(grid)),
+  stats::runif(n, ymin(grid), ymax(grid)),
+  crs = grid@crs
+)
+
+px <- extract_points(cube, pts)              # (100000, 64)
+dim(px)
+#> [1] 100000     64
+px <- px[stats::complete.cases(px), ]
+km <- kmeans(px, centers = 5)
+km$size
+#> [1] 12935 30046 24230 22641 10148
+```
+
+The same call is how a model gets its training table off any garry
+pipeline: give it the GEDI shots, the field plots or the labelled points
+instead of random ones. `interp = "bilinear"` interpolates the four
+surrounding cell centres for continuous data measured off-grid, and
+`krnl_dim` reads a window around each point instead of a single cell.
 
 **Assign.** Every 30 m pixel goes to its nearest centroid:
 `argmax_k (x . c_k - |c_k|^2 / 2)`, and `x . c_k` is a linear combination of
@@ -134,7 +154,7 @@ nearest_center <- function(centers) {
   }
 }
 
-clusters <- reduce_over(stack_bands(embeddings),
+clusters <- reduce_over(stack_bands(cube),
                         nearest_center(km$centers), over = "band")
 clmap <- collect(clusters)
 
@@ -142,9 +162,9 @@ garry_daemons(0, 0)
 ```
 
 
-One fused kernel reads the full-resolution 64-band cube once, computes every
-projection and the argmax per pixel, and only the finished single-band
-cluster map ever reaches R. (Want the raw scores instead? Stack plain
+One fused kernel reads the 64-band cube once, computes every projection and
+the argmax per pixel, and only the finished single-band cluster map ever
+reaches R. (Want the raw scores instead? Stack plain
 `band_project()` reducers with `lazy_stack(along = "band")` and take
 `max.col()` host-side -- same digital numbers.)
 

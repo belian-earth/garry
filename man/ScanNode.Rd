@@ -8,6 +8,7 @@ ScanNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   over = character(0),
   direction = character(0),
   fn = list(),
@@ -20,6 +21,10 @@ ScanNode(
 \item{parents}{Integer ids of parent nodes.}
 
 \item{grid}{Output \code{GridSpec} of this node.}
+
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+Pure metadata: never read by the planner or executors; surfaced by
+\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{over}{Single dim name to scan along (\code{"t"} or \code{"band"}).}
 

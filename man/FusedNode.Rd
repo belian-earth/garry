@@ -9,6 +9,7 @@ FusedNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   fn = function() NULL,
   members = integer(0),
   halo = integer(0)
@@ -20,6 +21,10 @@ FusedNode(
 \item{parents}{Integer ids of parent nodes (may be empty).}
 
 \item{grid}{Output \code{GridSpec} of this node.}
+
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+Pure metadata: never read by the planner or executors; surfaced by
+\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{fn}{Composed stage function.}
 

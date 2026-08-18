@@ -32,6 +32,9 @@ NULL
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @return A `Node` subclass instance.
 #' @export
 Node <- S7::new_class(
@@ -40,9 +43,23 @@ Node <- S7::new_class(
   properties = list(
     id = S7::class_integer,
     parents = S7::class_integer, # parent ids (may be empty)
-    grid = GridSpec
+    grid = GridSpec,
+    # Semantic role of the node ("mask" for the maps mask() creates).
+    # Pure metadata: no planner pass or executor reads it; surfaced by
+    # draw() and plan_view(). Length 0 = none.
+    role = S7::new_property(S7::class_character,
+                            default = quote(character(0)))
   )
 )
+
+# Stamp a role on a LazyRaster's tail node (in place, via the graph
+# env). Returns the raster unchanged otherwise.
+.with_role <- function(lr, role) {
+  n <- graph_get(lr@graph, lr@node_id)
+  n@role <- role
+  graph_replace(lr@graph, lr@node_id, n)
+  lr
+}
 
 #' A GDAL-readable source: path + band + optional nodata sentinel.
 #'
@@ -54,6 +71,11 @@ Node <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
+#' @param name Optional display name (the asset or band name). Pure
+#'   metadata, shown by [plan_view()]; set by [lazy_dataset()].
 #' @param path Path or VSI URL readable by GDAL.
 #' @param band 1-based band index.
 #' @param nodata Length-0 (absent) or length-1 nodata sentinel value.
@@ -82,7 +104,12 @@ SourceNode <- S7::new_class(
     # the nodata sentinel is promoted to NaN. Length 0 = absent; when active
     # both are length 1 (offset 0 for pure scaling).
     scale = S7::new_property(S7::class_numeric, default = numeric(0)),
-    offset = S7::new_property(S7::class_numeric, default = numeric(0))
+    offset = S7::new_property(S7::class_numeric, default = numeric(0)),
+    # Display name (asset/band name from the dataset builder). Pure
+    # metadata: no planner pass or executor reads it; surfaced by
+    # plan_view() and friends. Length 0 = absent.
+    name = S7::new_property(S7::class_character,
+                            default = quote(character(0)))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L) {
@@ -105,6 +132,9 @@ SourceNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param fn Elementwise R function.
 #' @return A `MapNode`.
 #' @export
@@ -123,6 +153,9 @@ MapNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param fn Neighbourhood function (over the list of shifted arrays).
 #' @param radius Halo radius in pixels.
 #' @param boundary Boundary policy.
@@ -165,6 +198,9 @@ FocalNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param op Reduction name, e.g. "mean" (one of the names above), or
 #'   "custom".
 #' @param over Names of dims to reduce over.
@@ -229,6 +265,9 @@ ReduceNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes.
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param over Single dim name to scan along (`"t"` or `"band"`).
 #' @param direction One of `"forward"`, `"backward"`, `"bidir"`.
 #' @param fn Length-1 list holding the scan body `fn(xs, margin)`.
@@ -279,6 +318,9 @@ ScanNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param target_grid `GridSpec` to warp onto.
 #' @param resampling Resampling method ("nearest", "bilinear", "cubic", ...).
 #' @return A `WarpNode`.
@@ -298,6 +340,9 @@ WarpNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param along Name of the dim to stack along.
 #' @return A `StackNode`.
 #' @export
@@ -315,6 +360,9 @@ StackNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param fn Composed stage function.
 #' @param members Ids of the absorbed nodes.
 #' @param halo Combined halo radius of the members.
@@ -355,6 +403,9 @@ FusedNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (length 1).
 #' @param grid Output `GridSpec` of this node.
+#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#'   Pure metadata: never read by the planner or executors; surfaced by
+#'   [draw()] and [plan_view()].
 #' @param fn The model body `fn(xpad)`.
 #' @param radius Halo consumed per side, pixels.
 #' @param out_bands Output band count; 0 drops the band axis.

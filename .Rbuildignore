@@ -22,3 +22,5 @@
 ^src/.*\.gcno$
 ^covr/$
 ^garry-logo\.png$
+^package-graph$
+^vignettes/articles$

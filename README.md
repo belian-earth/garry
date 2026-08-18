@@ -169,12 +169,12 @@ draw(composite[["ndvi"]])    # the NDVI band's node tree
 #> └─ ƒ map  (2 inputs)  ×2
 #>    └─ ▸ median  over t  ×2
 #>       └─ ⬚ stack  along t
-#>          └─ ƒ map  (2 inputs)  ×15
+#>          └─ ✕ node  ×15
 #>             ├─ ◈ source  2536×1480 f32
 #>             └─ ◫ focal  r=3
 #>                └─ ◫ focal  r=2
 #>                   └─ ◫ focal  r=2
-#>                      └─ ƒ map
+#>                      └─ ✕ node
 #>                         └─ ◈ source  2536×1480 f32
 
 # preview() estimates a coarse grid from the graph and device, runs the pipeline
@@ -196,6 +196,26 @@ preview(a)     # multi-band  -> RGB (first three bands)
 ```
 
 <img src="man/figures/README-example-2.png" alt="" width="100%" />
+
+The plan itself is worth looking at. `plan_view()` renders it as an
+interactive DAG (static here; live when interactive and on the pkgdown
+site): stages typed by what they compute, provenance on hover (assets,
+acquisition dates, reducers), and dashed edges where bands pass through
+into the output. It shows the schedule you cannot see from the code:
+each QA slice’s mask predicate and morphological cleanup run as their
+own focal stages (halo work, kept narrow); each band’s masking, time
+stack, and median fuse into a single stage; and NDVI derives in its own
+stage before the write.
+
+``` r
+plan_view(composite)
+```
+
+<img src="man/figures/README-plan-view-1.png" alt="" width="100%" />
+
+See the [Inspecting
+plans](https://belian-earth.github.io/garry/articles/inspecting-plans.html)
+article for the full visual vocabulary and layout controls.
 
 To write to disk instead, `write_tif()` runs the same plan but streams
 each chunk into a GeoTIFF as it lands, so nothing is ever held whole in

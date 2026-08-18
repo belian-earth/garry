@@ -81,6 +81,35 @@ materialise <- function(
   .assert_class(x, LazyDataset, "LazyDataset")
 
   slices <- unique(unlist(lapply(x@bands, names), use.names = FALSE))
+  # Single-slice dataset: a composite (reduce_over drops the time axis), or
+  # the file form of lazy_dataset(). There are no dates to key cubes by and
+  # none are needed -- write ONE cube, a band per dataset band.
+  if (is.null(slices) && all(vapply(x@bands, length, integer(1)) == 1L)) {
+    path <- file.path(dir, paste0(name, ".vrt"))
+    .mat_check_clear(path, overwrite)
+    bn <- names(x@bands)
+    layers <- lapply(x@bands, `[[`, 1L)
+    sink <- if (length(layers) == 1L) {
+      layers[[1L]]
+    } else {
+      lazy_stack(stats::setNames(layers, bn), along = "band")
+    }
+    .collect_impl(
+      sink,
+      path = path,
+      nodata = nodata,
+      distributed = distributed,
+      band_names = bn
+    )
+    bands <- stats::setNames(
+      lapply(seq_along(bn), function(i) lazy_source(path, band = i)),
+      bn
+    )
+    return(as_dataset(
+      bands,
+      mask_asset = if (length(x@mask_asset)) x@mask_asset
+    ))
+  }
   if (is.null(slices) || !all(nzchar(slices))) {
     cli::cli_abort(c(
       "the dataset's slices must be named (dates) to materialise.",

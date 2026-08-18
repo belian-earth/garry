@@ -7,14 +7,17 @@
 plan_dot(plan)
 }
 \arguments{
-\item{plan}{A \code{Plan}, from \code{\link[=plan_lazy]{plan_lazy()}}.}
+\item{plan}{A \code{Plan} from \code{\link[=plan_lazy]{plan_lazy()}}, or anything \code{\link[=plan_lazy]{plan_lazy()}}
+accepts (a \code{LazyRaster}, a \code{LazyDataset}, or a named list of
+\code{LazyRaster}s), which is planned first.}
 }
 \value{
 A single DOT string.
 }
 \description{
-A \code{Plan} is obtained from \code{\link[=plan_lazy]{plan_lazy()}}.
+Render a Plan as DOT (Graphviz) text.
 }
 \seealso{
-\code{\link[=draw]{draw()}}, the user-facing pipeline visualisation.
+\code{\link[=plan_view]{plan_view()}} for the interactive DAG, \code{\link[=draw]{draw()}} for the
+user-facing pipeline visualisation.
 }

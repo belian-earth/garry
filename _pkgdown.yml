@@ -114,6 +114,7 @@ reference:
   contents:
   - preview
   - draw
+  - plan_view
   - garry_last_route
   - garry_task_report
   - garry_explain_placement

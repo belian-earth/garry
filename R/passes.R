@@ -623,12 +623,23 @@ NULL
 #' most code never needs it directly; it is useful for inspecting a
 #' pipeline with [plan_dot()] or executing a plan by hand.
 #'
-#' @param x A `LazyRaster`, or a named list of them (multi-export: one
-#'   graph, one execution, several sinks).
+#' @param x A `LazyRaster`, a `LazyDataset` (its bands are assembled
+#'   along the band axis first, as in [collect()]), or a named list of
+#'   `LazyRaster`s (multi-export: one graph, one execution, several
+#'   sinks).
 #' @return A `Plan`.
 #' @seealso [execute_plan()], [plan_dot()]
 #' @export
 plan_lazy <- function(x) {
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
+    cli::cli_abort(c(
+      "{.cls LazyDatasetGroups} plans one execution per group.",
+      "i" = "Pick one group, e.g. {.code plan_lazy(x@groups[[1]])}."
+    ))
+  }
+  if (S7::S7_inherits(x, LazyDataset)) {
+    x <- stack_bands(x)
+  }
   # Multi-export: a NAMED list of LazyRasters plans as ONE graph with one
   # execution and several sinks (design/multi-export-collect.md).
   if (is.list(x) && !S7::S7_inherits(x, LazyRaster)) {

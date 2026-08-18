@@ -340,7 +340,8 @@ lazy_dataset <- function(
         block_dim = meta$block_dim,
         resampling = rs,
         scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-        offset = if (length(aff$offset) == 1L) aff$offset else NULL
+        offset = if (length(aff$offset) == 1L) aff$offset else NULL,
+        name = a
       )
     })
     names(layers) <- slices
@@ -464,7 +465,8 @@ lazy_dataset <- function(
         } else {
           FALSE
         },
-        offset = offset
+        offset = offset,
+        name = nm
       )
       if (!is.null(grid)) {
         x <- align(x, grid, resampling = resolve_rs(nm))
@@ -1050,7 +1052,7 @@ mask <- function(
   pred <- .mask_predicate(where)
 
   masks <- lapply(x@bands[[from]], function(qlr) {
-    m <- lazy_map(qlr, fn = pred, dtype = "f32")
+    m <- .with_role(lazy_map(qlr, fn = pred, dtype = "f32"), "mask")
     if (open > 0L) {
       m <- .morph_open(m, as.integer(open))
     }
@@ -1061,11 +1063,14 @@ mask <- function(
   })
 
   apply_mask <- function(v, m) {
-    lazy_map(
-      v,
-      m,
-      fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
-      dtype = "f32"
+    .with_role(
+      lazy_map(
+        v,
+        m,
+        fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
+        dtype = "f32"
+      ),
+      "mask"
     )
   }
 

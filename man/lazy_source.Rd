@@ -14,7 +14,8 @@ lazy_source(
   block_dim = NULL,
   resampling = "near",
   scale = FALSE,
-  offset = NULL
+  offset = NULL,
+  name = NULL
 )
 }
 \arguments{
@@ -49,6 +50,11 @@ metadata is never read.}
 
 \item{offset}{Explicit additive offset used when \code{scale} is numeric;
 defaults to 0. Ignored when \code{scale} is logical.}
+
+\item{name}{Optional display name (e.g. the asset or band name).
+Pure metadata: surfaced by \code{\link[=plan_view]{plan_view()}} and diagnostics, never
+read by the planner or executors. \code{\link[=lazy_dataset]{lazy_dataset()}} sets it to the
+asset/band name automatically.}
 }
 \value{
 A \code{LazyRaster}.

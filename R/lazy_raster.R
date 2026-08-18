@@ -93,6 +93,10 @@ S7::method(res, LazyRaster) <- function(x) res(x@grid)
 #'   metadata is never read.
 #' @param offset Explicit additive offset used when `scale` is numeric;
 #'   defaults to 0. Ignored when `scale` is logical.
+#' @param name Optional display name (e.g. the asset or band name).
+#'   Pure metadata: surfaced by [plan_view()] and diagnostics, never
+#'   read by the planner or executors. [lazy_dataset()] sets it to the
+#'   asset/band name automatically.
 #' @return A `LazyRaster`.
 #' @seealso [collect()], [lazy_dataset()]
 #' @export
@@ -106,7 +110,8 @@ lazy_source <- function(
   block_dim = NULL,
   resampling = "near",
   scale = FALSE,
-  offset = NULL
+  offset = NULL,
+  name = NULL
 ) {
   if (is.null(grid)) {
     meta <- gdal_grid_spec(
@@ -156,7 +161,8 @@ lazy_source <- function(
     open_options = open_options,
     resampling = as.character(resampling),
     scale = aff$scale,
-    offset = aff$offset
+    offset = aff$offset,
+    name = if (is.null(name)) character(0) else as.character(name)
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
