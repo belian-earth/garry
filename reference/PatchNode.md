@@ -19,6 +19,7 @@ PatchNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   fn = function() NULL,
   radius = integer(0),
   out_bands = integer(0),
@@ -43,6 +44,14 @@ PatchNode(
 - grid:
 
   Output `GridSpec` of this node.
+
+- role:
+
+  Optional semantic role tag (e.g. "mask", set by
+  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)).
+  Pure metadata: never read by the planner or executors; surfaced by
+  [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) and
+  [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md).
 
 - fn:
 

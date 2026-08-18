@@ -201,6 +201,9 @@ drawings, and run reports.
 - [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) :
   Draw the pipeline of a lazy object.
 
+- [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
+  : Interactive Plan viewer.
+
 - [`garry_last_route()`](https://belian-earth.github.io/garry/reference/garry_last_route.md)
   :
 

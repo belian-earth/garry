@@ -6,6 +6,11 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>Reading Alpha Earth embeddings • garry</title>
+<!-- favicons --><link rel="icon" type="image/png" sizes="96x96" href="../favicon-96x96.png">
+<link rel="icon" type="”image/svg+xml”" href="../favicon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png">
+<link rel="icon" sizes="any" href="../favicon.ico">
+<link rel="manifest" href="../site.webmanifest">
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
 <script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
@@ -35,7 +40,9 @@
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles">
 <li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
+    <li><a class="dropdown-item" href="../articles/architecture.html">Architecture: an interactive map of garry</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
+    <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -101,7 +108,7 @@ bands as a false-colour composite.</p>
 <span>  <span class="fu"><a href="../reference/lazy_map.html">lazy_map</a></span><span class="op">(</span>fn <span class="op">=</span> <span class="va">dequantize_aef</span>, dtype <span class="op">=</span> <span class="st">"f32"</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">embeddings</span></span>
-<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ───────────────────────────────────────────────────────────────</span></span>
+<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ────────────────────────────────</span></span>
 <span><span class="co">#&gt;   bands  A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A10 A11 A12 A13 A14 A15 A16 A17 A18 A19 A20 A21 A22 A23 A24 A25 A26 A27 A28 A29 A30 A31 A32 A33 A34 A35 A36 A37 A38 A39 A40 A41 A42 A43 A44 A45 A46 A47 A48 A49 A50 A51 A52 A53 A54 A55 A56 A57 A58 A59 A60 A61 A62 A63</span></span>
 <span><span class="co">#&gt;   time   1 slice</span></span>
 <span><span class="co">#&gt;   grid   2732 x 2731 • f32</span></span>
@@ -118,16 +125,13 @@ on-device, not as a separate pass.</p>
 <h2 id="collect-three-bands-and-plot">Collect three bands and plot<a class="anchor" aria-label="anchor" href="#collect-three-bands-and-plot"></a>
 </h2>
 <p>Pick three arbitrary embedding dimensions and collect just those: the
-band-axis subset means only those three are ever read or computed.</p>
+band-axis subset means only those three are ever read or computed or
+preview a coarser overview of the tile to take a quick look.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="op">)</span></span>
-<span><span class="va">cube</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A09"</span>, <span class="st">"A10"</span>, <span class="st">"A11"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">0</span><span class="op">)</span></span>
+<span><span class="co"># cube &lt;- collect(embeddings[c("A09", "A10", "A11")])</span></span>
 <span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">cube</span><span class="op">)</span></span>
-<span><span class="co">#&gt; [1] 2731 2732    3</span></span>
-<span></span>
-<span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="va">cube</span>, bands<span class="op">=</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2</span>,<span class="fl">1</span>,<span class="fl">3</span><span class="op">)</span><span class="op">)</span>   <span class="co"># False-colour composite</span></span></code></pre></div>
+<span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A09"</span>, <span class="st">"A10"</span>, <span class="st">"A11"</span><span class="op">)</span><span class="op">]</span>, bands<span class="op">=</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">2</span>,<span class="fl">1</span>,<span class="fl">3</span><span class="op">)</span><span class="op">)</span>   <span class="co"># False-colour composite</span></span></code></pre></div>
 <div class="float">
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/aef-plot-1.png" alt="plot of chunk aef-plot"><div class="figcaption">plot of chunk aef-plot</div>
 </div>
@@ -141,26 +145,46 @@ sixty-four dimensions. The clustering below uses all of them.</p>
 </h2>
 <p>An unsupervised k-means over the 64-dimensional embedding vectors
 segments the landscape without a single training label. The pattern is
-fit-small, predict-lazily:</p>
-<p><strong>Fit.</strong> k-means needs pixels in R, but not all 7.5
-million of them. AEF embeddings are built to average linearly (the read
-above already relies on that with <code>resampling = "average"</code>),
-so fit on a coarser 120 m read of the same tile: an overview-backed,
-light fetch of ~470k pixels.</p>
+fit-small, predict-lazily – and neither half needs the raster on
+disk:</p>
+<p><strong>Materialise once.</strong> Both halves below read all 64
+bands, so decode the tile a single time into a local cube and work from
+that. This is the one expensive step, and it is explicit: the remote
+fetch and the dequant happen once, and everything after reads local
+pixels.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">emb120</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">tile</span>, <span class="fu"><a href="../reference/grid_from_src.html">grid_from_src</a></span><span class="op">(</span><span class="va">tile</span>, <span class="fl">120</span><span class="op">)</span>,</span>
-<span>                       resampling <span class="op">=</span> <span class="st">"average"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="../reference/lazy_map.html">lazy_map</a></span><span class="op">(</span>fn <span class="op">=</span> <span class="va">dequantize_aef</span>, dtype <span class="op">=</span> <span class="st">"f32"</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="va">cube</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/materialise.html">materialise</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">)</span>   <span class="co"># pass dir= to keep it beyond the session</span></span></code></pre></div>
+<p><strong>Fit.</strong> k-means needs pixels in R, but not all 7.5
+million of them – 100k scattered ones place five centroids perfectly
+well. <code><a href="../reference/extract_points.html">extract_points()</a></code> reads just those, straight out of
+the cube: GDAL touches only the blocks holding points, so this costs a
+fraction of a second rather than another pass over the raster.</p>
+<p>Points are a <a href="https://paleolimbot.github.io/wk/" class="external-link">wk</a>
+<code>xy</code> vector carrying their own CRS, so they are placed on the
+grid explicitly rather than by assumption (<code><a href="https://paleolimbot.github.io/wk/reference/xy.html" class="external-link">wk::as_xy()</a></code>
+converts points from sf, terra or a data frame).</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">42</span><span class="op">)</span></span>
+<span><span class="va">n</span>   <span class="op">&lt;-</span> <span class="fl">1e5</span></span>
+<span><span class="va">pts</span> <span class="op">&lt;-</span> <span class="fu">wk</span><span class="fu">::</span><span class="fu"><a href="https://paleolimbot.github.io/wk/reference/xy.html" class="external-link">xy</a></span><span class="op">(</span></span>
+<span>  <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="fu"><a href="../reference/grid-accessors.html">xmin</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span>, <span class="fu"><a href="../reference/grid-accessors.html">xmax</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>  <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="fu"><a href="../reference/grid-accessors.html">ymin</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span>, <span class="fu"><a href="../reference/grid-accessors.html">ymax</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>  crs <span class="op">=</span> <span class="va">grid</span><span class="op">@</span><span class="va">crs</span></span>
+<span><span class="op">)</span></span>
 <span></span>
-<span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="op">)</span></span>
-<span><span class="va">arr</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="va">emb120</span><span class="op">)</span><span class="op">)</span>          <span class="co"># (y, x, 64)</span></span>
-<span><span class="va">px</span>  <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">matrix</a></span><span class="op">(</span><span class="va">arr</span>, ncol <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">arr</span><span class="op">)</span><span class="op">[[</span><span class="fl">3</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="va">px</span>  <span class="op">&lt;-</span> <span class="va">px</span><span class="op">[</span><span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/complete.cases.html" class="external-link">complete.cases</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span>, <span class="op">]</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">42</span><span class="op">)</span></span>
-<span><span class="va">px</span>  <span class="op">&lt;-</span> <span class="va">px</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/sample.html" class="external-link">sample</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/nrow.html" class="external-link">nrow</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span>, <span class="fl">1e5</span><span class="op">)</span>, <span class="op">]</span>           <span class="co"># 100k px place 6 centroids fine</span></span>
-<span><span class="va">km</span>  <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/kmeans.html" class="external-link">kmeans</a></span><span class="op">(</span><span class="va">px</span>, centers <span class="op">=</span> <span class="fl">5</span><span class="op">)</span></span>
+<span><span class="va">px</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/extract_points.html">extract_points</a></span><span class="op">(</span><span class="va">cube</span>, <span class="va">pts</span><span class="op">)</span>              <span class="co"># (100000, 64)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span></span>
+<span><span class="co">#&gt; [1] 100000     64</span></span>
+<span><span class="va">px</span> <span class="op">&lt;-</span> <span class="va">px</span><span class="op">[</span><span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/complete.cases.html" class="external-link">complete.cases</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span>, <span class="op">]</span></span>
+<span><span class="va">km</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/kmeans.html" class="external-link">kmeans</a></span><span class="op">(</span><span class="va">px</span>, centers <span class="op">=</span> <span class="fl">5</span><span class="op">)</span></span>
 <span><span class="va">km</span><span class="op">$</span><span class="va">size</span></span>
-<span><span class="co">#&gt; [1] 14675 10598 30765 21419 22543</span></span></code></pre></div>
+<span><span class="co">#&gt; [1] 12935 30046 24230 22641 10148</span></span></code></pre></div>
+<p>The same call is how a model gets its training table off any garry
+pipeline: give it the GEDI shots, the field plots or the labelled points
+instead of random ones. <code>interp = "bilinear"</code> interpolates
+the four surrounding cell centres for continuous data measured off-grid,
+and <code>krnl_dim</code> reads a window around each point instead of a
+single cell.</p>
 <p><strong>Assign.</strong> Every 30 m pixel goes to its nearest
 centroid: <code>argmax_k (x . c_k - |c_k|^2 / 2)</code>, and
 <code>x . c_k</code> is a linear combination of bands – the
@@ -171,7 +195,7 @@ comparison chain, and <code><a href="../reference/collect.html">collect()</a></c
 cluster map. This is ordinary user code – garry’s shipped verbs are
 built from exactly these pieces, with no privileged access to the
 engine.</p>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">nearest_center</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">centers</span><span class="op">)</span> <span class="op">{</span></span>
 <span>  <span class="va">ct</span>   <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/unname.html" class="external-link">unname</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/matrix.html" class="external-link">as.matrix</a></span><span class="op">(</span><span class="va">centers</span><span class="op">)</span><span class="op">)</span>            <span class="co"># k x band</span></span>
 <span>  <span class="va">half</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/colSums.html" class="external-link">rowSums</a></span><span class="op">(</span><span class="va">ct</span><span class="op">^</span><span class="fl">2</span><span class="op">)</span> <span class="op">/</span> <span class="fl">2</span></span>
@@ -190,22 +214,22 @@ engine.</p>
 <span>  <span class="op">}</span></span>
 <span><span class="op">}</span></span>
 <span></span>
-<span><span class="va">clusters</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/reduce_over.html">reduce_over</a></span><span class="op">(</span><span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="va">embeddings</span><span class="op">)</span>,</span>
+<span><span class="va">clusters</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/reduce_over.html">reduce_over</a></span><span class="op">(</span><span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="va">cube</span><span class="op">)</span>,</span>
 <span>                        <span class="fu">nearest_center</span><span class="op">(</span><span class="va">km</span><span class="op">$</span><span class="va">centers</span><span class="op">)</span>, over <span class="op">=</span> <span class="st">"band"</span><span class="op">)</span></span>
 <span><span class="va">clmap</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">clusters</span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fl">0</span><span class="op">)</span></span></code></pre></div>
-<p>One fused kernel reads the full-resolution 64-band cube once,
-computes every projection and the argmax per pixel, and only the
-finished single-band cluster map ever reaches R. (Want the raw scores
-instead? Stack plain <code><a href="../reference/band_project.html">band_project()</a></code> reducers with
+<p>One fused kernel reads the 64-band cube once, computes every
+projection and the argmax per pixel, and only the finished single-band
+cluster map ever reaches R. (Want the raw scores instead? Stack plain
+<code><a href="../reference/band_project.html">band_project()</a></code> reducers with
 <code>lazy_stack(along = "band")</code> and take <code><a href="https://rdrr.io/r/base/maxCol.html" class="external-link">max.col()</a></code>
 host-side – same digital numbers.)</p>
 <p>The k-means prediction can also stream straight to disk. Note the
 <code>dtype</code> and <code>overview_resampling</code> arguments: COG
 overviews default to “average”, and an averaged class label is
 meaningless, so categorical outputs want “nearest”:</p>
-<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/write_tif.html">write_tif</a></span><span class="op">(</span></span>
 <span>  <span class="va">clusters</span>,</span>
 <span>  <span class="st">"km-aef.tif"</span>,</span>
@@ -214,7 +238,7 @@ meaningless, so categorical outputs want “nearest”:</p>
 <span>  overview_resampling <span class="op">=</span> <span class="st">"nearest"</span></span>
 <span><span class="op">)</span></span></code></pre></div>
 <p>And the final k-means map:</p>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span></span>
 <span>  <span class="va">clmap</span>,</span>
 <span>  col <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"#E41A1C"</span>, <span class="st">"#377EB8"</span>, <span class="st">"#4DAF4A"</span>, <span class="st">"#984EA3"</span>, <span class="st">"#FF7F00"</span><span class="op">)</span></span>

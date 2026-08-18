@@ -11,6 +11,7 @@ WarpNode(
   id = integer(0),
   parents = integer(0),
   grid = GridSpec(),
+  role = character(0),
   target_grid = GridSpec(),
   resampling = character(0)
 )
@@ -30,6 +31,14 @@ WarpNode(
 - grid:
 
   Output `GridSpec` of this node.
+
+- role:
+
+  Optional semantic role tag (e.g. "mask", set by
+  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)).
+  Pure metadata: never read by the planner or executors; surfaced by
+  [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) and
+  [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md).
 
 - target_grid:
 

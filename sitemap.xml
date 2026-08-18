@@ -3,9 +3,13 @@
 <url><loc>https://belian-earth.github.io/garry/LICENSE-text.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/LICENSE.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/aef-embeddings.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/articles/architecture.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/articles/garry-api-graph.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/articles/garry-package-graph.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/garry.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/hls-harmonized-pca.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/index.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/articles/inspecting-plans.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/omnicloudmask.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/stac-composite.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/time-series.html</loc></url>
@@ -66,6 +70,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dtype_valid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/execute_plan.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/execute_plan_mirai.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/extract_points.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/fill_gaps.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/focal.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/focal_kernel.html</loc></url>
@@ -115,6 +120,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_grid_spec.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_mosaic_vrt.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_nodata_window.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/gdal_pixel_extract.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_read_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_version_num.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_version_str.html</loc></url>
@@ -158,6 +164,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/output_grid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/plan_dot.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/plan_lazy.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/plan_view.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/preview.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/qa_bits.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/reduce_over.html</loc></url>

@@ -6,6 +6,11 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <title>Lazy, Spatial-Aware Raster Arrays with JIT-Compiled Kernels • garry</title>
+<!-- favicons --><link rel="icon" type="image/png" sizes="96x96" href="favicon-96x96.png">
+<link rel="icon" type="”image/svg+xml”" href="favicon.svg">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="icon" sizes="any" href="favicon.ico">
+<link rel="manifest" href="site.webmanifest">
 <script src="deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
 <link href="deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
 <script src="deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
@@ -38,7 +43,9 @@
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles">
 <li><a class="dropdown-item" href="articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
+    <li><a class="dropdown-item" href="articles/architecture.html">Architecture: an interactive map of garry</a></li>
     <li><a class="dropdown-item" href="articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
+    <li><a class="dropdown-item" href="articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
     <li><a class="dropdown-item" href="articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -172,12 +179,12 @@
 <span><span class="co">#&gt; └─ ƒ map  (2 inputs)  ×2</span></span>
 <span><span class="co">#&gt;    └─ ▸ median  over t  ×2</span></span>
 <span><span class="co">#&gt;       └─ ⬚ stack  along t</span></span>
-<span><span class="co">#&gt;          └─ ƒ map  (2 inputs)  ×15</span></span>
+<span><span class="co">#&gt;          └─ ✕ node  ×15</span></span>
 <span><span class="co">#&gt;             ├─ ◈ source  2536×1480 f32</span></span>
 <span><span class="co">#&gt;             └─ ◫ focal  r=3</span></span>
 <span><span class="co">#&gt;                └─ ◫ focal  r=2</span></span>
 <span><span class="co">#&gt;                   └─ ◫ focal  r=2</span></span>
-<span><span class="co">#&gt;                      └─ ƒ map</span></span>
+<span><span class="co">#&gt;                      └─ ✕ node</span></span>
 <span><span class="co">#&gt;                         └─ ◈ source  2536×1480 f32</span></span>
 <span></span>
 <span><span class="co"># preview() estimates a coarse grid from the graph and device, runs the pipeline</span></span>
@@ -194,8 +201,13 @@
 <span><span class="co"># preview() on a materialised array reads that `gis` attribute for real-world axes.</span></span>
 <span><span class="fu"><a href="reference/preview.html">preview</a></span><span class="op">(</span><span class="va">a</span><span class="op">)</span>     <span class="co"># multi-band  -&gt; RGB (first three bands)</span></span></code></pre></div>
 <p><img src="reference/figures/README-example-2.png" alt="" width="100%"></p>
-<p>To write to disk instead, <code><a href="reference/write_tif.html">write_tif()</a></code> runs the same plan but streams each chunk into a GeoTIFF as it lands, so nothing is ever held whole in memory. <code>dtype</code> and <code>scale</code> quantise the f32 reflectance back to int16 (half the file size, and the scale is written to the TIFF tags so readers recover real values); <code>cog = TRUE</code> finalises a Cloud-Optimised GeoTIFF.</p>
+<p>The plan itself is worth looking at. <code><a href="reference/plan_view.html">plan_view()</a></code> renders it as an interactive DAG (static here; live when interactive and on the pkgdown site): stages typed by what they compute, provenance on hover (assets, acquisition dates, reducers), and dashed edges where bands pass through into the output. It shows the schedule you cannot see from the code: each QA slice’s mask predicate and morphological cleanup run as their own focal stages (halo work, kept narrow); each band’s masking, time stack, and median fuse into a single stage; and NDVI derives in its own stage before the write.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="reference/plan_view.html">plan_view</a></span><span class="op">(</span><span class="va">composite</span><span class="op">)</span></span></code></pre></div>
+<p><img src="reference/figures/README-plan-view-1.png" alt="" width="100%"></p>
+<p>See the <a href="https://belian-earth.github.io/garry/articles/inspecting-plans.html">Inspecting plans</a> article for the full visual vocabulary and layout controls.</p>
+<p>To write to disk instead, <code><a href="reference/write_tif.html">write_tif()</a></code> runs the same plan but streams each chunk into a GeoTIFF as it lands, so nothing is ever held whole in memory. <code>dtype</code> and <code>scale</code> quantise the f32 reflectance back to int16 (half the file size, and the scale is written to the TIFF tags so readers recover real values); <code>cog = TRUE</code> finalises a Cloud-Optimised GeoTIFF.</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">tif</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"composite.tif"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="reference/write_tif.html">write_tif</a></span><span class="op">(</span><span class="va">composite</span>, <span class="va">tif</span>,</span>
 <span>          dtype <span class="op">=</span> <span class="st">"i16"</span>, scale <span class="op">=</span> <span class="fl">0.0001</span>, nodata <span class="op">=</span> <span class="op">-</span><span class="fl">32768</span>, cog <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span></code></pre></div>

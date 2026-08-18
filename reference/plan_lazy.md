@@ -19,7 +19,10 @@ plan_lazy(x)
 
 - x:
 
-  A `LazyRaster`, or a named list of them (multi-export: one graph, one
+  A `LazyRaster`, a `LazyDataset` (its bands are assembled along the
+  band axis first, as in
+  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)),
+  or a named list of `LazyRaster`s (multi-export: one graph, one
   execution, several sinks).
 
 ## Value

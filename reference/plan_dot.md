@@ -1,7 +1,6 @@
 # Render a Plan as DOT (Graphviz) text.
 
-A `Plan` is obtained from
-[`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md).
+Render a Plan as DOT (Graphviz) text.
 
 ## Usage
 
@@ -13,8 +12,12 @@ plan_dot(plan)
 
 - plan:
 
-  A `Plan`, from
-  [`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md).
+  A `Plan` from
+  [`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md),
+  or anything
+  [`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md)
+  accepts (a `LazyRaster`, a `LazyDataset`, or a named list of
+  `LazyRaster`s), which is planned first.
 
 ## Value
 
@@ -22,5 +25,7 @@ A single DOT string.
 
 ## See also
 
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md), the
-user-facing pipeline visualisation.
+[`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
+for the interactive DAG,
+[`draw()`](https://belian-earth.github.io/garry/reference/draw.md) for
+the user-facing pipeline visualisation.

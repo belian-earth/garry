@@ -20,7 +20,8 @@ lazy_source(
   block_dim = NULL,
   resampling = "near",
   scale = FALSE,
-  offset = NULL
+  offset = NULL,
+  name = NULL
 )
 ```
 
@@ -77,6 +78,15 @@ lazy_source(
 
   Explicit additive offset used when `scale` is numeric; defaults to 0.
   Ignored when `scale` is logical.
+
+- name:
+
+  Optional display name (e.g. the asset or band name). Pure metadata:
+  surfaced by
+  [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
+  and diagnostics, never read by the planner or executors.
+  [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
+  sets it to the asset/band name automatically.
 
 ## Value
 
