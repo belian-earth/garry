@@ -28,3 +28,5 @@ scratch.R
 km*.tif
 garry-logo.png
 /.quarto/
+
+**/*.quarto_ipynb
