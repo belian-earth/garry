@@ -137,6 +137,131 @@ NULL
   out
 }
 
+# Dataset provenance for tooltips: node id -> band name and slice label
+# (acquisition date for STAC datasets), from the named band layers.
+.pv_band_map <- function(ds) {
+  out <- list()
+  for (bn in names(ds@bands)) {
+    layers <- ds@bands[[bn]]
+    lnames <- names(layers)
+    for (j in seq_along(layers)) {
+      slice <- if (!is.null(lnames) && nzchar(lnames[[j]])) {
+        lnames[[j]]
+      } else {
+        NA_character_
+      }
+      out[[.key(layers[[j]]@node_id)]] <- list(band = bn, slice = slice)
+    }
+  }
+  out
+}
+
+# Axis provenance from stack ordering: a stack node's parents are
+# ordered exactly as its grid labels (a t-stack's parents follow its
+# slice dates; the band-assembly stack's parents follow its band
+# names), so parent i inherits label i. Survives reduce_over(), which
+# drops the dataset's named layers. Returns node id -> named character
+# (axis -> label).
+.pv_axis_map <- function(p) {
+  out <- list()
+  for (s in p@stages) {
+    for (id in s@members) {
+      n <- graph_get(p@graph, id)
+      if (is.null(n) || length(n@parents) < 2L) next
+      for (axis in names(n@grid@labels)) {
+        labs <- n@grid@labels[[axis]]
+        if (length(labs) != length(n@parents)) next
+        for (j in seq_along(labs)) {
+          k <- .key(n@parents[[j]])
+          out[[k]] <- c(out[[k]], stats::setNames(labs[[j]], axis))
+        }
+      }
+    }
+  }
+  out
+}
+
+# Tooltip metadata lines for one stage, harvested from its members:
+# band/slice provenance (dataset layer names), per-node parameters
+# (source path/band/scale, reduce op/axis, focal radius, scan
+# direction), t labels carried by member grids, and band labels on the
+# stage's output grid.
+.pv_stage_meta <- function(s, graph, band_map, axis_map = list()) {
+  lines <- character(0)
+  mem <- lapply(s@members, function(id) graph_get(graph, id))
+
+  # stack-ordering provenance: axis labels inherited by this stage's
+  # members (dates on slice sources, band names on band tails)
+  ax <- do.call(c, unname(Filter(Negate(is.null),
+    lapply(s@members, function(id) axis_map[[.key(id)]]))))
+  if (length(ax)) {
+    for (axis in unique(names(ax))) {
+      v <- sort(unique(unname(ax[names(ax) == axis])))
+      lines <- c(lines, if (length(v) <= 4L) {
+        .glue("{axis}: {paste(v, collapse = ', ')}")
+      } else {
+        .glue("{axis}: {v[[1L]]} … {v[[length(v)]]} ({length(v)})")
+      })
+    }
+  }
+
+  bm <- Filter(Negate(is.null),
+               lapply(s@members, function(id) band_map[[.key(id)]]))
+  if (length(bm)) {
+    bands <- unique(vapply(bm, `[[`, "", "band"))
+    slices <- unique(stats::na.omit(vapply(bm, `[[`, "", "slice")))
+    ln <- .glue("band: {paste(bands, collapse = ', ')}")
+    if (length(slices)) {
+      slices <- sort(slices)
+      ln <- if (length(slices) <= 3L) {
+        .glue("{ln} · {paste(slices, collapse = ', ')}")
+      } else {
+        .glue("{ln} · {slices[[1L]]} … ",
+              "{slices[[length(slices)]]} ({length(slices)})")
+      }
+    }
+    lines <- c(lines, ln)
+  }
+
+  for (n in mem) {
+    if (is.null(n)) next
+    if (S7::S7_inherits(n, SourceNode)) {
+      ln <- .glue("file: {basename(n@path)} ",
+                  "(band {paste(n@band, collapse = ',')})")
+      if (length(n@scale)) {
+        ln <- .glue("{ln} · scale {n@scale}")
+      }
+      lines <- c(lines, ln)
+    } else if (S7::S7_inherits(n, ReduceNode)) {
+      op <- if (length(n@fn)) "custom" else n@op
+      lines <- c(lines, .glue(
+        "reduce: {op} over {paste(n@over, collapse = ',')}",
+        "{if (isTRUE(n@nan_rm)) ', nan_rm' else ''}"))
+    } else if (S7::S7_inherits(n, FocalNode)) {
+      lines <- c(lines, .glue("focal: radius {n@radius}, {n@boundary}"))
+    } else if (S7::S7_inherits(n, ScanNode)) {
+      lines <- c(lines, .glue("scan: over {n@over}, {n@direction}"))
+    }
+  }
+
+  tl <- unique(unlist(lapply(mem, function(n) {
+    if (!is.null(n)) n@grid@labels[["t"]]
+  })))
+  if (length(tl)) {
+    tl <- sort(tl)
+    lines <- c(lines, if (length(tl) <= 4L) {
+      .glue("t: {paste(tl, collapse = ', ')}")
+    } else {
+      .glue("t: {tl[[1L]]} … {tl[[length(tl)]]} ({length(tl)})")
+    })
+  }
+  bl <- s@grid@labels[["band"]]
+  if (length(bl)) {
+    lines <- c(lines, .glue("bands: {paste(bl, collapse = ', ')}"))
+  }
+  unique(lines)
+}
+
 # Classify one stage: vocabulary key, display label, and the member
 # composition ("focal + 2 map") built from the plan's graph.
 # `derive_map` (node id -> band name) relabels a derived band's members
@@ -216,8 +341,13 @@ NULL
 #' bands (`ds[["ndvi"]] <- ...`) are recovered from the dataset's step
 #' record and the stage computing one is labelled with the band name
 #' (`derive·ndvi`); the derivation is bounded structurally at the first
-#' non-elementwise node, so it survives subsetting (`ds["ndvi"]`). Hovering a stage shows its full op
-#' composition, members, halo, device, and output grid; clicking
+#' non-elementwise node, so it survives subsetting (`ds["ndvi"]`).
+#' Hovering a stage shows its full op composition and any recoverable
+#' metadata — acquisition dates on slice sources and t-spans on
+#' composites (from stack ordering and grid labels), the band a stage
+#' computes, source file and band, and op parameters (reducer and
+#' axis, focal radius, scan direction) — plus members, halo, device,
+#' and output grid; clicking
 #' highlights its neighbours; the sink stage is drawn with a heavy
 #' border. Where [plan_dot()] emits static Graphviz
 #' text, `plan_view()` is the exploratory sibling: watch the plan
@@ -256,14 +386,17 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   }
   derive_map <- character(0)
   band_names <- NULL
+  band_map <- list()
   if (S7::S7_inherits(x, LazyDataset)) {
     derive_map <- .pv_derive_map(x)
     band_names <- names(x@bands)
+    band_map <- .pv_band_map(x)
     x <- stack_bands(x)
   }
   p <- if (S7::S7_inherits(x, Plan)) x else plan_lazy(x)
 
   levels <- .plan_stage_levels(p@stages)
+  axis_map <- .pv_axis_map(p)
   info <- lapply(p@stages, .pv_stage_info, graph = p@graph,
                  derive_map = derive_map)
   sinks <- if (length(p@sinks)) p@sinks else stats::setNames(integer(0), NULL)
@@ -332,6 +465,8 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
         "<b>stage {s@id}</b> &middot; {s@kind}",
         "{if (s@id == p@sink) ' &middot; sink' else ''}<br>",
         "ops: {info[[i]]$comp}<br>",
+        "{paste0(.pv_stage_meta(s, p@graph, band_map, axis_map),
+                 '<br>', collapse = '')}",
         "members: {paste(s@members, collapse = ', ')}<br>",
         "halo: {s@halo} &middot; device: {s@device}<br>",
         "grid: {dims} ({s@grid@dtype})"

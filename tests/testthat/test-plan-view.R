@@ -121,6 +121,33 @@ test_that("subsetting a dataset does not swallow the graph into derive", {
   expect_identical(sum(grepl("derive·ndvi", nodes_sub$label)), 1L)
 })
 
+test_that("tooltips carry op parameters and dataset provenance", {
+  skip_if_not_installed("visNetwork")
+  f <- fixture_gradient_f32()
+  lr <- lazy_source(f)
+
+  # op parameters from member nodes
+  nodes <- plan_view(reduce_over(
+    lazy_stack(list(focal(lr, radius = 2L, fn = g_mean), lr + 1)),
+    "median", "t", nan_rm = TRUE
+  ))$x$nodes
+  expect_true(any(grepl("focal: radius 2", nodes$title)))
+  expect_true(any(grepl("reduce: median over t, nan_rm", nodes$title)))
+  expect_true(any(grepl("file: garry-fixture-grad.tif", nodes$title)))
+
+  # band and slice provenance from named dataset layers
+  G <- graph_new()
+  s1 <- lazy_source(f, graph = G)
+  s2 <- lazy_source(f, graph = G)
+  ds <- as_dataset(list(
+    V = stats::setNames(list(s1), "2023-01-05"),
+    W = stats::setNames(list(s2), "2023-01-15")
+  ))
+  nodes2 <- plan_view(ds)$x$nodes
+  expect_true(any(grepl("band: V · 2023-01-05", nodes2$title)))
+  expect_true(any(grepl("band: W · 2023-01-15", nodes2$title)))
+})
+
 test_that("derive stage keeps solid edges only from bands it reads", {
   skip_if_not_installed("visNetwork")
   f <- fixture_gradient_f32()

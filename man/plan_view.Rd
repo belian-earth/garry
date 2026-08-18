@@ -45,8 +45,13 @@ reducer (\verb{reduce·median}). When a \code{LazyDataset} is passed, derived
 bands (\code{ds[["ndvi"]] <- ...}) are recovered from the dataset's step
 record and the stage computing one is labelled with the band name
 (\verb{derive·ndvi}); the derivation is bounded structurally at the first
-non-elementwise node, so it survives subsetting (\code{ds["ndvi"]}). Hovering a stage shows its full op
-composition, members, halo, device, and output grid; clicking
+non-elementwise node, so it survives subsetting (\code{ds["ndvi"]}).
+Hovering a stage shows its full op composition and any recoverable
+metadata — acquisition dates on slice sources and t-spans on
+composites (from stack ordering and grid labels), the band a stage
+computes, source file and band, and op parameters (reducer and
+axis, focal radius, scan direction) — plus members, halo, device,
+and output grid; clicking
 highlights its neighbours; the sink stage is drawn with a heavy
 border. Where \code{\link[=plan_dot]{plan_dot()}} emits static Graphviz
 text, \code{plan_view()} is the exploratory sibling: watch the plan
