@@ -613,6 +613,83 @@ NULL
   invisible(graph)
 }
 
+# -- Warp dedup (shared warp-on-read) ------------------------------------------
+#
+# graph_import() deduplicates SourceNodes (D6) but copies every derived
+# node fresh, so a band used in two subexpressions carries two WarpNodes
+# over the one shared source -- and the warp stage is where the read
+# happens. `(nir - red) / (nir + red)` reads `red` twice: the left
+# operand's graph is the base and the right operand is re-imported into
+# each subexpression, taking new ids each time.
+#
+# A WarpNode is a pure function of (parent, target grid, resampling) with
+# no closure, so consumers of an identical warp can share one node. The
+# rewrite is semantics-preserving and idempotent, and duplicates are
+# rewired rather than deleted, so a user-held LazyRaster pointing at one
+# stays valid (it simply becomes unreachable from these sinks).
+#
+# Sharing a warp raises its consumer count, which the stage-merge pass
+# reads: a multi-consumer producer stays materialised instead of fusing.
+# For a read that trade is always worth taking -- one read plus a store
+# round-trip beats decoding the same window from the file twice -- which
+# is why this pass covers warps only and not compute nodes in general,
+# where duplicating cheap arithmetic to keep a fusion can be the better
+# plan.
+.dedup_warps <- function(graph, sink_ids) {
+  if (!isTRUE(garry_opt("warp_dedup"))) {
+    return(invisible(graph))
+  }
+  ids <- sort(unique(unlist(lapply(unique(sink_ids), function(i) {
+    .reachable(graph, i)
+  }))))
+  protected <- unique(as.integer(sink_ids))
+
+  # Bucket on the exact-match fields; grid equality is tolerance-based
+  # (as in .source_index), so grids stay out of the key and every
+  # candidate is verified with grid_equal().
+  canon <- new.env(parent = emptyenv())
+  remap <- new.env(parent = emptyenv())
+  warp_ids <- Filter(
+    function(id) S7::S7_inherits(graph_get(graph, id), WarpNode),
+    ids
+  )
+  # Sinks first, so a requested output is always the canonical node and
+  # never rewired away from under the caller.
+  for (id in c(intersect(warp_ids, protected), setdiff(warp_ids, protected))) {
+    n <- graph_get(graph, id)
+    key <- paste(.node_parents(n)[[1L]], n@resampling, sep = "\x1f")
+    hit <- NULL
+    for (ci in canon[[key]]) {
+      if (grid_equal(graph_get(graph, ci)@target_grid, n@target_grid)) {
+        hit <- ci
+        break
+      }
+    }
+    if (is.null(hit) || id %in% protected) {
+      canon[[key]] <- c(canon[[key]], id)
+    } else {
+      remap[[.key(id)]] <- hit
+    }
+  }
+  if (!length(ls(remap, all.names = TRUE))) {
+    return(invisible(graph))
+  }
+
+  for (id in ids) {
+    n <- graph_get(graph, id)
+    ps <- .node_parents(n)
+    if (!length(ps)) {
+      next
+    }
+    new_ps <- vapply(ps, function(p) remap[[.key(p)]] %||% p, integer(1))
+    if (!identical(as.integer(new_ps), as.integer(ps))) {
+      n@parents <- as.integer(new_ps)
+      graph_replace(graph, id, n)
+    }
+  }
+  invisible(graph)
+}
+
 # -- The planner ---------------------------------------------------------------
 
 #' Plan a LazyRaster: run all planner passes and export a Plan.
@@ -682,6 +759,10 @@ plan_lazy <- function(x) {
   # semantics-preserving and idempotent, so a shared user graph stays
   # valid for later collects).
   .collapse_band_stacks(graph, unname(sink_ids))
+  # Share identical warp-on-read nodes before staging, so a band used in
+  # several subexpressions is read once (same in-place, idempotent
+  # contract as the collapse above).
+  .dedup_warps(graph, unname(sink_ids))
   ids <- sort(unique(unlist(lapply(unique(sink_ids), function(i) {
     .reachable(graph, i)
   }))))

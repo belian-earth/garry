@@ -239,6 +239,8 @@ NULL
 #' @param parts NULL for chunk-aligned reads (the buffer is shared
 #'   whole under `key`), else per-compute-chunk windows (`r0`/`c0`
 #'   0-based offsets, `nr`/`nc` sizes, `elt` the element name).
+#' @param decim Optional decimating-read spec (see [gdal_read_window()]),
+#'   set when an aligned warp is served by a direct RasterIO read.
 #' @return The shared object (serialises as its region name).
 #' @keywords internal
 #' @export
@@ -256,7 +258,8 @@ NULL
   read_raw = FALSE,
   store_raw = FALSE,
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 ) {
   m <- .exec_read_padded(
     path,
@@ -267,7 +270,8 @@ NULL
     open_options = open_options,
     out = if (read_raw) "raw_f32" else "matrix",
     scale = scale,
-    offset = offset
+    offset = offset,
+    decim = decim
   )
   if (!is.null(fuse)) {
     m <- .apply_fuse(m, fuse, store_raw)
