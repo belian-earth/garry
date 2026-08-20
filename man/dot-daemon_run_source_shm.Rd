@@ -18,7 +18,8 @@
   read_raw = FALSE,
   store_raw = FALSE,
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 )
 }
 \arguments{
@@ -30,6 +31,9 @@
 \item{parts}{NULL for chunk-aligned reads (the buffer is shared
 whole under \code{key}), else per-compute-chunk windows (\code{r0}/\code{c0}
 0-based offsets, \code{nr}/\code{nc} sizes, \code{elt} the element name).}
+
+\item{decim}{Optional decimating-read spec (see \code{\link[=gdal_read_window]{gdal_read_window()}}),
+set when an aligned warp is served by a direct RasterIO read.}
 }
 \value{
 The shared object (serialises as its region name).

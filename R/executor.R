@@ -18,6 +18,46 @@ NULL
 # against.
 # ---------------------------------------------------------------------------
 
+# Resolve a "warp" stage to the read that actually serves it. An aligned
+# same-CRS target needs no warping (see .rio_direct_spec()): read the
+# source directly and let RasterIO resample in the same pass. Anything
+# else builds the warped VRT as before. Shared by execute_plan() and the
+# mirai scheduler so the two cannot disagree about which read they do.
+.warp_read_plan <- function(wnode, snode) {
+  spec <- .rio_direct_spec(
+    snode@path,
+    wnode@target_grid,
+    wnode@resampling,
+    snode@open_options
+  )
+  if (!is.null(spec)) {
+    return(list(
+      path = snode@path,
+      band = snode@band,
+      nodata = snode@nodata,
+      open_options = snode@open_options,
+      scale = snode@scale,
+      offset = snode@offset,
+      decim = spec
+    ))
+  }
+  list(
+    path = gdal_warp_vrt(
+      snode@path,
+      snode@band,
+      wnode@target_grid,
+      wnode@resampling,
+      src_nodata = snode@nodata
+    ),
+    band = 1L,
+    nodata = snode@nodata,
+    open_options = character(0),
+    scale = snode@scale,
+    offset = snode@offset,
+    decim = NULL
+  )
+}
+
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
@@ -32,7 +72,8 @@ NULL
   open_options = character(0),
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 ) {
   out <- rlang::arg_match(out)
   H <- cg@halo
@@ -61,7 +102,8 @@ NULL
           open_options = open_options,
           out = out,
           scale = scale,
-          offset = offset
+          offset = offset,
+          decim = decim
         )
       },
       what = "read"
@@ -902,18 +944,14 @@ execute_plan <- function(
       if (s@kind == "warp") {
         wnode <- graph_get(graph, s@members[[1L]])
         snode <- graph_get(graph, wnode@parents[[1L]])
-        rpath <- gdal_warp_vrt(
-          snode@path,
-          snode@band,
-          wnode@target_grid,
-          wnode@resampling,
-          src_nodata = snode@nodata
-        )
-        rband <- 1L
-        rnodata <- snode@nodata
-        roo <- character(0)
-        rsc <- snode@scale
-        rof <- snode@offset
+        rp <- .warp_read_plan(wnode, snode)
+        rpath <- rp$path
+        rband <- rp$band
+        rnodata <- rp$nodata
+        roo <- rp$open_options
+        rsc <- rp$scale
+        rof <- rp$offset
+        rdecim <- rp$decim
         key <- .key(wnode@id)
       } else {
         node <- graph_get(graph, s@members[[1L]])
@@ -923,6 +961,7 @@ execute_plan <- function(
         roo <- node@open_options
         rsc <- node@scale
         rof <- node@offset
+        rdecim <- NULL
         key <- .key(node@id)
       }
       split_cg <- .exec_split_cg(plan, s)
@@ -937,7 +976,8 @@ execute_plan <- function(
               it[j, ],
               open_options = roo,
               scale = rsc,
-              offset = rof
+              offset = rof,
+              decim = rdecim
             )),
             key
           )
@@ -959,7 +999,8 @@ execute_plan <- function(
             it[r, ],
             open_options = roo,
             scale = rsc,
-            offset = rof
+            offset = rof,
+            decim = rdecim
           )
           rank3 <- length(dim(buf)) == 3L
           for (j in .exec_split_members(its, it[r, ])) {

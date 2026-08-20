@@ -656,19 +656,14 @@ execute_plan_mirai <- function(
       if (s@kind == "warp") {
         wnode <- graph_get(graph, s@members[[1L]])
         snode <- graph_get(graph, wnode@parents[[1L]])
-        vrt <- gdal_warp_vrt(
-          snode@path,
-          snode@band,
-          wnode@target_grid,
-          wnode@resampling,
-          src_nodata = snode@nodata
-        )
-        rpath <- vrt
-        rband <- 1L
-        rnodata <- snode@nodata
-        roo <- character(0)
-        rsc <- snode@scale
-        rof <- snode@offset
+        rp <- .warp_read_plan(wnode, snode)
+        rpath <- rp$path
+        rband <- rp$band
+        rnodata <- rp$nodata
+        roo <- rp$open_options
+        rsc <- rp$scale
+        rof <- rp$offset
+        rdecim <- rp$decim
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
@@ -677,6 +672,7 @@ execute_plan_mirai <- function(
         roo <- node@open_options
         rsc <- node@scale
         rof <- node@offset
+        rdecim <- NULL
       }
       skey <- .key(s@members[[1L]])
       fspec <- fuse_of[[.key(s@id)]]
@@ -792,6 +788,7 @@ execute_plan_mirai <- function(
             sr <- use_raw
             sc <- rsc
             of <- rof
+            dcm <- rdecim
             key <- .glue("s{sid}_c{jj}")
             add_task(
               key,
@@ -814,7 +811,8 @@ execute_plan_mirai <- function(
                     read_raw = rr,
                     store_raw = sr,
                     scale = sc,
-                    offset = of
+                    offset = of,
+                    decim = dcm
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -829,6 +827,7 @@ execute_plan_mirai <- function(
                   sr = sr,
                   sc = sc,
                   of = of,
+                  dcm = dcm,
                   .compute = prof
                 )
               }
@@ -873,6 +872,7 @@ execute_plan_mirai <- function(
             sr <- use_raw
             sc <- rsc
             of <- rof
+            dcm <- rdecim
             key <- .glue("s{sid}_r{rr2}")
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -907,7 +907,8 @@ execute_plan_mirai <- function(
                     read_raw = rr,
                     store_raw = sr,
                     scale = sc,
-                    offset = of
+                    offset = of,
+                    decim = dcm
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -922,6 +923,7 @@ execute_plan_mirai <- function(
                   sr = sr,
                   sc = sc,
                   of = of,
+                  dcm = dcm,
                   reg = .glue("r{run_id}_{key}"),
                   .compute = prof
                 )
