@@ -18,6 +18,49 @@ NULL
 # against.
 # ---------------------------------------------------------------------------
 
+# Host-side jit cache for execute_plan(). The dispatcher cache anvl hangs
+# off a JitFunction is keyed on input SHAPES only, never on the function
+# (see .gd_cached_jit()), so a fresh g_jit() per run hands XLA a kernel it
+# has never seen and recompiles it every time -- measured at ~0.29 s per
+# collect on a 4-band index pipeline, half the executor's compute time.
+# The daemon path already caches under the host's structural signature;
+# this is the single-process twin, keyed the same way so a rebuilt but
+# structurally identical plan reuses the executable.
+.exec_jit_cache <- new.env(parent = emptyenv())
+
+#' Drop every cached executable held by the single-process executor.
+#'
+#' The cache is keyed on stage structure, so it is only ever a speed
+#' optimisation; clearing it costs a recompile and nothing else.
+#'
+#' @return `NULL`, invisibly.
+#' @keywords internal
+.exec_jit_clear <- function() {
+  rm(list = ls(.exec_jit_cache, all.names = TRUE), envir = .exec_jit_cache)
+  invisible(NULL)
+}
+
+.exec_cached_jit <- function(graph, s, dev) {
+  # A stage whose signature cannot be taken (an exotic member the sig
+  # does not model) simply compiles inline, as before.
+  ck <- tryCatch(
+    paste0(.stage_kernel_sig(graph, s), "@", s@device),
+    error = function(e) NULL
+  )
+  if (is.null(ck)) {
+    return(g_jit(s@fn, device = dev))
+  }
+  if (length(ls(.exec_jit_cache, all.names = TRUE)) > 64L) {
+    .exec_jit_clear()
+  }
+  jf <- .exec_jit_cache[[ck]]
+  if (is.null(jf)) {
+    jf <- g_jit(s@fn, device = dev)
+    .exec_jit_cache[[ck]] <- jf
+  }
+  jf
+}
+
 # Resolve a "warp" stage to the read that actually serves it. An aligned
 # same-CRS target needs no warping (see .rio_direct_spec()): read the
 # source directly and let RasterIO resample in the same pass. Anything
@@ -1025,13 +1068,11 @@ execute_plan <- function(
       }
     } else if (s@kind %in% c("compute", "reduce_partial")) {
       dev <- .exec_device(s@device)
-      jf <- g_jit(s@fn, device = dev)
+      jf <- .exec_cached_jit(graph, s, dev)
       in_meta <- .exec_in_meta(graph, s, plan@stages)
+      okeys <- vapply(s@exports, .key, character(1))
       epads <- if (length(s@export_pads)) {
-        stats::setNames(
-          as.integer(s@export_pads),
-          vapply(s@exports, .key, character(1))
-        )
+        stats::setNames(as.integer(s@export_pads), okeys)
       } else {
         integer(0)
       }
@@ -1057,6 +1098,12 @@ execute_plan <- function(
           )
         ))
         res <- g_download(jf(inputs))
+        # The jit cache shares one wrapper across structurally identical
+        # stages, and the wrapper's export NAMES belong to whichever
+        # stage compiled it, so rename positionally (exports are
+        # ascending in every composed closure). Same contract as the
+        # daemon compute body.
+        names(res) <- okeys
         if (any(epads > 0L)) {
           for (k2 in names(res)) {
             res[[k2]] <- .exec_mask_edge(
