@@ -99,17 +99,24 @@ test_that("fast-path reads equal warped-VRT reads", {
       spec <- .rio_direct_spec(f, target, resampling)
       expect_false(is.null(spec))
 
+      # name the iteration so a platform-specific failure identifies
+      # its fixture/factor/resampling in the check log
+      tag <- paste0(basename(f), " fact=", fact, " ", resampling)
       fast <- gdal_read_window(f, 1L, 0L, 0L, 20L, 15L, nodata = nd,
                                decim = spec)
       vrt <- gdal_warp_vrt(f, 1L, target, resampling, src_nodata = nd)
       want <- gdal_read_window(vrt, 1L, 0L, 0L, 20L, 15L, nodata = nd)
-      expect_equal(fast, want)
+      expect_equal(fast, want,
+                   label = paste0("fast [", tag, "]"),
+                   expected.label = "warped-VRT read")
 
       # an offset window inside the same grid exercises the translation
       fast2 <- gdal_read_window(f, 1L, 3L, 2L, 10L, 8L, nodata = nd,
                                 decim = spec)
       want2 <- gdal_read_window(vrt, 1L, 3L, 2L, 10L, 8L, nodata = nd)
-      expect_equal(fast2, want2)
+      expect_equal(fast2, want2,
+                   label = paste0("offset fast [", tag, "]"),
+                   expected.label = "warped-VRT read")
     }
   }
 })
