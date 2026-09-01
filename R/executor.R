@@ -18,6 +18,101 @@ NULL
 # against.
 # ---------------------------------------------------------------------------
 
+# Host-side jit cache for execute_plan(). The dispatcher cache anvl hangs
+# off a JitFunction is keyed on input SHAPES only, never on the function
+# (see .gd_cached_jit()), so a fresh g_jit() per run hands XLA a kernel it
+# has never seen and recompiles it every time -- measured at ~0.29 s per
+# collect on a 4-band index pipeline, half the executor's compute time.
+# The daemon path already caches under the host's structural signature;
+# this is the single-process twin, keyed the same way so a rebuilt but
+# structurally identical plan reuses the executable.
+.exec_jit_cache <- new.env(parent = emptyenv())
+
+#' Drop every cached executable held by the single-process executor.
+#'
+#' The cache is keyed on stage structure, so it is only ever a speed
+#' optimisation; clearing it costs a recompile and nothing else.
+#'
+#' @return `NULL`, invisibly.
+#' @keywords internal
+.exec_jit_clear <- function() {
+  rm(list = ls(.exec_jit_cache, all.names = TRUE), envir = .exec_jit_cache)
+  invisible(NULL)
+}
+
+.exec_cached_jit <- function(graph, s, dev) {
+  # macOS: reusing a cached JitFunction across collects dispatches
+  # SLOWER than a fresh compile there (test-kernel-cache's recompile
+  # tripwire: second collect 3.8s vs a 2s gate, run 33505350958), and
+  # the compounded slowdown pushed the CI suite past its elapsed-time
+  # kill. Same needs-mac-hardware family as the fused-on-reader hang
+  # (see test-compute-on-read.R). Until debugged on real hardware the
+  # host cache is not used on Darwin; inline g_jit is exactly the
+  # pre-cache behavior, which is green there.
+  if (Sys.info()[["sysname"]] == "Darwin") {
+    return(g_jit(s@fn, device = dev))
+  }
+  # A stage whose signature cannot be taken (an exotic member the sig
+  # does not model) simply compiles inline, as before.
+  ck <- tryCatch(
+    paste0(.stage_kernel_sig(graph, s), "@", s@device),
+    error = function(e) NULL
+  )
+  if (is.null(ck)) {
+    return(g_jit(s@fn, device = dev))
+  }
+  if (length(ls(.exec_jit_cache, all.names = TRUE)) > 64L) {
+    .exec_jit_clear()
+  }
+  jf <- .exec_jit_cache[[ck]]
+  if (is.null(jf)) {
+    jf <- g_jit(s@fn, device = dev)
+    .exec_jit_cache[[ck]] <- jf
+  }
+  jf
+}
+
+# Resolve a "warp" stage to the read that actually serves it. An aligned
+# same-CRS target needs no warping (see .rio_direct_spec()): read the
+# source directly and let RasterIO resample in the same pass. Anything
+# else builds the warped VRT as before. Shared by execute_plan() and the
+# mirai scheduler so the two cannot disagree about which read they do.
+.warp_read_plan <- function(wnode, snode) {
+  spec <- .rio_direct_spec(
+    snode@path,
+    wnode@target_grid,
+    wnode@resampling,
+    snode@open_options,
+    band = snode@band
+  )
+  if (!is.null(spec)) {
+    return(list(
+      path = snode@path,
+      band = snode@band,
+      nodata = snode@nodata,
+      open_options = snode@open_options,
+      scale = snode@scale,
+      offset = snode@offset,
+      decim = spec
+    ))
+  }
+  list(
+    path = gdal_warp_vrt(
+      snode@path,
+      snode@band,
+      wnode@target_grid,
+      wnode@resampling,
+      src_nodata = snode@nodata
+    ),
+    band = 1L,
+    nodata = snode@nodata,
+    open_options = character(0),
+    scale = snode@scale,
+    offset = snode@offset,
+    decim = NULL
+  )
+}
+
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
@@ -32,7 +127,8 @@ NULL
   open_options = character(0),
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 ) {
   out <- rlang::arg_match(out)
   H <- cg@halo
@@ -61,7 +157,8 @@ NULL
           open_options = open_options,
           out = out,
           scale = scale,
-          offset = offset
+          offset = offset,
+          decim = decim
         )
       },
       what = "read"
@@ -902,18 +999,14 @@ execute_plan <- function(
       if (s@kind == "warp") {
         wnode <- graph_get(graph, s@members[[1L]])
         snode <- graph_get(graph, wnode@parents[[1L]])
-        rpath <- gdal_warp_vrt(
-          snode@path,
-          snode@band,
-          wnode@target_grid,
-          wnode@resampling,
-          src_nodata = snode@nodata
-        )
-        rband <- 1L
-        rnodata <- snode@nodata
-        roo <- character(0)
-        rsc <- snode@scale
-        rof <- snode@offset
+        rp <- .warp_read_plan(wnode, snode)
+        rpath <- rp$path
+        rband <- rp$band
+        rnodata <- rp$nodata
+        roo <- rp$open_options
+        rsc <- rp$scale
+        rof <- rp$offset
+        rdecim <- rp$decim
         key <- .key(wnode@id)
       } else {
         node <- graph_get(graph, s@members[[1L]])
@@ -923,6 +1016,7 @@ execute_plan <- function(
         roo <- node@open_options
         rsc <- node@scale
         rof <- node@offset
+        rdecim <- NULL
         key <- .key(node@id)
       }
       split_cg <- .exec_split_cg(plan, s)
@@ -937,7 +1031,8 @@ execute_plan <- function(
               it[j, ],
               open_options = roo,
               scale = rsc,
-              offset = rof
+              offset = rof,
+              decim = rdecim
             )),
             key
           )
@@ -959,7 +1054,8 @@ execute_plan <- function(
             it[r, ],
             open_options = roo,
             scale = rsc,
-            offset = rof
+            offset = rof,
+            decim = rdecim
           )
           rank3 <- length(dim(buf)) == 3L
           for (j in .exec_split_members(its, it[r, ])) {
@@ -984,13 +1080,11 @@ execute_plan <- function(
       }
     } else if (s@kind %in% c("compute", "reduce_partial")) {
       dev <- .exec_device(s@device)
-      jf <- g_jit(s@fn, device = dev)
+      jf <- .exec_cached_jit(graph, s, dev)
       in_meta <- .exec_in_meta(graph, s, plan@stages)
+      okeys <- vapply(s@exports, .key, character(1))
       epads <- if (length(s@export_pads)) {
-        stats::setNames(
-          as.integer(s@export_pads),
-          vapply(s@exports, .key, character(1))
-        )
+        stats::setNames(as.integer(s@export_pads), okeys)
       } else {
         integer(0)
       }
@@ -1016,6 +1110,12 @@ execute_plan <- function(
           )
         ))
         res <- g_download(jf(inputs))
+        # The jit cache shares one wrapper across structurally identical
+        # stages, and the wrapper's export NAMES belong to whichever
+        # stage compiled it, so rename positionally (exports are
+        # ascending in every composed closure). Same contract as the
+        # daemon compute body.
+        names(res) <- okeys
         if (any(epads > 0L)) {
           for (k2 in names(res)) {
             res[[k2]] <- .exec_mask_edge(

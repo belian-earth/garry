@@ -85,16 +85,22 @@ jobs:
       # data from the peer" on the same release asset). Cache it across
       # runs and pre-fetch with retries so tests never touch the network
       # for it.
+      # Key the plugin cache on the version pjrt actually pins, not on
+      # garry's DESCRIPTION: actions/cache never updates an existing key,
+      # so a DESCRIPTION-keyed entry held the old plugin forever and every
+      # run after a pjrt plugin bump re-downloaded the new one. pjrt is
+      # installed by this point, so ask it directly.
       - name: PJRT plugin cache path
         run: |
           echo "PJRT_CACHE=$(Rscript -e 'cat(tools::R_user_dir("pjrt", "cache"))')" >> $GITHUB_ENV
+          echo "PJRT_PLUGIN_VERSION=$(Rscript -e 'cat(pjrt:::plugin_version())')" >> $GITHUB_ENV
         shell: bash
 
       - name: Cache PJRT CPU plugin
         uses: actions/cache@v4
         with:
           path: ${{ env.PJRT_CACHE }}
-          key: ${{ runner.os }}-pjrt-cpu-${{ hashFiles('DESCRIPTION') }}
+          key: ${{ runner.os }}-pjrt-cpu-${{ env.PJRT_PLUGIN_VERSION }}
           restore-keys: ${{ runner.os }}-pjrt-cpu-
 
       - name: Pre-fetch PJRT CPU plugin (retry)

@@ -15,7 +15,8 @@ gdal_read_window(
   open_options = character(0),
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 )
 }
 \arguments{
@@ -38,6 +39,13 @@ binary store or another process.}
 \item{scale, offset}{Length-0 (absent) or length-1 band affine: values
 become \code{v * scale + offset} after the nodata sentinel is promoted
 to NaN, so sentinels never scale.}
+
+\item{decim}{Optional decimating-read spec from \code{\link[=.rio_direct_spec]{.rio_direct_spec()}}
+(\code{fx}/\code{fy} integer decimation factors, \code{x_off}/\code{y_off} the source
+pixel origin of the target grid, \code{resamp} the RasterIO algorithm).
+When supplied the window arguments are read as TARGET-grid pixels
+and translated to the source window internally, so a caller chunked
+on the target grid needs no coordinate maths of its own.}
 }
 \value{
 With \code{out = "matrix"}: a numeric \verb{y_size x x_size} matrix for

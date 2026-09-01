@@ -1,0 +1,3 @@
+# All HTML in this repo is generated output (plan_view/package-graph DAG
+# pages); keep it out of GitHub's language stats and collapse its diffs.
+*.html linguist-generated=true

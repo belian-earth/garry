@@ -199,6 +199,157 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   list(grid = grid, nodata = nodata, block_dim = block, scale = sc, offset = of)
 }
 
+# -- Warper bypass: aligned decimating reads -----------------------------------
+
+# garry resampling name -> GDAL RasterIO algorithm. Anything absent here
+# has no RasterIO equivalent and keeps the warper.
+.rio_resamp_names <- c(
+  near = "NEAREST",
+  nearest = "NEAREST",
+  bilinear = "BILINEAR",
+  cubic = "CUBIC",
+  cubicspline = "CUBICSPLINE",
+  lanczos = "LANCZOS",
+  average = "AVERAGE",
+  mode = "MODE",
+  rms = "RMS"
+)
+
+# Round-trip tolerance in PIXEL units when testing grid alignment. At a
+# 30 m pixel this is 3e-5 m: tight enough that only genuinely aligned
+# grids pass, and a false negative merely keeps the warper.
+.rio_align_tol <- 1e-6
+
+.rio_near_int <- function(v) abs(v - round(v)) < .rio_align_tol
+
+#' Can this warp be served by a plain decimating RasterIO read?
+#'
+#' A `WarpNode` whose target grid shares the source CRS, is axis-aligned,
+#' starts on a source pixel boundary and has a whole-number pixel size
+#' needs no warping at all: GDAL's RasterIO reads the window and
+#' resamples it in one pass, which is measurably cheaper than building a
+#' warped VRT and reading through the warper (2.6x on a 4-band Landsat
+#' crop+3x-average, 0.98s -> 0.375s). Results are identical, including
+#' overview selection and nodata handling at fill boundaries, because
+#' both paths hand the same request to the same GDAL resampler.
+#'
+#' Integer bands are the one exception to that identity: an
+#' interpolating resampler produces fractional values that each engine
+#' rounds back to the band type itself, and under GDAL 3.13.1 on ARM
+#' (new NEON float->int conversion paths) RasterIO and the warper round
+#' .5 ties in opposite directions -- every tie came back +1 DN through
+#' the fast path on the macOS CI runners. Identity is the contract, so
+#' integer bands take the fast path only for NEAREST, where no rounding
+#' happens.
+#'
+#' Returns `NULL` (keep the warper) unless every condition holds, so the
+#' warper stays the default and this is a pure opt-in fast path.
+#'
+#' @param src_path Source path or VSI URL.
+#' @param target_grid The `WarpNode` target [GridSpec()].
+#' @param resampling Requested resampling name.
+#' @param open_options Source open options; any at all keep the warper
+#'   (GTI and other option-driven sources are left alone in v1).
+#' @param band 1-based band index the read will use; must be a single
+#'   band (the decimating read is single-band). Its data type drives the
+#'   integer gate above.
+#' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
+#' @keywords internal
+.rio_direct_spec <- function(
+  src_path,
+  target_grid,
+  resampling,
+  open_options = character(0),
+  band = 1L
+) {
+  if (length(open_options) > 0L || length(band) != 1L) {
+    return(NULL)
+  }
+  resamp <- unname(.rio_resamp_names[resampling])
+  if (length(resamp) != 1L || is.na(resamp)) {
+    return(NULL)
+  }
+
+  ds <- tryCatch(.gdal_handle(src_path), error = function(e) NULL)
+  if (is.null(ds)) {
+    return(NULL)
+  }
+  if (resamp != "NEAREST") {
+    dtn <- tryCatch(ds$getDataTypeName(band), error = function(e) NULL)
+    if (is.null(dtn) || !startsWith(dtn, "Float")) {
+      return(NULL)
+    }
+  }
+  gt <- tryCatch(ds$getGeoTransform(), error = function(e) NULL)
+  if (length(gt) != 6L || anyNA(gt)) {
+    return(NULL)
+  }
+  # Axis-aligned and north-up only: RasterIO offsets are in the file's own
+  # row order, so a south-up source would need the y axis flipped and a
+  # rotated one cannot be expressed as a window at all.
+  if (gt[[3L]] != 0 || gt[[5L]] != 0 || gt[[2L]] <= 0 || gt[[6L]] >= 0) {
+    return(NULL)
+  }
+  if (!crs_equal(ds$getProjectionRef(), target_grid@crs)) {
+    return(NULL)
+  }
+
+  tt <- target_grid@transform
+  if (tt[[3L]] != 0 || tt[[5L]] != 0 || tt[[6L]] >= 0) {
+    return(NULL)
+  }
+  fx <- tt[[2L]] / gt[[2L]]
+  fy <- tt[[6L]] / gt[[6L]]
+  x_off <- (tt[[1L]] - gt[[1L]]) / gt[[2L]]
+  y_off <- (gt[[4L]] - tt[[4L]]) / -gt[[6L]]
+  if (!all(vapply(list(fx, fy, x_off, y_off), .rio_near_int, TRUE))) {
+    return(NULL)
+  }
+  fx <- round(fx)
+  fy <- round(fy)
+  x_off <- round(x_off)
+  y_off <- round(y_off)
+  if (fx < 1 || fy < 1 || x_off < 0 || y_off < 0) {
+    return(NULL)
+  }
+  # The target must lie wholly inside the source: the warper pads beyond
+  # the edge with nodata, a windowed read cannot.
+  if (
+    x_off + target_grid@dims[["x"]] * fx > ds$getRasterXSize() ||
+      y_off + target_grid@dims[["y"]] * fy > ds$getRasterYSize()
+  ) {
+    return(NULL)
+  }
+
+  list(
+    fx = as.integer(fx),
+    fy = as.integer(fy),
+    x_off = as.integer(x_off),
+    y_off = as.integer(y_off),
+    resamp = resamp
+  )
+}
+
+# Shared tail of a window read: nodata sentinel -> NaN, band affine, and
+# the requested output form. Single-band and decimating reads both end
+# here so the two cannot drift apart.
+.gdal_finish_vec <- function(v, y_size, x_size, nodata, scale, offset, out) {
+  v <- as.numeric(v)
+  if (length(nodata) == 1L) {
+    v[!is.na(v) & v == nodata] <- NaN
+  }
+  v[is.na(v) & !is.nan(v)] <- NaN # GDAL-side masked values
+  if (length(scale) == 1L) {
+    v <- v * scale + offset
+  }
+  # GDAL's buffer is already row-major: the raw f32 store payload (D19)
+  # converts it directly, skipping the byrow transpose below.
+  if (out == "raw_f32") {
+    return(.sv_from_vec(v, y_size, x_size))
+  }
+  matrix(v, nrow = y_size, byrow = TRUE)
+}
+
 #' Read a window from a GDAL source as a garry-oriented matrix.
 #'
 #' Returns the window with row 1 = northernmost. Offsets are 0-based
@@ -218,6 +369,12 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param scale,offset Length-0 (absent) or length-1 band affine: values
 #'   become `v * scale + offset` after the nodata sentinel is promoted
 #'   to NaN, so sentinels never scale.
+#' @param decim Optional decimating-read spec from [.rio_direct_spec()]
+#'   (`fx`/`fy` integer decimation factors, `x_off`/`y_off` the source
+#'   pixel origin of the target grid, `resamp` the RasterIO algorithm).
+#'   When supplied the window arguments are read as TARGET-grid pixels
+#'   and translated to the source window internally, so a caller chunked
+#'   on the target grid needs no coordinate maths of its own.
 #' @return With `out = "matrix"`: a numeric `y_size x x_size` matrix for
 #'   a single band, or a `(band, y, x)` numeric array when `band` is a
 #'   vector. With `out = "raw_f32"`: a raw row-major f32 payload (band
@@ -234,9 +391,41 @@ gdal_read_window <- function(
   open_options = character(0),
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 ) {
   out <- rlang::arg_match(out)
+  # Warper bypass (see .rio_direct_spec()): the window arrives in TARGET
+  # pixels; translate it to the source window and let RasterIO resample
+  # in the same pass as the read. Takes precedence over the raw-BSQ path
+  # below, which cannot decimate.
+  if (!is.null(decim)) {
+    if (length(band) != 1L) {
+      cli::cli_abort("{.arg decim} supports a single band read.")
+    }
+    ds <- .gdal_handle(path, open_options)
+    sx <- decim$x_off + x_off * decim$fx
+    sy <- decim$y_off + y_off * decim$fy
+    sw <- x_size * decim$fx
+    sh <- y_size * decim$fy
+    if (decim$fx > 1L || decim$fy > 1L) {
+      prev <- gdalraster::get_config_option("GDAL_RASTERIO_RESAMPLING")
+      gdalraster::set_config_option("GDAL_RASTERIO_RESAMPLING", decim$resamp)
+      on.exit(
+        gdalraster::set_config_option("GDAL_RASTERIO_RESAMPLING", prev),
+        add = TRUE
+      )
+    }
+    return(.gdal_finish_vec(
+      ds$read(band, sx, sy, sw, sh, x_size, y_size),
+      y_size,
+      x_size,
+      nodata,
+      scale,
+      offset,
+      out
+    ))
+  }
   # Raw-BSQ cube fast path: a garry raw cube (.bin + sibling
   # VRTRawRasterBand .vrt) reads via seek+readBin, skipping GDAL's
   # tile machinery AND this function's band-walk — measured 2026-08-02:
@@ -276,21 +465,15 @@ gdal_read_window <- function(
       offset
     ))
   }
-  v <- ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size)
-  v <- as.numeric(v)
-  if (length(nodata) == 1L) {
-    v[!is.na(v) & v == nodata] <- NaN
-  }
-  v[is.na(v) & !is.nan(v)] <- NaN # GDAL-side masked values
-  if (length(scale) == 1L) {
-    v <- v * scale + offset
-  }
-  # GDAL's buffer is already row-major: the raw f32 store payload (D19)
-  # converts it directly, skipping the byrow transpose below.
-  if (out == "raw_f32") {
-    return(.sv_from_vec(v, y_size, x_size))
-  }
-  matrix(v, nrow = y_size, byrow = TRUE)
+  .gdal_finish_vec(
+    ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size),
+    y_size,
+    x_size,
+    nodata,
+    scale,
+    offset,
+    out
+  )
 }
 
 # Multi-band window read: every band of the window in ONE pass, as a

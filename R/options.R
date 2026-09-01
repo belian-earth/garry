@@ -172,6 +172,18 @@
     desc = "collapse same-file band stacks into multi-band reads",
     check = .opt_flag()
   ),
+  # Share one WarpNode between consumers that ask the same source for
+  # the same target grid. graph_import() dedups SourceNodes (D6) but
+  # copies derived nodes, so a band used in two subexpressions is read
+  # once per use. FALSE restores the duplicated plan shape (A/B and
+  # debugging); the flag is scaffolding and goes away once the pass has
+  # proven itself on real pipelines.
+  warp_dedup = list(
+    default = TRUE,
+    tier = "user",
+    desc = "share identical warp-on-read stages between consumers",
+    check = .opt_flag()
+  ),
   # Path to a CSV the distributed scheduler appends task events to.
   # Schema (header written on a fresh file):
   #   time,event,key,pool,slot,mb,store_mb,ready
