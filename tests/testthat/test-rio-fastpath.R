@@ -87,44 +87,62 @@ test_that("the fast path refuses anything the warper is needed for", {
   expect_null(.rio_direct_spec(f, ok, "average", "OVERVIEW_LEVEL=NONE"))
   # resampling with no RasterIO analogue
   expect_null(.rio_direct_spec(f, ok, "med"))
+  # multi-band request: the decimating read is single-band
+  expect_null(.rio_direct_spec(f, ok, "average", band = 1:2))
+
+  # integer band + interpolating resampler: RasterIO and the warper
+  # round .5 ties oppositely on ARM under GDAL 3.13.1, so identity only
+  # holds for NEAREST there (see .rio_direct_spec())
+  fi <- fixture_i16_nodata()
+  gi <- gdal_grid_spec(fi)$grid
+  expect_null(.rio_direct_spec(fi, coarser(gi, 2L, 20L, 15L), "average"))
+  expect_false(is.null(.rio_direct_spec(fi, coarser(gi, 1L, 20L, 15L), "near")))
 })
 
 test_that("fast-path reads equal warped-VRT reads", {
-  for (f in list(fixture_gradient_f32(), fixture_i16_nodata())) {
+  # every combination the fast path accepts: interpolating resamplers
+  # only reach it for float bands (integer + average is refused, see
+  # the gate test above), so i16 is exercised at NEAREST
+  cases <- list(
+    list(f = fixture_gradient_f32(), fact = 1L, resampling = "near"),
+    list(f = fixture_gradient_f32(), fact = 2L, resampling = "average"),
+    list(f = fixture_i16_nodata(), fact = 1L, resampling = "near")
+  )
+  for (case in cases) {
+    f <- case$f
     g <- gdal_grid_spec(f)$grid
     nd <- gdal_grid_spec(f)$nodata
-    for (fact in c(1L, 2L)) {
-      target <- coarser(g, fact, 20L, 15L)
-      resampling <- if (fact == 1L) "near" else "average"
-      spec <- .rio_direct_spec(f, target, resampling)
-      expect_false(is.null(spec))
+    target <- coarser(g, case$fact, 20L, 15L)
+    spec <- .rio_direct_spec(f, target, case$resampling)
+    expect_false(is.null(spec))
 
-      # name the iteration so a platform-specific failure identifies
-      # its fixture/factor/resampling in the check log
-      tag <- paste0(basename(f), " fact=", fact, " ", resampling)
-      fast <- gdal_read_window(f, 1L, 0L, 0L, 20L, 15L, nodata = nd,
-                               decim = spec)
-      vrt <- gdal_warp_vrt(f, 1L, target, resampling, src_nodata = nd)
-      want <- gdal_read_window(vrt, 1L, 0L, 0L, 20L, 15L, nodata = nd)
-      expect_equal(fast, want,
-                   label = paste0("fast [", tag, "]"),
-                   expected.label = "warped-VRT read")
+    # name the iteration so a platform-specific failure identifies
+    # its fixture/factor/resampling in the check log
+    tag <- paste0(basename(f), " fact=", case$fact, " ", case$resampling)
+    fast <- gdal_read_window(f, 1L, 0L, 0L, 20L, 15L, nodata = nd,
+                             decim = spec)
+    vrt <- gdal_warp_vrt(f, 1L, target, case$resampling, src_nodata = nd)
+    want <- gdal_read_window(vrt, 1L, 0L, 0L, 20L, 15L, nodata = nd)
+    expect_equal(fast, want,
+                 label = paste0("fast [", tag, "]"),
+                 expected.label = "warped-VRT read")
 
-      # an offset window inside the same grid exercises the translation
-      fast2 <- gdal_read_window(f, 1L, 3L, 2L, 10L, 8L, nodata = nd,
-                                decim = spec)
-      want2 <- gdal_read_window(vrt, 1L, 3L, 2L, 10L, 8L, nodata = nd)
-      expect_equal(fast2, want2,
-                   label = paste0("offset fast [", tag, "]"),
-                   expected.label = "warped-VRT read")
-    }
+    # an offset window inside the same grid exercises the translation
+    fast2 <- gdal_read_window(f, 1L, 3L, 2L, 10L, 8L, nodata = nd,
+                              decim = spec)
+    want2 <- gdal_read_window(vrt, 1L, 3L, 2L, 10L, 8L, nodata = nd)
+    expect_equal(fast2, want2,
+                 label = paste0("offset fast [", tag, "]"),
+                 expected.label = "warped-VRT read")
   }
 })
 
 test_that("an aligned align() pipeline is unchanged by the fast path", {
-  f <- fixture_i16_nodata()
+  f <- fixture_gradient_f32()
   g <- gdal_grid_spec(f)$grid
   target <- coarser(g, 2L, 30L, 20L)
+  # the fast path must actually be in play for this to prove anything
+  expect_false(is.null(.rio_direct_spec(f, target, "average")))
 
   expr <- function() align(lazy_source(f), target, resampling = "average") * 2 + 1
   got <- collect(expr())

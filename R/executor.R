@@ -41,6 +41,17 @@ NULL
 }
 
 .exec_cached_jit <- function(graph, s, dev) {
+  # macOS: reusing a cached JitFunction across collects dispatches
+  # SLOWER than a fresh compile there (test-kernel-cache's recompile
+  # tripwire: second collect 3.8s vs a 2s gate, run 33505350958), and
+  # the compounded slowdown pushed the CI suite past its elapsed-time
+  # kill. Same needs-mac-hardware family as the fused-on-reader hang
+  # (see test-compute-on-read.R). Until debugged on real hardware the
+  # host cache is not used on Darwin; inline g_jit is exactly the
+  # pre-cache behavior, which is green there.
+  if (Sys.info()[["sysname"]] == "Darwin") {
+    return(g_jit(s@fn, device = dev))
+  }
   # A stage whose signature cannot be taken (an exotic member the sig
   # does not model) simply compiles inline, as before.
   ck <- tryCatch(
@@ -71,7 +82,8 @@ NULL
     snode@path,
     wnode@target_grid,
     wnode@resampling,
-    snode@open_options
+    snode@open_options,
+    band = snode@band
   )
   if (!is.null(spec)) {
     return(list(

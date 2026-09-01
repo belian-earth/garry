@@ -233,6 +233,15 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' overview selection and nodata handling at fill boundaries, because
 #' both paths hand the same request to the same GDAL resampler.
 #'
+#' Integer bands are the one exception to that identity: an
+#' interpolating resampler produces fractional values that each engine
+#' rounds back to the band type itself, and under GDAL 3.13.1 on ARM
+#' (new NEON float->int conversion paths) RasterIO and the warper round
+#' .5 ties in opposite directions -- every tie came back +1 DN through
+#' the fast path on the macOS CI runners. Identity is the contract, so
+#' integer bands take the fast path only for NEAREST, where no rounding
+#' happens.
+#'
 #' Returns `NULL` (keep the warper) unless every condition holds, so the
 #' warper stays the default and this is a pure opt-in fast path.
 #'
@@ -241,15 +250,19 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param resampling Requested resampling name.
 #' @param open_options Source open options; any at all keep the warper
 #'   (GTI and other option-driven sources are left alone in v1).
+#' @param band 1-based band index the read will use; must be a single
+#'   band (the decimating read is single-band). Its data type drives the
+#'   integer gate above.
 #' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
 #' @keywords internal
 .rio_direct_spec <- function(
   src_path,
   target_grid,
   resampling,
-  open_options = character(0)
+  open_options = character(0),
+  band = 1L
 ) {
-  if (length(open_options) > 0L) {
+  if (length(open_options) > 0L || length(band) != 1L) {
     return(NULL)
   }
   resamp <- unname(.rio_resamp_names[resampling])
@@ -260,6 +273,12 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   ds <- tryCatch(.gdal_handle(src_path), error = function(e) NULL)
   if (is.null(ds)) {
     return(NULL)
+  }
+  if (resamp != "NEAREST") {
+    dtn <- tryCatch(ds$getDataTypeName(band), error = function(e) NULL)
+    if (is.null(dtn) || !startsWith(dtn, "Float")) {
+      return(NULL)
+    }
   }
   gt <- tryCatch(ds$getGeoTransform(), error = function(e) NULL)
   if (length(gt) != 6L || anyNA(gt)) {
