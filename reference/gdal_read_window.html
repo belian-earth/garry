@@ -65,7 +65,8 @@ file-level NA) are rewritten to NaN and the result is numeric.</p>
 <span>  open_options <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  out <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"matrix"</span>, <span class="st">"raw_f32"</span><span class="op">)</span>,</span>
 <span>  scale <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  decim <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -105,6 +106,15 @@ binary store or another process.</p></dd>
 <dd><p>Length-0 (absent) or length-1 band affine: values
 become <code>v * scale + offset</code> after the nodata sentinel is promoted
 to NaN, so sentinels never scale.</p></dd>
+
+
+<dt id="arg-decim">decim<a class="anchor" aria-label="anchor" href="#arg-decim"></a></dt>
+<dd><p>Optional decimating-read spec from <code><a href="dot-rio_direct_spec.html">.rio_direct_spec()</a></code>
+(<code>fx</code>/<code>fy</code> integer decimation factors, <code>x_off</code>/<code>y_off</code> the source
+pixel origin of the target grid, <code>resamp</code> the RasterIO algorithm).
+When supplied the window arguments are read as TARGET-grid pixels
+and translated to the source window internally, so a caller chunked
+on the target grid needs no coordinate maths of its own.</p></dd>
 
 </dl></div>
     <div class="section level2">

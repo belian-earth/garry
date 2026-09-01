@@ -18,7 +18,8 @@ gdal_read_window(
   open_options = character(0),
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 )
 ```
 
@@ -57,6 +58,16 @@ gdal_read_window(
   Length-0 (absent) or length-1 band affine: values become
   `v * scale + offset` after the nodata sentinel is promoted to NaN, so
   sentinels never scale.
+
+- decim:
+
+  Optional decimating-read spec from
+  [`.rio_direct_spec()`](https://belian-earth.github.io/garry/reference/dot-rio_direct_spec.md)
+  (`fx`/`fy` integer decimation factors, `x_off`/`y_off` the source
+  pixel origin of the target grid, `resamp` the RasterIO algorithm).
+  When supplied the window arguments are read as TARGET-grid pixels and
+  translated to the source window internally, so a caller chunked on the
+  target grid needs no coordinate maths of its own.
 
 ## Value
 

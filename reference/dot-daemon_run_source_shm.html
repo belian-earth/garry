@@ -80,7 +80,8 @@ Internal (exported only so mirai daemons can address it via <code>::</code>).</p
 <span>  read_raw <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  store_raw <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  scale <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  decim <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -101,6 +102,11 @@ Internal (exported only so mirai daemons can address it via <code>::</code>).</p
 <dd><p>NULL for chunk-aligned reads (the buffer is shared
 whole under <code>key</code>), else per-compute-chunk windows (<code>r0</code>/<code>c0</code>
 0-based offsets, <code>nr</code>/<code>nc</code> sizes, <code>elt</code> the element name).</p></dd>
+
+
+<dt id="arg-decim">decim<a class="anchor" aria-label="anchor" href="#arg-decim"></a></dt>
+<dd><p>Optional decimating-read spec (see <code><a href="gdal_read_window.html">gdal_read_window()</a></code>),
+set when an aligned warp is served by a direct RasterIO read.</p></dd>
 
 </dl></div>
     <div class="section level2">

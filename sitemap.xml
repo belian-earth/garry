@@ -58,6 +58,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_warm_jit.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_write_chunk.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_write_close.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dot-exec_jit_clear.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-g_has_nv_scan.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-g_has_raw_upload.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-garry_abi_token.html</loc></url>
@@ -65,6 +66,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_compute_masked_band.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_warm.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_warm_pipeline.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dot-rio_direct_spec.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/draw.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dtype_promote.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dtype_valid.html</loc></url>

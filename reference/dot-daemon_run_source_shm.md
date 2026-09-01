@@ -25,7 +25,8 @@ mirai daemons can address it via `::`).
   read_raw = FALSE,
   store_raw = FALSE,
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 )
 ```
 
@@ -45,6 +46,12 @@ mirai daemons can address it via `::`).
   NULL for chunk-aligned reads (the buffer is shared whole under `key`),
   else per-compute-chunk windows (`r0`/`c0` 0-based offsets, `nr`/`nc`
   sizes, `elt` the element name).
+
+- decim:
+
+  Optional decimating-read spec (see
+  [`gdal_read_window()`](https://belian-earth.github.io/garry/reference/gdal_read_window.md)),
+  set when an aligned warp is served by a direct RasterIO read.
 
 ## Value
 
