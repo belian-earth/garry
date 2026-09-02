@@ -83,20 +83,33 @@ kalman_llt <- function(
   out_dtype = "f32"
 ) {
   output <- match.arg(output)
-  for (v in c(
-    sigma_lvl = sigma_lvl,
-    sigma_slp = sigma_slp,
-    sigma_obs = sigma_obs,
-    kappa = kappa
-  )) {
+  for (v in list(sigma_lvl, sigma_slp, sigma_obs, kappa)) {
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0) {
       cli::cli_abort("hyperparameters must be finite positive scalars")
     }
   }
+  if (
+    !is.numeric(robust_iters) ||
+      length(robust_iters) != 1L ||
+      !is.finite(robust_iters) ||
+      robust_iters < 0 ||
+      robust_iters != trunc(robust_iters)
+  ) {
+    cli::cli_abort("{.arg robust_iters} must be a single non-negative integer")
+  }
   robust_iters <- as.integer(robust_iters)
-  stopifnot(dtype_valid(out_dtype))
-  force(robust_threshold)
-  force(robust_inflation)
+  for (v in list(robust_threshold, robust_inflation)) {
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0) {
+      cli::cli_abort(
+        "{.arg robust_threshold}/{.arg robust_inflation} must be finite positive scalars"
+      )
+    }
+  }
+  if (!dtype_valid(out_dtype)) {
+    cli::cli_abort(
+      "{.arg out_dtype} must be a valid dtype; got {.val {out_dtype}}"
+    )
+  }
 
   function(xs, margin) {
     if (!identical(as.integer(margin), 1L)) {
