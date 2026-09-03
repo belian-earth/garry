@@ -131,3 +131,107 @@ test_that("a QA-gated predict (QA as last plane) fuses and matches (the ESD shap
   dist <- execute_plan_mirai(p)
   expect_equal(dist, single, tolerance = 1e-12)
 })
+
+# -- tiled fused kernels ------------------------------------------------------
+
+test_that(".apply_fuse_tiled equals one whole-window call", {
+  skip_if(!requireNamespace("anvl", quietly = TRUE), "anvl not installed")
+  set.seed(5)
+  nb <- 6L; ny <- 23L; nx <- 9L
+  w1 <- matrix(runif(8L * nb), 8L); w2 <- matrix(runif(8L), 1L)
+  body <- mlp_project(list(w1, w2), list(rep(0, 8L), 0))
+  fn <- function(inputs) list(body(inputs[[1L]], 1L))
+  jf <- g_jit(fn)
+  cube <- array(rnorm(nb * ny * nx), c(nb, ny, nx))
+  cube[2, 4, 5] <- NaN
+  up <- g_upload(cube, "f32")
+  whole <- g_download(jf(list(up))[[1L]])
+  for (k in c(2L, 4L, 7L, 23L, 50L)) {          # uneven splits; > ny clamps
+    tiled <- g_download(garry:::.apply_fuse_tiled(jf, up, k))
+    expect_identical(dim(tiled), dim(whole), label = paste("tiles", k))
+    expect_identical(is.na(tiled), is.na(whole))
+    expect_equal(tiled, whole, tolerance = 1e-6, label = paste("tiles", k))
+  }
+  # a 3-D export (band-preserving map) concatenates along y too
+  fn3 <- function(inputs) list(inputs[[1L]] * 2 + 1)
+  jf3 <- g_jit(fn3)
+  whole3 <- g_download(jf3(list(up))[[1L]])
+  tiled3 <- g_download(garry:::.apply_fuse_tiled(jf3, up, 5L))
+  expect_equal(tiled3, whole3, tolerance = 1e-6)
+})
+
+test_that("placement tiles a wide pointwise chain and the fused run matches", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  fx <- fixture_multiband()
+  g <- graph_new()
+  bands <- lapply(seq_len(fx$nb), function(b)
+    lazy_source(fx$path, band = b, graph = g))
+  st <- lazy_stack(bands, along = "band")
+  w1 <- matrix(runif(8L * fx$nb), 8L)
+  w2 <- matrix(runif(8L), 1L)
+  pred <- reduce_over(st, mlp_project(list(w1, w2),
+                                      list(rep(0, 8L), 0)),
+                      over = "band")
+  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"),
+                             nan_rm = TRUE))
+  single <- execute_plan(p)
+
+  local_pools(4, 1, gdal_config = TRUE)
+  # a tiny per-call activation budget forces several row tiles
+  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
+                 garry.fuse_tile_mb = 1e-4)
+  on.exit(options(old), add = TRUE)
+  tab <- garry_explain_placement(p)
+  mlp <- tab[tab$bands > 1L, ]
+  expect_identical(mlp$decision, "fuse")
+  expect_true("tiles" %in% names(tab))
+  expect_gt(mlp$tiles, 1L)
+
+  dist <- execute_plan_mirai(p)
+  expect_equal(dist, single, tolerance = 1e-12)
+
+  # with the default budget the same small window is one tile
+  options(garry.fuse_tile_mb = 512)
+  tab1 <- garry_explain_placement(p)
+  expect_identical(tab1[tab1$bands > 1L, ]$tiles, 1L)
+})
+
+test_that("tiling lets a window over fuse_reader_mb fuse instead of materialising", {
+  fx <- fixture_multiband()
+  g <- graph_new()
+  bands <- lapply(seq_len(fx$nb), function(b)
+    lazy_source(fx$path, band = b, graph = g))
+  st <- lazy_stack(bands, along = "band")
+  w1 <- matrix(runif(8L * fx$nb), 8L)
+  w2 <- matrix(runif(8L), 1L)
+  pred <- reduce_over(st, mlp_project(list(w1, w2),
+                                      list(rep(0, 8L), 0)),
+                      over = "band")
+  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"),
+                             nan_rm = TRUE))
+  # reader budget below the whole-window working set but above the
+  # input window: untiled it must materialise, tiled it fuses
+  old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+  tab0 <- garry_explain_placement(p, read = 4L, compute = 1L)
+  cid <- tab0[tab0$bands > 1L, ]$compute
+  C <- p@stages[[cid]]; S <- p@stages[[C@inputs[[1L]]]]
+  win_px <- prod(pmin(as.numeric(S@chunks@chunk_dim),
+                      as.numeric(S@grid@dims[c("x", "y")])))
+  win_rows <- min(S@chunks@chunk_dim[[2L]], S@grid@dims[["y"]])
+  options(garry.fuse_tile_mb = 1e9)
+  whole <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
+  options(garry.fuse_tile_mb = whole$act_mb / 8)
+  tiled <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
+  expect_gte(tiled$tiles, 8L)
+  expect_lt(tiled$ws_mb, whole$ws_mb)
+  # a reader budget between the tiled and the whole working set
+  options(garry.fuse_reader_mb = (tiled$ws_mb + whole$ws_mb) / 2)
+  options(garry.fuse_tile_mb = 1e9)
+  t_un <- garry_explain_placement(p, read = 4L, compute = 1L)
+  expect_identical(t_un[t_un$bands > 1L, ]$decision, "comp")
+  options(garry.fuse_tile_mb = whole$act_mb / 8)
+  t_ti <- garry_explain_placement(p, read = 4L, compute = 1L)
+  expect_identical(t_ti[t_ti$bands > 1L, ]$decision, "fuse")
+})

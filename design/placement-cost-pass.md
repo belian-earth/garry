@@ -287,3 +287,26 @@ Same pass, no per-op rule.
   accounting)
 - `R/passes.R:861-889` (E, the cost function to extend)
 - `R/band_mlp.R` (the MLP op whose compute cost the model must estimate)
+
+
+## Tiled fused kernels (2026-09-03)
+
+A fused chain runs once per read window, and a pointwise kernel's
+activations scale with the pixels handed to that one call: the SI
+predict (72 -> 256 -> 256 -> 1) over a 1 Mpx window peaks at ~2 GB per
+call (measured in-process, `VmHWM`), so 8 readers needed ~24 GB and
+the in-flight byte budget correctly admitted 3-4 of them while the
+rest waited 40-90 s (hutan lazy `si_tail`, task log 2026-09-03: 60
+fused reads, run p50 2 s, wait p50 44 s). The model was right; the
+footprint was the problem.
+
+`.fuse_tiles()` (placement) splits a chain with no halo and no
+`out_pad` into `ceiling(act_mb / fuse_tile_mb)` row tiles; the task's
+`ws_mb` becomes the input window (raw buffer + device copy) plus ONE
+tile's activations, and the `fuse_reader_mb` gate prices the tiled set
+too (a wide kernel that could not fit a reader whole now fuses).
+`.apply_fuse()` uploads the window once, runs the jitted kernel on row
+slices of the device copy (`nv_static_slice`) and concatenates the
+exports on device (`.apply_fuse_tiled`); at most two tile heights
+occur, so the jit cache compiles twice. Halo / out_pad chains are
+untouched (tiles = 1). `garry_explain_placement()` reports `tiles`.

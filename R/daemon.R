@@ -175,9 +175,19 @@ NULL
 
 # Compute-on-read (phase 12b): apply a fused single-consumer stage
 # kernel to the whole padded read window, once, on the daemon that
-# read it. `fuse` is list(ck, fn, dtype, out_key): jit cache key
-# (content-addressed), stage closure, upload dtype, export node key.
-# Returns the kernel's single export (pad consumed: core-sized).
+# read it. `fuse` is list(ck, fn, dtype, out_key, tiles): jit cache
+# key (content-addressed), stage closure, upload dtype, export node
+# key, row-tile count. Returns the kernel's single export (pad
+# consumed: core-sized).
+#
+# Tiled execution (`tiles > 1`, pointwise chains only, decided by
+# placement's .fuse_tiles): the window is uploaded once, the kernel
+# runs on row slices of the device copy, and the slices' exports are
+# concatenated on device. Activations then scale with the tile, not
+# the window (a 256-wide MLP over a 1 Mpx window peaks ~2 GB per call;
+# 4 tiles hold ~0.5 GB), so a reader fleet fits the in-flight byte
+# budget several times over instead of serialising on it. At most two
+# distinct tile heights occur, so the jit cache compiles twice.
 .apply_fuse <- function(m, fuse, store_raw = FALSE) {
   if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
@@ -192,8 +202,14 @@ NULL
   } else {
     g_upload(m, fuse$dtype)
   }
-  res <- jf(list(up))
-  out_dev <- res[[1L]]
+  tiles <- as.integer(fuse$tiles %||% 1L)
+  if (tiles > 1L) {
+    out_dev <- .apply_fuse_tiled(jf, up, tiles)
+    res <- NULL
+  } else {
+    res <- jf(list(up))
+    out_dev <- res[[1L]]
+  }
   # Producer-side write quantization for a FUSED sink (the host sets
   # fuse$wq only when this fused export is a no-other-consumer sink).
   # Applied eagerly on device, outside the jitted kernel, so the
@@ -220,6 +236,31 @@ NULL
   }
   rm(res, out_dev, up)
   gc(FALSE)
+  out
+}
+
+# Run a jitted fused kernel over `tiles` row slices of a device window
+# (.., y, x) and concatenate the exports along y. Row bounds split as
+# evenly as integer rows allow (two distinct heights at most).
+.apply_fuse_tiled <- function(jf, up, tiles) {
+  sh <- .g_shape(up)
+  nd <- length(sh)
+  ny <- sh[[nd - 1L]]
+  tiles <- max(1L, min(as.integer(tiles), ny))
+  base <- ny %/% tiles
+  extra <- ny %% tiles
+  heights <- rep(base, tiles) + c(rep(1L, extra), rep(0L, tiles - extra))
+  starts <- cumsum(c(1L, heights[-tiles]))
+  parts <- vector("list", tiles)
+  for (i in seq_len(tiles)) {
+    tile <- .g_slice_axis(up, nd - 1L, starts[[i]],
+                          starts[[i]] + heights[[i]] - 1L)
+    parts[[i]] <- jf(list(tile))[[1L]]
+    rm(tile)
+  }
+  od <- length(.g_shape(parts[[1L]]))
+  out <- .g_concat_axis(parts, od - 1L)
+  rm(parts)
   out
 }
 

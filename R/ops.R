@@ -648,6 +648,27 @@ g_slice_t <- function(x, from, to) {
   do.call(`[`, c(list(x, from:to), idx, list(drop = FALSE)))
 }
 
+# Slice `from:to` (1-based, inclusive) along one axis of a traced array
+# and concatenate along one axis: the bridge .apply_fuse_tiled uses to
+# run a fused kernel over row tiles of a device window (traced only).
+.g_slice_axis <- function(x, axis, from, to) {
+  sh <- .g_shape(x)
+  st <- rep(1L, length(sh))
+  lim <- as.integer(sh)
+  st[[axis]] <- as.integer(from)
+  lim[[axis]] <- as.integer(to)
+  anvl::nv_static_slice(
+    x,
+    start_indices = st,
+    limit_indices = lim,
+    strides = rep(1L, length(sh))
+  )
+}
+
+.g_concat_axis <- function(xs, axis) {
+  do.call(anvl::nv_concatenate, c(xs, list(axis = as.integer(axis))))
+}
+
 #' Concatenate along dim 1 (the scanned axis).
 #'
 #' Matrices are treated as single (1, y, x) slices, so a scan's stacked

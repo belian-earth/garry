@@ -98,6 +98,27 @@ NULL
   out
 }
 
+# Row-tile count and per-task working set of a fused chain over one
+# read window. Only pointwise chains tile (no halo, no out_pad): a tile
+# of rows is then an exact sub-problem, and .apply_fuse concatenates
+# the tiles' exports on device. The working set the reader holds is
+# the raw read buffer + its device copy (8 bytes/px/band) plus the
+# activations of ONE kernel call.
+.fuse_tiles <- function(graph, C, win_px, win_rows, nb_src) {
+  act_px <- .stage_fuse_act_bytes_px(graph, C@members, nb_src)
+  act_mb <- win_px * act_px / 2^20
+  in_mb <- win_px * 8 * nb_src / 2^20
+  tileable <- (C@out_pad %||% 0L) == 0L && (C@halo %||% 0L) == 0L
+  tiles <- 1L
+  if (tileable) {
+    tiles <- as.integer(max(1, min(
+      win_rows,
+      ceiling(act_mb / garry_opt("fuse_tile_mb"))
+    )))
+  }
+  list(tiles = tiles, ws_mb = in_mb + act_mb / tiles, act_mb = act_mb)
+}
+
 # The placement pass. Returns the side table the scheduler's task
 # build consumes:
 #   by_source : env, .key(sid) -> fuse spec (only chains DECIDED fuse);
@@ -151,6 +172,21 @@ NULL
     C <- plan@stages[[cc$cid]]
     nb_src <- length(graph_get(graph, S@members[[1L]])@band)
     flops_px <- cost_fuse <- cost_mat <- move_mb <- NA_real_
+    # Fused kernels run per READ window (no chunking). Tiled fused
+    # kernels: a pointwise chain's activations scale with the pixels
+    # handed to ONE kernel call, so a window wider than `fuse_tile_mb`
+    # runs as row tiles (see .apply_fuse) and the reader holds the
+    # input window plus one tile's activations, not the whole
+    # window's. Halo / out_pad chains stay whole-window (tiles = 1).
+    win_px <- prod(pmin(
+      as.numeric(S@chunks@chunk_dim),
+      as.numeric(S@grid@dims[c("x", "y")])
+    ))
+    win_rows <- min(
+      as.numeric(S@chunks@chunk_dim[[2L]]),
+      as.numeric(S@grid@dims[["y"]])
+    )
+    tl <- .fuse_tiles(graph, C, win_px, win_rows, nb_src)
     if (identical(mode, "rules")) {
       # Phase 12b behaviour: sinks stay materialised, and a coalesced
       # multi-band source keeps its consumer on the COMPUTE pool
@@ -197,18 +233,12 @@ NULL
       } else {
         avail_mb * (1 - garry_opt("exec_ram_fraction"))
       }
-      # Fused kernels run at READ granularity — no chunking — so one
-      # reader holds the whole window's input planes AND activation
-      # cubes live. Price that against the per-reader budget; a chain
-      # whose window working set does not fit materialises (the
-      # chunked compute pool handles any size).
-      win_px <- prod(pmin(
-        as.numeric(S@chunks@chunk_dim),
-        as.numeric(S@grid@dims[c("x", "y")])
-      ))
-      fuse_ws_mb <- win_px *
-        .stage_fuse_act_bytes_px(graph, C@members, nb_src) /
-        2^20
+      # One reader holds the input window plus the activations of one
+      # kernel call (a tile, or the whole window when untileable).
+      # Price that against the per-reader budget; a chain whose
+      # working set does not fit materialises (the chunked compute
+      # pool handles any size).
+      fuse_ws_mb <- tl$ws_mb
       if (is.na(flops_px)) {
         decision <- "comp"
         reason <- "cost: unknown compute cost (scan / opaque custom body)"
@@ -227,8 +257,8 @@ NULL
         reason <- .glue(
           "cost: fused window working set {round(fuse_ws_mb)} MB exceeds ",
           "fuse_reader_mb {round(garry_opt('fuse_reader_mb'))} ",
-          "(window {formatC(win_px / 1e6, format = 'f', digits = 1)} Mpx ",
-          "at read granularity)"
+          "(window {formatC(win_px / 1e6, format = 'f', digits = 1)} Mpx",
+          "{if (tl$tiles > 1L) paste0(' in ', tl$tiles, ' row tiles') else ' at read granularity'})"
         )
       } else if (mem_need > mem_free) {
         decision <- "comp"
@@ -259,14 +289,7 @@ NULL
       # them by store bytes alone (fused outputs are tiny) stacked
       # N cold XLA ramps on top of whatever else holds the machine
       # (measured: crop=0 with the whole-AOI embedding staging resident).
-      wpx <- prod(pmin(
-        as.numeric(S@chunks@chunk_dim),
-        as.numeric(S@grid@dims[c("x", "y")])
-      ))
-      ws_mb <- wpx *
-        (.stage_fuse_act_bytes_px(graph, C@members, nb_src) +
-          8 * nb_src) /
-        2^20
+      ws_mb <- tl$ws_mb
       by_source[[.key(S@id)]] <- list(
         cid = C@id,
         ck = paste0(.stage_kernel_sig(graph, C), "@", C@device),
@@ -276,7 +299,8 @@ NULL
         out_pad = C@out_pad,
         out_nb = .node_outer_nb(graph, C@exports[[1L]]),
         out_dtype = graph_get(graph, C@exports[[1L]])@grid@dtype,
-        ws_mb = ws_mb
+        ws_mb = ws_mb,
+        tiles = tl$tiles
       )
       fused[[.key(C@id)]] <- TRUE
     }
@@ -289,6 +313,7 @@ NULL
       cost_fuse_s = cost_fuse,
       cost_mat_s = cost_mat,
       decision = decision,
+      tiles = tl$tiles,
       reason = reason
     )
   }
