@@ -88,3 +88,28 @@ test_that("stac_filter_coverage also works on a sources data frame", {
   expect_equal(nrow(stac_filter_coverage(src, c(0, 0, 10, 10), 0.5)), 1L)
 })
 
+
+test_that("stac_sources() and stac_filter_coverage() reject malformed bboxes", {
+  skip_if_not_installed("rstac")
+  ok <- .di_feat("a", 10, c(0, 0, 10, 10), "descending", list(B04 = "a.tif"))
+  nobox <- ok
+  nobox$bbox <- NULL
+  nobox$id <- "missing-bbox"
+  expect_error(stac_sources(.di_items(list(ok, nobox))), "missing-bbox")
+  rev <- ok
+  rev$bbox <- c(10, 0, 0, 10)
+  expect_error(stac_sources(.di_items(list(rev))), "xmin < xmax")
+  expect_error(stac_sources(.di_items(list())), "no features")
+
+  expect_error(
+    stac_filter_coverage(.di_items(list(ok, nobox)), c(0, 0, 10, 10)),
+    "missing-bbox"
+  )
+  its <- .di_items(list(ok))
+  expect_error(stac_filter_coverage(its, c(0, 0, 0, 10)), "xmin < xmax")
+  expect_error(stac_filter_coverage(its, c(0, 0, NA, 10)), "finite")
+  expect_error(stac_filter_coverage(its, c(0, 0, 10, 10), 1.5), "min_coverage")
+  expect_error(stac_filter_coverage(its, c(0, 0, 10, 10), NA_real_), "min_coverage")
+  src <- stac_sources(its)
+  expect_error(stac_filter_coverage(src, c(0, 0, 10)), "c\\(xmin, ymin, xmax, ymax\\)")
+})

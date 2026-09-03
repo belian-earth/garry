@@ -48,3 +48,18 @@ test_that(".mpc_token_lookup honours expiry across memory and disk", {
   expect_equal(garry:::.mpc_token_lookup(dcoll), "disktok")
   expect_true(exists(dcoll, envir = garry:::.mpc_token_cache, inherits = FALSE))
 })
+
+test_that(".sign_href joins queries and re-signs idempotently", {
+  tok <- "st=abc&se=2030-01-01T00%3A00%3A00Z&sig=xyz"
+  plain <- "https://x.blob.core.windows.net/a/B04.tif"
+  expect_equal(garry:::.sign_href(plain, tok), paste0(plain, "?", tok))
+  # existing non-SAS query: extend with &, never a second ?
+  expect_equal(
+    garry:::.sign_href(paste0(plain, "?foo=bar"), tok),
+    paste0(plain, "?foo=bar&", tok)
+  )
+  # already signed: token replaced, not stacked
+  once <- garry:::.sign_href(plain, "st=old&sig=old")
+  expect_equal(garry:::.sign_href(once, tok), paste0(plain, "?", tok))
+  expect_equal(lengths(regmatches(once, gregexpr("?", once, fixed = TRUE))), 1L)
+})

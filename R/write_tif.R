@@ -100,9 +100,15 @@ write_tif <- function(
     }
     scale <- as.numeric(scale)
     offset <- if (is.null(offset)) 0 else as.numeric(offset)
-    if (length(scale) != 1L || length(offset) != 1L || scale == 0) {
+    if (
+      length(scale) != 1L ||
+        length(offset) != 1L ||
+        !is.finite(scale) ||
+        !is.finite(offset) ||
+        scale == 0
+    ) {
       cli::cli_abort(
-        "{.arg scale}/{.arg offset} must be non-zero length-1 numerics."
+        "{.arg scale}/{.arg offset} must be finite, non-zero length-1 numerics."
       )
     }
     if (is.null(dtype) || is.null(.wt_int_range[[dtype]])) {

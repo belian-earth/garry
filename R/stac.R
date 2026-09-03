@@ -103,12 +103,27 @@ stac_sign_mpc <- function(
   token <- .mpc_token(items$features[[1L]]$collection, subscription_key)
   items$features <- lapply(items$features, function(f) {
     f$assets <- lapply(f$assets, function(a) {
-      a$href <- paste0(a$href, "?", token)
+      a$href <- .sign_href(a$href, token)
       a
     })
     f
   })
   items
+}
+
+# Attach a SAS query string to an href. A previously signed href (a
+# query carrying a SAS `sig=`) has its token replaced, so re-signing is
+# idempotent; any other existing query is extended with `&`, never a
+# second `?`.
+.sign_href <- function(href, token) {
+  q <- regmatches(href, regexpr("\\?.*$", href))
+  if (!length(q)) {
+    return(paste0(href, "?", token))
+  }
+  if (grepl("(^\\?|&)sig=", q)) {
+    return(paste0(sub("\\?.*$", "", href), "?", token))
+  }
+  paste0(href, "&", token)
 }
 
 # Signed-expiry epoch (numeric, UTC) of a SAS query string, NA when
@@ -241,6 +256,26 @@ stac_sign_mpc <- function(
   )
 }
 
+# A finite, ordered `c(xmin, ymin, xmax, ymax)` with positive area: the
+# shared contract for STAC item bboxes and AOI bboxes. `what` is a cli
+# fragment naming the offender, evaluated in the caller's frame.
+.check_bbox <- function(bbox, what = "{.arg bbox}", env = parent.frame()) {
+  b <- tryCatch(as.numeric(unlist(bbox)), error = function(e) NULL)
+  bad <- is.null(b) || length(b) != 4L || !all(is.finite(b))
+  if (!bad) {
+    bad <- b[[1L]] >= b[[3L]] || b[[2L]] >= b[[4L]]
+  }
+  if (bad) {
+    who <- cli::format_inline(what, .envir = env)
+    got <- if (is.null(bbox)) "NULL" else deparse1(bbox)
+    cli::cli_abort(c(
+      "{who} must be finite {.code c(xmin, ymin, xmax, ymax)}",
+      "x" = "with xmin < xmax and ymin < ymax; got {.code {got}}."
+    ))
+  }
+  invisible(b)
+}
+
 #' Rectangularise STAC items into a source table.
 #'
 #' One row per item x asset. The result is a plain data frame: the
@@ -260,8 +295,15 @@ stac_sign_mpc <- function(
 #' @export
 stac_sources <- function(items, assets = NULL) {
   feats <- items$features
-  stopifnot(length(feats) > 0L)
-  rows <- lapply(feats, function(ft) {
+  if (!length(feats)) {
+    cli::cli_abort("{.arg items} has no features.")
+  }
+  rows <- lapply(seq_along(feats), function(i) {
+    ft <- feats[[i]]
+    .check_bbox(
+      ft$bbox,
+      what = "bbox of STAC item {.val {ft$id %||% i}}"
+    )
     anames <- names(ft$assets)
     if (!is.null(assets)) {
       anames <- intersect(anames, assets)
@@ -322,7 +364,16 @@ stac_filter_cloud <- function(sources, max_cloud_cover) {
 #' @family stac helpers
 #' @export
 stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
-  stopifnot(length(bbox) == 4L, min_coverage >= 0, min_coverage <= 1)
+  .check_bbox(bbox, what = "{.arg bbox}")
+  if (
+    !is.numeric(min_coverage) ||
+      length(min_coverage) != 1L ||
+      !is.finite(min_coverage) ||
+      min_coverage < 0 ||
+      min_coverage > 1
+  ) {
+    cli::cli_abort("{.arg min_coverage} must be a single number in [0, 1].")
+  }
   aoi <- (bbox[[3L]] - bbox[[1L]]) * (bbox[[4L]] - bbox[[2L]])
   frac <- function(xmin, ymin, xmax, ymax) {
     ix <- pmax(0, pmin(xmax, bbox[[3L]]) - pmax(xmin, bbox[[1L]]))
@@ -331,6 +382,12 @@ stac_filter_coverage <- function(sources, bbox, min_coverage = 0.5) {
   }
   if (inherits(sources, "doc_items")) {
     .require_rstac()
+    # Validate up front: rstac::items_filter() turns any error inside
+    # filter_fn into FALSE, which would drop a malformed item silently.
+    for (i in seq_along(sources$features)) {
+      x <- sources$features[[i]]
+      .check_bbox(x$bbox, what = "bbox of STAC item {.val {x$id %||% i}}")
+    }
     return(rstac::items_filter(sources, filter_fn = function(x) {
       frac(x$bbox[[1L]], x$bbox[[2L]], x$bbox[[3L]], x$bbox[[4L]]) >=
         min_coverage
@@ -633,7 +690,7 @@ stac_merge <- function(...) {
 #' Write a source table as a GTI index for one asset.
 #'
 #' A GTI index is a vector layer of raster footprints read by GDAL's
-#' GTI (GDAL Tile Index) raster driver, available from GDAL 3.10, which
+#' GTI (GDAL Tile Index) raster driver, available from GDAL 3.9, which
 #' mosaics the indexed rasters on the fly. Footprints are stored in
 #' `crs` (transformed from the table's EPSG:4326 bboxes), so the index
 #' layer SRS matches the grid the GTI dataset will be pinned to and the

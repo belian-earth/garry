@@ -131,6 +131,14 @@ test_that("validation: quantize needs int dtype; sentinel must fit; no .vrt", {
                          scale = 1e-4, nodata = 99999),
                "does not fit")
   expect_error(write_tif(x, tempfile(fileext = ".vrt")), "materialise")
+  for (bad in list(NA, NaN, Inf, 0)) {
+    expect_error(write_tif(x, tempfile(fileext = ".tif"), dtype = "i16",
+                           scale = bad),
+                 "finite, non-zero")
+  }
+  expect_error(write_tif(x, tempfile(fileext = ".tif"), dtype = "i16",
+                         scale = 1e-4, offset = NA),
+               "finite, non-zero")
 })
 
 test_that("collect() no longer takes file-writing arguments", {
