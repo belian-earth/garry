@@ -1,7 +1,7 @@
 # Write a source table as a GTI index for one asset.
 
 A GTI index is a vector layer of raster footprints read by GDAL's GTI
-(GDAL Tile Index) raster driver, available from GDAL 3.10, which mosaics
+(GDAL Tile Index) raster driver, available from GDAL 3.9, which mosaics
 the indexed rasters on the fly. Footprints are stored in `crs`
 (transformed from the table's EPSG:4326 bboxes), so the index layer SRS
 matches the grid the GTI dataset will be pinned to and the culling
