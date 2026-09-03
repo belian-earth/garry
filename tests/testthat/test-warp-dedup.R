@@ -1,6 +1,7 @@
 # Sharing identical warp-on-read stages between consumers. graph_import()
-# dedups SourceNodes but copies derived nodes, so a band used in two
-# subexpressions used to carry one WarpNode per use.
+# now memoises every imported node, so ONE lazy raster used in two
+# subexpressions imports once; the dedup pass covers the remaining case,
+# identical warps built SEPARATELY (two align() calls on the same band).
 
 n_warps <- function(x) {
   sum(vapply(collect(x, plan_only = TRUE)@stages,
@@ -28,14 +29,26 @@ test_that("a band used in two subexpressions is read once", {
   mb <- fixture_multiband()
   target <- target_of(mb$path)
 
-  mk <- function() {
+  # one object used twice: the import memo alone shares it
+  mk1 <- function() {
     x <- align(lazy_source(mb$path, band = 1L), target)
     y <- align(lazy_source(mb$path, band = 2L), target)
     (x - y) / (x + y)
   }
+  expect_identical(n_warps(mk1()), 2L)
+  expect_identical(without_dedup(n_warps(mk1())), 2L)
 
-  expect_identical(n_warps(mk()), 2L)
-  expect_identical(without_dedup(n_warps(mk())), 3L)
+  # the same warp built twice: only the dedup pass shares it
+  mk2 <- function() {
+    x1 <- align(lazy_source(mb$path, band = 1L), target)
+    x2 <- align(lazy_source(mb$path, band = 1L), target)
+    y <- align(lazy_source(mb$path, band = 2L), target)
+    (x1 - y) / (x2 + y)
+  }
+  # (4 without the pass: x1, x2, and y imported into each operand's
+  # graph before the two meet; the memo is per source graph)
+  expect_identical(n_warps(mk2()), 2L)
+  expect_identical(without_dedup(n_warps(mk2())), 4L)
 })
 
 test_that("dedup does not change the result", {
