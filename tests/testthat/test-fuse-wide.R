@@ -270,3 +270,55 @@ test_that(".fuse_tiles keeps a halo chain whole and prices input plus activation
   expect_equal(tl$act_mb, win_px * (act_px - 4 * fx$nb) / 2^20)
 })
 
+# -- seal at a fanned-out reduce ----------------------------------------------
+
+test_that("a fanned-out band reduce fed by a source keeps its own single-export stage", {
+  fx <- fixture_multiband()
+  mk <- function() {
+    g <- graph_new()
+    bands <- lapply(seq_len(fx$nb), function(b)
+      lazy_source(fx$path, band = b, graph = g))
+    st <- lazy_stack(bands, along = "band")
+    w1 <- matrix(seq_len(8L * fx$nb) / 100, 8L); w2 <- matrix(seq_len(8L) / 10, 1L)
+    reduce_over(st, mlp_project(list(w1, w2), list(rep(0, 8L), 0)), over = "band")
+  }
+  old <- options(garry.placement = "cost")
+  on.exit(options(old), add = TRUE)
+  pred <- mk()
+  x <- list(a = pred * 2, b = pred + 1,
+            c = lazy_map(pred, fn = function(v) sqrt(abs(v)), dtype = "f32"))
+  p <- plan_lazy(x)
+  own <- Filter(function(s) s@kind == "compute" && pred@node_id %in% s@members,
+                p@stages)
+  expect_length(own, 1L)
+  expect_identical(own[[1L]]@exports, pred@node_id)     # single export
+  expect_identical(own[[1L]]@members, pred@node_id)     # consumers cut off
+  down <- Filter(function(s) s@kind == "compute" && own[[1L]]@id %in% s@inputs,
+                 p@stages)
+  expect_length(down, 1L)                               # one downstream stage
+  expect_identical(sort(down[[1L]]@exports), sort(unname(p@sinks)))
+  # it is a compute-on-read candidate and fuses on a capped pool
+  single <- execute_plan(p)
+  local_pools(4, 1, gdal_config = TRUE)
+  tab <- garry_explain_placement(p)
+  expect_identical(tab$compute, own[[1L]]@id)
+  expect_identical(tab$decision, "fuse")
+  # and the distributed run matches single-process
+  dist <- execute_plan_mirai(p)
+  for (nm in names(x)) expect_equal(dist[[nm]], single[[nm]], tolerance = 1e-6)
+
+  # ONE consumer: no seal, the map fuses into the reduce's stage as before
+  pred1 <- mk()
+  p1 <- plan_lazy(pred1 * 2)
+  own1 <- Filter(function(s) s@kind == "compute" && pred1@node_id %in% s@members,
+                 p1@stages)
+  expect_gt(length(own1[[1L]]@members), 1L)
+
+  # rules placement: no seal
+  options(garry.placement = "rules")
+  pred2 <- mk()
+  p2 <- plan_lazy(list(a = pred2 * 2, b = pred2 + 1))
+  own2 <- Filter(function(s) s@kind == "compute" && pred2@node_id %in% s@members,
+                 p2@stages)
+  expect_gt(length(own2[[1L]]@members), 1L)
+})
