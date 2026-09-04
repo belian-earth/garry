@@ -307,6 +307,18 @@ tile's activations, and the `fuse_reader_mb` gate prices the tiled set
 too (a wide kernel that could not fit a reader whole now fuses).
 `.apply_fuse()` uploads the window once, runs the jitted kernel on row
 slices of the device copy (`nv_static_slice`) and concatenates the
-exports on device (`.apply_fuse_tiled`); at most two tile heights
-occur, so the jit cache compiles twice. Halo / out_pad chains are
-untouched (tiles = 1). `garry_explain_placement()` reports `tiles`.
+exports on device (`.apply_fuse_tiled`). Per window shape at most two
+tile heights occur, so the stage kernel compiles twice; the eager
+slice and concatenate ops compile once per distinct bound set on top
+(k + 1 small kernels for k tiles), all cached per daemon. Halo /
+out_pad chains are untouched (tiles = 1). `garry_explain_placement()`
+reports `tiles`.
+
+Working-set accounting (`.fuse_tiles`): the reader holds the host read
+buffer (up to 8 bytes/px/band), the window's device copy (4, priced
+inside `.stage_fuse_act_bytes_px` and split out so it is not counted
+twice) and one call's activations. Only the activations divide by the
+tile count. The `fuse_reader_mb` gate now includes the input terms for
+every chain, so an untileable (halo / out_pad) chain is priced
+slightly higher than before (activations alone).
+

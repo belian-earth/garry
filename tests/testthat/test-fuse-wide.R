@@ -235,3 +235,38 @@ test_that("tiling lets a window over fuse_reader_mb fuse instead of materialisin
   t_ti <- garry_explain_placement(p, read = 4L, compute = 1L)
   expect_identical(t_ti[t_ti$bands > 1L, ]$decision, "fuse")
 })
+
+test_that(".fuse_tiles keeps a halo chain whole and prices input plus activations", {
+  fx <- fixture_multiband()
+  g <- graph_new()
+  bands <- lapply(seq_len(fx$nb), function(b)
+    lazy_source(fx$path, band = b, graph = g))
+  st <- lazy_stack(bands, along = "band")
+  w1 <- matrix(runif(8L * fx$nb), 8L); w2 <- matrix(runif(8L), 1L)
+  pred <- reduce_over(st, mlp_project(list(w1, w2), list(rep(0, 8L), 0)),
+                      over = "band")
+  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"), nan_rm = TRUE))
+  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
+                 garry.fuse_tile_mb = 1e-4)
+  on.exit(options(old), add = TRUE)
+  tab <- garry_explain_placement(p, read = 4L, compute = 1L)
+  C <- p@stages[[tab[tab$bands > 1L, ]$compute]]
+  S <- p@stages[[C@inputs[[1L]]]]
+  win_px <- prod(pmin(as.numeric(S@chunks@chunk_dim),
+                      as.numeric(S@grid@dims[c("x", "y")])))
+  win_rows <- min(S@chunks@chunk_dim[[2L]], S@grid@dims[["y"]])
+  tl <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
+  expect_gt(tl$tiles, 1L)
+  # a halo (or out_pad) chain is not tileable: whole window, full activations
+  Ch <- C; Ch@halo <- 1L
+  th <- garry:::.fuse_tiles(p@graph, Ch, win_px, win_rows, fx$nb)
+  expect_identical(th$tiles, 1L)
+  expect_equal(th$ws_mb, th$in_mb + th$act_mb)
+  Cp <- C; Cp@out_pad <- 1L
+  expect_identical(garry:::.fuse_tiles(p@graph, Cp, win_px, win_rows, fx$nb)$tiles, 1L)
+  # the input term is host buffer + device copy; activations exclude the copy
+  act_px <- garry:::.stage_fuse_act_bytes_px(p@graph, C@members, fx$nb)
+  expect_equal(tl$in_mb, win_px * 12 * fx$nb / 2^20)
+  expect_equal(tl$act_mb, win_px * (act_px - 4 * fx$nb) / 2^20)
+})
+

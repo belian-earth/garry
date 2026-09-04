@@ -101,13 +101,17 @@ NULL
 # Row-tile count and per-task working set of a fused chain over one
 # read window. Only pointwise chains tile (no halo, no out_pad): a tile
 # of rows is then an exact sub-problem, and .apply_fuse concatenates
-# the tiles' exports on device. The working set the reader holds is
-# the raw read buffer + its device copy (8 bytes/px/band) plus the
-# activations of ONE kernel call.
+# the tiles' exports on device. The reader holds the host read buffer
+# (up to 8 bytes/px/band: an R double matrix on the non-raw path), the
+# window's device copy (4 bytes/px/band, uploaded whole) and the
+# activations of ONE kernel call; only the activations shrink with the
+# tile. .stage_fuse_act_bytes_px prices the device copy inside its
+# per-pixel figure, so it is split out here rather than counted twice.
 .fuse_tiles <- function(graph, C, win_px, win_rows, nb_src) {
   act_px <- .stage_fuse_act_bytes_px(graph, C@members, nb_src)
-  act_mb <- win_px * act_px / 2^20
-  in_mb <- win_px * 8 * nb_src / 2^20
+  dev_px <- 4 * max(1, nb_src)
+  act_mb <- win_px * max(0, act_px - dev_px) / 2^20
+  in_mb <- win_px * (8 * nb_src + dev_px) / 2^20
   tileable <- (C@out_pad %||% 0L) == 0L && (C@halo %||% 0L) == 0L
   tiles <- 1L
   if (tileable) {
@@ -116,7 +120,8 @@ NULL
       ceiling(act_mb / garry_opt("fuse_tile_mb"))
     )))
   }
-  list(tiles = tiles, ws_mb = in_mb + act_mb / tiles, act_mb = act_mb)
+  list(tiles = tiles, ws_mb = in_mb + act_mb / tiles, act_mb = act_mb,
+       in_mb = in_mb)
 }
 
 # The placement pass. Returns the side table the scheduler's task
