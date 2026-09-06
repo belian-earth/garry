@@ -78,6 +78,17 @@ jobs:
           extra-packages: any::rcmdcheck, rustyfilters=?ignore
           needs: check
 
+      # stablehlo 78695b7 (2026-09-04) turned Shape into a bare integer
+      # vector; the anvl fork at nv-scan still reads shape$dims (every
+      # XLA test failed with "$ operator is invalid for atomic vectors",
+      # PR #22). Hold the last compatible stablehlo until the fork
+      # carries upstream anvl's port (r-xla/anvl#469). pak resolves
+      # stablehlo through anvl's Remotes, so garry's DESCRIPTION cannot
+      # pin it: a conflicting ref fails the solve.
+      - name: Pin stablehlo to the pre-refactor commit
+        run: pak::pkg_install("r-xla/stablehlo@5fcc73b", upgrade = FALSE)
+        shell: Rscript {0}
+
 
       # The PJRT CPU plugin otherwise downloads lazily at first XLA use,
       # INSIDE the test run: one CDN flake fails the whole suite (main
