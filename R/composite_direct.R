@@ -470,6 +470,7 @@ NULL
     quote({
       suppressMessages(library(garry))
       garry::garry_gdal_config()
+      garry::.daemon_jit_reset()
       options(garry.read_retry = rr)
     }),
     profiles = prof,
