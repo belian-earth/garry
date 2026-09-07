@@ -212,7 +212,9 @@ test_that("tiling lets a window over fuse_reader_mb fuse instead of materialisin
                              nan_rm = TRUE))
   # reader budget below the whole-window working set but above the
   # input window: untiled it must materialise, tiled it fuses
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
+  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
+                 garry.fuse_tile_mb = getOption("garry.fuse_tile_mb"),
+                 garry.fuse_reader_mb = getOption("garry.fuse_reader_mb"))
   on.exit(options(old), add = TRUE)
   tab0 <- garry_explain_placement(p, read = 4L, compute = 1L)
   cid <- tab0[tab0$bands > 1L, ]$compute
