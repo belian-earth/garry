@@ -81,7 +81,8 @@ runs again.</p>
 
 
 <dl><dt id="arg-x">x<a class="anchor" aria-label="anchor" href="#arg-x"></a></dt>
-<dd><p>A <code>LazyDataset</code> or <code>LazyRaster</code>.</p></dd>
+<dd><p>A <code>LazyDataset</code>, a <code>LazyRaster</code>, or a named list of
+<code>LazyRaster</code>s (multi-export: one execution, one cube per name).</p></dd>
 
 
 <dt id="arg-dir">dir<a class="anchor" aria-label="anchor" href="#arg-dir"></a></dt>
@@ -109,7 +110,8 @@ unique session-temporary directory.</p></dd>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>A lazy object of the same class as <code>x</code>, reading the local
-cubes.</p>
+cubes; for a named list, a named list of <code>LazyRaster</code>s (one per
+sink, same names).</p>
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>

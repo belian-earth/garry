@@ -436,6 +436,8 @@ Plan, distribute across daemons, and write the result.
   : Execute a lazy raster and stream it to a GeoTIFF.
 - [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
   : Materialise a lazy object locally and stay lazy.
+- [`extract_points()`](https://belian-earth.github.io/garry/reference/extract_points.md)
+  : Extract raster values at points.
 - [`as_terra()`](https://belian-earth.github.io/garry/reference/as_terra.md)
   : Convert a collected result to a terra SpatRaster.
 - [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)

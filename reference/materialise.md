@@ -24,7 +24,8 @@ materialise(
 
 - x:
 
-  A `LazyDataset` or `LazyRaster`.
+  A `LazyDataset`, a `LazyRaster`, or a named list of `LazyRaster`s
+  (multi-export: one execution, one cube per name).
 
 - dir:
 
@@ -51,7 +52,8 @@ materialise(
 
 ## Value
 
-A lazy object of the same class as `x`, reading the local cubes.
+A lazy object of the same class as `x`, reading the local cubes; for a
+named list, a named list of `LazyRaster`s (one per sink, same names).
 
 ## Details
 
