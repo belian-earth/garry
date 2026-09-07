@@ -108,3 +108,34 @@ test_that("draw renders and gradients refuse", {
       wrt = ln),
     "not")
 })
+
+test_that(".fn_identity ignores closure call state, bytecode and slimming", {
+  mk <- function(s) function(x) x * s
+  a <- mk(2)
+  b <- mk(2)
+  ref <- garry:::.fn_identity(b)
+  expect_identical(garry:::.fn_identity(a), ref)
+  # the interpreter stamps a closure's header on its first calls
+  for (i in 1:3) invisible(a(1))
+  expect_identical(garry:::.fn_identity(a), ref)
+  # a compiled body and a slimmed-then-called copy sign the same
+  expect_identical(garry:::.fn_identity(compiler::cmpfun(a)), ref)
+  sa <- garry:::.slim_fn(a)
+  invisible(sa(1))
+  expect_identical(garry:::.fn_identity(sa), ref)
+  # source references (R_KEEP_PKG_SOURCE=yes installs, keep.source
+  # sessions) carry paths and mutable srcfile state: not identity
+  src <- eval(parse(text = "function(s) function(x) {\n  x * s\n}",
+                    keep.source = TRUE))
+  nosrc <- eval(parse(text = "function(s) function(x) {\n  x * s\n}",
+                      keep.source = FALSE))
+  expect_false(is.null(attr(src(2), "srcref")))
+  expect_identical(garry:::.fn_identity(src(2)), garry:::.fn_identity(nosrc(2)))
+  # captured values and captured functions still participate
+  expect_false(identical(garry:::.fn_identity(mk(3)), ref))
+  mkf <- function(g) function(x) g(x)
+  expect_identical(garry:::.fn_identity(mkf(mk(2))),
+                   garry:::.fn_identity(mkf(mk(2))))
+  expect_false(identical(garry:::.fn_identity(mkf(mk(2))),
+                         garry:::.fn_identity(mkf(mk(3)))))
+})

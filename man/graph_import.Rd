@@ -18,7 +18,13 @@ The id of the imported root in \code{dst}.
 }
 \description{
 Node ids are renumbered; a SourceNode identical in (path, band, nodata,
-grid, dtype) to one already in \code{dst} is deduplicated.
+grid, dtype) to one already in \code{dst} is deduplicated, and every node
+imported from \code{src} is memoised in \code{dst}, so importing the same
+foreign node again (or a descendant of an already-imported node)
+reuses the existing local copy instead of planting a second chain.
+Without this a lazy raster built on one graph and referenced from
+several consumers on another gained one full read+compute chain per
+consumer (hutan's fused SI tail: 4-6 predicts per year, 2026-09-03).
 Graphs are append-only (rewrites swap nodes in place, ids never
 reorder), so ascending id order within the reachable set is a valid
 topological order.

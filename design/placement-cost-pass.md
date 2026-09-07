@@ -287,3 +287,68 @@ Same pass, no per-op rule.
   accounting)
 - `R/passes.R:861-889` (E, the cost function to extend)
 - `R/band_mlp.R` (the MLP op whose compute cost the model must estimate)
+
+
+## Tiled fused kernels (2026-09-03)
+
+A fused chain runs once per read window, and a pointwise kernel's
+activations scale with the pixels handed to that one call: the SI
+predict (72 -> 256 -> 256 -> 1) over a 1 Mpx window peaks at ~2 GB per
+call (measured in-process, `VmHWM`), so 8 readers needed ~24 GB and
+the in-flight byte budget correctly admitted 3-4 of them while the
+rest waited 40-90 s (hutan lazy `si_tail`, task log 2026-09-03: 60
+fused reads, run p50 2 s, wait p50 44 s). The model was right; the
+footprint was the problem.
+
+`.fuse_tiles()` (placement) splits a chain with no halo and no
+`out_pad` into `ceiling(act_mb / fuse_tile_mb)` row tiles; the task's
+`ws_mb` becomes the input window (raw buffer + device copy) plus ONE
+tile's activations, and the `fuse_reader_mb` gate prices the tiled set
+too (a wide kernel that could not fit a reader whole now fuses).
+`.apply_fuse()` uploads the window once, runs the jitted kernel on row
+slices of the device copy (`nv_static_slice`) and concatenates the
+exports on device (`.apply_fuse_tiled`). Per window shape at most two
+tile heights occur, so the stage kernel compiles twice; the eager
+slice and concatenate ops compile once per distinct bound set on top
+(k + 1 small kernels for k tiles), all cached per daemon. Halo /
+out_pad chains are untouched (tiles = 1). `garry_explain_placement()`
+reports `tiles`.
+
+Working-set accounting (`.fuse_tiles`): the reader holds the host read
+buffer (up to 8 bytes/px/band), the window's device copy (4, priced
+inside `.stage_fuse_act_bytes_px` and split out so it is not counted
+twice) and one call's activations. Only the activations divide by the
+tile count. The `fuse_reader_mb` gate now includes the input terms for
+every chain, so an untileable (halo / out_pad) chain is priced
+slightly higher than before (activations alone).
+
+
+## Sealing a stage at a fanned-out reduce (2026-09-03)
+
+Compute-on-read takes only a single-input, single-export compute
+stage. Phase A grows a stage greedily through a fan-out (every
+consumer of the reduce output has one open compute ancestor, so each
+joins it), so a wide reduce whose output feeds two or more nodes
+(hutan's tail: the raw prediction sink, the calibrated map, the
+ensemble term) ends up in a multi-export stage, and the whole 72-band
+predict runs on the compute pool over stored windows. Synthetic tail
+(3000 x 3000 x 24 bands, 24 -> 256 -> 256 -> 1, four sinks, 8 readers
++ 2 compute): one whole-raster read then nine compute chunks, 14.7 s.
+
+Phase A now seals a source-fed compute stage the moment a chunk-local
+`ReduceNode` with more than one consumer joins it (`maybe_seal`, cost
+placement only). Later nodes cannot fuse into a sealed stage; they
+start a downstream stage keyed on it as their only input, so all the
+consumers still share ONE stage. `.merge_stages` never folds a sealed
+stage forward. The source -> reduce chain is then single-export and a
+placement candidate; the same run becomes nine fused reads (window
+capped by `fuse_px_cap`) plus nine cheap consumer tasks, 6.3 s.
+
+A reduce with one consumer is not sealed (its consumer fuses into the
+reader kernel as before), and rules placement never seals (it would
+only add a store round trip: rules mode keeps wide kernels on the
+compute pool anyway).
+
+Tile budgets on that run (`fuse_tile_mb` = whole / 512 / 128): wall
+6.5 / 6.0 / 6.5 s, peak fleet anon RSS 1392 / 2257 / 345 MB. Tiling
+buys reader memory, not time, at this width.

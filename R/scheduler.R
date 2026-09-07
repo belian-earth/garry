@@ -29,8 +29,9 @@ NULL
 # morphology benchmark's compile storm) — and identical kernels
 # persist across runs. Node ids are normalized to stage-local
 # indices (inputs in stored order, then members ascending); member
-# fns compare by their serialized slimmed closures, so captured free
-# variables participate in the identity. The only per-stage residue
+# fns compare by .fn_identity (formals, body expression, captured
+# bindings), so captured free variables participate in the identity
+# while closure call state and bytecode do not. The only per-stage residue
 # is export NAMES (node ids baked into the composed closure), which
 # the task bodies overwrite positionally via `out_keys` — exports
 # are sorted ascending in every composed fn, so position is
@@ -38,7 +39,7 @@ NULL
 .stage_kernel_sig <- function(graph, s) {
   ids <- c(s@input_nodes, s@members)
   local <- stats::setNames(seq_along(ids), as.character(ids))
-  norm_fn <- function(f) serialize(.slim_fn(f), NULL)
+  norm_fn <- .fn_identity
   parts <- lapply(s@members, function(id) {
     n <- graph_get(graph, id)
     base <- list(

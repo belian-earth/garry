@@ -166,6 +166,38 @@ NULL
   do.call(`[`, c(list(x), idx, list(drop = FALSE)))
 }
 
+# Content identity of a closure for signature hashes: formals, the
+# body EXPRESSION (never bytecode) and the captured bindings .slim_fn
+# would ship, captured functions reduced the same way. Serialising the
+# closure object is not stable: the interpreter stamps a closure's
+# header the first time it is called (JIT bookkeeping) and some R
+# versions carry that stamp through `environment<-`, and compiled
+# bodies serialise version-specific bytecode. Source references are
+# dropped too: a package installed with R_KEEP_PKG_SOURCE=yes (the
+# r-lib CI workflows) attaches them to every closure, and they carry
+# the install path plus a lazily populated srcfile environment.
+# Measured: the same scalar map signed differently before and after
+# its first plan on every CI runner, splitting one kernel's jit-cache
+# key in two, while hashing the same across a whole local suite.
+.fn_identity <- function(fn) {
+  if (!is.function(fn)) {
+    return(fn)
+  }
+  if (is.primitive(fn)) {
+    return(list(primitive = deparse(fn)))
+  }
+  f <- utils::removeSource(.slim_fn(fn))
+  env <- environment(f)
+  captures <- list()
+  if (!is.null(env) && !isNamespace(env) && !identical(env, globalenv())) {
+    captures <- lapply(
+      as.list(env, all.names = TRUE, sorted = TRUE),
+      .fn_identity
+    )
+  }
+  list(formals = formals(f), body = body(f), captures = captures)
+}
+
 # Rebind a user node fn onto a minimal environment holding only its
 # free variables (found via codetools), parented on globalenv(). Node
 # fns otherwise capture their construction environment, which typically
@@ -430,6 +462,11 @@ NULL
         logical(1)
       )]
       if (length(cids) != 1L) {
+        next
+      }
+      # A stage sealed at a fanned-out reduce stays its own
+      # single-export compute-on-read chain (Phase A, maybe_seal).
+      if (isTRUE(p$sealed)) {
         next
       }
       q <- protos[[cids]]
@@ -775,6 +812,41 @@ plan_lazy <- function(x) {
     as.character(ids)
   )
 
+  # Consumer count per node within the planned set: a chunk-local
+  # ReduceNode with several consumers is a fan-out point (see
+  # `seal_after_reduce` below).
+  n_cons <- new.env(parent = emptyenv())
+  for (i in ids) {
+    for (p in .node_parents(graph_get(graph, i))) {
+      n_cons[[.key(p)]] <- (n_cons[[.key(p)]] %||% 0L) + 1L
+    }
+  }
+  # Seal a source-fed compute stage at a fanned-out band/t reduce
+  # (cost placement only). A stage keeps growing greedily through a
+  # fan-out (a and b both read the reduce output, so both join its
+  # stage), which leaves the stage multi-export and compute-on-read
+  # refuses it: the WIDE kernel (a 72 -> 256 -> 256 -> 1 predict) then
+  # runs on the compute pool over the stored 72-band windows instead
+  # of on the reader that already holds them. Sealing cuts the stage
+  # right after the reduce, so the source -> reduce chain is
+  # single-export (one tiny plane) and fuses, and the consumers form
+  # one downstream stage (they share the sealed stage as their only
+  # input, so the join branch keeps them together). A reduce with ONE
+  # consumer is not sealed: the consumer fuses as before. The merge
+  # pass honours the seal (a sealed stage never folds forward).
+  seal_after_reduce <- identical(garry_opt("placement"), "cost")
+  maybe_seal <- function(sid, node) {
+    if (
+      seal_after_reduce &&
+        S7::S7_inherits(node, ReduceNode) &&
+        (n_cons[[.key(node@id)]] %||% 0L) > 1L &&
+        length(protos[[sid]]$inputs) == 1L &&
+        protos[[protos[[sid]]$inputs]]$kind %in% c("source_read", "warp")
+    ) {
+      protos[[sid]]$sealed <<- TRUE
+    }
+  }
+
   # ---- Phase A: assign nodes to proto-stages --------------------------------
   protos <- list() # id -> mutable list
   node_stage <- new.env(parent = emptyenv()) # node id -> stage id
@@ -897,7 +969,9 @@ plan_lazy <- function(x) {
       compute_sids <- parent_sids[vapply(
         parent_sids,
         function(s) {
-          protos[[s]]$kind == "compute" && !is_closed(s)
+          protos[[s]]$kind == "compute" &&
+            !is_closed(s) &&
+            !isTRUE(protos[[s]]$sealed)
         },
         logical(1)
       )]
@@ -947,6 +1021,7 @@ plan_lazy <- function(x) {
         }
         protos[[sid]]$grid <- .node_grid(node)
         node_stage[[.key(id)]] <- sid
+        maybe_seal(sid, node)
       } else if (length(compute_sids) == 0L) {
         # Join an open compute stage with the identical input set (keeps
         # diamonds in one stage), else start a new one. Candidates come
@@ -963,15 +1038,15 @@ plan_lazy <- function(x) {
           }
         }
         if (is.null(joinable)) {
-          node_stage[[.key(id)]] <-
-            new_proto(
-              "compute",
-              id,
-              .node_grid(node),
-              parent_sids,
-              parents,
-              has_focal = .node_halo_narrow(node)
-            )
+          sid <- new_proto(
+            "compute",
+            id,
+            .node_grid(node),
+            parent_sids,
+            parents,
+            has_focal = .node_halo_narrow(node)
+          )
+          node_stage[[.key(id)]] <- sid
         } else {
           sid <- joinable$id
           protos[[sid]]$members <- c(protos[[sid]]$members, id)
@@ -983,6 +1058,7 @@ plan_lazy <- function(x) {
           protos[[sid]]$grid <- .node_grid(node)
           node_stage[[.key(id)]] <- sid
         }
+        maybe_seal(sid, node)
       } else {
         # Distinct compute ancestries meet: consume both, materialised.
         node_stage[[.key(id)]] <-

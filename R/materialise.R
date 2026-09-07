@@ -46,7 +46,8 @@ NULL
 #' For large cubes, or to keep or reuse a checkpoint, give a real
 #' directory (note some systems mount `/tmp` in RAM).
 #'
-#' @param x A `LazyDataset` or `LazyRaster`.
+#' @param x A `LazyDataset`, a `LazyRaster`, or a named list of
+#'   `LazyRaster`s (multi-export: one execution, one cube per name).
 #' @param dir Directory for the cubes (created if missing); default: a
 #'   unique session-temporary directory.
 #' @param name File-name stem (default `"garry"`).
@@ -55,7 +56,8 @@ NULL
 #' @param overwrite Replace existing files at the target paths?
 #' @param distributed As in [collect()].
 #' @return A lazy object of the same class as `x`, reading the local
-#'   cubes.
+#'   cubes; for a named list, a named list of `LazyRaster`s (one per
+#'   sink, same names).
 #' @seealso [collect()] to execute and return the result in the R
 #'   session; [write_tif()] to execute and stream to a GeoTIFF.
 #' @export
@@ -77,6 +79,25 @@ materialise <- function(
     .mat_check_clear(path, overwrite)
     .collect_impl(x, path = path, nodata = nodata, distributed = distributed)
     return(lazy_source(path))
+  }
+  if (is.list(x) && !S7::S7_inherits(x, LazyDataset)) {
+    # Multi-export: several lazy rasters checkpointed in ONE execution
+    # (shared upstream runs once), one cube per sink, named by the list
+    # names under `name`. The raw-cube twin of write_tif()'s named-list
+    # form; `name` is a prefix here ("<name>-<sink>.vrt").
+    if (is.null(names(x)) || any(!nzchar(names(x))) || anyDuplicated(names(x))) {
+      cli::cli_abort("a list `x` must have unique, non-empty names (one per sink).")
+    }
+    if (!all(vapply(x, function(e) S7::S7_inherits(e, LazyRaster), logical(1)))) {
+      cli::cli_abort("every element of a list `x` must be a LazyRaster.")
+    }
+    paths <- stats::setNames(
+      file.path(dir, paste0(name, "-", names(x), ".vrt")),
+      names(x)
+    )
+    for (p in paths) .mat_check_clear(p, overwrite)
+    .collect_impl(x, path = paths, nodata = nodata, distributed = distributed)
+    return(lapply(paths, lazy_source))
   }
   .assert_class(x, LazyDataset, "LazyDataset")
 

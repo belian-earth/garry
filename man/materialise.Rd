@@ -14,7 +14,8 @@ materialise(
 )
 }
 \arguments{
-\item{x}{A \code{LazyDataset} or \code{LazyRaster}.}
+\item{x}{A \code{LazyDataset}, a \code{LazyRaster}, or a named list of
+\code{LazyRaster}s (multi-export: one execution, one cube per name).}
 
 \item{dir}{Directory for the cubes (created if missing); default: a
 unique session-temporary directory.}
@@ -30,7 +31,8 @@ unique session-temporary directory.}
 }
 \value{
 A lazy object of the same class as \code{x}, reading the local
-cubes.
+cubes; for a named list, a named list of \code{LazyRaster}s (one per
+sink, same names).
 }
 \description{
 The checkpoint verb (dbplyr's \code{compute()} for rasters): execute the

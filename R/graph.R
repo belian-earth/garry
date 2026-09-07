@@ -34,7 +34,35 @@ Graph <- S7::new_class(
 graph_new <- function() {
   env <- new.env(parent = emptyenv(), hash = TRUE)
   env$.next_id <- 1L
+  env$.uid <- .graph_uid_next()
   Graph(nodes = env)
+}
+
+# Graph identity for graph_import()'s memo: a token unique across
+# sessions (pid + session start + counter), stored as a dot-name in
+# the node env. NOT the env address: an address is recycled once the
+# graph is garbage-collected, and a memo keyed on it then maps a NEW
+# graph's node ids onto a dead graph's imports (measured: 24 of 3000
+# fresh one-node graphs imported into one long-lived graph returned
+# the wrong node). Assigned lazily for graphs that predate the field.
+.graph_uid_state <- new.env(parent = emptyenv())
+.graph_uid_next <- function() {
+  n <- (.graph_uid_state$n %||% 0L) + 1L
+  .graph_uid_state$n <- n
+  tag <- .graph_uid_state$tag
+  if (is.null(tag)) {
+    tag <- paste0(Sys.getpid(), "-", sprintf("%.6f", as.numeric(Sys.time())))
+    .graph_uid_state$tag <- tag
+  }
+  paste0(tag, "-", n)
+}
+.graph_uid <- function(graph) {
+  uid <- graph@nodes$.uid
+  if (is.null(uid)) {
+    uid <- .graph_uid_next()
+    graph@nodes$.uid <- uid
+  }
+  uid
 }
 
 # Internal: env key for node id.
@@ -154,7 +182,13 @@ graph_replace <- function(graph, id, node) {
 #' Import the subgraph reachable from `root_id` in `src` into `dst`.
 #'
 #' Node ids are renumbered; a SourceNode identical in (path, band, nodata,
-#' grid, dtype) to one already in `dst` is deduplicated.
+#' grid, dtype) to one already in `dst` is deduplicated, and every node
+#' imported from `src` is memoised in `dst`, so importing the same
+#' foreign node again (or a descendant of an already-imported node)
+#' reuses the existing local copy instead of planting a second chain.
+#' Without this a lazy raster built on one graph and referenced from
+#' several consumers on another gained one full read+compute chain per
+#' consumer (hutan's fused SI tail: 4-6 predicts per year, 2026-09-03).
 #' Graphs are append-only (rewrites swap nodes in place, ids never
 #' reorder), so ascending id order within the reachable set is a valid
 #' topological order.
@@ -185,14 +219,32 @@ graph_import <- function(dst, src, root_id) {
   seen <- sort(seen)
 
   idx <- .source_index(dst)
+  # Import memo: (source graph identity, source id) -> id in dst. A
+  # dot-name in the node env (skipped by graph_ids), keyed by the source
+  # graph's uid (see .graph_uid: never its address, which is recycled
+  # after GC). A deserialised graph keeps its uid, and its content, so
+  # a hit there is exact too.
+  memo <- dst@nodes$.imports
+  if (is.null(memo)) {
+    memo <- new.env(parent = emptyenv(), hash = TRUE)
+    dst@nodes$.imports <- memo
+  }
+  src_tag <- .graph_uid(src)
+  mkey <- function(id) paste0(src_tag, "#", id)
 
   id_map <- new.env(parent = emptyenv())
   for (id in seen) {
+    hit <- memo[[mkey(id)]]
+    if (!is.null(hit)) {
+      id_map[[.key(id)]] <- hit
+      next
+    }
     node <- graph_get(src, id)
     if (S7::S7_inherits(node, SourceNode)) {
       dup <- .source_index_find(idx, dst, node)
       if (!is.null(dup)) {
         id_map[[.key(id)]] <- dup
+        memo[[mkey(id)]] <- dup
         next
       }
     }
@@ -207,6 +259,7 @@ graph_import <- function(dst, src, root_id) {
     dst@nodes[[.key(new_id)]] <- node
     dst@nodes$.next_id <- new_id + 1L
     id_map[[.key(id)]] <- new_id
+    memo[[mkey(id)]] <- new_id
     if (S7::S7_inherits(node, SourceNode)) {
       .source_index_add(idx, node)
     }

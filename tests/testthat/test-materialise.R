@@ -133,3 +133,20 @@ test_that("a single-slice dataset materialises to one cube", {
   expect_equal(dim(v), c(2L, 3L))
   expect_equal(as.numeric(v[1L, ]), c(3, 6, 9))
 })
+
+test_that("a named list of lazy rasters materialises in one execution, one cube each", {
+  f <- fixture_gradient_f32()
+  a <- lazy_source(f)
+  x <- list(twice = a * 2, plus = a + 1)
+  d <- withr::local_tempdir()
+  m <- materialise(x, dir = d, name = "pred", distributed = FALSE)
+  expect_named(m, c("twice", "plus"))
+  expect_true(all(file.exists(file.path(d, c("pred-twice.vrt", "pred-plus.vrt")))))
+  ref <- execute_plan(plan_lazy(a))
+  expect_equal(execute_plan(plan_lazy(m$twice)), ref * 2, tolerance = 1e-6,
+               ignore_attr = TRUE)
+  expect_equal(execute_plan(plan_lazy(m$plus)), ref + 1, tolerance = 1e-6,
+               ignore_attr = TRUE)
+  expect_error(materialise(list(a * 2, a + 1), dir = d), "names")
+  expect_error(materialise(x, dir = d, name = "pred"), "exist|overwrite")
+})

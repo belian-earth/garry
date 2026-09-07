@@ -478,6 +478,17 @@
     desc = "per-reader budget (MB) for a fused kernel's working set",
     check = .opt_num(min = 1e-9)
   ),
+  # Activation budget per fused kernel INVOCATION: a pointwise chain
+  # (no halo, no out_pad) whose whole-window activations exceed it
+  # runs as row tiles on the reader (design/placement-cost-pass.md,
+  # "tiled fused kernels"), so its in-flight bytes are the input
+  # window plus one tile's activations rather than the whole window's.
+  fuse_tile_mb = list(
+    default = 512,
+    tier = "tuning",
+    desc = "activation budget (MB) per fused-kernel invocation; wider pointwise windows tile by rows",
+    check = .opt_num(min = 1e-9)
+  ),
   # Cost-mode memory admission: estimated resident cost of one XLA CPU
   # client on a read daemon (client + jitted kernel state; spike A
   # measured ~277 MB after one trivial jit). Fusion is refused when
