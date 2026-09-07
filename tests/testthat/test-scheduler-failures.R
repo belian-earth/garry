@@ -7,33 +7,47 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 skip_on_os(c("windows", "mac"))   # /dev/shm scan
 
-.sf_shm <- function() sort(list.files("/dev/shm"))
+# mori names a region after its creating process (mori_<pid hex>_<n>),
+# and /dev/shm is machine-wide: under parallel testthat the other
+# workers' daemons populate it concurrently, so the scan is confined
+# to regions of THIS test's processes (host session plus every pool
+# daemon). Capture the pid set once per test, before anything dies.
+.sf_pids <- function() {
+  pools <- c("garry_read", garry:::.comp_profiles(), "garry_write")
+  c(Sys.getpid(), unlist(lapply(pools, garry:::.garry_pool_pids)))
+}
+.sf_shm <- function(pids) {
+  all <- list.files("/dev/shm")
+  own <- paste0("^mori_(", paste(sprintf("%x", pids), collapse = "|"), ")_")
+  sort(all[grepl(own, all)])
+}
 
 # The shm-clear handlers dispatch via everywhere() without awaiting, so
 # give the daemons a moment before asserting the store is clean.
-.sf_expect_shm_restored <- function(before, timeout = 10) {
+.sf_expect_shm_restored <- function(before, pids, timeout = 10) {
   t0 <- Sys.time()
   repeat {
-    extra <- setdiff(.sf_shm(), before)
+    extra <- setdiff(.sf_shm(pids), before)
     if (!length(extra)) break
     if (as.numeric(Sys.time() - t0, units = "secs") > timeout) break
     Sys.sleep(0.2)
   }
-  expect_identical(setdiff(.sf_shm(), before), character(0))
+  expect_identical(setdiff(.sf_shm(pids), before), character(0))
 }
 
 test_that("a failing kernel aborts classed and leaves a clean store", {
   local_pools(2, 1)
   withr::local_options(garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()
-  before <- .sf_shm()
+  pids <- .sf_pids()
+  before <- .sf_shm(pids)
   bomb <- lazy_map(lazy_source(f), fn = function(v) stop("kernel bomb"))
   err <- expect_error(
     suppressWarnings(collect(bomb, distributed = TRUE)),
     class = "garry_task_error")
   expect_match(conditionMessage(err), "kernel bomb")
   expect_true(is.character(err$task) && nzchar(err$task))
-  .sf_expect_shm_restored(before)
+  .sf_expect_shm_restored(before, pids)
   # The SAME pools serve a clean run afterwards.
   got <- collect(lazy_source(f) + 1, distributed = TRUE)
   want <- collect(lazy_source(f) + 1, distributed = FALSE)
@@ -58,11 +72,12 @@ test_that("a daemon dying mid-drain aborts classed; pools are rebuildable", {
         Sys.sleep(5)
       }, envir = ns)
     }, .compute = p)
-  before <- .sf_shm()
+  pids <- .sf_pids()
+  before <- .sf_shm(pids)
   err <- expect_error(
     suppressWarnings(collect(lazy_source(f) + 1, distributed = TRUE)),
     class = "garry_task_error")
-  .sf_expect_shm_restored(before)
+  .sf_expect_shm_restored(before, pids)
   # Rebuild the pools; the host session is still serviceable.
   garry_daemons(0, 0, gdal_config = FALSE)
   garry_daemons(2, 1, gdal_config = FALSE)
