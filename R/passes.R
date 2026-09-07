@@ -166,6 +166,38 @@ NULL
   do.call(`[`, c(list(x), idx, list(drop = FALSE)))
 }
 
+# Content identity of a closure for signature hashes: formals, the
+# body EXPRESSION (never bytecode) and the captured bindings .slim_fn
+# would ship, captured functions reduced the same way. Serialising the
+# closure object is not stable: the interpreter stamps a closure's
+# header the first time it is called (JIT bookkeeping) and some R
+# versions carry that stamp through `environment<-`, and compiled
+# bodies serialise version-specific bytecode. Source references are
+# dropped too: a package installed with R_KEEP_PKG_SOURCE=yes (the
+# r-lib CI workflows) attaches them to every closure, and they carry
+# the install path plus a lazily populated srcfile environment.
+# Measured: the same scalar map signed differently before and after
+# its first plan on every CI runner, splitting one kernel's jit-cache
+# key in two, while hashing the same across a whole local suite.
+.fn_identity <- function(fn) {
+  if (!is.function(fn)) {
+    return(fn)
+  }
+  if (is.primitive(fn)) {
+    return(list(primitive = deparse(fn)))
+  }
+  f <- utils::removeSource(.slim_fn(fn))
+  env <- environment(f)
+  captures <- list()
+  if (!is.null(env) && !isNamespace(env) && !identical(env, globalenv())) {
+    captures <- lapply(
+      as.list(env, all.names = TRUE, sorted = TRUE),
+      .fn_identity
+    )
+  }
+  list(formals = formals(f), body = body(f), captures = captures)
+}
+
 # Rebind a user node fn onto a minimal environment holding only its
 # free variables (found via codetools), parented on globalenv(). Node
 # fns otherwise capture their construction environment, which typically

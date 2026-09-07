@@ -85,7 +85,7 @@ NULL
 # slice 1 and applies them cube-wide, so slices carrying a DIFFERENT
 # fn or chain must disqualify the plan (silently computing slice-1
 # semantics diverges from execute_plan).
-.cd_fn_sig <- function(fn) rlang::hash(serialize(.slim_fn(fn), NULL))
+.cd_fn_sig <- function(fn) rlang::hash(.fn_identity(fn))
 
 # Per-band read affine for the gd cube path. All slices of a band must
 # share one scale/offset (the cube is uploaded and scaled as a unit);
@@ -107,7 +107,7 @@ NULL
   rlang::hash(lapply(chain, function(n) {
     list(
       cls = class(n)[[1L]],
-      fn = serialize(.slim_fn(n@fn), NULL),
+      fn = .fn_identity(n@fn),
       radius = if (S7::S7_inherits(n, FocalNode)) n@radius else integer(0),
       boundary = if (S7::S7_inherits(n, FocalNode)) {
         n@boundary
