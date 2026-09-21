@@ -29,7 +29,7 @@ Imports:
 Remotes:
     hypertidy/vaster,
     firelab/gdalraster,
-    belian-earth/anvl@nv-scan,
+    belian-earth/anvl@garry-prod,
     belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
