@@ -515,11 +515,16 @@ g_index_scalar <- function(v, i) {
 
 # Recursive tree helpers for the oracle path (leaves = non-list values;
 # the traced path delegates tree handling to anvl::nv_scan).
+# A traced array is a list underneath, so it must be recognised as a leaf.
 .g_tree_map <- function(x, f) {
-  if (is.list(x)) lapply(x, .g_tree_map, f = f) else f(x)
+  if (is.list(x) && !.g_traced(x)) lapply(x, .g_tree_map, f = f) else f(x)
 }
 .g_tree_map2 <- function(x, y, f) {
-  if (is.list(x)) Map(.g_tree_map2, x, y, MoreArgs = list(f = f)) else f(x, y)
+  if (is.list(x) && !.g_traced(x)) {
+    Map(.g_tree_map2, x, y, MoreArgs = list(f = f))
+  } else {
+    f(x, y)
+  }
 }
 .g_tree_any <- function(x, f) {
   if (is.list(x) && !.g_traced(x)) {
@@ -527,6 +532,40 @@ g_index_scalar <- function(v, i) {
   } else {
     f(x)
   }
+}
+
+# anvl's scan fixes the carry's type across steps (as JAX's lax.scan does),
+# while a garry body may start from a scalar that broadcasts on its first step
+# (`init = NaN` in fill_gaps). Probe the body once on the first slice of `xs`
+# and bring every rank-0 init leaf to the type the body hands back. Only
+# probes when there is such a leaf; the probe's ops are dead code that XLA
+# removes, so the cost is one extra trace of the body.
+.g_scan_settle_init <- function(init, body, xs) {
+  is_scalar <- function(v) {
+    if (.g_traced(v)) !length(.g_shape(v)) else is.null(dim(v)) && length(v) == 1L
+  }
+  if (is.null(xs) || !.g_tree_any(init, is_scalar)) {
+    return(init)
+  }
+  first <- .g_tree_map(xs, function(x) {
+    sl <- g_slice_t(x, 1L, 1L)
+    if (.g_traced(sl)) {
+      anvl::nv_reshape(sl, .g_shape(x)[-1L])
+    } else {
+      array(sl, dim = dim(x)[-1L])
+    }
+  })
+  probe <- body(init, first)$carry
+  .g_tree_map2(init, probe, function(i, p) {
+    if (!is_scalar(i) || !.g_traced(p) || !length(.g_shape(p))) {
+      return(i)
+    }
+    if (.g_traced(i)) {
+      anvl::nv_broadcast_to(anvl::nv_convert(i, .g_dtype(p)), .g_shape(p))
+    } else {
+      anvl::nv_fill(i, shape = .g_shape(p), dtype = .g_dtype(p))
+    }
+  })
 }
 
 #' Scan: carry state along dim 1, emitting per-step outputs.
@@ -566,7 +605,7 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
       ))
     }
     return(anvl::nv_scan(
-      init,
+      .g_scan_settle_init(init, body, xs),
       body,
       xs = xs,
       length = length,
