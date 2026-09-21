@@ -596,6 +596,10 @@ for (op_name in c("^", "%%")) {
     c("abs", "sign", "floor", "ceiling", "trunc", "round", "signif")
   body_fn <- if (length(dots)) {
     function(v) do.call(fn, c(list(v), dots))
+  } else if (generic == "round") {
+    # anvl has no `round` method on arrays (no `digits` support); g_round()
+    # is the same round-half-even.
+    function(v) if (.g_traced(v)) g_round(v) else fn(v)
   } else {
     function(v) fn(v)
   }

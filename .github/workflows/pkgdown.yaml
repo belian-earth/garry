@@ -31,9 +31,28 @@ jobs:
 
       - name: Recent GDAL (Ubuntu, ubuntugis-unstable PPA)
         run: |
-          sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
-          sudo apt-get update
+          # Launchpad is intermittently unavailable, in two ways: its API can
+          # fail while add-apt-repository fetches the signing key (HTTP 500),
+          # and the archive can answer 503, which apt only warns about before
+          # installing the distro GDAL (3.8) instead. That surfaces much later
+          # as "garry needs GDAL >= 3.9". Retry both until the PPA index is
+          # there, and fail here if the GDAL that got installed is still too old.
+          for i in 1 2 3 4 5 6; do
+            if sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable &&
+              sudo apt-get update &&
+              apt-cache policy libgdal-dev | grep -q launchpad; then
+              break
+            fi
+            echo "ubuntugis PPA unavailable (attempt $i), retrying in 60 s"
+            sleep 60
+          done
           sudo apt-get install -y gdal-bin libgdal-dev libproj-dev libgeos-dev
+          gdal_version=$(gdal-config --version)
+          echo "GDAL $gdal_version"
+          if ! dpkg --compare-versions "$gdal_version" ge 3.9; then
+            echo "::error::GDAL $gdal_version installed, need >= 3.9: the ubuntugis PPA was not reachable"
+            exit 1
+          fi
 
       # terra=?ignore: pak's ignore parameter drops terra (soft dep)
       # entirely. Its CRAN binary links a GDAL soname the PPA install
@@ -59,7 +78,7 @@ jobs:
       # soname the runner no longer has (observed: libgdal.so.37
       # missing at site build). Mirrors the R-CMD-check step.
       - name: Rebuild dev gdalraster from source
-        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster', force = TRUE)"
+        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster@ba2827d7ec9c2284d760f6c2dee9c580462c87cc', force = TRUE)"
 
       - name: Build site
         run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
