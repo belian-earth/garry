@@ -91,6 +91,14 @@ g_upload <- function(x, dtype, device = NULL) {
   if (!is.na(carrier)) {
     dtype <- carrier
   }
+  # An integer buffer cannot hold NaN, which garry uses for nodata and for the
+  # halo ring beyond the raster edge. pjrt used to convert it through an
+  # undefined C++ cast (0 in practice) and now refuses it. Make the 0 explicit:
+  # QA bits read it as clear, and a padded stage re-NaNs its margin after
+  # computing (.exec_mask_edge), so no downstream value depends on it.
+  if (!startsWith(dtype, "f") && anyNA(x)) {
+    x[is.na(x)] <- 0
+  }
   if (is.null(device)) {
     anvl::nv_array(x, dtype)
   } else {

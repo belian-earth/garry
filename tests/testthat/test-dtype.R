@@ -66,3 +66,16 @@ test_that("invalid dtypes are rejected", {
   expect_false(dtype_valid("float32"))
   expect_true(dtype_valid("u16"))
 })
+
+test_that("g_upload maps NaN to 0 for integer dtypes and keeps it for floats", {
+  skip_if_not_installed("anvl")
+  x <- matrix(c(1, NaN, 3, NA, 5, 6), 2L, 3L)
+  # signed integer, and an unsigned dtype that uploads through a wider carrier
+  for (dt in c("i16", "i32", "u8")) {
+    got <- g_download(g_upload(x, dt))
+    expect_equal(as.numeric(got), c(1, 0, 3, 0, 5, 6), info = dt)
+  }
+  f <- g_download(g_upload(x, "f32"))
+  expect_true(all(is.nan(f[c(2L, 4L)])))
+  expect_equal(f[-c(2L, 4L)], c(1, 3, 5, 6))
+})
