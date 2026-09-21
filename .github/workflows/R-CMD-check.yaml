@@ -141,7 +141,7 @@ jobs:
       # Windows keeps whatever the Remotes pin installed (Rtools GDAL).
       - name: Rebuild dev gdalraster from source (macOS/Linux)
         if: runner.os != 'Windows'
-        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster@ba2827d7ec9c2284d760f6c2dee9c580462c87cc', force = TRUE)"
+        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster', force = TRUE)"
 
       - name: Print GDAL version
         run: Rscript -e "cat('GDAL:', gdalraster::gdal_version()[[1]], '\n')"

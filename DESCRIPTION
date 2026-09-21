@@ -27,10 +27,10 @@ Imports:
     rlang,
     wk
 Remotes:
-    hypertidy/vaster@63ba4759e9f018ce89af2aa68a4059ac89ed7958,
-    firelab/gdalraster@ba2827d7ec9c2284d760f6c2dee9c580462c87cc,
-    belian-earth/anvl@1c58001a62736fae7abe8fbc37fbdcbca0a3936f,
-    belian-earth/rustyfilters@a3642cb20335f08dc31ae4f70d7dcb9133cdb7a2
+    hypertidy/vaster,
+    firelab/gdalraster,
+    r-xla/anvl,
+    belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
