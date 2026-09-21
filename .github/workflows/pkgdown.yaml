@@ -78,7 +78,7 @@ jobs:
       # soname the runner no longer has (observed: libgdal.so.37
       # missing at site build). Mirrors the R-CMD-check step.
       - name: Rebuild dev gdalraster from source
-        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster@ba2827d7ec9c2284d760f6c2dee9c580462c87cc', force = TRUE)"
+        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster', force = TRUE)"
 
       - name: Build site
         run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
