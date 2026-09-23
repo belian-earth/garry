@@ -109,7 +109,13 @@ SourceNode <- S7::new_class(
     # metadata: no planner pass or executor reads it; surfaced by
     # plan_view() and friends. Length 0 = absent.
     name = S7::new_property(S7::class_character,
-                            default = quote(character(0)))
+                            default = quote(character(0))),
+    # Node ids of the single-band sources a band-stack collapse folded
+    # into this multi-band read (.collapse_band_stacks), in band order.
+    # Pure metadata: plan_view() reads dataset layer provenance through
+    # them. Length 0 = an ordinary source.
+    collapsed = S7::new_property(S7::class_integer,
+                                 default = quote(integer(0)))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L) {

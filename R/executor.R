@@ -256,14 +256,26 @@ NULL
 
 # Integer payload -> ROW-major R integer vector (GDAL write order).
 .sv_to_int <- function(v) {
-  gdt <- attr(v, "gdt")
-  es <- .sv_es(v)
-  readBin(
+  .sv_to_vec(v)
+}
+
+# One plane of a payload as the vector GDAL writes: plane `b` of a
+# rank-3 (band, y, x) payload, or the whole of a rank-2 one (b = 1).
+# Float payloads come back as doubles with NaN folded to `nodata` when
+# a sentinel is given; quantized integer payloads as integers. One C
+# pass from the byte offset: no R index vector over the bytes (the
+# writer-daemon tail of issue #25, 41 ms a plane on a 64-band write).
+.sv_plane_vec <- function(v, b, nodata = numeric(0)) {
+  d <- .sv_dim(v)
+  n <- prod(as.numeric(d[length(d) - 1:0]))
+  .Call(
+    "garry_sv_plane",
     v,
-    integer(),
-    n = prod(.sv_dim(v)),
-    size = es,
-    signed = !(gdt %in% c("u8", "u16"))
+    (b - 1) * n * .sv_es(v),
+    n,
+    attr(v, "gdt"),
+    as.numeric(nodata),
+    PACKAGE = "garry"
   )
 }
 
@@ -275,93 +287,60 @@ NULL
   )
 }
 
-# Producer-side window slice. `v` is private (fresh read output), so
-# the byte-matrix view (one column per row of the image) costs one
-# dim-stamped copy for the whole window, amortised over its parts.
-# Rank-3 (band, y, x) payloads slice every band plane of the window
-# (multi-band coalesced reads).
+# Producer-side window slice: rank-2 payloads slice a [y, x] window,
+# rank-3 (band, y, x) payloads slice every band plane of the window
+# (multi-band coalesced reads). One C row gather per part.
 .sv_slicer <- function(v) {
-  d <- .sv_dim(v)
+  d <- as.integer(.sv_dim(v))
   es <- .sv_es(v)
   gdt <- attr(v, "gdt")
-  bm <- unclass(v)
-  attributes(bm) <- NULL
-  if (length(d) == 3L) {
-    dim(bm) <- c(es * d[[3L]], d[[2L]], d[[1L]])
-    nb <- d[[1L]]
-    return(function(r0, c0, nr, nc) {
-      out <- bm[
-        (es * c0 + 1L):(es * (c0 + nc)),
-        (r0 + 1L):(r0 + nr),
-        ,
-        drop = FALSE
-      ]
-      attributes(out) <- NULL
-      structure(out, gdim = c(nb, nr, nc), gdt = gdt)
-    })
-  }
-  dim(bm) <- c(es * d[[2L]], d[[1L]])
+  nb <- if (length(d) == 3L) d[[1L]] else NULL
   function(r0, c0, nr, nc) {
-    out <- bm[
-      (es * c0 + 1L):(es * (c0 + nc)),
-      (r0 + 1L):(r0 + nr),
-      drop = FALSE
-    ]
-    attributes(out) <- NULL
-    structure(out, gdim = c(nr, nc), gdt = gdt)
+    out <- .Call(
+      "garry_sv_window",
+      v,
+      d,
+      es,
+      as.integer(r0),
+      as.integer(c0),
+      as.integer(nr),
+      as.integer(nc),
+      PACKAGE = "garry"
+    )
+    structure(out, gdim = c(nb, as.integer(nr), as.integer(nc)), gdt = gdt)
   }
 }
 
 # Consumer-side halo trim. Consumers hold shared (mori) payloads whose
 # attributes must not be touched (a write would force a private copy of
-# the whole mapping element), so this gathers by byte index instead of
-# taking a dim-stamped view. Trims are 0 on the fused hot paths; this
-# runs on align-style plans only.
+# the whole mapping element), so this gathers rows into a fresh vector
+# (C, one memcpy a row) instead of taking a dim-stamped view. Trims are
+# 0 on the fused hot paths; this runs on align-style plans only.
 .sv_trim <- function(v, k) {
   k <- as.integer(k)
   if (k == 0L) {
     return(v)
   }
-  d <- .sv_dim(v)
-  es <- .sv_es(v)
-  gdt <- attr(v, "gdt")
-  # The gather below indexes in R integers: past 2^31-1 bytes the
-  # arithmetic overflows to NA and raw subsetting would silently
-  # zero-fill the tail (defect hunt M1). Payloads this large mean the
-  # planner mis-sized a window; fail loudly.
-  if (prod(as.numeric(d)) * es > .Machine$integer.max) {
-    .garry_error(
-      paste0(
-        "raw store payload too large to trim (> 2 GiB); ",
-        "lower garry.read_target_px or garry.chunk_target_px"
-      ),
-      "garry_plan_error"
-    )
+  d <- as.integer(.sv_dim(v))
+  n <- length(d)
+  nr <- d[[n - 1L]] - 2L * k
+  nc <- d[[n]] - 2L * k
+  if (nr <= 0L || nc <= 0L) {
+    .garry_error("trim exceeds the payload window", "garry_plan_error")
   }
-  if (length(d) == 2L) {
-    nr <- d[[1L]] - 2L * k
-    nc <- d[[2L]] - 2L * k
-    ncb <- es * d[[2L]]
-    rows0 <- (k + seq_len(nr) - 1L) * ncb
-    cols <- es * k + seq_len(es * nc)
-    out <- v[rep(rows0, each = length(cols)) + cols]
-    attributes(out) <- NULL
-    return(structure(out, gdim = c(nr, nc), gdt = gdt))
-  }
-  # rank-3 (outer, y, x) row-major payload: per-plane 2D trim (D22
-  # padded stack exports written as sinks).
-  stopifnot(length(d) == 3L)
-  nr <- d[[2L]] - 2L * k
-  nc <- d[[3L]] - 2L * k
-  ncb <- es * d[[3L]]
-  plane <- d[[2L]] * ncb
-  rows0 <- (k + seq_len(nr) - 1L) * ncb
-  cols <- es * k + seq_len(es * nc)
-  base2 <- rep(rows0, each = length(cols)) + cols
-  idx <- rep((seq_len(d[[1L]]) - 1L) * plane, each = length(base2)) + base2
-  out <- v[idx]
-  attributes(out) <- NULL
-  structure(out, gdim = c(d[[1L]], nr, nc), gdt = gdt)
+  out <- .Call(
+    "garry_sv_window",
+    v,
+    d,
+    .sv_es(v),
+    k,
+    k,
+    nr,
+    nc,
+    PACKAGE = "garry"
+  )
+  d[n - 1:0] <- c(nr, nc)
+  structure(out, gdim = d, gdt = attr(v, "gdt"))
 }
 
 # Raw payload -> `[y, x]` matrix (sink writes, collect assembly,
@@ -395,7 +374,16 @@ NULL
 
 # Raw payload -> ROW-major numeric vector (GDAL write order).
 .sv_to_vec <- function(v) {
-  readBin(v, numeric(), n = prod(.sv_dim(v)), size = .sv_es(v))
+  n <- prod(as.numeric(.sv_dim(v)))
+  .Call(
+    "garry_sv_plane",
+    v,
+    0,
+    n,
+    attr(v, "gdt"),
+    numeric(0),
+    PACKAGE = "garry"
+  )
 }
 
 # Upload a store value (raw or matrix) after trimming `k`.
@@ -608,6 +596,16 @@ NULL
   )
 }
 
+# The chunk grid a stage's OUTPUT chunks are stored under: the split
+# (compute-chunk) grid for a coarse-read source with compute consumers,
+# else the stage's own. Every consumer of a stage's chunk list by index
+# (sink assembly, streamed writes) must iterate this grid, or a split
+# source that is also a sink lands one part per read window (issue
+# #25: a coalesced band stack written beside the reduce that reads it).
+.stage_out_chunks <- function(plan, s) {
+  .exec_split_cg(plan, s) %||% s@chunks
+}
+
 # Compute-chunk rows covered by read-chunk row `r` (both tile the same
 # grid; read boundaries land on compute boundaries).
 .exec_split_members <- function(its, rrow) {
@@ -674,20 +672,18 @@ NULL
       gdal_write_window(ds, x_off, y_off, ch, dtype = dtype, nodata = nodata)
     } else {
       # Row-major (band, y, x) payload: each band's plane is one
-      # contiguous byte range.
+      # contiguous byte range the write takes by offset.
       stopifnot(length(d) == 3L)
-      es <- .sv_es(ch)
-      plane <- es * prod(d[2:3])
       for (b in seq_len(d[[1L]])) {
-        bytes <- ch[((b - 1L) * plane + 1L):(b * plane)]
         gdal_write_window(
           ds,
           x_off,
           y_off,
-          structure(bytes, gdim = d[2:3], gdt = attr(ch, "gdt")),
+          ch,
           dtype = dtype,
           nodata = nodata,
-          band = b
+          band = b,
+          plane = b
         )
       }
     }
@@ -886,7 +882,7 @@ NULL
         logical(1)
       )))]]
       chunks <- lapply(chunks_of(st), `[[`, .key(nid))
-      it <- chunk_iter(st@chunks)
+      it <- chunk_iter(.stage_out_chunks(plan, st))
       pad <- .exec_export_pad(st, nid)
       # the exported node's grid, not the stage tail's
       ngrid <- graph_get(graph, nid)@grid
@@ -922,7 +918,7 @@ NULL
   sink <- plan@stages[[plan@sink]]
   key <- .key(sink@members[[length(sink@members)]])
   chunks <- lapply(chunks_of(sink), `[[`, key)
-  it <- chunk_iter(sink@chunks)
+  it <- chunk_iter(.stage_out_chunks(plan, sink))
   sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
   if (!is.null(path)) {
     return(.exec_write_sink(

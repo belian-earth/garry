@@ -208,6 +208,21 @@ NULL
     }
   }
 
+  # a collapsed band stack's layer provenance lives on the source ids
+  # it folded (SourceNode@collapsed), one line per layer in band order
+  band_line <- function(m) {
+    ln <- .glue("band: {m$band}")
+    if (!is.na(m$slice)) .glue("{ln} \u00b7 {m$slice}") else ln
+  }
+  for (id in s@members) {
+    n <- graph_get(graph, id)
+    if (S7::S7_inherits(n, SourceNode) && length(n@collapsed)) {
+      for (cid in n@collapsed) {
+        m <- band_map[[.key(cid)]]
+        if (!is.null(m)) lines <- c(lines, band_line(m))
+      }
+    }
+  }
   bm <- Filter(Negate(is.null),
                lapply(s@members, function(id) band_map[[.key(id)]]))
   if (length(bm)) {
