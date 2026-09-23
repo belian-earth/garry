@@ -22,7 +22,8 @@ SourceNode(
   resampling = "near",
   scale = numeric(0),
   offset = numeric(0),
-  name = character(0)
+  name = character(0),
+  collapsed = integer(0)
 )
 ```
 
