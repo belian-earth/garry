@@ -6,16 +6,7 @@ writing NaN into an integer band without a sentinel is an error.
 ## Usage
 
 ``` r
-gdal_write_window(
-  ds,
-  x_off,
-  y_off,
-  m,
-  dtype,
-  nodata = numeric(0),
-  band = 1L,
-  plane = 1L
-)
+gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
 ```
 
 ## Arguments
@@ -44,11 +35,6 @@ gdal_write_window(
 - band:
 
   1-based destination band.
-
-- plane:
-
-  For a rank-3 `(band, y, x)` raw store payload, the 1-based plane to
-  write (taken by byte offset, no copy of the rest).
 
 ## Value
 
