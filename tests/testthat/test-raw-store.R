@@ -156,3 +156,212 @@ test_that("an f64 chain runs distributed bit-identically to the oracle", {
     options(old_m)
   }
 })
+
+# --- C payload helpers (issue #25: writer tail, read tail) ------------
+
+test_that("plane extraction matches the byte-slice reference for every gdt", {
+  set.seed(7)
+  nb <- 3L
+  nr <- 5L
+  nc <- 4L
+  n <- nr * nc
+  mk <- function(vals, gdt) {
+    es <- garry:::.sv_es(gdt)
+    bytes <- if (gdt %in% c("f32", "f64")) {
+      writeBin(as.numeric(vals), raw(), size = es)
+    } else {
+      writeBin(as.integer(vals), raw(), size = es)
+    }
+    structure(bytes, gdim = c(nb, nr, nc), gdt = gdt)
+  }
+  ref <- function(v, b, nodata = numeric(0)) {
+    es <- garry:::.sv_es(v)
+    bytes <- v[((b - 1L) * n * es + 1L):(b * n * es)]
+    gdt <- attr(v, "gdt")
+    out <- if (gdt %in% c("f32", "f64")) {
+      readBin(bytes, numeric(), n = n, size = es)
+    } else {
+      readBin(
+        bytes,
+        integer(),
+        n = n,
+        size = es,
+        signed = !(gdt %in% c("u8", "u16"))
+      )
+    }
+    if (length(nodata) == 1L) {
+      out[is.na(out)] <- nodata
+    }
+    out
+  }
+  fl <- sample(c(-3.5, 0, 2.25, 1e6, NaN, NA_real_), nb * n, TRUE)
+  for (gdt in c("f32", "f64")) {
+    v <- mk(fl, gdt)
+    for (b in 1:3) {
+      expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
+      expect_identical(garry:::.sv_plane_vec(v, b, -9999), ref(v, b, -9999))
+    }
+    expect_identical(
+      garry:::.sv_to_vec(v),
+      ref(v, 1L)[rep(1, 0)] |>
+        c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
+    )
+  }
+  ints <- list(
+    i8 = sample(-128:127, nb * n, TRUE),
+    u8 = sample(0:255, nb * n, TRUE),
+    i16 = sample(-32768:32767, nb * n, TRUE),
+    u16 = sample(0:65535, nb * n, TRUE),
+    i32 = sample(c(-2e9, -1, 0, 7, 2e9), nb * n, TRUE)
+  )
+  for (gdt in names(ints)) {
+    v <- mk(ints[[gdt]], gdt)
+    for (b in 1:3) {
+      expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
+    }
+    expect_identical(
+      garry:::.sv_to_int(v),
+      c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
+    )
+  }
+  # rank-2 payloads are their own single plane
+  v2 <- structure(
+    writeBin(c(1, NaN, 3, 4), raw(), size = 8L),
+    gdim = c(2L, 2L),
+    gdt = "f64"
+  )
+  expect_identical(garry:::.sv_plane_vec(v2, 1L, 0), c(1, 0, 3, 4))
+  expect_error(garry:::.sv_plane_vec(v2, 2L), "outside")
+})
+
+test_that("rank-3 trim matches the per-plane matrix reference", {
+  set.seed(11)
+  nb <- 3L
+  nr <- 7L
+  nc <- 6L
+  a <- array(rnorm(nb * nr * nc), c(nb, nr, nc))
+  v <- structure(
+    writeBin(as.numeric(aperm(a, c(3, 2, 1))), raw(), size = 8L),
+    gdim = c(nb, nr, nc),
+    gdt = "f64"
+  )
+  tr <- garry:::.sv_trim(v, 2L)
+  expect_identical(garry:::.sv_dim(tr), c(nb, nr - 4L, nc - 4L))
+  expect_identical(garry:::.sv_materialise(tr), a[, 3:5, 3:4, drop = FALSE])
+  expect_error(garry:::.sv_trim(v, 3L), "exceeds")
+})
+
+test_that("the C read tail packs f32 exactly like the R reference", {
+  ref <- function(v, nodata, scale, offset) {
+    v <- as.numeric(v)
+    if (length(nodata) == 1L) {
+      v[!is.na(v) & v == nodata] <- NaN
+    }
+    v[is.na(v) & !is.nan(v)] <- NaN
+    if (length(scale) == 1L) {
+      v <- v * scale + offset
+    }
+    writeBin(v, raw(), size = 4L)
+  }
+  go <- function(
+    v,
+    nodata = numeric(0),
+    scale = numeric(0),
+    offset = numeric(0)
+  ) {
+    got <- .Call(
+      "garry_finish_f32",
+      v,
+      as.numeric(nodata),
+      as.numeric(scale),
+      as.numeric(offset),
+      PACKAGE = "garry"
+    )
+    expect_identical(got, ref(v, nodata, scale, offset))
+    # the in-place variant lands the same bytes at the offset
+    buf <- raw(8L + 4L * length(v))
+    .Call(
+      "garry_finish_f32_into",
+      buf,
+      8,
+      v,
+      as.numeric(nodata),
+      as.numeric(scale),
+      as.numeric(offset),
+      PACKAGE = "garry"
+    )
+    expect_identical(buf[-(1:8)], got)
+  }
+  vi <- c(-9999L, 5L, NA_integer_, 0L, 127L, -128L)
+  go(vi)
+  go(vi, nodata = -9999)
+  go(vi, nodata = -9999, scale = 0.0001, offset = -0.1)
+  vd <- c(-9999, 1 / 3, NA_real_, NaN, 1e-40, 3.14159)
+  go(vd)
+  go(vd, nodata = -9999)
+  go(vd, nodata = -9999, scale = 1 / 7, offset = 2.5)
+  go(vd, scale = 2, offset = 0)
+  expect_error(
+    .Call(
+      "garry_finish_f32_into",
+      raw(4),
+      4,
+      vd,
+      numeric(0),
+      numeric(0),
+      numeric(0),
+      PACKAGE = "garry"
+    ),
+    "fit"
+  )
+})
+
+test_that("distributed int8 multiband sink with nodata matches the oracle", {
+  skip_if(
+    !requireNamespace("garry", quietly = TRUE),
+    "garry not installed for daemons"
+  )
+  skip_if(
+    !garry::.g_has_raw_upload(),
+    "installed anvl lacks raw payload support"
+  )
+
+  local_pools(2, 1, gdal_config = TRUE)
+  old <- options(garry.chunk_target_px = 400)
+  on.exit(options(old), add = TRUE)
+
+  f <- fixture_i16_nodata()
+  nd <- gdal_grid_spec(f)$nodata
+  bands <- lazy_stack(
+    list(
+      local({
+        a <- lazy_source(f)
+        a / 100
+      }),
+      local({
+        a <- lazy_source(f)
+        a * (-1 / 200)
+      }),
+      local({
+        a <- lazy_source(f)
+        a * 0 + 7
+      })
+    ),
+    along = "band"
+  )
+
+  out_d <- tempfile(fileext = ".tif")
+  write_tif(bands, out_d, dtype = "i8", nodata = -128, distributed = TRUE)
+  out_s <- tempfile(fileext = ".tif")
+  write_tif(bands, out_s, dtype = "i8", nodata = -128)
+  rd <- function(p) {
+    lapply(1:3, function(b) gdal_read_window(p, b, 0L, 0L, 70L, 50L))
+  }
+  dist <- rd(out_d)
+  single <- rd(out_s)
+  expect_identical(dist, single)
+  expect_true(all(
+    is.na(single[[1]][10:14, 20:24]) |
+      single[[1]][10:14, 20:24] == -128
+  ))
+})

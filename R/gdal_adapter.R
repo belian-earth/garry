@@ -334,6 +334,23 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 # the requested output form. Single-band and decimating reads both end
 # here so the two cannot drift apart.
 .gdal_finish_vec <- function(v, y_size, x_size, nodata, scale, offset, out) {
+  # GDAL's buffer is already row-major: the raw f32 store payload (D19)
+  # packs it in one C pass (sentinel, NA, affine, f32 cast), skipping
+  # the numeric copy, the mask passes and the byrow transpose below.
+  if (out == "raw_f32") {
+    return(structure(
+      .Call(
+        "garry_finish_f32",
+        v,
+        as.numeric(nodata),
+        as.numeric(scale),
+        as.numeric(offset),
+        PACKAGE = "garry"
+      ),
+      gdim = c(y_size, x_size),
+      gdt = "f32"
+    ))
+  }
   v <- as.numeric(v)
   if (length(nodata) == 1L) {
     v[!is.na(v) & v == nodata] <- NaN
@@ -341,11 +358,6 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   v[is.na(v) & !is.nan(v)] <- NaN # GDAL-side masked values
   if (length(scale) == 1L) {
     v <- v * scale + offset
-  }
-  # GDAL's buffer is already row-major: the raw f32 store payload (D19)
-  # converts it directly, skipping the byrow transpose below.
-  if (out == "raw_f32") {
-    return(.sv_from_vec(v, y_size, x_size))
   }
   matrix(v, nrow = y_size, byrow = TRUE)
 }
@@ -522,15 +534,23 @@ gdal_read_window <- function(
   while (r0 < y_size) {
     rows <- min(slab, y_size - r0)
     for (k in seq_len(nb)) {
-      v <- as.numeric(ds$read(
-        band[[k]],
-        x_off,
-        y_off + r0,
-        x_size,
-        rows,
-        x_size,
-        rows
-      ))
+      v <- ds$read(band[[k]], x_off, y_off + r0, x_size, rows, x_size, rows)
+      if (out == "raw_f32") {
+        # Finish straight into the plane's slot of the private buffer
+        # (one C pass; no numeric copy, no raw index assignment).
+        .Call(
+          "garry_finish_f32_into",
+          res,
+          4 * ((k - 1) * n_px + as.numeric(r0) * x_size),
+          v,
+          as.numeric(nodata),
+          as.numeric(scale),
+          as.numeric(offset),
+          PACKAGE = "garry"
+        )
+        next
+      }
+      v <- as.numeric(v)
       if (length(nodata) == 1L) {
         v[!is.na(v) & v == nodata] <- NaN
       }
@@ -538,12 +558,7 @@ gdal_read_window <- function(
       if (length(scale) == 1L) {
         v <- v * scale + offset
       }
-      if (out == "raw_f32") {
-        p0 <- 4 * ((k - 1) * n_px + as.numeric(r0) * x_size)
-        res[(p0 + 1):(p0 + 4 * length(v))] <- writeBin(v, raw(), size = 4L)
-      } else {
-        res[k, (r0 + 1L):(r0 + rows), ] <- matrix(v, nrow = rows, byrow = TRUE)
-      }
+      res[k, (r0 + 1L):(r0 + rows), ] <- matrix(v, nrow = rows, byrow = TRUE)
     }
     r0 <- r0 + rows
   }
@@ -1272,6 +1287,8 @@ gdal_create_output <- function(
 #' @param dtype Output dtype (for the NaN check).
 #' @param nodata Optional sentinel for NaN demotion.
 #' @param band 1-based destination band.
+#' @param plane For a rank-3 `(band, y, x)` raw store payload, the
+#'   1-based plane to write (taken by byte offset, no copy of the rest).
 #' @return Invisibly, `NULL`.
 #' @export
 gdal_write_window <- function(
@@ -1281,31 +1298,33 @@ gdal_write_window <- function(
   m,
   dtype,
   nodata = numeric(0),
-  band = 1L
+  band = 1L,
+  plane = 1L
 ) {
-  # Quantized sink payloads arrive as ready-to-write integers from
-  # g_quantize() at the producer (design: one device quantizer for
-  # every route; the old writer-side round((v - offset) / scale) is
-  # gone, so the single writer daemon only does IO).
-  if (.sv_is_int(m)) {
-    d <- .sv_dim(m)
-    ds$write(as.integer(band), x_off, y_off, d[[2L]], d[[1L]], .sv_to_int(m))
-    return(invisible(NULL))
-  }
   if (.sv_is(m)) {
-    # Raw store payloads are already in GDAL's row-major write order.
+    # Raw store payloads are already in GDAL's row-major write order;
+    # one C pass takes the plane out and folds NaN to the sentinel.
+    # Quantized sink payloads arrive as ready-to-write integers from
+    # g_quantize() at the producer (design: one device quantizer for
+    # every route; the old writer-side round((v - offset) / scale) is
+    # gone, so the single writer daemon only does IO).
     d <- .sv_dim(m)
-    v <- .sv_to_vec(m)
-    nr <- d[[1L]]
-    nc <- d[[2L]]
+    nr <- d[[length(d) - 1L]]
+    nc <- d[[length(d)]]
+    v <- .sv_plane_vec(m, plane, nodata)
+    if (is.integer(v)) {
+      ds$write(as.integer(band), x_off, y_off, nc, nr, v)
+      return(invisible(NULL))
+    }
   } else {
     nr <- nrow(m)
     nc <- ncol(m)
     v <- if (is.integer(m)) as.integer(t(m)) else as.numeric(t(m))
+    if (length(nodata) == 1L) {
+      v[is.na(v)] <- nodata
+    }
   }
-  if (length(nodata) == 1L) {
-    v[is.na(v)] <- nodata
-  } else if (anyNA(v) && .dtype_family(dtype) != "float") {
+  if (length(nodata) != 1L && .dtype_family(dtype) != "float" && anyNA(v)) {
     cli::cli_abort(paste0(
       "result contains nodata (NaN) but no {.arg nodata} sentinel was ",
       "given for integer output dtype {.val {dtype}}"

@@ -24,13 +24,3 @@ SEXP garry_malloc_trim(void) {
   return ScalarLogical(0);
 #endif
 }
-
-static const R_CallMethodDef CallEntries[] = {
-  {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},
-  {NULL, NULL, 0}
-};
-
-void R_init_garry(DllInfo *dll) {
-  R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
-  R_useDynamicSymbols(dll, FALSE);
-}
