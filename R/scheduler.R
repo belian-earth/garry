@@ -1392,7 +1392,7 @@ execute_plan_mirai <- function(
   }
   if (stream_write) {
     sink_skey <- .key(sink@members[[length(sink@members)]])
-    sink_it <- chunk_iter(sink@chunks)
+    sink_it <- chunk_iter(.stage_out_chunks(plan, sink))
     sink_spad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
     sink_task_j <- sink_task_map(sink@id, nrow(sink_it))
     sink_ds <- gdal_create_output(
@@ -1447,7 +1447,7 @@ execute_plan_mirai <- function(
         path[[nm]]
       }
       ngrid <- graph_get(plan@graph, nid)@grid
-      it <- chunk_iter(st@chunks)
+      it <- chunk_iter(.stage_out_chunks(plan, st))
       ds <- gdal_create_output(
         p,
         ngrid,
@@ -2224,7 +2224,7 @@ execute_plan_mirai <- function(
   }
   read_chunk <- chunk_of # fused-aware (see chunk_of above)
   out_of <- function(s) {
-    it <- chunk_iter(s@chunks)
+    it <- chunk_iter(.stage_out_chunks(plan, s))
     lapply(seq_len(nrow(it)), function(j) read_chunk(s@id, j))
   }
 

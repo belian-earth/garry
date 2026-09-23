@@ -596,6 +596,16 @@ NULL
   )
 }
 
+# The chunk grid a stage's OUTPUT chunks are stored under: the split
+# (compute-chunk) grid for a coarse-read source with compute consumers,
+# else the stage's own. Every consumer of a stage's chunk list by index
+# (sink assembly, streamed writes) must iterate this grid, or a split
+# source that is also a sink lands one part per read window (issue
+# #25: a coalesced band stack written beside the reduce that reads it).
+.stage_out_chunks <- function(plan, s) {
+  .exec_split_cg(plan, s) %||% s@chunks
+}
+
 # Compute-chunk rows covered by read-chunk row `r` (both tile the same
 # grid; read boundaries land on compute boundaries).
 .exec_split_members <- function(its, rrow) {
@@ -872,7 +882,7 @@ NULL
         logical(1)
       )))]]
       chunks <- lapply(chunks_of(st), `[[`, .key(nid))
-      it <- chunk_iter(st@chunks)
+      it <- chunk_iter(.stage_out_chunks(plan, st))
       pad <- .exec_export_pad(st, nid)
       # the exported node's grid, not the stage tail's
       ngrid <- graph_get(graph, nid)@grid
@@ -908,7 +918,7 @@ NULL
   sink <- plan@stages[[plan@sink]]
   key <- .key(sink@members[[length(sink@members)]])
   chunks <- lapply(chunks_of(sink), `[[`, key)
-  it <- chunk_iter(sink@chunks)
+  it <- chunk_iter(.stage_out_chunks(plan, sink))
   sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
   if (!is.null(path)) {
     return(.exec_write_sink(

@@ -5,9 +5,10 @@
 # N-band pixel-interleaved file decompress ~N x the window bytes and
 # blow the task count up as bands^2 under the read budget; the
 # coalesced plan reads the same bytes once. Gates: the collapse fires
-# only when it is safe (same file, same nodata, no warp consumer, not
-# a sink), and results are identical to the per-band plan on every
-# execution path.
+# only when it is safe (same file, same nodata, no warp consumer),
+# sink stacks included (issue #25: a written stack of same-file bands
+# then needs no compute stage at all), and results are identical to
+# the per-band plan on every execution path.
 
 
 .mb_graph <- function(fx, fn = NULL) {
@@ -112,19 +113,84 @@ test_that("stacks across different files do not collapse", {
   expect_identical(sum(kinds == "source_read"), 3L)
 })
 
-test_that("a stack requested as a sink keeps its per-band shape", {
+test_that("a stack requested as a sink collapses too, alone or beside a consumer", {
   fx <- fixture_multiband()
+  # sink only: one read stage whose windows are compute-chunk sized
+  # (issue #25: the write is the only consumer, so nothing amortises a
+  # coarse window and the writer streams as each read lands)
+  st <- .mb_graph(fx)
+  p <- plan_lazy(st)
+  kinds <- vapply(p@stages, function(s) s@kind, character(1))
+  expect_identical(kinds, "source_read")
+  expect_identical(graph_get(p@graph, p@stages[[1]]@members[[1]])@band,
+                   seq_len(fx$nb))
+  pc <- plan_lazy(.mb_graph(fx, function(st) st * 2))
+  src <- Filter(function(s) s@kind == "source_read", pc@stages)[[1]]
+  expect_true(prod(p@stages[[1]]@chunks@chunk_dim) <=
+              prod(src@chunks@chunk_dim))
+  cube <- execute_plan(p)
+  for (b in seq_len(fx$nb)) {
+    expect_equal(cube[b, , ], unclass(fx$vals[[b]]), tolerance = 1e-6,
+                 ignore_attr = TRUE)
+  }
+  # sink AND consumer (multi-export): the cube is retrieved from the
+  # coarse split read regions the reduce also consumes
   g <- graph_new()
   bands <- lapply(seq_len(fx$nb), function(b)
     lazy_source(fx$path, band = b, graph = g))
-  st <- lazy_stack(bands, along = "band")
-  red <- reduce_over(st, "mean", "band", nan_rm = TRUE)
-  p <- plan_lazy(list(cube = st, mean = red))
-  kinds <- vapply(p@stages, function(s) s@kind, character(1))
-  expect_identical(sum(kinds == "source_read"), fx$nb)
-  res <- execute_plan(p)
+  st2 <- lazy_stack(bands, along = "band")
+  red <- reduce_over(st2, "mean", "band", nan_rm = TRUE)
+  p2 <- plan_lazy(list(cube = st2, mean = red))
+  kinds <- vapply(p2@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds == "source_read"), 1L)
+  res <- execute_plan(p2)
   ref <- Reduce(`+`, fx$vals) / fx$nb
   expect_equal(res$mean, unclass(ref), tolerance = 1e-5, ignore_attr = TRUE)
+  expect_equal(res$cube, cube, tolerance = 0, ignore_attr = TRUE)
+})
+
+test_that("a coalesced sink stack writes and collects identically on every path", {
+  skip_on_cran()
+  fx <- fixture_multiband()
+  local_pools(2, 1, gdal_config = TRUE)
+  old <- options(garry.chunk_target_px = 200)
+  on.exit(options(old), add = TRUE)
+  # permuted band order must survive the collapse
+  ord <- c(4L, 1L, 6L, 3L)
+  g <- graph_new()
+  st <- lazy_stack(lapply(ord, function(b)
+    lazy_source(fx$path, band = b, graph = g)), along = "band")
+  p <- plan_lazy(st)
+  expect_identical(length(p@stages), 1L)
+  expect_identical(graph_get(p@graph, p@stages[[1]]@members[[1]])@band, ord)
+  mem <- execute_plan(p)
+  dist <- execute_plan_mirai(p)
+  expect_equal(dist, mem, tolerance = 0)
+  for (k in seq_along(ord)) {
+    expect_equal(mem[k, , ], unclass(fx$vals[[ord[k]]]), tolerance = 1e-6,
+                 ignore_attr = TRUE)
+  }
+  dir <- withr::local_tempdir("coalsink2")
+  out_d <- file.path(dir, "dist.tif")
+  out_s <- file.path(dir, "single.tif")
+  write_tif(st, out_d, distributed = TRUE)
+  write_tif(st, out_s, distributed = FALSE)
+  for (k in seq_along(ord)) {
+    d <- gdal_read_window(out_d, k, 0L, 0L, fx$nx, fx$ny)
+    s <- gdal_read_window(out_s, k, 0L, 0L, fx$nx, fx$ny)
+    expect_identical(d, s)
+    expect_equal(d, unclass(fx$vals[[ord[k]]]), tolerance = 1e-6,
+                 ignore_attr = TRUE)
+  }
+  # a multi-export with the stack as one sink streams both to disk
+  red <- reduce_over(st, "mean", "band", nan_rm = TRUE)
+  write_tif(list(cube = st, mean = red), dir, distributed = TRUE)
+  got <- gdal_read_window(file.path(dir, "cube.tif"), 2L, 0L, 0L, fx$nx, fx$ny)
+  expect_equal(got, unclass(fx$vals[[ord[2]]]), tolerance = 1e-6,
+               ignore_attr = TRUE)
+  m <- gdal_read_window(file.path(dir, "mean.tif"), 1L, 0L, 0L, fx$nx, fx$ny)
+  expect_equal(m, unclass(Reduce(`+`, fx$vals[ord]) / length(ord)),
+               tolerance = 1e-5, ignore_attr = TRUE)
 })
 
 test_that("distributed execution matches memory on a coalesced plan", {
