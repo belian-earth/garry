@@ -26,6 +26,47 @@ NULL
   .Call("garry_malloc_trim", PACKAGE = "garry")
 }
 
+# Deferred per-task hygiene. A task body's transients are dead when it
+# returns, but a full gc costs ~35 ms on a daemon (150 ms under a busy
+# fleet) whatever it frees, and it was running after EVERY task: on a
+# 2 M pixel band read that was two thirds of the task (issue #25's
+# drain). Bodies report their transient bytes here instead; the
+# gc + malloc_trim pass runs once `garry.daemon_gc_mb` of them have
+# accumulated, so big tasks (device buffers, chunk payloads) still
+# clean up every time and small ones amortise.
+.daemon_gc_state <- new.env(parent = emptyenv())
+
+.daemon_gc_after <- function(bytes) {
+  acc <- (.daemon_gc_state$bytes %||% 0) + bytes
+  if (acc < garry_opt("daemon_gc_mb") * 2^20) {
+    .daemon_gc_state$bytes <- acc
+    return(invisible(FALSE))
+  }
+  .daemon_gc_state$bytes <- 0
+  gc(FALSE)
+  .garry_malloc_trim()
+  invisible(TRUE)
+}
+
+# Bytes a task transient holds: raw payloads by length, R vectors by
+# element width, lists summed (device arrays count through the host
+# payload they were uploaded from).
+.payload_bytes <- function(x) {
+  if (is.list(x)) {
+    return(sum(vapply(x, .payload_bytes, numeric(1))))
+  }
+  if (is.raw(x)) {
+    return(as.numeric(length(x)))
+  }
+  if (is.integer(x) || is.logical(x)) {
+    return(4 * as.numeric(length(x)))
+  }
+  if (is.numeric(x)) {
+    return(8 * as.numeric(length(x)))
+  }
+  0
+}
+
 #' Daemon task body: memory hygiene — trim arenas, optionally evict the
 #' jit cache.
 #'
@@ -281,8 +322,12 @@ NULL
   starts <- cumsum(c(1L, heights[-tiles]))
   parts <- vector("list", tiles)
   for (i in seq_len(tiles)) {
-    tile <- .g_slice_axis(up, nd - 1L, starts[[i]],
-                          starts[[i]] + heights[[i]] - 1L)
+    tile <- .g_slice_axis(
+      up,
+      nd - 1L,
+      starts[[i]],
+      starts[[i]] + heights[[i]] - 1L
+    )
     parts[[i]] <- jf(list(tile))[[1L]]
     rm(tile)
   }
@@ -379,9 +424,10 @@ NULL
   # window and its part list are dead once copied into shm, and the
   # native churn under the read (curl/TLS/PROJ) leaves freed arena
   # pages nothing else returns to the OS (the 11.1 drain plateau).
+  # Deferred by transient size (.daemon_gc_after).
+  bytes <- .payload_bytes(m) + .payload_bytes(val)
   rm(m, val)
-  gc(FALSE)
-  .garry_malloc_trim()
+  .daemon_gc_after(bytes)
   sh
 }
 
@@ -432,9 +478,9 @@ NULL
   ch <- if (is.null(el)) val[[skey]] else val[[el]]
   .exec_check_writable(ch, n_chunks)
   .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
+  bytes <- .payload_bytes(ch)
   rm(ch, val)
-  gc(FALSE)
-  .garry_malloc_trim()
+  .daemon_gc_after(bytes)
   TRUE
 }
 
@@ -622,9 +668,12 @@ NULL
   # thresholds only cover the top-of-heap path; malloc_trim(0) walks
   # every arena, and the scan-retention spike measured the difference
   # at ~475 MB of standing arena per scan daemon.
+  # Deferred by transient size (.daemon_gc_after): the device inputs
+  # count through the host payloads they were uploaded from.
+  bytes <- .payload_bytes(res) +
+    .payload_bytes(Map(function(v, k) v[[k]], in_vals, in_keys))
   rm(inputs, res)
-  gc(FALSE)
-  .garry_malloc_trim()
+  .daemon_gc_after(bytes)
   sh
 }
 

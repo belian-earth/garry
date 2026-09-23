@@ -159,28 +159,34 @@ SEXP garry_finish_f32_into(SEXP res, SEXP off, SEXP v, SEXP nodata,
   return res;
 }
 
-/* Halo trim of a rank-2 or rank-3 row-major payload: `k` cells off
- * every side of the last two dims, gathered row by row. */
-SEXP garry_sv_trim(SEXP v, SEXP dims, SEXP es_, SEXP k_) {
+/* Window of a rank-2 or rank-3 row-major payload: rows r0..r0+nr-1 and
+ * columns c0..c0+nc-1 of every plane, gathered row by row (one memcpy
+ * a row). Halo trims and producer-side part slicing both land here. */
+SEXP garry_sv_window(SEXP v, SEXP dims, SEXP es_, SEXP r0_, SEXP c0_,
+                     SEXP nr_, SEXP nc_) {
   if (TYPEOF(v) != RAWSXP) error("payload must be raw");
   const int nd = LENGTH(dims);
   const int *d = INTEGER(dims);
   const int es = asInteger(es_);
-  const int k = asInteger(k_);
+  const R_xlen_t r0 = asInteger(r0_), c0 = asInteger(c0_);
+  const R_xlen_t nr = asInteger(nr_), nc = asInteger(nc_);
   const R_xlen_t nb = nd == 3 ? d[0] : 1;
   const R_xlen_t ny = d[nd - 2], nx = d[nd - 1];
-  const R_xlen_t oy = ny - 2 * k, ox = nx - 2 * k;
-  if (k < 0 || oy <= 0 || ox <= 0) error("trim exceeds the payload window");
+  if (r0 < 0 || c0 < 0 || nr <= 0 || nc <= 0 || r0 + nr > ny || c0 + nc > nx) {
+    error("window [%lld+%lld, %lld+%lld) exceeds the %lld x %lld payload",
+          (long long) r0, (long long) nr, (long long) c0, (long long) nc,
+          (long long) ny, (long long) nx);
+  }
   if (nb * ny * nx * es != XLENGTH(v)) error("payload size does not match its dims");
   const size_t row_in = (size_t) nx * es;
-  const size_t row_out = (size_t) ox * es;
-  SEXP out = PROTECT(allocVector(RAWSXP, nb * oy * ox * es));
+  const size_t row_out = (size_t) nc * es;
+  SEXP out = PROTECT(allocVector(RAWSXP, nb * nr * nc * es));
   const unsigned char *src = RAW(v);
   unsigned char *dst = RAW(out);
   for (R_xlen_t b = 0; b < nb; b++) {
     const unsigned char *plane = src + (size_t) b * ny * row_in;
-    for (R_xlen_t r = 0; r < oy; r++) {
-      memcpy(dst, plane + (size_t) (r + k) * row_in + (size_t) k * es, row_out);
+    for (R_xlen_t r = 0; r < nr; r++) {
+      memcpy(dst, plane + (size_t) (r0 + r) * row_in + (size_t) c0 * es, row_out);
       dst += row_out;
     }
   }
@@ -193,7 +199,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"garry_sv_plane", (DL_FUNC) &garry_sv_plane, 5},
   {"garry_finish_f32", (DL_FUNC) &garry_finish_f32, 4},
   {"garry_finish_f32_into", (DL_FUNC) &garry_finish_f32_into, 6},
-  {"garry_sv_trim", (DL_FUNC) &garry_sv_trim, 4},
+  {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},
   {NULL, NULL, 0}
 };
 

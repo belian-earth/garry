@@ -576,7 +576,20 @@ gdal_read_window <- function(
 # host-created files; GTiff is single-writer, so exactly one process
 # holds this handle at a time).
 gdal_open_update <- function(path) {
-  methods::new(gdalraster::GDALRaster, path, read_only = FALSE)
+  # NUM_THREADS is a per-handle setting: the creation option on the
+  # host's handle dies with it, so a GTiff re-opened here compressed
+  # its tiles on one thread (14.9 ms a 768x768 plane against 3.5 ms
+  # threaded, the writer-daemon tail of issue #25). The raw-cube VRT
+  # has no compression and does not take the option.
+  if (grepl("\\.vrt$", path, ignore.case = TRUE)) {
+    return(methods::new(gdalraster::GDALRaster, path, read_only = FALSE))
+  }
+  methods::new(
+    gdalraster::GDALRaster,
+    path,
+    read_only = FALSE,
+    open_options = "NUM_THREADS=ALL_CPUS"
+  )
 }
 
 # Create a raw-BSQ cube destination: a sparse zeroed .bin sized for the

@@ -287,40 +287,27 @@ NULL
   )
 }
 
-# Producer-side window slice. `v` is private (fresh read output), so
-# the byte-matrix view (one column per row of the image) costs one
-# dim-stamped copy for the whole window, amortised over its parts.
-# Rank-3 (band, y, x) payloads slice every band plane of the window
-# (multi-band coalesced reads).
+# Producer-side window slice: rank-2 payloads slice a [y, x] window,
+# rank-3 (band, y, x) payloads slice every band plane of the window
+# (multi-band coalesced reads). One C row gather per part.
 .sv_slicer <- function(v) {
-  d <- .sv_dim(v)
+  d <- as.integer(.sv_dim(v))
   es <- .sv_es(v)
   gdt <- attr(v, "gdt")
-  bm <- unclass(v)
-  attributes(bm) <- NULL
-  if (length(d) == 3L) {
-    dim(bm) <- c(es * d[[3L]], d[[2L]], d[[1L]])
-    nb <- d[[1L]]
-    return(function(r0, c0, nr, nc) {
-      out <- bm[
-        (es * c0 + 1L):(es * (c0 + nc)),
-        (r0 + 1L):(r0 + nr),
-        ,
-        drop = FALSE
-      ]
-      attributes(out) <- NULL
-      structure(out, gdim = c(nb, nr, nc), gdt = gdt)
-    })
-  }
-  dim(bm) <- c(es * d[[2L]], d[[1L]])
+  nb <- if (length(d) == 3L) d[[1L]] else NULL
   function(r0, c0, nr, nc) {
-    out <- bm[
-      (es * c0 + 1L):(es * (c0 + nc)),
-      (r0 + 1L):(r0 + nr),
-      drop = FALSE
-    ]
-    attributes(out) <- NULL
-    structure(out, gdim = c(nr, nc), gdt = gdt)
+    out <- .Call(
+      "garry_sv_window",
+      v,
+      d,
+      es,
+      as.integer(r0),
+      as.integer(c0),
+      as.integer(nr),
+      as.integer(nc),
+      PACKAGE = "garry"
+    )
+    structure(out, gdim = c(nb, as.integer(nr), as.integer(nc)), gdt = gdt)
   }
 }
 
@@ -334,16 +321,25 @@ NULL
   if (k == 0L) {
     return(v)
   }
-  d <- .sv_dim(v)
+  d <- as.integer(.sv_dim(v))
+  n <- length(d)
+  nr <- d[[n - 1L]] - 2L * k
+  nc <- d[[n]] - 2L * k
+  if (nr <= 0L || nc <= 0L) {
+    .garry_error("trim exceeds the payload window", "garry_plan_error")
+  }
   out <- .Call(
-    "garry_sv_trim",
+    "garry_sv_window",
     v,
-    as.integer(d),
+    d,
     .sv_es(v),
     k,
+    k,
+    nr,
+    nc,
     PACKAGE = "garry"
   )
-  d[length(d) - 1:0] <- d[length(d) - 1:0] - 2L * k
+  d[n - 1:0] <- c(nr, nc)
   structure(out, gdim = d, gdt = attr(v, "gdt"))
 }
 
