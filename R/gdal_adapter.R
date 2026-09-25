@@ -1134,6 +1134,16 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #' match the highest-on-top overlap rule). Used to assemble multi-tile
 #' mosaics (e.g. the file form of [lazy_dataset()]).
 #'
+#' `gdalbuildvrt` takes only north-up sources in one projection, and
+#' SKIPS (with a warning) any other: a tile stored south-up (positive
+#' north-south pixel size; AEF tiles in UTM 22S, 2026-09-25) or a tile
+#' in the neighbouring UTM zone (ESD tiles on the MGRS grid, which
+#' overlaps a zone boundary). A skipped tile is a hole, or with every
+#' tile skipped no mosaic at all. So each such source is first wrapped
+#' in a north-up warped VRT in the first source's projection (a
+#' `gdalwarp -of VRT`, evaluated on read, no data written), and a
+#' mosaic that still lost a source is an error rather than a hole.
+#'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
 #' @return `dst`.
@@ -1145,6 +1155,7 @@ gdal_mosaic_vrt <- function(
   ts = NULL,
   vrtnodata = NULL
 ) {
+  files <- .mosaic_north_up(files, dirname(dst))
   args <- character(0)
   if (!is.null(te)) {
     te <- as.numeric(te)
@@ -1183,7 +1194,44 @@ gdal_mosaic_vrt <- function(
   if (!file.exists(dst)) {
     cli::cli_abort("buildVRT mosaic failed.")
   }
+  n_in <- length(grep("<SourceFilename", readLines(dst, warn = FALSE), fixed = TRUE))
+  if (n_in < length(files)) {
+    unlink(dst)
+    cli::cli_abort(
+      "buildVRT mosaic took {n_in} of {length(files)} source{?s}; the rest were skipped (see the GDAL warnings)."
+    )
+  }
   dst
+}
+
+# Sources gdalbuildvrt would skip, wrapped for it: any source that is
+# south-up or not in the first source's projection becomes a north-up
+# warped VRT (`-of VRT`, nearest, the source's own resolution) in that
+# projection, written beside the mosaic. Other sources pass through.
+.mosaic_north_up <- function(files, dir) {
+  probe <- function(f) {
+    ds <- .gdal_handle(f)
+    list(gt = ds$getGeoTransform(), srs = ds$getProjection())
+  }
+  ref <- probe(files[[1L]])
+  vapply(seq_along(files), function(i) {
+    f <- files[[i]]
+    p <- if (i == 1L) ref else probe(f)
+    same_srs <- identical(p$srs, ref$srs) ||
+      isTRUE(tryCatch(gdalraster::srs_is_same(p$srs, ref$srs), error = function(e) FALSE))
+    if (p$gt[[6L]] < 0 && same_srs) {
+      return(f)
+    }
+    v <- tempfile("garry-northup-", tmpdir = dir, fileext = ".vrt")
+    gdalraster::warp(
+      f,
+      v,
+      t_srs = ref$srs,
+      cl_arg = c("-of", "VRT", "-r", "near"),
+      quiet = TRUE
+    )
+    v
+  }, "")
 }
 
 #' Create an output raster for a grid.
