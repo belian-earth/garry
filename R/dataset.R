@@ -391,7 +391,13 @@ lazy_dataset <- function(
   # 2.7 GB AEF tile), observed live 2026-08-12.
   paths <- vapply(as.character(paths), .gdal_href, "", USE.NAMES = FALSE)
   path <- if (length(paths) > 1L) {
-    gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
+    # one resampling for every band lets the mosaic be built straight on
+    # the target grid (gdal_mosaic_vrt); per-band methods keep the warp
+    # on read
+    rs <- if (is.null(names(resampling)) && length(unique(unname(resampling))) == 1L) {
+      unname(resampling[[1L]])
+    }
+    gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths, target = grid, resampling = rs)
   } else {
     paths[[1L]]
   }

@@ -1136,16 +1136,25 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #'
 #' `gdalbuildvrt` takes only north-up sources in one projection, and
 #' SKIPS (with a warning) any other: a tile stored south-up (positive
-#' north-south pixel size; AEF tiles in UTM 22S, 2026-09-25) or a tile
+#' north-south pixel size; every AEF tile, seen 2026-09-25) or a tile
 #' in the neighbouring UTM zone (ESD tiles on the MGRS grid, which
 #' overlaps a zone boundary). A skipped tile is a hole, or with every
-#' tile skipped no mosaic at all. So each such source is first wrapped
-#' in a north-up warped VRT in the first source's projection (a
-#' `gdalwarp -of VRT`, evaluated on read, no data written), and a
+#' tile skipped no mosaic at all. When any source needs it, the sources
+#' are wrapped in warped VRTs (`gdalwarp -of VRT`: evaluated on read,
+#' no data written) before the build. With `target` and `resampling`
+#' given, every source is warped straight onto the target lattice
+#' (its own footprint snapped to the target's pixels), so the mosaic IS
+#' the target grid and the read that follows is an exact affine window
+#' read: one resample, no warp kernel downstream. Without them, only the
+#' offending sources are wrapped, north-up in the first source's
+#' projection at their own resolution, and the read warps as usual. A
 #' mosaic that still lost a source is an error rather than a hole.
 #'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
+#' @param target The `GridSpec` the mosaic will be read onto, if known.
+#' @param resampling The GDAL resampling of that read (a scalar), if one
+#'   method serves every band.
 #' @return `dst`.
 #' @keywords internal
 gdal_mosaic_vrt <- function(
@@ -1153,9 +1162,11 @@ gdal_mosaic_vrt <- function(
   files,
   te = NULL,
   ts = NULL,
-  vrtnodata = NULL
+  vrtnodata = NULL,
+  target = NULL,
+  resampling = NULL
 ) {
-  files <- .mosaic_north_up(files, dirname(dst))
+  files <- .mosaic_north_up(files, dirname(dst), target = target, resampling = resampling)
   args <- character(0)
   if (!is.null(te)) {
     te <- as.numeric(te)
@@ -1204,33 +1215,60 @@ gdal_mosaic_vrt <- function(
   dst
 }
 
-# Sources gdalbuildvrt would skip, wrapped for it: any source that is
-# south-up or not in the first source's projection becomes a north-up
-# warped VRT (`-of VRT`, nearest, the source's own resolution) in that
-# projection, written beside the mosaic. Other sources pass through.
-.mosaic_north_up <- function(files, dir) {
+# Sources gdalbuildvrt would skip, wrapped for it. When no source is
+# south-up or in another projection the files pass through untouched.
+# Otherwise, with a target grid and one resampling method, EVERY source
+# becomes a warped VRT onto the target lattice (its footprint in the
+# target projection snapped outward to the target's pixels, so buildvrt
+# sees aligned same-grid sources and the mosaic is the target grid);
+# without them, the offending sources become north-up warped VRTs in
+# the first source's projection at their own resolution.
+.mosaic_north_up <- function(files, dir, target = NULL, resampling = NULL) {
   probe <- function(f) {
     ds <- .gdal_handle(f)
-    list(gt = ds$getGeoTransform(), srs = ds$getProjection())
+    list(gt = ds$getGeoTransform(), srs = ds$getProjection(),
+         nx = ds$getRasterXSize(), ny = ds$getRasterYSize())
   }
-  ref <- probe(files[[1L]])
-  vapply(seq_along(files), function(i) {
-    f <- files[[i]]
-    p <- if (i == 1L) ref else probe(f)
-    same_srs <- identical(p$srs, ref$srs) ||
-      isTRUE(tryCatch(gdalraster::srs_is_same(p$srs, ref$srs), error = function(e) FALSE))
-    if (p$gt[[6L]] < 0 && same_srs) {
-      return(f)
-    }
+  ps <- lapply(files, probe)
+  ref <- ps[[1L]]
+  same_srs <- function(srs) identical(srs, ref$srs) ||
+    isTRUE(tryCatch(gdalraster::srs_is_same(srs, ref$srs), error = function(e) FALSE))
+  needs <- vapply(ps, function(p) p$gt[[6L]] > 0 || !same_srs(p$srs), NA)
+  if (!any(needs)) {
+    return(files)
+  }
+  wrap <- function(f, args) {
     v <- tempfile("garry-northup-", tmpdir = dir, fileext = ".vrt")
-    gdalraster::warp(
-      f,
-      v,
-      t_srs = ref$srs,
-      cl_arg = c("-of", "VRT", "-r", "near"),
-      quiet = TRUE
-    )
+    gdalraster::warp(f, v, t_srs = args$t_srs, cl_arg = c("-of", "VRT", args$cl), quiet = TRUE)
     v
+  }
+  onto_target <- !is.null(target) && !is.null(resampling) && length(resampling) == 1L
+  if (onto_target) {
+    gt <- target@transform
+    tr <- c(gt[[2L]], abs(gt[[6L]]))
+    x0 <- gt[[1L]]; y0 <- gt[[4L]]
+    return(vapply(seq_along(files), function(i) {
+      p <- ps[[i]]
+      # the source's footprint in the target projection, snapped OUTWARD
+      # to the target lattice, so the wrapped VRT is a grid-aligned tile
+      ext <- c(p$gt[[1L]], p$gt[[4L]] + p$ny * p$gt[[6L]], p$gt[[1L]] + p$nx * p$gt[[2L]], p$gt[[4L]])
+      ext <- c(min(ext[c(1L, 3L)]), min(ext[c(2L, 4L)]), max(ext[c(1L, 3L)]), max(ext[c(2L, 4L)]))
+      if (!same_srs(p$srs) || !isTRUE(tryCatch(gdalraster::srs_is_same(p$srs, target@crs), error = function(e) FALSE))) {
+        ext <- gdalraster::transform_bounds(ext, p$srs, target@crs)
+      }
+      te <- c(x0 + floor((ext[[1L]] - x0) / tr[[1L]]) * tr[[1L]],
+              y0 - ceiling((y0 - ext[[2L]]) / tr[[2L]]) * tr[[2L]],
+              x0 + ceiling((ext[[3L]] - x0) / tr[[1L]]) * tr[[1L]],
+              y0 - floor((y0 - ext[[4L]]) / tr[[2L]]) * tr[[2L]])
+      wrap(files[[i]], list(t_srs = target@crs, cl = c(
+        "-te", formatC(te, format = "g", digits = 16, width = 1),
+        "-tr", formatC(tr, format = "g", digits = 16, width = 1),
+        "-r", resampling)))
+    }, ""))
+  }
+  vapply(seq_along(files), function(i) {
+    if (!needs[[i]]) return(files[[i]])
+    wrap(files[[i]], list(t_srs = ref$srs, cl = c("-r", "near")))
   }, "")
 }
 
