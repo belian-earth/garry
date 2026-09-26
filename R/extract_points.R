@@ -140,7 +140,7 @@ extract_points <- function(raster, xy, bands = NULL, interp = NULL, ...) {
       return(NULL) # any compute in the graph: must materialise
     }
     n <- graph_get(b@graph, ids[[1L]])
-    if (!S7::S7_inherits(n, SourceNode) || .gdal_is_remote(n@path)) {
+    if (!S7::S7_inherits(n, SourceNode) || any(.gdal_is_remote(n@path))) {
       return(NULL)
     }
     paths <- c(paths, n@path)

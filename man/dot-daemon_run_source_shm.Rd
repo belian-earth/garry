@@ -19,7 +19,8 @@
   store_raw = FALSE,
   scale = numeric(0),
   offset = numeric(0),
-  decim = NULL
+  decim = NULL,
+  resampling = "near"
 )
 }
 \arguments{

@@ -284,7 +284,7 @@ NULL
   gg <- function(id) graph_get(graph, id)
   for (s in src_stages) {
     n <- gg(s@members[[1L]])
-    if (!grepl("^GTI:", n@path)) {
+    if (length(n@path) != 1L || !grepl("^GTI:", n@path)) {
       return(NULL)
     }
     if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
@@ -1046,7 +1046,7 @@ NULL
   for (s in src_stages) {
     # every source must be fetchable
     n <- graph_get(graph, s@members[[1L]])
-    if (!grepl("^GTI:", n@path)) {
+    if (length(n@path) != 1L || !grepl("^GTI:", n@path)) {
       return(NULL)
     }
     if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {

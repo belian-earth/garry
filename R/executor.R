@@ -78,6 +78,20 @@ NULL
 # else builds the warped VRT as before. Shared by execute_plan() and the
 # mirai scheduler so the two cannot disagree about which read they do.
 .warp_read_plan <- function(wnode, snode) {
+  if (length(snode@path) > 1L) {
+    # a multi-path source (tiles no mosaic can hold): every source
+    # warped straight into each target window (gdal_warp_window)
+    return(list(
+      path = snode@path,
+      band = snode@band,
+      nodata = snode@nodata,
+      open_options = character(0),
+      scale = snode@scale,
+      offset = snode@offset,
+      decim = NULL,
+      resampling = wnode@resampling
+    ))
+  }
   spec <- .rio_direct_spec(
     snode@path,
     wnode@target_grid,
@@ -128,7 +142,8 @@ NULL
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
   offset = numeric(0),
-  decim = NULL
+  decim = NULL,
+  resampling = "near"
 ) {
   out <- rlang::arg_match(out)
   H <- cg@halo
@@ -143,26 +158,40 @@ NULL
     core$x_size,
     core$y_size
   )
+  read_one <- function() {
+    if (length(path) > 1L) {
+      return(gdal_warp_window(
+        path,
+        band,
+        cg@grid,
+        w$x_off,
+        w$y_off,
+        w$x_size,
+        w$y_size,
+        resampling = resampling,
+        nodata = nodata,
+        out = out,
+        scale = scale,
+        offset = offset
+      ))
+    }
+    gdal_read_window(
+      path,
+      band,
+      w$x_off,
+      w$y_off,
+      w$x_size,
+      w$y_size,
+      nodata = nodata,
+      open_options = open_options,
+      out = out,
+      scale = scale,
+      offset = offset,
+      decim = decim
+    )
+  }
   sub <- tryCatch(
-    .gdal_with_retry(
-      function() {
-        gdal_read_window(
-          path,
-          band,
-          w$x_off,
-          w$y_off,
-          w$x_size,
-          w$y_size,
-          nodata = nodata,
-          open_options = open_options,
-          out = out,
-          scale = scale,
-          offset = offset,
-          decim = decim
-        )
-      },
-      what = "read"
-    ),
+    .gdal_with_retry(read_one, what = "read"),
     error = function(e) {
       if (!identical(garry_opt("read_fail"), "nodata")) {
         stop(e)
@@ -1003,11 +1032,13 @@ execute_plan <- function(
         rsc <- rp$scale
         rof <- rp$offset
         rdecim <- rp$decim
+        rresamp <- rp$resampling %||% "near"
         key <- .key(wnode@id)
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
         rband <- node@band
+        rresamp <- node@resampling
         rnodata <- node@nodata
         roo <- node@open_options
         rsc <- node@scale
@@ -1028,7 +1059,8 @@ execute_plan <- function(
               open_options = roo,
               scale = rsc,
               offset = rof,
-              decim = rdecim
+              decim = rdecim,
+              resampling = rresamp
             )),
             key
           )
@@ -1051,7 +1083,8 @@ execute_plan <- function(
             open_options = roo,
             scale = rsc,
             offset = rof,
-            decim = rdecim
+            decim = rdecim,
+            resampling = rresamp
           )
           rank3 <- length(dim(buf)) == 3L
           for (j in .exec_split_members(its, it[r, ])) {

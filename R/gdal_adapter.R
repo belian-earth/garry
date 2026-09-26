@@ -262,7 +262,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   open_options = character(0),
   band = 1L
 ) {
-  if (length(open_options) > 0L || length(band) != 1L) {
+  if (length(src_path) != 1L || length(open_options) > 0L || length(band) != 1L) {
     return(NULL)
   }
   resamp <- unname(.rio_resamp_names[resampling])
@@ -1044,7 +1044,9 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #' Float targets without a source nodata get `-dstnodata nan` so area
 #' outside the source footprint reads as NaN, not 0.
 #'
-#' @param src_path Source path/VSI URL.
+#' @param src_path Source path/VSI URL. One source: gdalwarp writes a
+#'   VRT from a single input only. A multi-path source node is read by
+#'   [gdal_warp_window()] instead.
 #' @param band 1-based source band (the VRT has this single band).
 #' @param target_grid `GridSpec` to warp onto.
 #' @param resampling GDAL resampling method name.
@@ -1058,6 +1060,9 @@ gdal_warp_vrt <- function(
   resampling,
   src_nodata = numeric(0)
 ) {
+  if (length(src_path) != 1L) {
+    cli::cli_abort("gdal_warp_vrt() takes one source; several are read by gdal_warp_window().")
+  }
   src_path <- .gdal_href(src_path) # bare https would pull the whole file
   vrt <- tempfile(fileext = ".vrt")
   num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
@@ -1134,27 +1139,18 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #' match the highest-on-top overlap rule). Used to assemble multi-tile
 #' mosaics (e.g. the file form of [lazy_dataset()]).
 #'
-#' `gdalbuildvrt` takes only north-up sources in one projection, and
-#' SKIPS (with a warning) any other: a tile stored south-up (positive
+#' `gdalbuildvrt` takes only north-up sources in one projection and
+#' SKIPS, with a warning, any other: a tile stored south-up (positive
 #' north-south pixel size; every AEF tile, seen 2026-09-25) or a tile
 #' in the neighbouring UTM zone (ESD tiles on the MGRS grid, which
-#' overlaps a zone boundary). A skipped tile is a hole, or with every
-#' tile skipped no mosaic at all. When any source needs it, the sources
-#' are wrapped in warped VRTs (`gdalwarp -of VRT`: evaluated on read,
-#' no data written) before the build. With `target` and `resampling`
-#' given, every source is warped straight onto the target lattice
-#' (its own footprint snapped to the target's pixels), so the mosaic IS
-#' the target grid and the read that follows is an exact affine window
-#' read: one resample, no warp kernel downstream. Without them, only the
-#' offending sources are wrapped, north-up in the first source's
-#' projection at their own resolution, and the read warps as usual. A
-#' mosaic that still lost a source is an error rather than a hole.
+#' overlaps a zone boundary). A skipped tile would be a hole, or with
+#' every tile skipped no mosaic at all, so a build that lost a source is
+#' an error here. Sources like that do not belong in a mosaic: the file
+#' form of [lazy_dataset()] keeps them as a multi-path source node and
+#' the warper reads them together ([gdal_warp_vrt()]).
 #'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
-#' @param target The `GridSpec` the mosaic will be read onto, if known.
-#' @param resampling The GDAL resampling of that read (a scalar), if one
-#'   method serves every band.
 #' @return `dst`.
 #' @keywords internal
 gdal_mosaic_vrt <- function(
@@ -1162,11 +1158,8 @@ gdal_mosaic_vrt <- function(
   files,
   te = NULL,
   ts = NULL,
-  vrtnodata = NULL,
-  target = NULL,
-  resampling = NULL
+  vrtnodata = NULL
 ) {
-  files <- .mosaic_north_up(files, dirname(dst), target = target, resampling = resampling)
   args <- character(0)
   if (!is.null(te)) {
     te <- as.numeric(te)
@@ -1215,61 +1208,51 @@ gdal_mosaic_vrt <- function(
   dst
 }
 
-# Sources gdalbuildvrt would skip, wrapped for it. When no source is
-# south-up or in another projection the files pass through untouched.
-# Otherwise, with a target grid and one resampling method, EVERY source
-# becomes a warped VRT onto the target lattice (its footprint in the
-# target projection snapped outward to the target's pixels, so buildvrt
-# sees aligned same-grid sources and the mosaic is the target grid);
-# without them, the offending sources become north-up warped VRTs in
-# the first source's projection at their own resolution.
-.mosaic_north_up <- function(files, dir, target = NULL, resampling = NULL) {
-  probe <- function(f) {
+# Header probes of several sources: geotransform, projection, size.
+.source_probes <- function(files) {
+  lapply(files, function(f) {
     ds <- .gdal_handle(f)
     list(gt = ds$getGeoTransform(), srs = ds$getProjection(),
          nx = ds$getRasterXSize(), ny = ds$getRasterYSize())
-  }
-  ps <- lapply(files, probe)
-  ref <- ps[[1L]]
-  same_srs <- function(srs) identical(srs, ref$srs) ||
-    isTRUE(tryCatch(gdalraster::srs_is_same(srs, ref$srs), error = function(e) FALSE))
-  needs <- vapply(ps, function(p) p$gt[[6L]] > 0 || !same_srs(p$srs), NA)
-  if (!any(needs)) {
-    return(files)
-  }
-  wrap <- function(f, args) {
-    v <- tempfile("garry-northup-", tmpdir = dir, fileext = ".vrt")
-    gdalraster::warp(f, v, t_srs = args$t_srs, cl_arg = c("-of", "VRT", args$cl), quiet = TRUE)
-    v
-  }
-  onto_target <- !is.null(target) && !is.null(resampling) && length(resampling) == 1L
-  if (onto_target) {
-    gt <- target@transform
-    tr <- c(gt[[2L]], abs(gt[[6L]]))
-    x0 <- gt[[1L]]; y0 <- gt[[4L]]
-    return(vapply(seq_along(files), function(i) {
-      p <- ps[[i]]
-      # the source's footprint in the target projection, snapped OUTWARD
-      # to the target lattice, so the wrapped VRT is a grid-aligned tile
-      ext <- c(p$gt[[1L]], p$gt[[4L]] + p$ny * p$gt[[6L]], p$gt[[1L]] + p$nx * p$gt[[2L]], p$gt[[4L]])
-      ext <- c(min(ext[c(1L, 3L)]), min(ext[c(2L, 4L)]), max(ext[c(1L, 3L)]), max(ext[c(2L, 4L)]))
-      if (!same_srs(p$srs) || !isTRUE(tryCatch(gdalraster::srs_is_same(p$srs, target@crs), error = function(e) FALSE))) {
-        ext <- gdalraster::transform_bounds(ext, p$srs, target@crs)
-      }
-      te <- c(x0 + floor((ext[[1L]] - x0) / tr[[1L]]) * tr[[1L]],
-              y0 - ceiling((y0 - ext[[2L]]) / tr[[2L]]) * tr[[2L]],
-              x0 + ceiling((ext[[3L]] - x0) / tr[[1L]]) * tr[[1L]],
-              y0 - floor((y0 - ext[[4L]]) / tr[[2L]]) * tr[[2L]])
-      wrap(files[[i]], list(t_srs = target@crs, cl = c(
-        "-te", formatC(te, format = "g", digits = 16, width = 1),
-        "-tr", formatC(tr, format = "g", digits = 16, width = 1),
-        "-r", resampling)))
-    }, ""))
-  }
-  vapply(seq_along(files), function(i) {
-    if (!needs[[i]]) return(files[[i]])
-    wrap(files[[i]], list(t_srs = ref$srs, cl = c("-r", "near")))
-  }, "")
+  })
+}
+
+# Can gdalbuildvrt mosaic these sources: all north-up, one projection.
+.mosaicable <- function(probes) {
+  ref <- probes[[1L]]$srs
+  all(vapply(probes, function(p) {
+    p$gt[[6L]] < 0 && p$gt[[3L]] == 0 && p$gt[[5L]] == 0 &&
+      (identical(p$srs, ref) ||
+         isTRUE(tryCatch(gdalraster::srs_is_same(p$srs, ref), error = function(e) FALSE)))
+  }, NA))
+}
+
+# The planning grid of a multi-path source node: the first source's
+# projection, resolution and type, over the union of every source's
+# footprint (a footprint in another projection is transformed), snapped
+# outward to the first source's lattice and north-up. Chunking and the
+# read plan run on it; the warper serves each read from all sources.
+.multi_source_meta <- function(files, probes) {
+  m1 <- gdal_grid_spec(files[[1L]])
+  g1 <- m1$grid
+  gt <- g1@transform
+  res <- c(gt[[2L]], abs(gt[[6L]]))
+  exts <- lapply(probes, function(p) {
+    e <- c(p$gt[[1L]], p$gt[[4L]] + p$ny * p$gt[[6L]], p$gt[[1L]] + p$nx * p$gt[[2L]], p$gt[[4L]])
+    e <- c(min(e[c(1L, 3L)]), min(e[c(2L, 4L)]), max(e[c(1L, 3L)]), max(e[c(2L, 4L)]))
+    same <- identical(p$srs, probes[[1L]]$srs) ||
+      isTRUE(tryCatch(gdalraster::srs_is_same(p$srs, probes[[1L]]$srs), error = function(e) FALSE))
+    if (same) e else gdalraster::transform_bounds(e, p$srs, probes[[1L]]$srs)
+  })
+  u <- c(min(vapply(exts, `[[`, 0, 1L)), min(vapply(exts, `[[`, 0, 2L)),
+         max(vapply(exts, `[[`, 0, 3L)), max(vapply(exts, `[[`, 0, 4L)))
+  x0 <- gt[[1L]]; y0 <- gt[[4L]]
+  te <- c(x0 + floor((u[[1L]] - x0) / res[[1L]]) * res[[1L]],
+          y0 - ceiling((y0 - u[[2L]]) / res[[2L]]) * res[[2L]],
+          x0 + ceiling((u[[3L]] - x0) / res[[1L]]) * res[[1L]],
+          y0 - floor((y0 - u[[4L]]) / res[[2L]]) * res[[2L]])
+  m1$grid <- grid_spec(g1@crs, extent = te, res = res, dtype = g1@dtype)
+  m1
 }
 
 #' Create an output raster for a grid.
@@ -1471,7 +1454,8 @@ gdal_warp_to_buffer <- function(
   wkt,
   srcs,
   srcnodata = NULL,
-  resampling = "near"
+  resampling = "near",
+  band = NULL
 ) {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES") # >=3.10 gate
   # `buf` is a RAW f32 byte vector (the raw-f32 store, D19-D21). The public
@@ -1492,9 +1476,52 @@ gdal_warp_to_buffer <- function(
   if (length(srcnodata) == 1L) {
     cl <- c(cl, "-srcnodata", format(srcnodata, scientific = FALSE))
   }
+  if (length(band) == 1L) {
+    cl <- c(cl, "-srcband", as.character(as.integer(band))) # GDAL >= 3.7
+  }
   gdalraster::warp(srcs, o, "", cl_arg = cl)
   o$close()
   buf
+}
+
+# Read one window of a multi-path source node: every source's `band`
+# warped straight into the window's f32 buffer in ONE gdalwarp (GDAL
+# reads each source's blocks once, reprojects, mosaics; later sources
+# win on overlap). No mosaic VRT (gdalbuildvrt cannot hold south-up or
+# cross-projection tiles) and no warped VRT (gdalwarp writes a VRT from
+# a single source only, and a warped VRT re-warps every band of a block
+# whenever one band is read, which a per-band fan-out multiplies by the
+# band count). The window is in `grid` pixels (a chunk with its halo);
+# cells outside every source come back NaN.
+gdal_warp_window <- function(
+  paths,
+  band,
+  grid,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  resampling = "near",
+  nodata = numeric(0),
+  out = c("matrix", "raw_f32"),
+  scale = numeric(0),
+  offset = numeric(0)
+) {
+  out <- rlang::arg_match(out)
+  if (length(band) != 1L) {
+    cli::cli_abort("a multi-path source reads one band at a time.")
+  }
+  gt <- grid@transform
+  win <- c(gt[[1L]] + x_off * gt[[2L]], gt[[2L]], 0, gt[[4L]] + y_off * gt[[6L]], 0, gt[[6L]])
+  gtstr <- paste(formatC(win, format = "g", digits = 17, width = 1), collapse = "/")
+  buf <- rep(writeBin(NaN, raw(), size = 4L), as.numeric(x_size) * y_size)
+  buf <- gdal_warp_to_buffer(
+    buf, x_size, y_size, gtstr, grid@crs,
+    vapply(paths, .gdal_href, "", USE.NAMES = FALSE),
+    srcnodata = nodata, resampling = resampling, band = band
+  )
+  v <- readBin(buf, "numeric", n = as.numeric(x_size) * y_size, size = 4L)
+  .gdal_finish_vec(v, y_size, x_size, numeric(0), scale, offset, out)
 }
 
 # Run an idempotent read/fetch/warp thunk with task-scoped retries.
@@ -1807,7 +1834,8 @@ gti_open_options <- function(
 # wrapper composes with the RESX/RESY/FILTER/SORT open options as usual.
 .gti_resampled_path <- function(path, resampling = "near") {
   if (
-    length(resampling) != 1L ||
+    length(path) != 1L ||
+      length(resampling) != 1L ||
       resampling %in% c("", "near", "nearest") ||
       !startsWith(path, "GTI:")
   ) {

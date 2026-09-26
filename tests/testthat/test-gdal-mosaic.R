@@ -1,9 +1,6 @@
-
-test_that("gdal_mosaic_vrt takes south-up and foreign-projection sources, and refuses a lossy mosaic", {
+test_that("gdal_mosaic_vrt refuses a mosaic that lost a source instead of leaving a hole", {
   skip_if_not_installed("gdalraster")
   dir <- withr::local_tempdir()
-  # two 4 x 4 tiles side by side in UTM 32722, both stored SOUTH-UP
-  # (positive north-south pixel size), as the AEF tiles are
   srs <- gdalraster::epsg_to_wkt(32722)
   south_up <- function(path, x0, value) {
     ds <- gdalraster::create("GTiff", path, 4L, 4L, 1L, "Int16", return_obj = TRUE)
@@ -15,47 +12,62 @@ test_that("gdal_mosaic_vrt takes south-up and foreign-projection sources, and re
   }
   a <- south_up(file.path(dir, "a.tif"), 100000, 1L)
   b <- south_up(file.path(dir, "b.tif"), 100040, 2L)
-  d <- gdalraster::GDALRaster$new(a); expect_gt(d$getGeoTransform()[6], 0); d$close()
-  v <- gdal_mosaic_vrt(file.path(dir, "m.vrt"), c(a, b))
-  ds <- gdalraster::GDALRaster$new(v)
-  expect_equal(c(ds$getRasterXSize(), ds$getRasterYSize()), c(8L, 4L))
-  expect_lt(ds$getGeoTransform()[6], 0)                # north-up mosaic
-  vals <- ds$read(1L, 0L, 0L, 8L, 4L, 8L, 4L); ds$close()
-  expect_equal(sort(unique(as.integer(vals))), c(1L, 2L))  # both tiles present
-  # a source in another projection is warped in rather than skipped
-  c_path <- file.path(dir, "c.tif")
-  gdalraster::warp(b, c_path, t_srs = "EPSG:32721", cl_arg = c("-r", "near"), quiet = TRUE)
-  v2 <- gdal_mosaic_vrt(file.path(dir, "m2.vrt"), c(a, c_path))
-  n_src <- length(grep("<SourceFilename", readLines(v2, warn = FALSE), fixed = TRUE))
-  expect_equal(n_src, 2L)
+  expect_error(gdal_mosaic_vrt(file.path(dir, "m.vrt"), c(a, b)), "skipped|failed")
+  expect_false(file.exists(file.path(dir, "m.vrt")))
 })
 
-test_that("with a target grid the mosaic is built on that lattice, one resample", {
+test_that("tiles the mosaic cannot hold stay a multi-path node the warper reads together", {
   skip_if_not_installed("gdalraster")
   dir <- withr::local_tempdir()
   srs <- gdalraster::epsg_to_wkt(32722)
-  south_up <- function(path, x0, value) {
-    ds <- gdalraster::create("GTiff", path, 4L, 4L, 1L, "Int16", return_obj = TRUE)
+  south_up <- function(path, x0, values) {   # 3 bands, 4 x 4, one value per band
+    ds <- gdalraster::create("GTiff", path, 4L, 4L, 3L, "Int16", return_obj = TRUE)
     ds$setProjection(srs)
     ds$setGeoTransform(c(x0, 10, 0, 7900000, 0, 10))
-    ds$write(1L, 0L, 0L, 4L, 4L, rep(value, 16L))
+    for (b in 1:3) ds$write(b, 0L, 0L, 4L, 4L, rep(values[[b]], 16L))
     ds$close()
     path
   }
-  a <- south_up(file.path(dir, "a.tif"), 100000, 1L)
-  b <- south_up(file.path(dir, "b.tif"), 100040, 3L)
-  # a 20 m target grid offset by 5 m from the tiles, covering both
-  tg <- grid_spec(srs, extent = c(99995, 7899995, 100085, 7900045), res = 20)
-  v <- gdal_mosaic_vrt(file.path(dir, "t.vrt"), c(a, b), target = tg, resampling = "average")
-  ds <- gdalraster::GDALRaster$new(v)
-  gt <- ds$getGeoTransform()
-  expect_equal(gt[[2L]], 20); expect_equal(gt[[6L]], -20)
-  expect_equal((gt[[1L]] - tg@transform[[1L]]) %% 20, 0)   # on the target lattice
-  expect_equal((tg@transform[[4L]] - gt[[4L]]) %% 20, 0)
-  vals <- ds$read(1L, 0L, 0L, ds$getRasterXSize(), ds$getRasterYSize(), ds$getRasterXSize(), ds$getRasterYSize()); ds$close()
-  expect_true(all(vals[is.finite(vals)] >= 1 & vals[is.finite(vals)] <= 3))   # averaged, in range
-  expect_true(any(vals == 1) && any(vals == 3))                              # both tiles contribute
-  # the lazy dataset over the pair on that grid reads exactly the target dims
-  d <- lazy_dataset(c(a, b), tg, resampling = "average")
-  expect_s7_class(d, LazyDataset)
+  a <- south_up(file.path(dir, "a.tif"), 100000, c(1L, 10L, 100L))
+  b <- south_up(file.path(dir, "b.tif"), 100040, c(2L, 20L, 200L))
+  tg <- grid_spec(srs, extent = c(100000, 7900000, 100080, 7900040), res = 10)
+  src_of <- function(lr) {
+    n <- graph_get(lr@graph, lr@node_id)
+    while (!S7::S7_inherits(n, SourceNode)) n <- graph_get(lr@graph, n@parents[[1L]])
+    n
+  }
+  d <- lazy_dataset(c(a, b), tg, resampling = "near")
+  # the source node carries both paths; the direct read path declines it
+  src <- src_of(d@bands[[1L]][[1L]])
+  expect_length(src@path, 2L)
+  expect_null(.rio_direct_spec(src@path, tg, "near", band = 1L))
+  # the planning grid is the union of both footprints, north-up
+  expect_lt(src@grid@transform[[6L]], 0)
+  expect_equal(unname(src@grid@extent), c(100000, 7900000, 100080, 7900040))
+  # every band reads both tiles
+  for (k in 1:3) {
+    out <- file.path(dir, sprintf("b%d.tif", k))
+    write_tif(lazy_dataset(c(a, b), tg, resampling = "near", assets = sprintf("b%d", k)), out, dtype = "i16")
+    ds <- gdalraster::GDALRaster$new(out)
+    vals <- as.integer(ds$read(1L, 0L, 0L, 8L, 4L, 8L, 4L)); ds$close()
+    expect_equal(sort(unique(vals)), sort(c(1L, 2L) * 10L^(k - 1L)))
+  }
+  # a tile in a neighbouring projection joins the same way
+  c_path <- file.path(dir, "c.tif")
+  gdalraster::warp(b, c_path, t_srs = "EPSG:32721", cl_arg = c("-r", "near"), quiet = TRUE)
+  out <- file.path(dir, "ac.tif")
+  write_tif(lazy_dataset(c(a, c_path), tg, resampling = "near", assets = "b1"), out, dtype = "i16")
+  ds <- gdalraster::GDALRaster$new(out)
+  vals <- as.integer(ds$read(1L, 0L, 0L, 8L, 4L, 8L, 4L)); ds$close()
+  expect_true(all(c(1L, 2L) %in% vals))
+  # aligned north-up tiles still take the mosaic (one path, a VRT)
+  north_up <- function(path, x0, value) {
+    ds <- gdalraster::create("GTiff", path, 4L, 4L, 1L, "Int16", return_obj = TRUE)
+    ds$setProjection(srs); ds$setGeoTransform(c(x0, 10, 0, 7900040, 0, -10))
+    ds$write(1L, 0L, 0L, 4L, 4L, rep(value, 16L)); ds$close(); path
+  }
+  n1 <- north_up(file.path(dir, "n1.tif"), 100000, 5L); n2 <- north_up(file.path(dir, "n2.tif"), 100040, 6L)
+  dn <- lazy_dataset(c(n1, n2), tg, resampling = "near")
+  srcn <- src_of(dn@bands[[1L]][[1L]])
+  expect_length(srcn@path, 1L); expect_match(srcn@path, "\\.vrt$")
 })

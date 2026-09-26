@@ -361,7 +361,10 @@ lazy_dataset <- function(
 }
 
 # File form of lazy_dataset(): one band per (selected) file band, one time
-# slice. A vector of paths mosaics first (same-CRS tiles, gdalbuildvrt). ONE
+# slice. A vector of paths mosaics first (same-CRS north-up tiles,
+# gdalbuildvrt); tiles the mosaic cannot hold (south-up, or across a
+# projection boundary) stay a multi-path source node that the warper
+# reads together, band by band (gdal_warp_vrt()). ONE
 # metadata probe serves every band (.gdal_handle caches the dataset handle),
 # and the probed grid is DECLARED on each band source, so construction costs
 # one header fetch however many bands the file carries. Each band is its own
@@ -390,20 +393,21 @@ lazy_dataset <- function(
   # an unprefixed remote URL there makes GDAL pull the ENTIRE file (a
   # 2.7 GB AEF tile), observed live 2026-08-12.
   paths <- vapply(as.character(paths), .gdal_href, "", USE.NAMES = FALSE)
+  meta <- NULL
   path <- if (length(paths) > 1L) {
-    # one resampling for every band lets the mosaic be built straight on
-    # the target grid (gdal_mosaic_vrt); per-band methods keep the warp
-    # on read
-    rs <- if (is.null(names(resampling)) && length(unique(unname(resampling))) == 1L) {
-      unname(resampling[[1L]])
+    probes <- .source_probes(paths)
+    if (.mosaicable(probes)) {
+      gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
+    } else {
+      meta <- .multi_source_meta(paths, probes)
+      paths
     }
-    gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths, target = grid, resampling = rs)
   } else {
     paths[[1L]]
   }
 
-  meta <- gdal_grid_spec(path)
-  ds <- .gdal_handle(path)
+  if (is.null(meta)) meta <- gdal_grid_spec(path)
+  ds <- .gdal_handle(path[[1L]])
   nb <- ds$getRasterCount()
   descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), "")
 
