@@ -245,9 +245,9 @@ NULL
     if (is.null(n)) next
     if (S7::S7_inherits(n, SourceNode)) {
       ln <- if (length(n@name)) {
-        .glue("asset: {n@name} \u00b7 {basename(n@path)}")
+        .glue("asset: {n@name} \u00b7 {paste(basename(n@path), collapse = ', ')}")
       } else {
-        .glue("file: {basename(n@path)} ",
+        .glue("file: {paste(basename(n@path), collapse = ', ')} ",
               "(band {paste(n@band, collapse = ',')})")
       }
       if (length(n@scale)) {

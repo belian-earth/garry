@@ -373,7 +373,8 @@ NULL
   store_raw = FALSE,
   scale = numeric(0),
   offset = numeric(0),
-  decim = NULL
+  decim = NULL,
+  resampling = "near"
 ) {
   m <- .exec_read_padded(
     path,
@@ -385,7 +386,8 @@ NULL
     out = if (read_raw) "raw_f32" else "matrix",
     scale = scale,
     offset = offset,
-    decim = decim
+    decim = decim,
+    resampling = resampling
   )
   if (!is.null(fuse)) {
     m <- .apply_fuse(m, fuse, store_raw)

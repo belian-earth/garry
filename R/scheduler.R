@@ -389,7 +389,7 @@ execute_plan_mirai <- function(
   )
 
   prepare_fetch <- function(rpath, roo, rnodata, grid) {
-    if (fetch_mode == "direct" || !startsWith(rpath, "GTI:")) {
+    if (fetch_mode == "direct" || length(rpath) != 1L || !startsWith(rpath, "GTI:")) {
       return(NULL)
     }
     ipath <- sub("^GTI:", "", rpath)
@@ -665,10 +665,12 @@ execute_plan_mirai <- function(
         rsc <- rp$scale
         rof <- rp$offset
         rdecim <- rp$decim
+        rresamp <- rp$resampling %||% "near"
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
         rband <- node@band
+        rresamp <- node@resampling
         rnodata <- node@nodata
         roo <- node@open_options
         rsc <- node@scale
@@ -790,6 +792,7 @@ execute_plan_mirai <- function(
             sc <- rsc
             of <- rof
             dcm <- rdecim
+            rsm <- rresamp
             key <- .glue("s{sid}_c{jj}")
             add_task(
               key,
@@ -813,7 +816,8 @@ execute_plan_mirai <- function(
                     store_raw = sr,
                     scale = sc,
                     offset = of,
-                    decim = dcm
+                    decim = dcm,
+                    resampling = rsm
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -829,6 +833,7 @@ execute_plan_mirai <- function(
                   sc = sc,
                   of = of,
                   dcm = dcm,
+                  rsm = rsm,
                   .compute = prof
                 )
               }
@@ -874,6 +879,7 @@ execute_plan_mirai <- function(
             sc <- rsc
             of <- rof
             dcm <- rdecim
+            rsm <- rresamp
             key <- .glue("s{sid}_r{rr2}")
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -909,7 +915,8 @@ execute_plan_mirai <- function(
                     store_raw = sr,
                     scale = sc,
                     offset = of,
-                    decim = dcm
+                    decim = dcm,
+                    resampling = rsm
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -925,6 +932,7 @@ execute_plan_mirai <- function(
                   sc = sc,
                   of = of,
                   dcm = dcm,
+                  rsm = rsm,
                   reg = .glue("r{run_id}_{key}"),
                   .compute = prof
                 )

@@ -115,7 +115,7 @@ lazy_source <- function(
 ) {
   if (is.null(grid)) {
     meta <- gdal_grid_spec(
-      path,
+      path[[1L]],
       band = as.integer(band),
       open_options = open_options
     )
@@ -134,7 +134,7 @@ lazy_source <- function(
     function() {
       if (is.null(meta)) {
         meta <<- gdal_grid_spec(
-          path,
+          path[[1L]],
           band = as.integer(band),
           open_options = open_options
         )
