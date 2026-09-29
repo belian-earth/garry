@@ -13,9 +13,11 @@ kfas_llt <- function(y, q_lvl, q_slp, h) {
     y ~ SSMtrend(degree = 2, Q = list(matrix(q_lvl), matrix(q_slp))),
     H = array(h, c(1, 1, length(y)))
   )
-  ks <- KFAS::KFS(m, smoothing = "state")
+  ks <- KFAS::KFS(m, filtering = "state", smoothing = "state")
   list(mean = as.numeric(ks$alphahat[, "level"]),
-       sd = sqrt(pmax(ks$V[1, 1, ], 0)))
+       sd = sqrt(pmax(ks$V[1, 1, ], 0)),
+       fmean = as.numeric(ks$att[, "level"]),
+       fsd = sqrt(pmax(ks$Ptt[1, 1, ], 0)))
 }
 
 # hutan-like hyperparameters used throughout: sigma_lvl 1, sigma_slp 0.1,
@@ -113,7 +115,7 @@ test_that("traced (PJRT) body matches the untraced oracle", {
   set.seed(6)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
   cube[sample(length(cube), 30)] <- NaN
-  for (output in c("mean", "sd")) {
+  for (output in c("mean", "sd", "fmean", "fsd")) {
     body <- .k_body(output)
     jf <- g_jit(function(x) body(list(x), 1L))
     traced <- g_download(jf(g_upload(cube, "f32")))
@@ -327,4 +329,36 @@ test_that("mean+sd collect as ONE multi-sink plan, scans sharing a stage", {
                tolerance = 1e-6)
   expect_equal(both$sd, collect(sm$sd, distributed = FALSE),
                tolerance = 1e-6)
+})
+
+test_that("filtered mean and sd match KFAS; the revision variance is fsd^2 - sd^2", {
+  skip_if_not_installed("KFAS")
+  set.seed(12)
+  cases <- list(
+    dense    = .k_series(),
+    leading  = { y <- .k_series(); y[1:4] <- NaN; y },
+    midgap   = { y <- .k_series(); y[6:9] <- NaN; y },
+    short5   = .k_series(5)
+  )
+  for (nm in names(cases)) {
+    y <- cases[[nm]]
+    cube <- array(y, c(length(y), 1, 1))
+    ref <- kfas_llt(y, q_lvl = 1, q_slp = 0.01, h = 4)
+    fm <- as.numeric(.k_body("fmean")(list(cube), 1L))
+    fs <- as.numeric(.k_body("fsd")(list(cube), 1L))
+    # the local linear trend has two diffuse states: until two years are
+    # observed KFAS (exact diffuse) and garry (kappa) differ by design
+    ok <- cumsum(!is.na(y)) >= 2L
+    expect_lt(max(abs(fm[ok] - ref$fmean[ok]) / pmax(abs(ref$fmean[ok]), 1)), 1e-5,
+              label = paste0(nm, ": filtered mean rel diff"))
+    expect_lt(max(abs(fs[ok] - ref$fsd[ok]) / pmax(ref$fsd[ok], 1e-9)), 1e-5,
+              label = paste0(nm, ": filtered sd rel diff"))
+    # the last year is both filtered and smoothed
+    sm <- as.numeric(.k_body("mean")(list(cube), 1L))
+    ss <- as.numeric(.k_body("sd")(list(cube), 1L))
+    last <- max(which(!is.na(fm)))
+    expect_equal(fm[last], sm[last], tolerance = 1e-10)
+    # smoothing never adds variance: fsd >= sd wherever both are defined
+    expect_true(all(fs[ok] >= ss[ok] - 1e-9))
+  }
 })

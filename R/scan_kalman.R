@@ -60,7 +60,12 @@
 #'
 #' @param sigma_lvl,sigma_slp,sigma_obs Noise standard deviations (level
 #'   disturbance, slope disturbance, observation).
-#' @param output `"mean"` (smoothed level) or `"sd"` (its standard error).
+#' @param output `"mean"` (smoothed level), `"sd"` (its standard error),
+#'   `"fmean"` (the forward-filtered level: each year from that year and
+#'   earlier ones only) or `"fsd"` (its standard error). Under the model
+#'   the smoother's revision `mean - fmean` has variance `fsd^2 - sd^2`,
+#'   so a revision far outside it flags change the model cannot
+#'   represent (a step, carried backwards by the smoother).
 #' @param robust_iters Robust reweighting passes (0 = plain smoother).
 #'   Each pass inflates the level noise at years whose smoothed-level
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
@@ -75,7 +80,7 @@ kalman_llt <- function(
   sigma_lvl,
   sigma_slp,
   sigma_obs = 1,
-  output = c("mean", "sd"),
+  output = c("mean", "sd", "fmean", "fsd"),
   robust_iters = 0L,
   robust_threshold = 3,
   robust_inflation = 100,
@@ -176,6 +181,7 @@ kalman_llt <- function(
             out = list(
               a1f = a1,
               a2f = a2,
+              P11f = P11,
               a1p = a1p,
               a2p = a2p,
               P11p = P11p,
@@ -193,10 +199,18 @@ kalman_llt <- function(
         list(m = g_ifelse(ok, a1s, NaN), s = g_ifelse(ok, sd, NaN))
       }
       last <- emit(fwd$carry$a1, fwd$carry$P11) # smoothed(T) = filtered(T)
+      # the forward filter at every year: (t, y, x) cubes, gap-masked
+      okT <- g_rep_t(ok, T_)
+      filt <- list(
+        m = g_ifelse(okT, fwd$out$a1f, NaN),
+        s = g_ifelse(okT, sqrt(g_ifelse(fwd$out$P11f > 0, fwd$out$P11f, 0)), NaN)
+      )
       if (T_ == 1L) {
         return(list(
           mean = g_concat_t(list(last$m)),
-          sd = g_concat_t(list(last$s))
+          sd = g_concat_t(list(last$s)),
+          fmean = filt$m,
+          fsd = filt$s
         ))
       }
 
@@ -275,7 +289,9 @@ kalman_llt <- function(
       )
       list(
         mean = g_concat_t(list(bwd$out$m, last$m)),
-        sd = g_concat_t(list(bwd$out$s, last$s))
+        sd = g_concat_t(list(bwd$out$s, last$s)),
+        fmean = filt$m,
+        fsd = filt$s
       )
     }
 
@@ -315,7 +331,7 @@ kalman_llt <- function(
       }
     }
 
-    g_cast(if (output == "mean") sm$mean else sm$sd, out_dtype)
+    g_cast(sm[[output]], out_dtype)
   }
 }
 
@@ -330,7 +346,8 @@ kalman_llt <- function(
 #'   `LazyDataset` (each band smoothed independently).
 #' @param obs_var Optional relative observation-variance stack on the
 #'   same grid (`Var(v_t) = sigma_obs^2 * obs_var_t`).
-#' @param outputs Which outputs to build (`"mean"`, `"sd"`).
+#' @param outputs Which outputs to build (`"mean"`, `"sd"`, and the
+#'   forward-filtered `"fmean"`, `"fsd"`; see [kalman_llt()]).
 #' @param dtype Output dtype (default f32).
 #' @inheritParams kalman_llt
 #' @param ... Passed to [kalman_llt()].
@@ -348,7 +365,7 @@ kalman_smooth <- function(
   dtype = "f32",
   ...
 ) {
-  outputs <- match.arg(outputs, several.ok = TRUE)
+  outputs <- match.arg(outputs, c("mean", "sd", "fmean", "fsd"), several.ok = TRUE)
   target <- if (is.null(obs_var)) x else list(x, obs_var)
   stats::setNames(
     lapply(outputs, function(o) {
