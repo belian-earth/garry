@@ -65,7 +65,22 @@
 #'   earlier ones only) or `"fsd"` (its standard error). Under the model
 #'   the smoother's revision `mean - fmean` has variance `fsd^2 - sd^2`,
 #'   so a revision far outside it flags change the model cannot
-#'   represent (a step, carried backwards by the smoother).
+#'   represent (a step, carried backwards by the smoother). With `gate`,
+#'   `"mean"` and `"sd"` are the GATED level and sd; `"smean"`, `"ssd"`
+#'   are then the plain smoothed ones and `"gate"` the weight.
+#' @param gate `NULL`, or `list(prior, scale)`: gate the smoother on its
+#'   revision, inside the kernel. Per pixel and year the gated level is
+#'   `w * smoothed + (1 - w) * filtered`, with `w` the posterior
+#'   probability that the revision `d = smoothed - filtered` is
+#'   consistent with the model (`d ~ N(0, fsd^2 - sd^2)`) against a broad
+#'   alternative of prior `prior` and `scale` times that sd:
+#'   `w = 1 / (1 + prior / ((1 - prior) scale) exp(z^2/2 (1 - 1/scale^2)))`.
+#'   The gated sd is the mixture's. The gate only removes information
+#'   from later years, never adds it. Computing it here keeps the scan
+#'   to two outputs: every output materialises per chunk until its
+#'   consumers run, and gating outside the kernel (four outputs plus the
+#'   weight and the blend) held ~100 GB per daemon on a 10.4 M pixel,
+#'   15-year index.
 #' @param robust_iters Robust reweighting passes (0 = plain smoother).
 #'   Each pass inflates the level noise at years whose smoothed-level
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
@@ -80,8 +95,9 @@ kalman_llt <- function(
   sigma_lvl,
   sigma_slp,
   sigma_obs = 1,
-  output = c("mean", "sd", "fmean", "fsd"),
+  output = c("mean", "sd", "fmean", "fsd", "smean", "ssd", "gate"),
   robust_iters = 0L,
+  gate = NULL,
   robust_threshold = 3,
   robust_inflation = 100,
   kappa = 1e7,
@@ -114,6 +130,16 @@ kalman_llt <- function(
     cli::cli_abort(
       "{.arg out_dtype} must be a valid dtype; got {.val {out_dtype}}"
     )
+  }
+  if (!is.null(gate)) {
+    ok_gate <- is.list(gate) && is.numeric(gate$prior) && is.numeric(gate$scale) &&
+      length(gate$prior) == 1L && length(gate$scale) == 1L &&
+      gate$prior > 0 && gate$prior < 1 && gate$scale > 1
+    if (!ok_gate) {
+      cli::cli_abort("{.arg gate} must be NULL or list(prior in (0, 1), scale > 1)")
+    }
+  } else if (output %in% c("smean", "ssd", "gate")) {
+    cli::cli_abort("output {.val {output}} needs {.arg gate}")
   }
 
   function(xs, margin) {
@@ -331,6 +357,22 @@ kalman_llt <- function(
       }
     }
 
+    if (!is.null(gate)) {
+      # the gate, on the final pass's smoothed and filtered states
+      a <- kv(gate$prior / ((1 - gate$prior) * gate$scale))
+      k <- kv(0.5 * (1 - 1 / gate$scale^2))
+      d <- sm$mean - sm$fmean
+      rv <- sm$fsd * sm$fsd - sm$sd * sm$sd
+      rv <- g_ifelse(rv > 1e-12, rv, kv(1e-12) + 0 * rv)
+      z2 <- d * d / rv
+      z2 <- g_ifelse(k * z2 < 80, k * z2, kv(80) + 0 * z2)
+      w <- 1 / (1 + a * exp(z2))
+      w <- g_ifelse(g_is_nodata(w), kv(1) + 0 * d, w)
+      gm <- w * sm$mean + (1 - w) * sm$fmean
+      gs <- sqrt(w * sm$sd * sm$sd + (1 - w) * sm$fsd * sm$fsd + w * (1 - w) * d * d)
+      sm <- list(mean = gm, sd = gs, fmean = sm$fmean, fsd = sm$fsd,
+                 smean = sm$mean, ssd = sm$sd, gate = w)
+    }
     g_cast(sm[[output]], out_dtype)
   }
 }
@@ -365,7 +407,7 @@ kalman_smooth <- function(
   dtype = "f32",
   ...
 ) {
-  outputs <- match.arg(outputs, c("mean", "sd", "fmean", "fsd"), several.ok = TRUE)
+  outputs <- match.arg(outputs, c("mean", "sd", "fmean", "fsd", "smean", "ssd", "gate"), several.ok = TRUE)
   target <- if (is.null(obs_var)) x else list(x, obs_var)
   stats::setNames(
     lapply(outputs, function(o) {

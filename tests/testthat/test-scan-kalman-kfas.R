@@ -362,3 +362,40 @@ test_that("filtered mean and sd match KFAS; the revision variance is fsd^2 - sd^
     expect_true(all(fs[ok] >= ss[ok] - 1e-9))
   }
 })
+
+test_that("gate: the kernel's gated level matches the formula on the plain outputs; a late step stays out of earlier years", {
+  gate <- list(prior = 0.05, scale = 5)
+  set.seed(3); T_ <- 12L
+  y <- c(rep(1, T_ - 2L), 3, 3) + stats::rnorm(T_, 0, 0.05)
+  cube <- array(y, c(T_, 1L, 1L)); r <- array(1, c(T_, 1L, 1L))
+  kb <- function(o, g = NULL) kalman_llt(1e-4, 0.05, 0.1, output = o, out_dtype = "f64", gate = g)
+  out <- function(o, g = NULL) as.numeric(kb(o, g)(list(cube, r), 1L))
+  sm <- out("mean"); ss <- out("sd"); fm <- out("fmean"); fs <- out("fsd")
+  # the formula, as hutan's .gate_fns()
+  a <- gate$prior / ((1 - gate$prior) * gate$scale); k <- 0.5 * (1 - 1 / gate$scale^2)
+  d <- sm - fm; rv <- pmax(fs^2 - ss^2, 1e-12); w <- 1 / (1 + a * exp(pmin(k * d^2 / rv, 80)))
+  expect_equal(out("gate", gate), w, tolerance = 1e-8)
+  expect_equal(out("mean", gate), w * sm + (1 - w) * fm, tolerance = 1e-8)
+  expect_equal(out("sd", gate), sqrt(w * ss^2 + (1 - w) * fs^2 + w * (1 - w) * d^2), tolerance = 1e-8)
+  expect_equal(out("smean", gate), sm); expect_equal(out("ssd", gate), ss)
+  # the two-sided smoother lifts the pre-step years; the gated level does not
+  pre <- 4:(T_ - 2L)
+  expect_gt(max(sm[pre]) - 1, 0.3)
+  expect_lt(max(abs(out("mean", gate)[pre] - 1)), 0.1)
+  expect_error(kb("gate"), "needs")
+  expect_error(kalman_llt(1, 0.1, 1, gate = list(prior = 2, scale = 5)), "prior")
+})
+
+test_that("gate: traced (PJRT) body matches the untraced oracle", {
+  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
+  set.seed(8)
+  cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3)); cube[sample(length(cube), 20)] <- NaN
+  for (output in c("mean", "sd", "gate")) {
+    body <- .k_body(output, gate = list(prior = 0.05, scale = 5))
+    jf <- g_jit(function(x) body(list(x), 1L))
+    traced <- g_download(jf(g_upload(cube, "f32")))
+    untraced <- body(list(cube), 1L)
+    expect_identical(is.na(traced), is.na(untraced))
+    expect_lt(max(abs(traced - untraced), na.rm = TRUE), 1e-3)
+  }
+})
