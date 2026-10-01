@@ -15,7 +15,7 @@ Depends:
     R (>= 4.3)
 Imports:
     S7,
-    anvl (>= 0.4.0.9000),
+    anvl (>= 0.5.1),
     cli,
     codetools,
     gdalraster (>= 2.6.1.9001),

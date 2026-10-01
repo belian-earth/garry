@@ -69,16 +69,16 @@ g_value_and_gradient <- function(f, wrt) {
   anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
 }
 
-# anvl cannot build unsigned arrays from R numerics; upload through a
-# signed (or f64 for u64) carrier wide enough for the full value range.
-# Bitwise/comparison semantics are unchanged for the non-negative
-# values QA bands hold. Candidate upstream contribution.
+# Unsigned dtypes upload through a signed (or f64 for u64) carrier wide
+# enough for the full value range. anvl >= 0.5 can build unsigned arrays
+# from R, but the kernels are verified against the carriers, so they stay.
+# Bitwise/comparison semantics are unchanged for the non-negative values
+# QA bands hold.
 .anvl_upload_dtype <- c(u8 = "i16", u16 = "i32", u32 = "i64", u64 = "f64")
 
 #' Upload an R array to an AnvlArray of the given garry dtype.
 #'
-#' Unsigned dtypes upload via a wider signed carrier: anvl cannot
-#' construct them from R numerics.
+#' Unsigned dtypes upload via a wider signed carrier.
 #'
 #' @param x R array/matrix.
 #' @param dtype garry dtype string (anvl-aligned).
@@ -100,9 +100,9 @@ g_upload <- function(x, dtype, device = NULL) {
     x[is.na(x)] <- 0
   }
   if (is.null(device)) {
-    anvl::nv_array(x, dtype)
+    anvl::nv_array(x, dtype = dtype)
   } else {
-    anvl::nv_array(x, dtype, device = device)
+    anvl::nv_array(x, dtype = dtype, device = device)
   }
 }
 
@@ -124,33 +124,18 @@ g_download <- function(x) {
 
 # -- Raw f32 transport (phase 12c, D19/D20) -----------------------------------
 
-# Does the installed anvl accept raw byte payloads in nv_array?
-# Released anvl (<= 0.3.0.9000 upstream) does not; the patched local
-# branch does at the same version string, so probe behaviour, not
-# versions. Memoised per process (daemons probe once each).
-.g_raw_probe <- new.env(parent = emptyenv())
+# anvl >= 0.5 accepts raw byte payloads in nv_array, so the raw path is
+# available wherever anvl is. Kept as a function: callers (daemons,
+# hutan's engine) gate on it.
 
 #' Can uploads take the raw byte path?
 #'
-#' Internal capability probe (exported for daemon use via `::`).
-#' @return `TRUE` if `anvl::nv_array` accepts raw payloads.
+#' Internal capability check (exported for daemon use via `::`).
+#' @return `TRUE` if anvl is installed.
 #' @keywords internal
 #' @export
 .g_has_raw_upload <- function() {
-  ok <- .g_raw_probe$ok
-  if (!is.null(ok)) {
-    return(ok)
-  }
-  ok <- rlang::is_installed("anvl") &&
-    tryCatch(
-      {
-        x <- anvl::nv_array(as.raw(c(0L, 0L, 128L, 63L)), "f32", shape = 1L)
-        identical(as.numeric(anvl::as_array(x)), 1)
-      },
-      error = function(e) FALSE
-    )
-  .g_raw_probe$ok <- ok
-  ok
+  rlang::is_installed("anvl")
 }
 
 #' Upload a raw byte payload to an AnvlArray.
@@ -170,9 +155,15 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   .require_anvl()
   attributes(bytes) <- NULL
   if (is.null(device)) {
-    anvl::nv_array(bytes, dtype, shape = dim, byrow = TRUE)
+    anvl::nv_array(bytes, shape = dim, dtype = dtype, byrow = TRUE)
   } else {
-    anvl::nv_array(bytes, dtype, shape = dim, byrow = TRUE, device = device)
+    anvl::nv_array(
+      bytes,
+      shape = dim,
+      dtype = dtype,
+      byrow = TRUE,
+      device = device
+    )
   }
 }
 
@@ -247,7 +238,7 @@ g_round <- function(x) {
 #' @export
 g_clamp <- function(x, lo, hi) {
   .require_anvl()
-  anvl::nv_clamp(lo, x, hi)
+  anvl::nv_clamp(x, lo, hi)
 }
 
 # Integer output ranges for quantized sinks (mirrors GDAL's clamp at
@@ -368,8 +359,8 @@ g_pad <- function(x, h, value = 0) {
     return(anvl::nv_pad(
       x,
       .g_scalar_like(x, value),
-      edge_padding_low = c(lead, h, h),
-      edge_padding_high = c(lead, h, h)
+      low = c(lead, h, h),
+      high = c(lead, h, h)
     ))
   }
   out <- matrix(value, nrow(x) + 2L * h, ncol(x) + 2L * h)
@@ -398,7 +389,7 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
     return(anvl::nv_static_slice(
       xpad,
       start_indices = c(rep(1L, lead), 1L + h + dy, 1L + h + dx),
-      limit_indices = c(
+      end_indices = c(
         sh[seq_len(lead)],
         out_nrow + h + dy,
         out_ncol + h + dx
@@ -471,7 +462,7 @@ g_index_scalar <- function(v, i) {
       anvl::nv_static_slice(
         v,
         start_indices = i,
-        limit_indices = i,
+        end_indices = i,
         strides = 1L
       ),
       integer(0)
@@ -482,25 +473,17 @@ g_index_scalar <- function(v, i) {
 
 # -- Scan (carried-state loop along dim 1) ------------------------------------
 
-# Does the installed anvl provide nv_scan? Released anvl does not; the
-# patched local branch does. Probe existence, memoised per process.
-.g_scan_probe <- new.env(parent = emptyenv())
+# anvl >= 0.5 provides nv_scan, so scans trace wherever anvl is. Kept as
+# a function for the callers that gate on it.
 
 #' Can scans take the traced path?
 #'
-#' Internal capability probe (exported for daemon use via `::`).
-#' @return `TRUE` if `anvl::nv_scan` is available.
+#' Internal capability check (exported for daemon use via `::`).
+#' @return `TRUE` if anvl is installed.
 #' @keywords internal
 #' @export
 .g_has_nv_scan <- function() {
-  ok <- .g_scan_probe$ok
-  if (!is.null(ok)) {
-    return(ok)
-  }
-  ok <- rlang::is_installed("anvl") &&
-    is.function(asNamespace("anvl")$nv_scan)
-  .g_scan_probe$ok <- ok
-  ok
+  rlang::is_installed("anvl")
 }
 
 # Slice step `t` off dim 1 of a plain-R array, dropping the unit axis
@@ -606,17 +589,11 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
     (!is.null(xs) && .g_tree_any(xs, .g_traced))
   if (traced) {
     .require_anvl()
-    if (!.g_has_nv_scan()) {
-      cli::cli_abort(c(
-        "The installed {.pkg anvl} does not provide {.fn nv_scan}.",
-        "i" = "Install the anvl branch with the scan wrapper (nv-scan)."
-      ))
-    }
     return(anvl::nv_scan(
       .g_scan_settle_init(init, body, xs),
-      body,
       xs = xs,
-      length = length,
+      body = body,
+      steps = length,
       reverse = reverse
     ))
   }
@@ -686,7 +663,7 @@ g_slice_t <- function(x, from, to) {
     return(anvl::nv_static_slice(
       x,
       start_indices = c(from, rep(1L, length(sh) - 1L)),
-      limit_indices = c(to, sh[-1L]),
+      end_indices = c(to, sh[-1L]),
       strides = rep(1L, length(sh))
     ))
   }
@@ -707,7 +684,7 @@ g_slice_t <- function(x, from, to) {
   anvl::nv_static_slice(
     x,
     start_indices = st,
-    limit_indices = lim,
+    end_indices = lim,
     strides = rep(1L, length(sh))
   )
 }
@@ -795,15 +772,29 @@ g_expand <- function(x, axis, n) {
 
 # -- Pixel-matrix bridge (band-collapsing linear algebra) ----------------------
 
+# Row-major reshape of a traced array. anvl reshapes column-major and
+# lowers that as reverse-axes transpose, row-major reshape, reverse-axes
+# transpose; wrapping it in the same reversals cancels both transposes, so
+# this is a free reshape of the row-major device buffer. A column-major
+# reshape that merges (y, x) would put y fastest against a buffer that
+# stores x fastest, and XLA then copies the whole chunk.
+.g_reshape_rm <- function(x, shape) {
+  rev_axes <- function(v) {
+    n <- length(.g_shape(v))
+    if (n <= 1L) v else anvl::nv_transpose(v, perm = rev(seq_len(n)))
+  }
+  rev_axes(anvl::nv_reshape(rev_axes(x), rev(as.integer(shape))))
+}
+
 # Flatten a (band, y, x) chunk to a (band, npix) matrix and back. The
-# pixel ordering is backend-defined (anvl reshapes row-major, base R
-# column-major) so these are ONLY valid as an inverse pair around
-# per-pixel math: matmul mixes bands within a pixel column, never
-# across pixels, so the ordering cancels.
+# pixel ordering is backend-defined (row-major traced, column-major in
+# base R) so these are ONLY valid as an inverse pair around per-pixel
+# math: matmul mixes bands within a pixel column, never across pixels,
+# so the ordering cancels.
 .g_flatten_yx <- function(x) {
   if (.g_traced(x)) {
     sh <- .g_shape(x)
-    return(anvl::nv_reshape(x, c(sh[[1L]], prod(sh[-1L]))))
+    return(.g_reshape_rm(x, c(sh[[1L]], prod(sh[-1L]))))
   }
   d <- dim(x)
   matrix(x, nrow = d[[1L]])
@@ -811,7 +802,7 @@ g_expand <- function(x, axis, n) {
 
 .g_unflatten_yx <- function(v, ny, nx) {
   if (.g_traced(v)) {
-    return(anvl::nv_reshape(v, c(as.integer(ny), as.integer(nx))))
+    return(.g_reshape_rm(v, c(ny, nx)))
   }
   matrix(as.vector(v), ny, nx)
 }
@@ -820,10 +811,7 @@ g_expand <- function(x, axis, n) {
 # flatten ordering, so it is only valid around per-pixel-column math.
 .g_unflatten_kyx <- function(v, k, ny, nx) {
   if (.g_traced(v)) {
-    return(anvl::nv_reshape(
-      v,
-      c(as.integer(k), as.integer(ny), as.integer(nx))
-    ))
+    return(.g_reshape_rm(v, c(k, ny, nx)))
   }
   array(as.vector(v), c(k, ny, nx))
 }
@@ -863,14 +851,14 @@ NULL
 #' @export
 g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
-    return(anvl::nv_reduce_sum(x, axes = dims, nan_rm = nan_rm))
+    return(anvl::nv_sum(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))
 }
 
 #' Broadcast arrays to a common shape (compute vocabulary).
 #'
-#' numpy-style broadcasting for the `g_*` vocabulary: the hook for per-band
+#' Broadcasting for the `g_*` vocabulary: the hook for per-band
 #' constants in a band reducer -- multiply a `(band, y, x)` cube by a
 #' `(band, 1, 1)` loading vector before summing over band (a linear projection;
 #' see [band_project()]). anvl requires operands broadcast explicitly. Traces to
@@ -917,7 +905,7 @@ g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_min <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
-    return(anvl::nv_reduce_min(x, axes = dims, nan_rm = nan_rm))
+    return(anvl::nv_min(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
@@ -929,7 +917,7 @@ g_min <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_max <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
-    return(anvl::nv_reduce_max(x, axes = dims, nan_rm = nan_rm))
+    return(anvl::nv_max(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) {
     v <- .nan_filter(v, nan_rm)
@@ -941,7 +929,7 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
-    return(anvl::nv_median(x, axis = dims, nan_rm = nan_rm))
+    return(anvl::nv_median(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) {
     m <- stats::median(v, na.rm = nan_rm)
@@ -954,7 +942,7 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
 g_count <- function(x, dims = NULL) {
   if (.g_traced(x)) {
     valid <- anvl::nv_convert(anvl::nv_not(anvl::nv_is_nan(x)), "f32")
-    return(anvl::nv_reduce_sum(valid, axes = dims))
+    return(anvl::nv_sum(valid, axes = dims))
   }
   .g_reduce(x, dims, function(v) sum(!is.na(v)))
 }
@@ -1151,9 +1139,9 @@ g_conv2d <- function(
 g_upsample2x <- function(x) {
   if (.g_traced(x)) {
     sh <- .g_shape(x)
-    u <- anvl::nv_unsqueeze(anvl::nv_unsqueeze(x, 3L), 5L) # (C,H,1,W,1)
+    u <- anvl::nv_unsqueeze(x, c(3L, 5L)) # (C,H,1,W,1)
     b <- anvl::nv_broadcast_to(u, c(sh[[1L]], sh[[2L]], 2L, sh[[3L]], 2L))
-    return(anvl::nv_reshape(b, c(sh[[1L]], 2L * sh[[2L]], 2L * sh[[3L]])))
+    return(.g_reshape_rm(b, c(sh[[1L]], 2L * sh[[2L]], 2L * sh[[3L]])))
   }
   d <- dim(x)
   x[,
@@ -1183,8 +1171,8 @@ g_pad_rb <- function(x, dy, dx, value = 0) {
     return(anvl::nv_pad(
       x,
       value,
-      edge_padding_low = rep(0L, r),
-      edge_padding_high = hi
+      low = rep(0L, r),
+      high = hi
     ))
   }
   d <- dim(x)
@@ -1207,7 +1195,7 @@ g_pad_rb <- function(x, dy, dx, value = 0) {
 #' @export
 g_transpose <- function(x, perm = NULL) {
   if (.g_traced(x)) {
-    return(anvl::nv_transpose(x, permutation = perm))
+    return(anvl::nv_transpose(x, perm = perm))
   }
   aperm(x, perm)
 }
