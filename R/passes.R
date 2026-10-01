@@ -1450,13 +1450,7 @@ plan_lazy <- function(x) {
   # scans for that; a one-way scan keeps the ~7-cube figure. Undercounting
   # here oversizes the scan chunk and lets the compute budget over-admit
   # concurrent scan chunks against their true f64 working set.
-  # Sibling scans sharing the stage (kalman_smooth's outputs) compile into
-  # one kernel and share the forward pass, but each keeps its own backward
-  # pass and output cubes live: charge the SUM over the stage's scans.
-  # Charging the max (as before) admitted a four-output smoother at a
-  # quarter of its working set: 144 GB against 42 GB modelled, then an
-  # out-of-memory kill, on a 10.4 M pixel, 15-year index.
-  scan_px <- sum(c(
+  scan_px <- max(c(
     0,
     vapply(
       members,
