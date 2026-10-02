@@ -12,20 +12,7 @@ NULL
 
 # Reduction vocabulary. Named ops (not arbitrary functions) so the
 # planner can decide algebraic decomposition (D12) and output dtype.
-.reduce_ops <- c(
-  "sum",
-  "mean",
-  "min",
-  "max",
-  "prod",
-  "median",
-  "quantile",
-  "sd",
-  "var",
-  "count",
-  "any",
-  "all"
-)
+.reduce_ops <- c("sum", "mean", "min", "max", "median", "count")
 
 #' Abstract IR node.
 #'
@@ -194,8 +181,8 @@ FocalNode <- S7::new_class(
 #' Reduction over named dims. Barrier: forces materialisation of its inputs.
 #'
 #' Created by [reduce_over()]. `op` is normally one of the named
-#' reductions "sum", "mean", "min", "max", "prod", "median",
-#' "quantile", "sd", "var", "count", "any", "all": the planner needs op
+#' reductions "sum", "mean", "min", "max", "median", "count": the
+#' planner needs op
 #' identity to decide algebraic decomposition and output dtype, and
 #' the executor maps it to the ops vocabulary. A CUSTOM reducer may
 #' instead be supplied as `fn` (a length-1 list holding an anvl function

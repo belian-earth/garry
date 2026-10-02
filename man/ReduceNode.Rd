@@ -42,8 +42,8 @@ A \code{ReduceNode}.
 }
 \description{
 Created by \code{\link[=reduce_over]{reduce_over()}}. \code{op} is normally one of the named
-reductions "sum", "mean", "min", "max", "prod", "median",
-"quantile", "sd", "var", "count", "any", "all": the planner needs op
+reductions "sum", "mean", "min", "max", "median", "count": the
+planner needs op
 identity to decide algebraic decomposition and output dtype, and
 the executor maps it to the ops vocabulary. A CUSTOM reducer may
 instead be supplied as \code{fn} (a length-1 list holding an anvl function

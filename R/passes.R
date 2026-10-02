@@ -940,7 +940,7 @@ plan_lazy <- function(x) {
             "\" cannot be distributed over spatial ",
             "chunks; algebraic ops (",
             paste(.algebraic_ops, collapse = ", "),
-            ") only (D12). median/quantile remain available over t/band."
+            ") only (D12). median remains available over t/band."
           ),
           "garry_reduce_unsupported_error"
         )

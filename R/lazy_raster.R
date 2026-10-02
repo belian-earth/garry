@@ -872,8 +872,7 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 #'
 #' @param x A `LazyRaster`, or a `LazyDataset`.
 #' @param op Reduction name: one of `"sum"`, `"mean"`, `"min"`, `"max"`,
-#'   `"prod"`, `"median"`, `"quantile"`, `"sd"`, `"var"`, `"count"`,
-#'   `"any"`, `"all"`. Alternatively a custom reducer: a function
+#'   `"median"`, `"count"`. Alternatively a custom reducer: a function
 #'   `fn(x, dims)` written in the `g_*` vocabulary that collapses the
 #'   margins `dims` (e.g. a per-pixel model fit over time).
 #' @param over Names of dims to reduce over (subset of `names(dims)`).

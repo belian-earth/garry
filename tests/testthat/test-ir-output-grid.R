@@ -42,14 +42,13 @@ test_that("reduce over x and y collapses axes, preserves extent", {
   expect_identical(rg@transform[6], -0.5 * 80)
 })
 
-test_that("reduce dtype rules: float ops promote ints; count/any typed", {
+test_that("reduce dtype rules: float ops promote ints; count typed", {
   pg_i <- .stub_grid_3d("i16")
   expect_identical(garry:::.reduce_grid(pg_i, "mean", "t")@dtype, "f32")
   expect_identical(garry:::.reduce_grid(pg_i, "median", "t")@dtype, "f32")
   expect_identical(garry:::.reduce_grid(pg_i, "sum", "t")@dtype, "i16")
   expect_identical(garry:::.reduce_grid(pg_i, "max", "t")@dtype, "i16")
   expect_identical(garry:::.reduce_grid(pg_i, "count", "t")@dtype, "i32")
-  expect_identical(garry:::.reduce_grid(pg_i, "any", "t")@dtype, "pred")
   pg_f <- .stub_grid_3d("f64")
   expect_identical(garry:::.reduce_grid(pg_f, "mean", "t")@dtype, "f64")
 })
@@ -77,4 +76,15 @@ test_that("full pipeline grids: Source -> Map -> Focal -> Reduce", {
 test_that("reduce_over rejects unknown ops at node construction", {
   a <- lazy_source_stub("x.tif")
   expect_error(reduce_over(a, "medoid", c("x", "y")), "op")
+})
+
+test_that("reduce_over accepts exactly the executable ops", {
+  expect_identical(
+    garry:::.reduce_ops,
+    c("sum", "mean", "min", "max", "median", "count")
+  )
+  x <- lazy_source(fixture_gradient_f32())
+  for (op in c("prod", "quantile", "sd", "var", "any", "all")) {
+    expect_error(reduce_over(x, op, "x"), "must be one of")
+  }
 })

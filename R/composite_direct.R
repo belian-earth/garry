@@ -125,7 +125,7 @@ NULL
   }
   if (
     !("t" %in% red@over) ||
-      !(red@op %in% c("median", "mean", "min", "max", "sum", "prod"))
+      !(red@op %in% c("median", "mean", "min", "max", "sum"))
   ) {
     return(NULL)
   }

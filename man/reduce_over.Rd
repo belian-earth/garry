@@ -10,8 +10,7 @@ reduce_over(x, op, over, nan_rm = TRUE, bands = NULL)
 \item{x}{A \code{LazyRaster}, or a \code{LazyDataset}.}
 
 \item{op}{Reduction name: one of \code{"sum"}, \code{"mean"}, \code{"min"}, \code{"max"},
-\code{"prod"}, \code{"median"}, \code{"quantile"}, \code{"sd"}, \code{"var"}, \code{"count"},
-\code{"any"}, \code{"all"}. Alternatively a custom reducer: a function
+\code{"median"}, \code{"count"}. Alternatively a custom reducer: a function
 \code{fn(x, dims)} written in the \verb{g_*} vocabulary that collapses the
 margins \code{dims} (e.g. a per-pixel model fit over time).}
 
