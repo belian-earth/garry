@@ -39,7 +39,8 @@ GDAL block cache.}
 daemons (default \code{TRUE}). Set \code{FALSE} to leave session GDAL config
 untouched (e.g. when mixing local multi-file reads).}
 
-\item{...}{Passed to \code{mirai::daemons()} for both pools.}
+\item{...}{Passed to \code{mirai::daemons()} for every pool; \code{dispatcher} is
+garry's to set.}
 }
 \value{
 Invisibly, \code{list(read =, compute =)}.

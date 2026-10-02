@@ -45,3 +45,11 @@ test_that("daemon-side options reach the daemons", {
   got <- mirai::mirai(getOption("garry.daemon_gc_mb"), .compute = garry:::.comp_profiles()[[1L]])[]
   expect_identical(got, 777)
 })
+
+test_that("garry_daemons validates its pool sizes", {
+  expect_error(garry_daemons(NA, 1), "whole number")
+  expect_error(garry_daemons(1, -1), "whole number")
+  expect_error(garry_daemons(1, 1.5), "whole number")
+  expect_error(garry_daemons(1, 1, read_handles = 0), ">= 1")
+  expect_error(garry_daemons(1, 1, dispatcher = TRUE), "set by")
+})

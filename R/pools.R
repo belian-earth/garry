@@ -516,7 +516,8 @@ NULL
 #' @param gdal_config Apply [garry_gdal_config()] on the host and read
 #'   daemons (default `TRUE`). Set `FALSE` to leave session GDAL config
 #'   untouched (e.g. when mixing local multi-file reads).
-#' @param ... Passed to `mirai::daemons()` for both pools.
+#' @param ... Passed to `mirai::daemons()` for every pool; `dispatcher` is
+#'   garry's to set.
 #' @return Invisibly, `list(read =, compute =)`.
 #' @seealso [garry_daemons_set()], [garry_pool_hygiene()], [collect()]
 #' @export
@@ -556,7 +557,22 @@ garry_daemons <- function(
     }
     if (is.null(read)) read <- cr$logical
   }
-  read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
+  .garry_opt_check()
+  count <- function(v, arg, min = 0) {
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v < min || v != round(v)) {
+      cli::cli_abort(
+        "{.arg {arg}} must be a single whole number >= {min}, not {.val {v}}.",
+        call = rlang::caller_env(2)
+      )
+    }
+    as.integer(v)
+  }
+  read <- count(read, "read")
+  compute <- count(compute, "compute")
+  read_handles <- count(read_handles %||% garry_opt("read_handles"), "read_handles", 1)
+  if ("dispatcher" %in% names(list(...))) {
+    cli::cli_abort("{.arg dispatcher} is set by {.fn garry_daemons} itself.")
+  }
   # MALLOC_* must be exported BEFORE the daemons spawn (read at exec). The GDAL
   # config is applied on the read daemons below, NOT on the host session:
   # DISABLE_READDIR_ON_OPEN=EMPTY_DIR would hide local sidecars (overviews,
