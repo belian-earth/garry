@@ -146,3 +146,17 @@ test_that("the raw-cube fast read refuses a window outside the cube", {
   expect_error(gdal_read_window(v, 1L, 0L, 30L, 60L, 20L), "out of range")
   expect_error(gdal_read_window(v, 1L, 50L, 0L, 20L, 10L, out = "raw_f32"), "out of range")
 })
+
+test_that("a .vrt output records scale/offset and refuses GTiff options", {
+  g <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(4L, 4L))
+  p <- withr::local_tempfile(fileext = ".vrt")
+  d <- gdal_create_output(p, g, scale = 0.5, offset = 2)
+  d$close()
+  r <- methods::new(gdalraster::GDALRaster, p)
+  on.exit(r$close(), add = TRUE)
+  expect_identical(c(r$getScale(1L), r$getOffset(1L)), c(0.5, 2))
+  expect_error(
+    gdal_create_output(withr::local_tempfile(fileext = ".vrt"), g, options = "COMPRESS=DEFLATE"),
+    "do not apply"
+  )
+})

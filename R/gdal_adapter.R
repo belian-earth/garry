@@ -670,7 +670,9 @@ gdal_open_update <- function(path) {
   grid,
   n_bands,
   nodata = numeric(0),
-  band_names = NULL
+  band_names = NULL,
+  scale = numeric(0),
+  offset = numeric(0)
 ) {
   if (!grid@dtype %in% c("f32", "f64")) {
     cli::cli_abort(paste0(
@@ -700,7 +702,9 @@ gdal_open_update <- function(path) {
     if (bytes == 4L) "Float32" else "Float64",
     n_bands,
     nodata = if (length(nodata) == 1L) nodata else NULL,
-    descriptions = band_names
+    descriptions = band_names,
+    scale = if (length(scale) == 1L) scale else NULL,
+    offset = if (length(offset) == 1L) offset else NULL
   )
   writeLines(xml, path)
   gdal_open_update(path)
@@ -1422,7 +1426,10 @@ gdal_create_output <- function(
   # tile machinery (~9x on multi-band windows). Update-writes go
   # through the VRT, so the streamed writer daemon works unchanged.
   if (grepl("\\.vrt$", path, ignore.case = TRUE)) {
-    return(.raw_cube_create(path, grid, n_bands, nodata, band_names))
+    if (length(options)) {
+      cli::cli_abort("{.arg options} do not apply to a {.path .vrt} raw cube.")
+    }
+    return(.raw_cube_create(path, grid, n_bands, nodata, band_names, scale, offset))
   }
   if (is.null(options)) {
     # NUM_THREADS parallelises per-tile DEFLATE inside the (single)
