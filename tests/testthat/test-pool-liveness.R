@@ -37,3 +37,11 @@ test_that("a distributed run leaves the RNG stream alone", {
   expect_identical(.Random.seed, before)
   expect_false(identical(garry:::.garry_run_id(), garry:::.garry_run_id()))
 })
+
+test_that("daemon-side options reach the daemons", {
+  local_pools(1, 1)
+  withr::local_options(garry.daemon_gc_mb = 777)
+  invisible(collect(lazy_source(fixture_gradient_f32()) * 2, distributed = TRUE))
+  got <- mirai::mirai(getOption("garry.daemon_gc_mb"), .compute = garry:::.comp_profiles()[[1L]])[]
+  expect_identical(got, 777)
+})

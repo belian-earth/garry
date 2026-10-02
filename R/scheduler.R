@@ -280,12 +280,21 @@ execute_plan_mirai <- function(
   .pool_broadcast(
     quote({
       suppressMessages(library(garry))
-      options(garry.read_fail = rf, garry.read_retry = rr)
+      options(
+        garry.read_fail = rf,
+        garry.read_retry = rr,
+        garry.daemon_gc_mb = gc_mb
+      )
       asNamespace("garry")$.daemon_hygiene()
     }),
-    profiles = profiles,
+    # the writer reads daemon_gc_mb too
+    profiles = unique(c(
+      profiles,
+      if (.gd_n_compute("garry_write") > 0L) "garry_write"
+    )),
     rf = garry_opt("read_fail"),
-    rr = garry_opt("read_retry")
+    rr = garry_opt("read_retry"),
+    gc_mb = garry_opt("daemon_gc_mb")
   )
 
   graph <- plan@graph
