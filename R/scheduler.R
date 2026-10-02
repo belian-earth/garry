@@ -289,7 +289,7 @@ execute_plan_mirai <- function(
   )
 
   graph <- plan@graph
-  run_id <- as.integer(stats::runif(1, 1, 1e8))
+  run_id <- .garry_run_id()
   # Raw f32 store payloads (phase 12c, D19-D21). Resolved once here:
   # daemon processes do not inherit host options, so the flag rides in
   # every task payload.

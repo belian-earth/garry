@@ -216,6 +216,16 @@ NULL
 # (probed 2026-08-02; a substitute()-based first attempt relied on a
 # nonexistent .expr_quoted argument and was backed out). `quiet`
 # tolerates down profiles (teardown-adjacent broadcasts).
+# A run id unique on this machine: the host pid plus a per-session count.
+# It names the run's store regions and fetch directory, so it must not
+# come from the RNG (drawing would move the user's .Random.seed, and two
+# sessions seeded alike would share regions and a fetch directory).
+.garry_run_id <- function() {
+  n <- (.garry_state$run_count %||% 0L) + 1L
+  .garry_state$run_count <- n
+  .glue("{Sys.getpid()}x{n}")
+}
+
 # Abort if any of `profiles` has no connected daemon. A width-1 profile
 # whose daemon died (an OOM kill, a crash) stays registered, and a task
 # sent to it never resolves: without this check the next run blocks

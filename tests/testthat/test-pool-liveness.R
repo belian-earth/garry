@@ -27,3 +27,13 @@ test_that("a dead compute daemon fails the next run fast and clearly", {
   # hygiene skips the dead profile instead of hanging
   expect_no_error(garry_pool_hygiene())
 })
+
+test_that("a distributed run leaves the RNG stream alone", {
+  local_pools(1, 1)
+  x <- lazy_source(fixture_gradient_f32()) * 2
+  set.seed(42)
+  before <- .Random.seed
+  collect(x, distributed = TRUE)
+  expect_identical(.Random.seed, before)
+  expect_false(identical(garry:::.garry_run_id(), garry:::.garry_run_id()))
+})
