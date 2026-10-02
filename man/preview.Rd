@@ -43,7 +43,7 @@ RGB.}
 \item{na_col}{Colour for nodata pixels, or \code{NULL} (default) to leave
 them transparent. Useful to make a mask's footprint explicit.}
 
-\item{...}{Unused.}
+\item{...}{Must be empty: a misspelt argument is an error.}
 }
 \value{
 \code{x}, invisibly.

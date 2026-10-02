@@ -411,6 +411,21 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   matrix(v, nrow = y_size, byrow = TRUE)
 }
 
+# A whole band read at a reduced size in one RasterIO call (GDAL picks
+# overviews where the file has them), in garry's row order, nodata as NaN.
+# The preview path: nothing beyond the requested size is read.
+.gdal_read_resampled <- function(path, band, out_nx, out_ny, nodata = numeric(0)) {
+  ds <- .gdal_handle(path)
+  nx <- ds$getRasterXSize()
+  ny <- ds$getRasterYSize()
+  v <- ds$read(band, 0L, 0L, nx, ny, out_nx, out_ny)
+  if (ds$getGeoTransform()[[6L]] > 0) {
+    idx <- as.vector(matrix(seq_len(out_ny * out_nx), nrow = out_nx)[, out_ny:1L])
+    v <- v[idx] # south-up: rows to north-first
+  }
+  .gdal_finish_vec(v, out_ny, out_nx, nodata, numeric(0), numeric(0), "matrix")
+}
+
 # Read a window of `rows` rows in garry's row order (row 1 = north,
 # decision D13). gdal_grid_spec() presents a south-up file (positive y
 # pixel size, e.g. AEF embedding COGs) as a north-up grid with the same

@@ -202,3 +202,9 @@ test_that("the coarse preview re-plan keeps a source's affine and resampler", {
   expect_identical(src@offset, 1)
   expect_identical(src@resampling, "average")
 })
+
+test_that("preview refuses a misspelt argument and a 4-D array", {
+  m <- matrix(runif(20), 4, 5)
+  expect_error(preview(m, strech = c(5, 95)), "strech")
+  expect_error(.plot_array(array(0, c(2, 2, 3, 2))), "4 dimensions")
+})
