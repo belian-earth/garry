@@ -261,3 +261,15 @@ test_that("write targets are checked before anything runs", {
   out <- write_tif(x, c(a = file.path(d, "a.tif"), b = file.path(d, "b.tif")))
   expect_true(all(file.exists(file.path(d, c("a.tif", "b.tif")))))
 })
+
+test_that("a directory target returns the per-sink files", {
+  f <- fixture_gradient_f32()
+  x <- list(a = lazy_source(f), b = lazy_source(f) * 2)
+  d <- withr::local_tempdir()
+  out <- write_tif(x, d, distributed = FALSE)
+  expect_identical(out, c(a = file.path(d, "a.tif"), b = file.path(d, "b.tif")))
+  d2 <- withr::local_tempdir()
+  out2 <- write_tif(x, d2, cog = TRUE, distributed = FALSE)
+  expect_setequal(basename(unlist(out2)), c("a.tif", "b.tif"))
+  expect_setequal(list.files(d2), c("a.tif", "b.tif"))
+})

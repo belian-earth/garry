@@ -1485,11 +1485,7 @@ execute_plan_mirai <- function(
       ) {
         next
       } # unquantizable stream: host tail writes it
-      p <- if (length(path) == 1L && dir.exists(path)) {
-        file.path(path, paste0(nm, ".tif"))
-      } else {
-        path[[nm]]
-      }
+      p <- .sink_paths(path, nm)[[nm]]
       ngrid <- graph_get(plan@graph, nid)@grid
       it <- chunk_iter(.stage_out_chunks(plan, st))
       ds <- gdal_create_output(
@@ -2286,7 +2282,7 @@ execute_plan_mirai <- function(
       sink_ds$close()
       sink_ds <- NULL
     }
-    return(invisible(path))
+    return(invisible(if (multi) .sink_paths(path, names(plan@sinks)) else path))
   }
 
   combine_vals <- new.env(parent = emptyenv())

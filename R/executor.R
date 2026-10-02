@@ -880,6 +880,17 @@ NULL
   band_names %||% .grid_layer_labels(ngrid)
 }
 
+# Per-sink output paths of a multi-sink write, named by sink: an
+# existing directory holds "<sink>.tif" files, otherwise `path` is
+# already named by sink.
+.sink_paths <- function(path, sinks) {
+  if (length(path) == 1L && dir.exists(path)) {
+    return(stats::setNames(file.path(path, paste0(sinks, ".tif")), sinks))
+  }
+  stats::setNames(as.character(path[sinks]), sinks)
+}
+
+
 # (silently lost raw sink) lived in — one implementation means one
 # place to guard it. `chunks_of(stage)` returns the stage's list of
 # per-chunk EXPORT lists (reduce_combine: a one-element list holding
@@ -917,11 +928,7 @@ NULL
       # the exported node's grid, not the stage tail's
       ngrid <- graph_get(graph, nid)@grid
       if (!is.null(path)) {
-        p <- if (length(path) == 1L && dir.exists(path)) {
-          file.path(path, paste0(nm, ".tif"))
-        } else {
-          path[[nm]]
-        }
+        p <- .sink_paths(path, nm)[[nm]]
         sk <- st
         S7::prop(sk, "grid") <- ngrid
         return(.exec_write_sink(
@@ -943,7 +950,7 @@ NULL
       }
     })
     names(res) <- names(plan@sinks)
-    return(if (is.null(path)) res else invisible(path))
+    return(if (is.null(path)) res else invisible(.sink_paths(path, names(plan@sinks))))
   }
   sink <- plan@stages[[plan@sink]]
   key <- .key(sink@members[[length(sink@members)]])
