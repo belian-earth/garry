@@ -143,9 +143,12 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
         .write_read_only(p, ro, path, nodata, band_names, wspec, distributed)
       ))
     }
-    out <- .collect_read_only(p, ro, distributed)
-    attr(out, "gis") <- .gis_attr(p@stages[[p@sink]]@grid, ro$nk, band_names)
-    return(out)
+    return(.collect_read_only(
+      p,
+      ro,
+      distributed,
+      gis = .gis_attr(p@stages[[p@sink]]@grid, ro$nk, band_names)
+    ))
   }
   res <- if (distributed) {
     # Quantized writes (wspec with scale) bypass the cd/gd fast paths:
@@ -653,7 +656,7 @@ garry_last_route <- function() .garry_state$route
 
 # The read-only collect: the (y, x) matrix or (y, x, layer) array, each
 # chunk copied into place in one pass.
-.collect_read_only <- function(p, spec, distributed = FALSE) {
+.collect_read_only <- function(p, spec, distributed = FALSE, gis = NULL) {
   ny <- spec$ny
   nx <- spec$nx
   nk <- spec$nk
@@ -672,6 +675,9 @@ garry_last_route <- function() .garry_state$route
       PACKAGE = "garry"
     )
   }, distributed = distributed)
+  # set here, while `out` has one reference: an attribute set on the
+  # caller's copy duplicates the whole array
+  attr(out, "gis") <- gis
   out
 }
 
