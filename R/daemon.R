@@ -992,7 +992,7 @@ NULL
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param j Per-slice job (locs/dt/nodata/resampling/bin).
 #' @param k Grid-constant bundle (nx/ny/gtstr/wkt).
-#' @return List with `err`, `tf`, `tw`.
+#' @return List with `err` and `tw` (warp seconds).
 #' @keywords internal
 .cd_fetch_warp <- function(j, k) {
   nx <- k$nx
@@ -1034,5 +1034,5 @@ NULL
   rm(buf)
   gc(FALSE)
   .garry_malloc_trim()
-  list(err = err, tf = 0, tw = tw)
+  list(err = err, tw = tw)
 }

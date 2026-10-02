@@ -284,11 +284,6 @@ NULL
   .sv_is(v) && attr(v, "gdt") %in% c("u8", "i8", "i16", "u16", "i32")
 }
 
-# Integer payload -> ROW-major R integer vector (GDAL write order).
-.sv_to_int <- function(v) {
-  .sv_to_vec(v)
-}
-
 # One plane of a payload as the vector GDAL writes: plane `b` of a
 # rank-3 (band, y, x) payload, or the whole of a rank-2 one (b = 1).
 # Float payloads come back as doubles with NaN folded to `nodata` when

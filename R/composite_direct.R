@@ -550,10 +550,9 @@ NULL
   r <- lapply(launched$promise, function(h) h[])
   t <- proc.time()[["elapsed"]] - launched$t0
   if (progress) {
-    ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
+    ok <- Filter(function(x) is.list(x) && !is.null(x$tw), r)
     cli::cli_inform(.glue(
       "[gdal-direct] per-task sums: ",
-      "fetch={formatC(sum(vapply(ok, function(x) x$tf, 0)), format = 'f', digits = 1)}s ",
       "warp={formatC(sum(vapply(ok, function(x) x$tw, 0)), format = 'f', digits = 1)}s"
     ))
   }

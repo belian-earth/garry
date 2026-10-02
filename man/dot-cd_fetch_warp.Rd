@@ -12,7 +12,7 @@
 \item{k}{Grid-constant bundle (nx/ny/gtstr/wkt).}
 }
 \value{
-List with \code{err}, \code{tf}, \code{tw}.
+List with \code{err} and \code{tw} (warp seconds).
 }
 \description{
 Internal; daemons reach it through \code{asNamespace("garry")}.

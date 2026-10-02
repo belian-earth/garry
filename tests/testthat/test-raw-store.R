@@ -220,7 +220,7 @@ test_that("plane extraction matches the byte-slice reference for every gdt", {
       expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
     }
     expect_identical(
-      garry:::.sv_to_int(v),
+      garry:::.sv_to_vec(v),
       c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
     )
   }
