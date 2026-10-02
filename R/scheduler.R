@@ -2368,3 +2368,30 @@ execute_plan_mirai <- function(
     streamed_path = streamed_path
   )
 }
+
+# Would the scheduler's fetch stage serve this read? A GTI index with
+# garry's sidecar, a slice filter, and remote items in that slice (any
+# item under garry.fetch = "force"): its windows then download to local
+# files in parallel before the reads. Mirrors prepare_fetch() in
+# execute_plan_mirai(), so the read-only route can leave these reads to
+# the scheduler.
+.read_would_fetch <- function(rpath, roo) {
+  mode <- garry_opt("fetch")
+  if (mode == "direct" || length(rpath) != 1L || !startsWith(rpath, "GTI:")) {
+    return(FALSE)
+  }
+  meta_f <- paste0(sub("^GTI:", "", rpath), ".meta.rds")
+  if (!file.exists(meta_f)) {
+    return(FALSE)
+  }
+  ent <- readRDS(meta_f)$entries
+  if (!all(c("slice", "location") %in% names(ent))) {
+    return(FALSE)
+  }
+  sl <- .gti_slice_of(roo)
+  if (is.null(sl) || is.na(sl)) {
+    return(FALSE)
+  }
+  rows <- ent$slice == sl
+  any(rows & (mode == "force" | grepl("^/vsi", ent$location)))
+}

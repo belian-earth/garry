@@ -479,6 +479,86 @@ NULL
   TRUE
 }
 
+#' Daemon task body: read a chunk and prepare its band writes.
+#'
+#' The read half of the read-only route's streamed write, on the read
+#' pool: reads the chunk as raw f32, turns each band plane into the
+#' vector GDAL writes (nodata folded, the integer-output check made)
+#' and shares the planes in one shared-memory region pinned under
+#' `reg`. The writer daemon maps the region by name, so the payload
+#' never passes through the host and the writer only writes.
+#'
+#' Internal; daemons reach it through `asNamespace("garry")`.
+#'
+#' @param ra Read arguments (as `.stage_read_args()`).
+#' @param cg,core Chunk grid and chunk row.
+#' @param dtype,nodata Output dtype and sentinel.
+#' @param reg Registry key pinning the region until the host drops it.
+#' @return list(name, reg, nr, nc, mb): the region name and registry
+#'   key, the window size and the region's size in MB.
+#' @keywords internal
+.daemon_read_for_write <- function(ra, cg, core, dtype, nodata, reg) {
+  v <- .exec_read_padded(
+    ra$path,
+    ra$band,
+    ra$nodata,
+    cg,
+    core,
+    open_options = ra$open_options,
+    out = "raw_f32",
+    scale = ra$scale,
+    offset = ra$offset,
+    decim = ra$decim,
+    resampling = ra$resampling
+  )
+  d <- .sv_dim(v)
+  planes <- lapply(seq_len(if (length(d) == 3L) d[[1L]] else 1L), function(b) {
+    .write_vec(v, dtype, nodata, b)$v
+  })
+  sh <- mori::share(planes)
+  .daemon_shm[[reg]] <- sh
+  bytes_shared <- .payload_bytes(planes)
+  bytes <- .payload_bytes(v) + bytes_shared
+  rm(v, planes)
+  .daemon_gc_after(bytes)
+  list(
+    name = mori::shared_name(sh),
+    reg = reg,
+    nr = d[[length(d) - 1L]],
+    nc = d[[length(d)]],
+    mb = bytes_shared / 2^20
+  )
+}
+
+#' Daemon task body: write prepared band planes to an output.
+#'
+#' The write half of the read-only route's streamed write: maps the
+#' planes `.daemon_read_for_write()` shared and writes plane `b` to band
+#' `band0 + b` of the output the host created. Shares the writer's
+#' open-handle cache with `.daemon_write_chunk`.
+#'
+#' Internal; daemons reach it through `asNamespace("garry")`.
+#'
+#' @param path Output file (already created by the host).
+#' @param x_off,y_off Window offsets.
+#' @param w The read task's result: region name and window size.
+#' @param band0 Bands before this chunk's first.
+#' @return `TRUE`.
+#' @keywords internal
+.daemon_write_shared <- function(path, x_off, y_off, w, band0) {
+  ds <- .daemon_ds[[path]]
+  if (is.null(ds)) {
+    ds <- gdal_open_update(path)
+    .daemon_ds[[path]] <- ds
+  }
+  planes <- mori::map_shared(w$name)
+  for (b in seq_along(planes)) {
+    ds$write(as.integer(band0 + b), x_off, y_off, w$nc, w$nr, planes[[b]])
+  }
+  rm(planes)
+  TRUE
+}
+
 #' Daemon task body: close every output the writer holds open.
 #'
 #' Returns the close errors, named by output path (empty when all closed).

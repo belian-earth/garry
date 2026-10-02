@@ -135,7 +135,7 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   # them) has nothing to compute: read each layer straight into the
   # result array or output file, skipping the compute stage, chunk
   # assembly and layout permute. Same reads, same values.
-  ro <- .read_only_spec(p)
+  ro <- .read_only_spec(p, distributed)
   if (!is.null(ro)) {
     .garry_state$route <- "read_only"
     if (!is.null(path)) {
@@ -448,9 +448,10 @@ garry_last_route <- function() .garry_state$route
 
 # A read-only plan: NULL unless every layer of the sink is a source
 # (single- or multi-band) or a warp of one, read by its own source_read/
-# warp stage with no halo. Otherwise its read stages, the layers each
+# warp stage with no halo, and (distributed) none the scheduler would
+# fetch. Otherwise its read stages, the layers each
 # contributes (`nb`) and the layer each starts at (`k0`).
-.read_only_spec <- function(p) {
+.read_only_spec <- function(p, distributed = FALSE) {
   if (!isTRUE(garry_opt("read_only")) || length(p@sinks) > 1L) {
     return(NULL)
   }
@@ -480,6 +481,17 @@ garry_last_route <- function() .garry_state$route
   if (!length(read_stage) || any(vapply(read_stage, is.null, logical(1)))) {
     return(NULL)
   }
+  # Remote mosaics the scheduler fetches (each item's window downloaded
+  # to a local file in parallel, then read locally) beat chunk reads
+  # straight from the remote, so they stay with the scheduler.
+  if (distributed) {
+    for (s in read_stage) {
+      a <- .stage_read_args(graph, s)
+      if (s@kind == "source_read" && .read_would_fetch(a$path, a$open_options)) {
+        return(NULL)
+      }
+    }
+  }
   g <- top@grid
   nb <- vapply(leaves, function(id) {
     d <- graph_get(graph, id)@grid@dims
@@ -504,11 +516,11 @@ garry_last_route <- function() .garry_state$route
 # (nb[k], h, w) or (h, w) planes of leaf k. In-process, local files
 # decode on every core; distributed, the read pool reads the chunks
 # and the host only copies them into place, in completion order.
-.read_only_each <- function(p, spec, emit, distributed = FALSE) {
+.read_only_each <- function(p, spec, emit, distributed = FALSE, ...) {
   graph <- p@graph
   ra <- lapply(spec$read_stage, function(s) .stage_read_args(graph, s))
   if (distributed && .gd_n_compute("garry_read") > 0L) {
-    return(.read_only_each_pool(spec, ra, emit))
+    return(.read_only_each_pool(spec, ra, emit, ...))
   }
   .with_gdal_threads(unique(unlist(lapply(ra, `[[`, "path"))))
   for (k in seq_along(spec$read_stage)) {
@@ -538,7 +550,15 @@ garry_last_route <- function() .garry_state$route
 # The distributed read loop: one read task per chunk on the read pool,
 # at most two a daemon in flight (so finished chunks never pile up on
 # the host), each emitted as it lands.
-.read_only_each_pool <- function(spec, ra, emit) {
+.read_only_each_pool <- function(
+  spec,
+  ra,
+  emit,
+  backlog = function() 0L,
+  poll = function() FALSE,
+  task = NULL,
+  cap = NULL
+) {
   prof <- "garry_read"
   .assert_pools_alive(prof)
   .garry_abi_check(prof)
@@ -556,13 +576,16 @@ garry_last_route <- function() .garry_state$route
     data.frame(k = k, j = seq_len(nrow(chunk_iter(spec$read_stage[[k]]@chunks))))
   }))
   its <- lapply(spec$read_stage, function(s) chunk_iter(s@chunks))
-  cap <- max(2L * .gd_n_compute(prof), 2L)
+  cap <- cap %||% max(2L * .gd_n_compute(prof), 2L)
   inflight <- list()
   next_i <- 1L
   last_check <- Sys.time()
   launch <- function(i) {
     k <- todo$k[[i]]
     a <- ra[[k]]
+    if (!is.null(task)) {
+      return(task(i, a, spec$read_stage[[k]]@chunks, its[[k]][todo$j[[i]], ]))
+    }
     mirai::mirai(
       asNamespace("garry")$.exec_read_padded(
         path,
@@ -591,11 +614,13 @@ garry_last_route <- function() .garry_state$route
     )
   }
   while (next_i <= nrow(todo) || length(inflight)) {
-    while (next_i <= nrow(todo) && length(inflight) < cap) {
+    # `backlog()` (queued writes) shares the cap: chunks waiting to be
+    # written hold host memory just as reads in flight do
+    while (next_i <= nrow(todo) && length(inflight) + backlog() < cap) {
       inflight[[as.character(next_i)]] <- launch(next_i)
       next_i <- next_i + 1L
     }
-    harvested <- FALSE
+    harvested <- poll()
     for (key in names(inflight)) {
       h <- inflight[[key]]
       if (mirai::unresolved(h)) {
@@ -651,7 +676,10 @@ garry_last_route <- function() .garry_state$route
 }
 
 # The read-only write: each chunk goes from the read straight to its
-# bands of the output, through the sink write's quantizer.
+# bands of the output, through the sink write's quantizer. With pools,
+# the writer daemon writes as the read pool reads, so compression never
+# stalls the host's read loop; quantized writes stay on the host, where
+# the device quantizer is.
 .write_read_only <- function(p, spec, path, nodata, band_names, wspec, distributed = FALSE) {
   sink <- p@stages[[p@sink]]
   nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
@@ -665,9 +693,19 @@ garry_last_route <- function() .garry_state$route
     scale = wspec$scale %||% numeric(0),
     offset = wspec$offset %||% numeric(0)
   )
-  on.exit(ds$close(), add = TRUE)
   wdt <- wspec$dtype %||% sink@grid@dtype
   wq <- .exec_wq(wspec, nodata)
+  if (
+    distributed &&
+      is.null(wq) &&
+      .gd_n_compute("garry_read") > 0L &&
+      .gd_n_compute("garry_write") > 0L
+  ) {
+    ds$close()
+    .write_read_only_pool(p, spec, path, nodata, wdt, distributed)
+    return(invisible(path))
+  }
+  on.exit(ds$close(), add = TRUE)
   .read_only_each(p, spec, function(v, y_off, x_off, k) {
     v <- .exec_quantize_value(v, wq)
     for (b in seq_len(spec$nb[[k]])) {
@@ -683,5 +721,136 @@ garry_last_route <- function() .garry_state$route
       )
     }
   }, distributed = distributed)
+  invisible(path)
+}
+
+# Stream a read-only plan to the writer daemon. Each read task also
+# prepares its chunk's band writes and shares them (shared memory,
+# pinned on the reader); the host hands the region NAME to the writer
+# and, once written, has the read pool drop it. Payloads never pass
+# through the host, and the writer only writes, overlapping the reads.
+.write_read_only_pool <- function(p, spec, path, nodata, dtype, distributed) {
+  prof <- "garry_write"
+  .assert_pools_alive(prof)
+  .garry_abi_check(prof)
+  run <- .garry_run_id()
+  writes <- list()
+  pending <- character(0) # written regions not yet dropped
+  pending_mb <- 0
+  live_mb <- 0 # shared memory pinned on the readers
+  budget_mb <- garry_opt("read_budget_mb")
+  done <- FALSE
+  # A drop is a broadcast to every reader, which waits for each one's
+  # current read: drop in large batches (a quarter of the read budget),
+  # not per write. The rest go at the end.
+  drop <- function(regs) {
+    if (length(regs)) {
+      try(
+        mirai::everywhere(
+          asNamespace("garry")$.daemon_shm_drop(regs),
+          regs = regs,
+          .compute = "garry_read"
+        ),
+        silent = TRUE
+      )
+    }
+  }
+  # Whatever happens, wait out the writes, close the writer's handles
+  # (a failed run leaves a closed, deletable file) and drop this run's
+  # regions; on success the close is checked below.
+  on.exit(
+    {
+      if (!done) {
+        try(lapply(writes, function(w) mirai::call_mirai(w$h)), silent = TRUE)
+        try(
+          lapply(
+            mirai::everywhere(asNamespace("garry")$.daemon_write_close(), .compute = prof),
+            function(m) m[]
+          ),
+          silent = TRUE
+        )
+      }
+      drop(c(pending, vapply(writes, `[[`, character(1), "reg")))
+    },
+    add = TRUE
+  )
+  harvest <- function() {
+    any <- FALSE
+    for (key in names(writes)) {
+      w <- writes[[key]]
+      if (mirai::unresolved(w$h)) {
+        next
+      }
+      if (inherits(w$h$data, c("miraiError", "errorValue"))) {
+        cli::cli_abort(
+          "write failed on the writer daemon: {as.character(w$h$data)}",
+          class = c("garry_write_error", "garry_error")
+        )
+      }
+      writes[[key]] <<- NULL
+      pending <<- c(pending, w$reg)
+      pending_mb <<- pending_mb + w$mb
+      any <- TRUE
+    }
+    if (pending_mb >= 0.25 * budget_mb) {
+      drop(pending)
+      live_mb <<- live_mb - pending_mb
+      pending <<- character(0)
+      pending_mb <<- 0
+    }
+    any
+  }
+  # Reads in flight: two a reader, held back while the pinned regions
+  # fill half the read budget (planes are doubles, 8 B a cell).
+  n_read <- .gd_n_compute("garry_read")
+  cap <- max(2L * n_read, 2L)
+  .read_only_each(
+    p,
+    spec,
+    function(w, y_off, x_off, k) {
+      live_mb <<- live_mb + w$mb
+      writes[[w$reg]] <<- list(
+        reg = w$reg,
+        mb = w$mb,
+        h = mirai::mirai(
+          asNamespace("garry")$.daemon_write_shared(path, xo, yo, w, b0),
+          path = path,
+          xo = x_off,
+          yo = y_off,
+          w = w,
+          b0 = spec$k0[[k]],
+          .compute = prof
+        )
+      )
+    },
+    distributed = distributed,
+    backlog = function() if (live_mb >= 0.5 * budget_mb) cap else length(writes),
+    poll = harvest,
+    cap = cap,
+    task = function(i, a, cg, core) {
+      mirai::mirai(
+        asNamespace("garry")$.daemon_read_for_write(a, cg, core, dt, nd, reg),
+        a = a,
+        cg = cg,
+        core = core,
+        dt = dtype,
+        nd = nodata,
+        reg = .glue("ro{run}_{i}"),
+        .compute = "garry_read"
+      )
+    }
+  )
+  while (length(writes)) {
+    if (!harvest()) Sys.sleep(0.002)
+  }
+  wcl <- mirai::everywhere(asNamespace("garry")$.daemon_write_close(), .compute = prof)
+  failed <- unlist(Filter(is.character, lapply(wcl, function(m) m[])))
+  done <- TRUE
+  if (length(failed)) {
+    .garry_error(
+      paste0("closing output ", names(failed)[[1L]], " failed (the file is incomplete): ", failed[[1L]]),
+      "garry_write_error"
+    )
+  }
   invisible(path)
 }

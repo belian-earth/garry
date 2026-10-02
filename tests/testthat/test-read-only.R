@@ -275,3 +275,46 @@ test_that("the read pool serves the read-only route with identical results", {
   }
   expect_identical(rd(out), rd(ref))
 })
+
+test_that("a failed pool write errors and leaves no file", {
+  skip_on_cran()
+  local_pools(2, 1)
+  out <- withr::local_tempfile(fileext = ".tif")
+  # NaN (the i16 fixture's nodata) cannot be written as i16 without a
+  # sentinel: the read pool's write preparation fails
+  expect_error(
+    write_tif(
+      lazy_source(fixture_i16_nodata()),
+      out,
+      dtype = "i16",
+      distributed = TRUE
+    ),
+    "nodata"
+  )
+  expect_false(file.exists(out))
+  write_tif(lazy_source(fixture_gradient_f32()), out, distributed = TRUE)
+  expect_identical(garry_last_route(), "read_only")
+  expect_true(file.exists(out))
+})
+
+test_that("reads the scheduler would fetch stay with the scheduler", {
+  skip_on_cran()
+  gti <- .gg_gti(list(a = .gg_val(0), b = .gg_val(100)))
+  build <- function() {
+    g <- graph_new()
+    lazy_stack(
+      list(.gg_slice(gti, "a", g), .gg_slice(gti, "b", g)),
+      along = "band"
+    )
+  }
+  ref <- collect(build(), distributed = FALSE)
+  local_pools(2, 1)
+  # local items: no fetch, so the read pool serves the read-only route
+  withr::local_options(garry.fetch = "auto")
+  expect_identical(collect(build(), distributed = TRUE), ref)
+  expect_identical(garry_last_route(), "read_only")
+  # fetched items (forced here; remote ones under "auto") go to the scheduler
+  withr::local_options(garry.fetch = "force")
+  expect_equal(collect(build(), distributed = TRUE), ref, ignore_attr = TRUE)
+  expect_identical(garry_last_route(), "scheduler")
+})

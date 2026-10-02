@@ -42,7 +42,8 @@ contain NaN.}
 
 \item{creation_options}{GDAL creation options (\code{"KEY=VALUE"}). With
 \code{cog = FALSE} these replace the default tiled-DEFLATE options of the
-streamed write; with \code{cog = TRUE} they go to the COG translate pass
+streamed write (compression stays multi-threaded unless they set
+\code{NUM_THREADS}); with \code{cog = TRUE} they go to the COG translate pass
 (the temporary streamed file keeps the defaults).}
 
 \item{overview_resampling}{COG overview resampling (\code{cog = TRUE}

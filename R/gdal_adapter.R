@@ -1540,6 +1540,15 @@ gdal_write_window <- function(
   band = 1L,
   plane = 1L
 ) {
+  w <- .write_vec(m, dtype, nodata, plane)
+  ds$write(as.integer(band), x_off, y_off, w$nc, w$nr, w$v)
+  invisible(NULL)
+}
+
+# The vector a window write hands GDAL, in its row-major order, with
+# its window size: list(v, nr, nc). Split from gdal_write_window() so
+# the read pool can prepare a write the writer daemon only performs.
+.write_vec <- function(m, dtype, nodata = numeric(0), plane = 1L) {
   if (.sv_is(m)) {
     # Raw store payloads are already in GDAL's row-major write order;
     # one C pass takes the plane out and folds NaN to the sentinel.
@@ -1552,8 +1561,7 @@ gdal_write_window <- function(
     nc <- d[[length(d)]]
     v <- .sv_plane_vec(m, plane, nodata)
     if (is.integer(v)) {
-      ds$write(as.integer(band), x_off, y_off, nc, nr, v)
-      return(invisible(NULL))
+      return(list(v = v, nr = nr, nc = nc))
     }
   } else {
     nr <- nrow(m)
@@ -1569,8 +1577,7 @@ gdal_write_window <- function(
       "given for integer output dtype {.val {dtype}}"
     ))
   }
-  ds$write(as.integer(band), x_off, y_off, nc, nr, v)
-  invisible(NULL)
+  list(v = v, nr = nr, nc = nc)
 }
 
 #' Extract raster values at points (adapter).

@@ -68,10 +68,12 @@ UInt16), single-threaded:
 * Plans that only read (sources, warps of them, and band or time stacks)
   take a new `"read_only"` route: each chunk is copied from GDAL straight
   into the result, or into the output file. In-process, local files decode
-  on every core; with pools running, the read pool reads the chunks in
-  parallel and the host copies each into place as it lands. Loading the scene drops from 30.5 s to 5.1 s, a crop from
+  on every core. With pools running, the read pool reads the chunks in
+  parallel; collected chunks are copied into place as they land, and
+  written ones pass through shared memory to the writer daemon, so
+  compression overlaps the reads. Loading the scene drops from 30.5 s to 5.1 s, a crop from
   5.6 s to 1.3 s, a 3x downsample from 6.7 s to 1.9 s and a write from
-  40.1 s to 6.4 s. Values and files are identical to the compute path;
+  40.1 s to 6.4 s (3.8 s with pools). Values and files are identical to the compute path;
   `options(garry.read_only = FALSE)` turns the route off.
 * User `creation_options` keep multi-threaded compression unless they set
   `NUM_THREADS`.
