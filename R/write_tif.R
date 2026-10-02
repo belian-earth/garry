@@ -55,7 +55,9 @@ NULL
 #' @param overview_resampling COG overview resampling (`cog = TRUE`
 #'   only). `"average"` (default) suits continuous data; use `"nearest"`
 #'   for categorical outputs like masks.
-#' @param band_names As in [collect()].
+#' @param band_names Band descriptions written to the file, one per output
+#'   band. Defaults to the dataset's band names, or the labels of a
+#'   `band` stack; given, it takes precedence over both.
 #' @param distributed As in [collect()].
 #' @return The written path(s), invisibly (expanded per sink/group for
 #'   list, directory, and `{group}` forms).

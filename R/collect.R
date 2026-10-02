@@ -50,12 +50,20 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.
   if (S7::S7_inherits(x, LazyDatasetGroups)) {
-    return(.collect_groups(x, plan_only, path, nodata, distributed, wspec))
+    return(.collect_groups(
+      x,
+      plan_only,
+      path,
+      nodata,
+      distributed,
+      wspec,
+      band_names
+    ))
   }
   # A dataset's band names become the output band descriptions; capture them
   # before stack_bands() collapses the named bands into one node.
   if (S7::S7_inherits(x, LazyDataset)) {
-    band_names <- names(x@bands)
+    band_names <- band_names %||% names(x@bands)
     x <- stack_bands(x)
   }
   p <- plan_lazy(x)
@@ -93,7 +101,12 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
       if (!is.null(dim(out))) {
         grid <- graph_get(p@graph, p@sinks[[k]])@grid
         nb <- if (length(dim(out)) == 3L) dim(out)[[3L]] else 1L
-        attr(out, "gis") <- .gis_attr(grid, nb)
+        bn <- if (is.list(band_names)) band_names[[names(res)[[k]]]] else NULL
+        attr(out, "gis") <- .gis_attr(
+          grid,
+          nb,
+          bn %||% .grid_layer_labels(grid)
+        )
       }
       out
     }))
@@ -177,7 +190,7 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   if (!is.null(dim(out))) {
     grid <- p@stages[[p@sink]]@grid
     nb <- if (length(dim(out)) == 3L) dim(out)[[3L]] else 1L
-    attr(out, "gis") <- .gis_attr(grid, nb)
+    attr(out, "gis") <- .gis_attr(grid, nb, band_names)
   }
   out
 }
@@ -186,8 +199,9 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
 #'
 #' `collect()` results carry a `gis` attribute (bbox, CRS, dims); this
 #' wraps the array as a `terra::SpatRaster` for hand-off to the terra
-#' ecosystem (plotting, zonal statistics, vector ops). Band
-#' names/descriptions are preserved when present.
+#' ecosystem (plotting, zonal statistics, vector ops). Layers are named
+#' after the dataset's bands, or a stack's labels, when the result has
+#' them (`gis$band_names`).
 #'
 #' @param x A matrix or `(y, x, band)` array from [collect()] (must
 #'   carry the `gis` attribute).
@@ -214,7 +228,7 @@ as_terra <- function(x) {
       gis$bbox[[4L]]
     )
   )
-  nms <- dimnames(x)[[3L]]
+  nms <- dimnames(x)[[3L]] %||% gis$band_names
   if (!is.null(nms)) {
     names(r) <- nms
   }
@@ -249,7 +263,8 @@ garry_last_route <- function() .garry_state$route
   path,
   nodata,
   distributed,
-  wspec = NULL
+  wspec = NULL,
+  band_names = NULL
 ) {
   labels <- names(x@groups)
   paths <- if (is.null(path)) {
@@ -270,7 +285,10 @@ garry_last_route <- function() .garry_state$route
   # expect one inspectable Plan per group.
   if (!plan_only && length(x@groups) > 1L) {
     sinks <- stats::setNames(lapply(x@groups, stack_bands), labels)
-    bn <- stats::setNames(lapply(x@groups, function(g) names(g@bands)), labels)
+    bn <- stats::setNames(
+      lapply(x@groups, function(g) band_names %||% names(g@bands)),
+      labels
+    )
     res <- .collect_impl(
       sinks,
       path = paths,
@@ -291,6 +309,7 @@ garry_last_route <- function() .garry_state$route
       path = if (is.null(paths)) NULL else paths[[i]],
       nodata = nodata,
       distributed = distributed,
+      band_names = band_names,
       wspec = wspec
     )
   })
@@ -327,8 +346,8 @@ garry_last_route <- function() .garry_state$route
 
 # gdalraster read_ds()-style `gis` attribute from a GridSpec: type, bbox
 # (xmin,ymin,xmax,ymax), dim (nx,ny,nbands), srs (WKT), datatype (GDAL name).
-.gis_attr <- function(grid, nbands) {
-  list(
+.gis_attr <- function(grid, nbands, band_names = NULL) {
+  out <- list(
     type = "raster",
     bbox = as.numeric(grid@extent),
     dim = c(
@@ -339,6 +358,10 @@ garry_last_route <- function() .garry_state$route
     srs = .canon_crs(grid@crs),
     datatype = unname(.gdal_dtype_rev[[grid@dtype]] %||% grid@dtype)
   )
+  if (length(band_names) == nbands && nbands > 1L) {
+    out$band_names <- as.character(band_names)
+  }
+  out
 }
 
 # Normalise an in-memory collect() result to the R raster convention:

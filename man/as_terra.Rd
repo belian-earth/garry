@@ -16,6 +16,7 @@ A \code{terra::SpatRaster}.
 \description{
 \code{collect()} results carry a \code{gis} attribute (bbox, CRS, dims); this
 wraps the array as a \code{terra::SpatRaster} for hand-off to the terra
-ecosystem (plotting, zonal statistics, vector ops). Band
-names/descriptions are preserved when present.
+ecosystem (plotting, zonal statistics, vector ops). Layers are named
+after the dataset's bands, or a stack's labels, when the result has
+them (\code{gis$band_names}).
 }

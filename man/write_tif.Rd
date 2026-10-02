@@ -49,7 +49,9 @@ streamed write; with \code{cog = TRUE} they go to the COG translate pass
 only). \code{"average"} (default) suits continuous data; use \code{"nearest"}
 for categorical outputs like masks.}
 
-\item{band_names}{As in \code{\link[=collect]{collect()}}.}
+\item{band_names}{Band descriptions written to the file, one per output
+band. Defaults to the dataset's band names, or the labels of a
+\code{band} stack; given, it takes precedence over both.}
 
 \item{distributed}{As in \code{\link[=collect]{collect()}}.}
 }

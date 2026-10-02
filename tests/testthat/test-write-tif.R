@@ -232,3 +232,17 @@ test_that("re-reading a rewritten file returns the new pixels", {
   second <- collect(lazy_source(path))
   expect_equal(second, 2 * first, ignore_attr = TRUE)
 })
+
+test_that("band_names reach the file and the collected result", {
+  f <- fixture_gradient_f32()
+  ds <- as_dataset(list(a = lazy_source(f), b = lazy_source(f) * 2))
+  path <- withr::local_tempfile(fileext = ".tif")
+  write_tif(ds, path, band_names = c("red", "nir"))
+  r <- methods::new(gdalraster::GDALRaster, path)
+  on.exit(r$close(), add = TRUE)
+  expect_identical(c(r$getDescription(1L), r$getDescription(2L)), c("red", "nir"))
+  # the default is the dataset's band names, and collect() carries them
+  expect_identical(attr(collect(ds), "gis")$band_names, c("a", "b"))
+  skip_if_not_installed("terra")
+  expect_identical(names(as_terra(collect(ds))), c("a", "b"))
+})
