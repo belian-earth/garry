@@ -131,3 +131,26 @@ test_that("gdal_fetch_window decimates to the target resolution via overviews", 
   expect_equal(native$nx, 256L)
   expect_gt(native$sd, 0.4)                        # checkerboard preserved
 })
+
+test_that("two stages sharing fetched files both read them", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  dir <- withr::local_tempdir("fa")
+  fx <- .fa_fixture(dir, n_slices = 1L)
+  sl <- fx$entries$slice[[1L]]
+  src <- function(scale) {
+    lazy_source(paste0("GTI:", fx$idx),
+                open_options = gti_open_options(
+                  fx$grid, filter = sprintf("slice = '%s'", sl),
+                  sort_field = "datetime"),
+                scale = scale, offset = 0)
+  }
+  # same index and slice, different affine: two source stages, one fetch
+  expr <- src(1) + src(2)
+  direct <- collect(expr, distributed = FALSE)
+  local_pools(2, 1, gdal_config = TRUE)
+  withr::local_options(garry.fetch = "force", garry.chunk_target_px = 400)
+  got <- collect(expr, distributed = TRUE)
+  expect_equal(got, direct, tolerance = 1e-6, ignore_attr = TRUE)
+  expect_false(anyNA(got))
+})

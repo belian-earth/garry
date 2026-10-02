@@ -390,6 +390,9 @@ execute_plan_mirai <- function(
   fetch_n_idx <- 0L
   fetch_made <- new.env(parent = emptyenv()) # fetch task key -> TRUE
   fetch_files_of <- new.env(parent = emptyenv()) # sid -> files to unlink
+  # fetched files are shared by every stage that reads the same index
+  # slice: count the stages still holding each one, unlink at zero
+  fetch_holders <- new.env(parent = emptyenv()) # file -> stage count
   fetch_reads_left <- new.env(parent = emptyenv()) # sid -> open read tasks
   on.exit(
     if (!is.null(fetch_root)) {
@@ -724,6 +727,9 @@ execute_plan_mirai <- function(
           fetch_deps <- fp$deps
           rpath <- fp$local
           fetch_files_of[[.key(s@id)]] <- fp$files
+          for (ff in unique(fp$files)) {
+            fetch_holders[[ff]] <- (fetch_holders[[ff]] %||% 0L) + 1L
+          }
           # Fetch-backed assembles are local CPU (warp + any fused
           # kernel): route them to the compute pool, which idles
           # during the drain now that compute-on-read emptied it of
@@ -2208,7 +2214,13 @@ execute_plan_mirai <- function(
           if (!is.null(left)) {
             fetch_reads_left[[sk]] <- left - 1L
             if (left <= 1L) {
-              unlink(fetch_files_of[[sk]])
+              done_files <- character(0)
+              for (ff in unique(fetch_files_of[[sk]])) {
+                n_left <- (fetch_holders[[ff]] %||% 1L) - 1L
+                fetch_holders[[ff]] <- n_left
+                if (n_left <= 0L) done_files <- c(done_files, ff)
+              }
+              unlink(done_files)
               rm(list = sk, envir = fetch_files_of)
             }
           }
