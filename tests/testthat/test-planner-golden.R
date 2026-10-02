@@ -74,3 +74,10 @@ test_that("golden: diamond on one source stays in one compute stage", {
     list(kind = "compute", members = c(2L, 3L, 4L), halo = 0L, inputs = 1L)
   ))
 })
+
+test_that("chunk snapping survives native blocks whose LCM overflows int32", {
+  l <- Reduce(garry:::.lcm2, c(7001L, 6997L, 6991L, 6983L), 1)
+  expect_false(is.na(l))
+  expect_gt(l, .Machine$integer.max)
+  expect_identical(garry:::.lcm2(4L, 6L), 12)
+})

@@ -1586,8 +1586,9 @@ plan_lazy <- function(x) {
   (if (f64) 8 else 4) * (max(1, nb_in) + max(2, maxw))
 }
 
-.gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
-.lcm2 <- function(a, b) as.integer(a / .gcd2(a, b) * b)
+.gcd2 <- function(a, b) if (b == 0) a else .gcd2(b, a %% b)
+# in double: native blocks of mixed strip widths overflow an int32 LCM
+.lcm2 <- function(a, b) as.numeric(a) / .gcd2(a, b) * b
 
 # Plan-wide chunk dim: ONE spatial tiling for every stage, because the
 # executors align input chunks by index, so chunk tables must tile
@@ -1637,8 +1638,8 @@ plan_lazy <- function(x) {
   block <- vapply(
     1:2,
     function(ax) {
-      l <- Reduce(.lcm2, vapply(blocks, `[[`, integer(1), ax), 1L)
-      if (l > 2L * side) 1L else l
+      l <- Reduce(.lcm2, vapply(blocks, `[[`, integer(1), ax), 1)
+      if (l > 2 * side) 1L else as.integer(l)
     },
     integer(1)
   )
