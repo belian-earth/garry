@@ -74,8 +74,8 @@ t_all <- system.time({
             ex0[1]+(tl$x0+tl$we)*res, ex0[4]-tl$y0*res)
     g <- grid_spec("EPSG:20255", te, c(tl$we, tl$he), "f32")
     dsk<-function(r){o<-expand.grid(dx=-r:r,dy=-r:r);which(o$dx^2+o$dy^2<=r^2)}
-    ero<-function(x,r){s<-dsk(r);focal(x,radius=as.integer(r),fn=function(sh)Reduce(`*`,sh[s]))}
-    dil<-function(x,r){s<-dsk(r);focal(x,radius=as.integer(r),fn=function(sh)1-Reduce(`*`,lapply(sh[s],function(z)1-z)))}
+    ero<-function(x,r){s<-dsk(r);focal_map(x,radius=as.integer(r),fn=function(sh)Reduce(`*`,sh[s]))}
+    dil<-function(x,r){s<-dsk(r);focal_map(x,radius=as.integer(r),fn=function(sh)1-Reduce(`*`,lapply(sh[s],function(z)1-z)))}
     G <- graph_new()
     sof<-function(a,sl,nd) lazy_source(paste0("GTI:",lidx[[a]]), graph=G, nodata=nd,
       grid=g, open_options=gti_open_options(g, filter=sprintf("slice = '%s'",sl), sort_field="datetime"))

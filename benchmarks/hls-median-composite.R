@@ -101,7 +101,7 @@ t_all <- system.time({
     nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
   )
 
-  # mask() derives the bad-pixel mask from Fmask (bits 0-3: cirrus /
+  # apply_mask() derives the bad-pixel mask from Fmask (bits 0-3: cirrus /
   # cloud / adjacent / shadow), cleans it with odc-algo morphology
   # (opening(2) despeckle then dilation(3) buffer, disk elements),
   # applies it to every value band, and drops Fmask. The cleaned mask is
@@ -113,7 +113,7 @@ t_all <- system.time({
   # constant-0 border.
   morph <- !identical(Sys.getenv("GARRY_BENCH_MORPH"), "0")
   composite <- ds |>
-    mask(
+    apply_mask(
       from = "Fmask",
       where = qa_bits(0:3),
       open = if (morph) 2L else 0L,

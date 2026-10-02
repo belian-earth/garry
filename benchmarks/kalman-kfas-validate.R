@@ -87,7 +87,7 @@ run_garry <- function(traced) {
                        output = o, robust_iters = robust_iters,
                        out_dtype = "f64")
     out[[o]] <- if (traced) {
-      jf <- g_jit(function(y, r) body(list(y, r), 1L))
+      jf <- garry:::g_jit(function(y, r) body(list(y, r), 1L))
       g_download(jf(g_upload(cube_y, "f64"), g_upload(cube_r, "f64")))
     } else {
       body(list(cube_y, cube_r), 1L)

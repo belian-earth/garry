@@ -69,7 +69,7 @@ gdal_multiband_dequant <- function() {
   d$close()
   cube <- g_upload_raw(writeBin(as.numeric(unlist(mats)), raw(), size = 4L),
                        "f32", c(nb, ts[2], ts[1]))
-  g_download(g_jit(function(inp) dequantize_aef(inp[[1L]]))(list(cube)))
+  g_download(garry:::g_jit(function(inp) dequantize_aef(inp[[1L]]))(list(cube)))
 }
 t_gd <- best(gdal_multiband_dequant)
 cat(sprintf("RESULT GDAL 1x multi-band warp + anvl dequant:              %.1fs\n", t_gd))
