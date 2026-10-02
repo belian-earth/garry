@@ -102,3 +102,30 @@ test_that("a dataset extracts one column per band, in band order", {
   expect_equal(as.numeric(got[, 2L]), as.numeric(got[, 1L]) * 3)
   expect_equal(colnames(got), c("A", "B"))
 })
+
+test_that("garry sources extract their own band, nodata and affine", {
+  dir <- withr::local_tempdir()
+  vals <- .gg_val(0)
+  f <- .pe_src(vals, dir, nb = 3L) # band b holds vals * b
+  xy <- cbind(c(5, 155, 595), c(395, 285, 5))
+  at <- c(vals[1, 1], vals[12, 16], vals[40, 60])
+
+  # a LazyRaster reads its own band, not every band of the file
+  got <- extract_points(lazy_source(f, band = 3L), xy)
+  expect_identical(ncol(got), 1L)
+  expect_equal(as.numeric(got), 3 * at)
+
+  # a dataset: columns named by band, selectable by name
+  ds <- as_dataset(list(
+    a = lazy_source(f, band = 1L),
+    s = lazy_source(f, band = 2L, scale = 0.5, offset = 1),
+    n = lazy_source(f, band = 1L, nodata = vals[1, 1])
+  ))
+  got <- extract_points(ds, xy)
+  expect_identical(colnames(got), c("a", "s", "n"))
+  expect_equal(got[, "a"], at)
+  expect_equal(got[, "s"], 0.5 * 2 * at + 1)
+  expect_true(is.nan(got[1, "n"]))
+  expect_identical(colnames(extract_points(ds, xy, bands = "s")), "s")
+  expect_error(extract_points(ds, xy, bands = "nope"), "must name bands")
+})

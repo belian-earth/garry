@@ -13,7 +13,9 @@ extract_points(x, xy, bands = NULL, interp = NULL, ...)
 \item{xy}{Points: a \code{\link[wk:xy]{wk::xy()}} vector (its CRS supplies \code{xy_srs}), or a
 two-column matrix/data frame as gdalraster expects.}
 
-\item{bands}{Bands to extract (default all).}
+\item{bands}{Bands to extract (default all): band names or positions
+for a \code{LazyDataset}, file band indices for a path or \code{GDALRaster}.
+Ignored for a \code{LazyRaster}, which reads its own band.}
 
 \item{interp}{Interpolation: \code{NULL}/\code{"nearest"} (default), \code{"bilinear"},
 \code{"cubic"}, \code{"cubicspline"}.}
@@ -23,7 +25,9 @@ two-column matrix/data frame as gdalraster expects.}
 }
 \value{
 As \code{\link[gdalraster:pixel_extract]{gdalraster::pixel_extract()}}: a matrix, or a data frame with
-\code{as_data_frame = TRUE}.
+\code{as_data_frame = TRUE}. For a garry object, one column per band, named
+by dataset band, with the band's nodata as \code{NaN} and its scale/offset
+applied, as \code{\link[=collect]{collect()}} would return them.
 }
 \description{
 Samples a raster at points via \code{\link[gdalraster:pixel_extract]{gdalraster::pixel_extract()}}, which reads
