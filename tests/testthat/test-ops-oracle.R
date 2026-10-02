@@ -117,3 +117,11 @@ test_that("unary, logical and summary operators on lazy rasters", {
   expect_error(x + c(1, 2), "single number")
   expect_error(max(x), "reduce_over")
 })
+
+test_that("round(x, digits) works on lazy rasters; other extra arguments are refused", {
+  x <- lazy_source(fixture_gradient_f32()) / 7
+  v <- collect(x)
+  expect_equal(collect(round(x, 1)), round(v, 1), tolerance = 1e-5, ignore_attr = TRUE)
+  expect_equal(collect(round(x, digits = 2)), round(v, 2), tolerance = 1e-5, ignore_attr = TRUE)
+  expect_error(signif(x, 2), "no extra arguments")
+})

@@ -715,8 +715,21 @@ for (op_name in c("^", "%%")) {
   dots <- list(...)
   keeps_dtype <- generic %in%
     c("abs", "sign", "floor", "ceiling", "trunc", "round", "signif")
+  digits_only <- generic == "round" && length(dots) == 1L &&
+    (is.null(names(dots)) || identical(names(dots), "digits"))
+  if (length(dots) && !digits_only) {
+    cli::cli_abort(c(
+      "{.fn {generic}} on a lazy raster takes no extra arguments.",
+      "i" = "Only {.code round(x, digits)} is supported."
+    ))
+  }
   body_fn <- if (length(dots)) {
-    function(v) do.call(fn, c(list(v), dots))
+    d <- dots[[1L]]
+    if (!is.numeric(d) || length(d) != 1L || !is.finite(d) || d != round(d)) {
+      cli::cli_abort("{.arg digits} must be a single whole number.")
+    }
+    p10 <- 10^d
+    function(v) if (.g_traced(v)) g_round(v * p10) / p10 else round(v, d)
   } else if (generic == "round") {
     # anvl has no `round` method on arrays (no `digits` support); g_round()
     # is the same round-half-even.
