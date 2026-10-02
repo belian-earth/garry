@@ -7,9 +7,9 @@
 .g_has_nv_scan()
 }
 \value{
-\code{TRUE} if \code{anvl::nv_scan} is available.
+\code{TRUE} if anvl is installed.
 }
 \description{
-Internal capability probe (exported for daemon use via \code{::}).
+Internal capability check (exported for daemon use via \code{::}).
 }
 \keyword{internal}

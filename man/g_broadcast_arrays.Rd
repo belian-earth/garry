@@ -13,7 +13,7 @@ g_broadcast_arrays(...)
 A list of the inputs broadcast to their common shape.
 }
 \description{
-numpy-style broadcasting for the \verb{g_*} vocabulary: the hook for per-band
+Broadcasting for the \verb{g_*} vocabulary: the hook for per-band
 constants in a band reducer -- multiply a \verb{(band, y, x)} cube by a
 \verb{(band, 1, 1)} loading vector before summing over band (a linear projection;
 see \code{\link[=band_project]{band_project()}}). anvl requires operands broadcast explicitly. Traces to

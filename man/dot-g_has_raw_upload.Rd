@@ -7,9 +7,9 @@
 .g_has_raw_upload()
 }
 \value{
-\code{TRUE} if \code{anvl::nv_array} accepts raw payloads.
+\code{TRUE} if anvl is installed.
 }
 \description{
-Internal capability probe (exported for daemon use via \code{::}).
+Internal capability check (exported for daemon use via \code{::}).
 }
 \keyword{internal}
