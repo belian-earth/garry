@@ -601,7 +601,8 @@ NULL
     same <- vapply(
       ps[-1L],
       function(n) {
-        identical(n@path, p1@path) &&
+        length(n@path) == 1L && length(p1@path) == 1L &&
+          identical(n@path, p1@path) &&
           identical(n@open_options, p1@open_options) &&
           identical(n@nodata, p1@nodata) &&
           identical(n@resampling, p1@resampling) &&

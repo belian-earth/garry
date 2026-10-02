@@ -389,7 +389,7 @@ execute_plan_mirai <- function(
   )
 
   prepare_fetch <- function(rpath, roo, rnodata, grid) {
-    if (fetch_mode == "direct" || !startsWith(rpath, "GTI:")) {
+    if (fetch_mode == "direct" || length(rpath) != 1L || !startsWith(rpath, "GTI:")) {
       return(NULL)
     }
     ipath <- sub("^GTI:", "", rpath)
@@ -665,10 +665,12 @@ execute_plan_mirai <- function(
         rsc <- rp$scale
         rof <- rp$offset
         rdecim <- rp$decim
+        rresamp <- rp$resampling %||% "near"
       } else {
         node <- graph_get(graph, s@members[[1L]])
         rpath <- .gti_resampled_path(node@path, node@resampling)
         rband <- node@band
+        rresamp <- node@resampling
         rnodata <- node@nodata
         roo <- node@open_options
         rsc <- node@scale
@@ -790,6 +792,7 @@ execute_plan_mirai <- function(
             sc <- rsc
             of <- rof
             dcm <- rdecim
+            rsm <- rresamp
             key <- .glue("s{sid}_c{jj}")
             add_task(
               key,
@@ -813,7 +816,8 @@ execute_plan_mirai <- function(
                     store_raw = sr,
                     scale = sc,
                     offset = of,
-                    decim = dcm
+                    decim = dcm,
+                    resampling = rsm
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -829,6 +833,7 @@ execute_plan_mirai <- function(
                   sc = sc,
                   of = of,
                   dcm = dcm,
+                  rsm = rsm,
                   .compute = prof
                 )
               }
@@ -874,6 +879,7 @@ execute_plan_mirai <- function(
             sc <- rsc
             of <- rof
             dcm <- rdecim
+            rsm <- rresamp
             key <- .glue("s{sid}_r{rr2}")
             # Parts carry the stage halo (see .exec_split_cg): same
             # r0/c0, slice grown by 2*halo.
@@ -909,7 +915,8 @@ execute_plan_mirai <- function(
                     store_raw = sr,
                     scale = sc,
                     offset = of,
-                    decim = dcm
+                    decim = dcm,
+                    resampling = rsm
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -925,6 +932,7 @@ execute_plan_mirai <- function(
                   sc = sc,
                   of = of,
                   dcm = dcm,
+                  rsm = rsm,
                   reg = .glue("r{run_id}_{key}"),
                   .compute = prof
                 )
@@ -1243,42 +1251,72 @@ execute_plan_mirai <- function(
     queue_drop(deps)
   }
 
-  # Pre-drain jit warm-up: compile each compute stage's modal shape on
-  # every compute-pool daemon while the read pool owns the drain
-  # (measured: cold 1.45 s vs warmed 0.61 s per tail chunk). Fired
-  # async — a daemon runs it before any compute task queued after it;
-  # while the read pool owns the early drain; the handle stays
-  # referenced until the run ends.
-  warm_handle <- NULL
+  # Idle-time jit warm-up: each compute daemon (a routed profile)
+  # compiles the plan's kernels, in plan order, only while it has no
+  # task running, one kernel at a time (measured: cold 1.45 s vs warmed
+  # 0.61 s per tail chunk). The earlier form broadcast every spec to
+  # every compute daemon up front, meant to hide under a read drain;
+  # where a collect has no long drain (the SI tail reads local cubes),
+  # the ready compute tasks queued behind every stage's compile, and the
+  # host spent seconds serialising the specs (run 12, 2026-09-26: each
+  # tail waited 105 to 115 s for its first compute task, median
+  # ready-wait 212 s; locally 13.8 s and 17.8 s). A daemon that meets a
+  # kernel before its warm-up still compiles it on first use (the task
+  # ships its closure), so the warm-up only ever uses idle time: a ready
+  # task waits behind at most one compile. Map kernels warm on every
+  # profile, scan kernels only on the designated scan profiles. A
+  # compute profile is one daemon without a dispatcher, so its tasks run
+  # in submission order: a kernel is marked warm on its profile when the
+  # warm-up is SENT, and later tasks there ship the cache key alone (the
+  # closure is MBs) and run after the compile. A failed warm-up clears
+  # the mark; a key-only task that still misses is resent with the
+  # closure (the garry_jit_miss path).
+  warm_queue <- list()
+  warm_inflight <- list()
   if (isTRUE(garry_opt("jit_warmup")) && length(warm_specs)) {
-    # Content-addressed keys collapse structurally identical stages
-    # (e.g. per-slice mask cleanup) to ONE spec. Targeted warm-up: map
-    # kernels on every profile, scan kernels only at the designated
-    # scan profiles. Warmth is recorded PER PROFILE — key-only
-    # launches are exact, not probabilistic (the resend covers a
-    # profile whose warm-up failed, clearing its mark).
     warm_specs <- warm_specs[
       !duplicated(
         vapply(warm_specs, `[[`, character(1), "ck")
       )
     ]
-    scan_sp <- Filter(function(sp) isTRUE(sp$scan), warm_specs)
-    map_sp <- Filter(function(sp) !isTRUE(sp$scan), warm_specs)
-    wh <- list()
     for (p in comp_profs) {
-      sp_p <- c(map_sp, if (p %in% scan_profs) scan_sp)
-      if (!length(sp_p)) {
+      q <- Filter(function(sp) !isTRUE(sp$scan) || p %in% scan_profs, warm_specs)
+      if (length(q)) warm_queue[[p]] <- q
+    }
+  }
+  # Launch the next unwarmed kernel on every idle compute profile, and
+  # collect finished warm-ups (TRUE when one finished).
+  warm_step <- function() {
+    done_any <- FALSE
+    for (p in names(warm_inflight)) {
+      w <- warm_inflight[[p]]
+      if (mirai::unresolved(w$h)) next
+      ok <- !inherits(w$h$data, c("miraiError", "errorValue"))
+      if (!ok) prof_warm[[.pw_key(p, w$ck)]] <- FALSE
+      if (isTRUE(w$scan)) prof_cold_busy[[p]] <- FALSE
+      prof_slots[[p]] <<- prof_slots[[p]] - 1L
+      warm_inflight[[p]] <<- NULL
+      done_any <- TRUE
+    }
+    for (p in names(warm_queue)) {
+      if (!is.null(warm_inflight[[p]]) || prof_slots[[p]] > 0L) next
+      q <- warm_queue[[p]]
+      while (length(q) && isTRUE(prof_warm[[.pw_key(p, q[[1L]]$ck)]])) q <- q[-1L]
+      if (!length(q)) {
+        warm_queue[[p]] <<- NULL
         next
       }
-      wh <- c(
-        wh,
-        mirai::everywhere(garry::.daemon_warm_jit(sp), sp = sp_p, .compute = p)
+      sp <- q[[1L]]
+      warm_queue[[p]] <<- q[-1L]
+      warm_inflight[[p]] <<- list(
+        h = mirai::mirai(garry::.daemon_warm_jit(list(sp)), sp = sp, .compute = p),
+        ck = sp$ck, scan = isTRUE(sp$scan)
       )
-      for (sp in sp_p) {
-        prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
-      }
+      prof_slots[[p]] <<- prof_slots[[p]] + 1L
+      prof_warm[[.pw_key(p, sp$ck)]] <- TRUE
+      if (isTRUE(sp$scan)) prof_cold_busy[[p]] <- TRUE
     }
-    warm_handle <- wh
+    done_any
   }
 
   # Region-aware stage chunk lookup. A stage's chunks live under its
@@ -2017,7 +2055,15 @@ execute_plan_mirai <- function(
         )
       }
     }
-    if (length(inflight) == 0L) {
+    if (length(warm_queue) || length(warm_inflight)) {
+      # a finished warm-up frees its daemon after this pass's launch
+      # scan: rescan before judging deadlock or harvesting
+      if (warm_step()) {
+        scan_needed <- TRUE
+        next
+      }
+    }
+    if (length(inflight) == 0L && length(warm_inflight) == 0L) {
       .garry_error(
         "scheduler deadlock: no runnable tasks",
         "garry_scheduler_error"
