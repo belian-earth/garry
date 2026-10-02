@@ -24,7 +24,7 @@ test_that("a daemon runs a garry kernel on CUDA", {
 
   m <- matrix(runif(64 * 64), 64, 64)
   task <- mirai::mirai({
-    jf <- garry::g_jit(function(inputs) {
+    jf <- asNamespace("garry")$g_jit(function(inputs) {
       a <- inputs[[1L]]
       list(out = (a * 2 + 1) / (a + 3))
     }, device = "cuda")

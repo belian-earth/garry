@@ -356,7 +356,6 @@ grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
 #' @param x A `GridSpec` or a length-4 garry-order extent.
 #' @return Length-4 numeric in vaster order.
 #' @keywords internal
-#' @export
 as_vaster_extent <- function(x) {
   ext <- if (S7::S7_inherits(x, GridSpec)) x@extent else as.numeric(x)
   stopifnot(length(ext) == 4L)

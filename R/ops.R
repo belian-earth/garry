@@ -48,7 +48,6 @@
 #'   anvl default device.
 #' @return A compiled function (anvl `JitFunction`).
 #' @keywords internal
-#' @export
 g_jit <- function(f, device = NULL) {
   .require_anvl()
   anvl::jit(f, device = device)
@@ -63,7 +62,6 @@ g_jit <- function(f, device = NULL) {
 #' @param wrt Name of the argument to differentiate with respect to.
 #' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
 #' @keywords internal
-#' @export
 g_value_and_gradient <- function(f, wrt) {
   .require_anvl()
   anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
@@ -150,7 +148,6 @@ g_download <- function(x) {
 #' @param device Optional device (e.g. "cuda"); NULL uses the default.
 #' @return An `AnvlArray`.
 #' @keywords internal
-#' @export
 g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   .require_anvl()
   attributes(bytes) <- NULL
@@ -197,7 +194,6 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 #' @param x `AnvlArray` (f32 or f64).
 #' @return Raw vector with `gdim` and `gdt` attributes.
 #' @keywords internal
-#' @export
 g_download_raw <- function(x) {
   .require_anvl()
   dt <- .g_dtype(x)
@@ -222,11 +218,12 @@ g_download_raw <- function(x) {
 #'
 #' @param x Traced array or plain numeric.
 #' @return Same shape as `x`.
-#' @keywords internal
 #' @export
 g_round <- function(x) {
-  .require_anvl()
-  anvl::nv_round(x)
+  if (.g_traced(x)) {
+    return(anvl::nv_round(x))
+  }
+  round(x)
 }
 
 #' Clamp values to a closed range, elementwise.
@@ -234,11 +231,14 @@ g_round <- function(x) {
 #' @param x Traced array or plain numeric.
 #' @param lo,hi Range bounds (scalars).
 #' @return Same shape as `x`.
-#' @keywords internal
 #' @export
 g_clamp <- function(x, lo, hi) {
-  .require_anvl()
-  anvl::nv_clamp(x, lo, hi)
+  if (.g_traced(x)) {
+    return(anvl::nv_clamp(x, lo, hi))
+  }
+  out <- pmin(pmax(x, lo), hi)
+  dim(out) <- dim(x)
+  out
 }
 
 # Integer output ranges for quantized sinks (mirrors GDAL's clamp at
@@ -267,7 +267,6 @@ g_clamp <- function(x, lo, hi) {
 #'   `"i32"`).
 #' @return Traced array of `dtype`.
 #' @keywords internal
-#' @export
 g_quantize <- function(x, scale, offset, nodata, dtype) {
   rng <- .g_int_range[[dtype]]
   if (is.null(rng)) {

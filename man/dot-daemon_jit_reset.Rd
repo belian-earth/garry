@@ -23,6 +23,6 @@ still shared across a run's tasks and key-only launches still hit.
 A no-op elsewhere.
 }
 \details{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

@@ -40,6 +40,6 @@ reads a hole instead of erroring (Int16 when a nodata sentinel is
 declared, Byte 255 otherwise, the HLS QA convention).
 }
 \details{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

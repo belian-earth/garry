@@ -20,6 +20,6 @@ pressure; the default trim-only pass costs microseconds and gives
 back what glibc is hoarding.
 }
 \details{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

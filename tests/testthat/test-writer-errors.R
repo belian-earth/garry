@@ -8,7 +8,7 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
         "garry not installed for daemons")
 
 # Replace the installed .daemon_write_chunk ON THE WRITER DAEMON (tasks
-# resolve garry::.daemon_write_chunk from the daemon's namespace, so a
+# resolve .daemon_write_chunk from the daemon's namespace, so a
 # host-side mock never ships). Fails from the `from`-th call on; earlier
 # calls run the real writer so an output handle is genuinely open.
 .we_break_writer <- function(from = 2L) {

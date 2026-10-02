@@ -363,7 +363,6 @@ StackNode <- S7::new_class(
 #' @param members Ids of the absorbed nodes.
 #' @param halo Combined halo radius of the members.
 #' @return A `FusedNode`.
-#' @export
 FusedNode <- S7::new_class(
   "FusedNode",
   parent = Node,

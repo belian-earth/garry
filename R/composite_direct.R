@@ -470,7 +470,7 @@ NULL
     quote({
       suppressMessages(library(garry))
       garry::garry_gdal_config()
-      garry::.daemon_jit_reset()
+      asNamespace("garry")$.daemon_jit_reset()
       options(garry.read_retry = rr)
     }),
     profiles = prof,
@@ -487,7 +487,7 @@ NULL
   prof <- .gd_profile()
   .gd_daemon_prep(prof)
   promise <- lapply(unname(b$jobs), function(j) {
-    mirai::mirai(garry::.cd_fetch_warp(j, k), j = j, k = b$K, .compute = prof)
+    mirai::mirai(asNamespace("garry")$.cd_fetch_warp(j, k), j = j, k = b$K, .compute = prof)
   })
   list(info = b$info, promise = promise, t0 = proc.time()[["elapsed"]])
 }
@@ -772,7 +772,7 @@ NULL
   fetch <- function(ids) {
     lapply(ids, function(id) {
       mirai::mirai(
-        garry::.cd_fetch_warp(j, k),
+        asNamespace("garry")$.cd_fetch_warp(j, k),
         j = b$jobs[[as.character(id)]],
         k = K,
         .compute = prof_r
@@ -840,7 +840,7 @@ NULL
     mirai::everywhere(
       {
         suppressMessages(library(garry))
-        try(garry::.gd_warm_pipeline(sp), silent = TRUE)
+        try(asNamespace("garry")$.gd_warm_pipeline(sp), silent = TRUE)
       },
       sp = wsp,
       .compute = p
@@ -882,7 +882,7 @@ NULL
       ))
     )
     mask_p <- mirai::mirai(
-      garry::.gd_compute_mask(km),
+      asNamespace("garry")$.gd_compute_mask(km),
       km = Km,
       .compute = next_cp()
     )
@@ -985,7 +985,7 @@ NULL
       )
       key <- .glue("b{bi}.s{si}")
       res_p[[key]] <- mirai::mirai(
-        garry::.gd_compute_masked_band(jb, kb),
+        asNamespace("garry")$.gd_compute_masked_band(jb, kb),
         jb = jb,
         kb = Kb,
         .compute = next_cp()

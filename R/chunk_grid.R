@@ -182,7 +182,6 @@ S7::method(chunk_window_with_halo, ChunkGrid) <- function(
 #' @param margin Safety margin in input cells; defaults to 0 for same-CRS
 #'   windows and `garry_opt("window_margin")` across CRS.
 #' @return A list with the 0-based input window.
-#' @export
 cross_grid_window <- function(
   out_grid,
   in_grid,

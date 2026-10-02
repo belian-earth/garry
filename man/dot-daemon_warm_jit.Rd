@@ -25,6 +25,6 @@ failures are swallowed (warm-up is an optimisation, never a
 correctness dependency).
 }
 \details{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

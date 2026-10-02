@@ -628,7 +628,7 @@ garry_daemons <- function(
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
   .pool_broadcast(
-    quote(garry::.daemon_hygiene(deep = d)),
+    quote(asNamespace("garry")$.daemon_hygiene(deep = d)),
     profiles = c("garry_read", .comp_profiles(), "garry_write"),
     d = deep,
     quiet = TRUE

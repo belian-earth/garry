@@ -44,6 +44,6 @@ other task. One writer daemon per session: GTiff is single-writer,
 and daemon-persistent open handles amortise the opens.
 }
 \details{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

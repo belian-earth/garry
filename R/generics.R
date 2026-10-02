@@ -36,7 +36,6 @@ S7::method(required_halo, PatchNode) <- function(node) node@radius
 #' @param node An intermediate representation (IR) `Node`.
 #' @param ... Passed to methods.
 #' @return `TRUE` or `FALSE`.
-#' @export
 fusable <- S7::new_generic("fusable", "node")
 S7::method(fusable, MapNode) <- function(node) TRUE
 S7::method(fusable, FocalNode) <- function(node) TRUE
@@ -52,7 +51,6 @@ S7::method(fusable, Node) <- function(node) FALSE # default: barrier
 #' @param node An intermediate representation (IR) `Node`.
 #' @param ... Passed to methods.
 #' @return `TRUE` or `FALSE`.
-#' @export
 is_barrier <- S7::new_generic("is_barrier", "node")
 S7::method(is_barrier, ReduceNode) <- function(node) TRUE
 S7::method(is_barrier, ScanNode) <- function(node) TRUE

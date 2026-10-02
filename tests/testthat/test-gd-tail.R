@@ -55,7 +55,7 @@ test_that("repeat collect creates no new pipeline kernels (cache + warm)", {
   on.exit(options(old), add = TRUE)
   x <- .gg_masked_composite()
   creates <- function() sum(vapply(garry:::.comp_profiles(), function(p)
-    mirai::mirai(garry::.daemon_jit_creates(), .compute = p)[], integer(1)))
+    mirai::mirai(asNamespace("garry")$.daemon_jit_creates(), .compute = p)[], integer(1)))
   invisible(collect(x, distributed = TRUE))
   c1 <- creates()
   expect_gte(c1, 1L)                       # warm or first use compiled something

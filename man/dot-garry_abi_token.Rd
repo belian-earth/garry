@@ -11,12 +11,12 @@ formals plus the store layout version.}
 A single hash string.
 }
 \description{
-Daemons resolve \verb{garry::.daemon_*} from their INSTALLED library while
+Daemons resolve the \verb{.daemon_*} bodies from their INSTALLED library while
 a development host frequently runs a \code{load_all()} tree; a namespace
 skew yields "unused argument" mirai errors at best and silent
 semantic drift at worst (positional renames, new masking arguments).
 \code{packageVersion()} cannot guard this (constant through development);
-the formals can. Internal (exported so daemons can evaluate their
-own token via \code{::}).
+the formals can. Internal; daemons evaluate their own token through
+\code{asNamespace("garry")}.
 }
 \keyword{internal}

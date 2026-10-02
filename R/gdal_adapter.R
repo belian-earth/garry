@@ -391,7 +391,6 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   a single band, or a `(band, y, x)` numeric array when `band` is a
 #'   vector. With `out = "raw_f32"`: a raw row-major f32 payload (band
 #'   planes contiguous when `band` is a vector).
-#' @export
 gdal_read_window <- function(
   path,
   band,
@@ -1052,7 +1051,6 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #' @param resampling GDAL resampling method name.
 #' @param src_nodata Source sentinel (length 0 or 1), from the SourceNode.
 #' @return Path to the VRT file (in `tempdir()`).
-#' @export
 gdal_warp_vrt <- function(
   src_path,
   band,
@@ -1120,7 +1118,6 @@ gdal_warp_vrt <- function(
 #'
 #' @return Integer version number, or `NA_integer_`.
 #' @keywords internal
-#' @export
 gdal_version_num <- function() {
   n <- suppressWarnings(as.integer(gdalraster::gdal_version()[[2L]]))
   if (length(n) != 1L || is.na(n)) NA_integer_ else n
@@ -1129,7 +1126,6 @@ gdal_version_num <- function() {
 #' GDAL runtime version as a human string (adapter).
 #' @return Character, e.g. `"GDAL 3.9.0, released ..."`.
 #' @keywords internal
-#' @export
 gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 
 #' Mosaic already-grid-aligned rasters into a VRT (adapter).
@@ -1280,7 +1276,6 @@ gdal_mosaic_vrt <- function(
 #'   band, so readers (QGIS, GDAL, `scale = TRUE` reads) recover
 #'   `stored * scale + offset`.
 #' @return An open dataset object; caller must `$close()`.
-#' @export
 gdal_create_output <- function(
   path,
   grid,
@@ -1372,7 +1367,6 @@ gdal_create_output <- function(
 #' @param plane For a rank-3 `(band, y, x)` raw store payload, the
 #'   1-based plane to write (taken by byte offset, no copy of the rest).
 #' @return Invisibly, `NULL`.
-#' @export
 gdal_write_window <- function(
   ds,
   x_off,
@@ -1427,7 +1421,6 @@ gdal_write_window <- function(
 #' @param ... Passed to [gdalraster::pixel_extract()].
 #' @return As [gdalraster::pixel_extract()].
 #' @keywords internal
-#' @export
 gdal_pixel_extract <- function(raster, ...) {
   gdalraster::pixel_extract(raster, ...)
 }

@@ -10,6 +10,6 @@
 \code{NULL}, invisibly.
 }
 \description{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

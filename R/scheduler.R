@@ -280,7 +280,7 @@ execute_plan_mirai <- function(
     quote({
       suppressMessages(library(garry))
       options(garry.read_fail = rf, garry.read_retry = rr)
-      garry::.daemon_hygiene()
+      asNamespace("garry")$.daemon_hygiene()
     }),
     profiles = profiles,
     rf = garry_opt("read_fail"),
@@ -353,7 +353,7 @@ execute_plan_mirai <- function(
   on.exit(
     for (p in profiles) {
       try(
-        mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
+        mirai::everywhere(asNamespace("garry")$.daemon_shm_clear(), .compute = p),
         silent = TRUE
       )
     },
@@ -470,7 +470,7 @@ execute_plan_mirai <- function(
         tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
         add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
           mirai::mirai(
-            garry::.daemon_fetch_window(
+            asNamespace("garry")$.daemon_fetch_window(
               src,
               dst,
               ex,
@@ -802,7 +802,7 @@ execute_plan_mirai <- function(
               store_mb = store_mb_read,
               launch = function(prof) {
                 mirai::mirai(
-                  garry::.daemon_run_source_shm(
+                  asNamespace("garry")$.daemon_run_source_shm(
                     p2,
                     b2,
                     nd,
@@ -900,7 +900,7 @@ execute_plan_mirai <- function(
               store_mb = store_mb_read,
               launch = function(prof) {
                 mirai::mirai(
-                  garry::.daemon_run_source_shm(
+                  asNamespace("garry")$.daemon_run_source_shm(
                     p2,
                     b2,
                     nd,
@@ -1109,7 +1109,7 @@ execute_plan_mirai <- function(
               # it costs MBs of host serialization per task (the 145-band
               # predict closure measured 3.36 MB).
               mirai::mirai(
-                garry::.daemon_run_compute_shm(
+                asNamespace("garry")$.daemon_run_compute_shm(
                   ck,
                   fn,
                   in_vals,
@@ -1210,7 +1210,7 @@ execute_plan_mirai <- function(
     for (p in profiles) {
       try(
         mirai::everywhere(
-          garry::.daemon_shm_drop(regs),
+          asNamespace("garry")$.daemon_shm_drop(regs),
           regs = .glue("r{run_id}_{pending_drop}"),
           .compute = p
         ),
@@ -1309,7 +1309,7 @@ execute_plan_mirai <- function(
       sp <- q[[1L]]
       warm_queue[[p]] <<- q[-1L]
       warm_inflight[[p]] <<- list(
-        h = mirai::mirai(garry::.daemon_warm_jit(list(sp)), sp = sp, .compute = p),
+        h = mirai::mirai(asNamespace("garry")$.daemon_warm_jit(list(sp)), sp = sp, .compute = p),
         ck = sp$ck, scan = isTRUE(sp$scan)
       )
       prof_slots[[p]] <<- prof_slots[[p]] + 1L
@@ -1409,7 +1409,7 @@ execute_plan_mirai <- function(
         try(
           {
             wcl <- mirai::everywhere(
-              garry::.daemon_write_close(),
+              asNamespace("garry")$.daemon_write_close(),
               .compute = "garry_write"
             )
             invisible(lapply(wcl, function(m) m[]))
@@ -1835,7 +1835,7 @@ execute_plan_mirai <- function(
     wr_inflight[[as.character(wr_seq)]] <<- list(
       rk = ref$rk,
       h = mirai::mirai(
-        garry::.daemon_write_chunk(
+        asNamespace("garry")$.daemon_write_chunk(
           wpath,
           xo,
           yo,
@@ -2267,7 +2267,7 @@ execute_plan_mirai <- function(
       if (!harvest_writes()) Sys.sleep(0.002) else flush_drops()
     }
     wcl <- mirai::everywhere(
-      garry::.daemon_write_close(),
+      asNamespace("garry")$.daemon_write_close(),
       .compute = "garry_write"
     )
     invisible(lapply(wcl, function(m) m[]))

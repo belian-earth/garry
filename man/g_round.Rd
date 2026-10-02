@@ -17,4 +17,3 @@ Matches base R's \code{round(x)} semantics (IEEE round-half-to-even), so
 device-side quantization reproduces the historical writer-side
 \code{round()} exactly.
 }
-\keyword{internal}
