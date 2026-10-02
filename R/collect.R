@@ -257,6 +257,10 @@ garry_last_route <- function() .garry_state$route
   } else {
     stats::setNames(unlist(.group_paths(path, labels)), labels)
   }
+  # a {group} placeholder may name a directory ("out/{group}/comp.tif")
+  for (d in unique(dirname(as.character(paths)))) {
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  }
   # Multi-export route (design/multi-export-collect.md): ONE plan whose
   # sinks are the per-group band stacks, so every group's reads enter
   # one ready queue and drain together under fetch-first priority.

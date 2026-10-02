@@ -152,30 +152,21 @@ write_tif <- function(
         ),
         names(path)
       )
-    } else if (dir.exists(path) || grepl("\\{group\\}|\\{time\\}", path)) {
-      # directory / placeholder targets: stream into a temp dir with the
-      # same layout; final files land beside/inside the real target.
-      td <- tempfile(
-        "garry-cog-",
-        tmpdir = if (dir.exists(path)) {
-          path
-        } else {
-          dirname(path)
-        }
-      )
+    } else {
+      # Stream into a temp dir under the target's fixed prefix, mirroring
+      # the rest of the path (placeholders included), so each streamed
+      # file's final path is its path relative to the temp dir, under the
+      # prefix. The temp dir is removed on exit, whatever was streamed.
+      # normalizePath: a relative target makes the prefix ".", and a
+      # "./"-prefixed temp key would be invisible to any default ls()
+      # over a path-keyed cache (the writer-close bug, 2026-08-13).
+      ca <- .cog_anchor(path)
+      cog_anchor <- ca$anchor
+      dir.create(cog_anchor, recursive = TRUE, showWarnings = FALSE)
+      td <- tempfile("garry-cog-", tmpdir = normalizePath(cog_anchor))
       dir.create(td)
       tmp_dirs <- td
-      work <- if (dir.exists(path)) td else file.path(td, basename(path))
-    } else {
-      # normalizePath: a relative target makes dirname(path) ".", and a
-      # "./"-prefixed temp key would be invisible to any default ls()
-      # over a path-keyed cache (the writer-close bug, 2026-08-13);
-      # absolute temps are unambiguous everywhere.
-      work <- tempfile(
-        "garry-cog-",
-        tmpdir = normalizePath(dirname(path)),
-        fileext = ".tif"
-      )
+      work <- if (nzchar(ca$rel)) file.path(td, ca$rel) else td
     }
     on.exit(
       unlink(c(unname(unlist(work)), tmp_dirs), recursive = TRUE),
@@ -198,16 +189,18 @@ write_tif <- function(
   # Enumerate the streamed files (a directory target returns the dir).
   wf <- unname(unlist(res))
   streamed <- unique(unlist(lapply(wf, function(p) {
-    if (dir.exists(p)) list.files(p, "\\.tif$", full.names = TRUE) else p
+    if (dir.exists(p)) {
+      list.files(p, "\\.tif$", full.names = TRUE, recursive = TRUE)
+    } else {
+      p
+    }
   })))
   finals <- if (length(path) > 1L) {
     unname(unlist(path))[match(streamed, unname(unlist(work)))]
-  } else if (dir.exists(path)) {
-    file.path(path, basename(streamed))
-  } else if (grepl("\\{group\\}|\\{time\\}", path)) {
-    file.path(dirname(path), basename(streamed))
   } else {
-    path
+    td <- normalizePath(tmp_dirs[[1L]])
+    rel <- substring(normalizePath(streamed), nchar(td) + 2L)
+    file.path(cog_anchor, rel)
   }
   cl <- c(
     "-of",
@@ -223,10 +216,30 @@ write_tif <- function(
     cl <- c(cl, "-co", o)
   }
   for (i in seq_along(streamed)) {
+    dir.create(dirname(finals[[i]]), recursive = TRUE, showWarnings = FALSE)
     ok <- gdal_translate_file(streamed[[i]], finals[[i]], cl)
     if (!isTRUE(ok) || !file.exists(finals[[i]])) {
       cli::cli_abort("COG finalise failed for {.path {finals[[i]]}}.")
     }
   }
   invisible(if (length(finals) == 1L) finals[[1L]] else finals)
+}
+
+# Split a COG write target into its fixed prefix (an existing directory,
+# or the path up to the first placeholder component) and the rest. A
+# directory target has an empty rest.
+.cog_anchor <- function(path) {
+  if (dir.exists(path)) {
+    return(list(anchor = path, rel = ""))
+  }
+  parts <- strsplit(path, "/", fixed = TRUE)[[1L]]
+  k <- which(grepl("\\{(group|time)\\}", parts))[1L]
+  if (is.na(k)) {
+    k <- length(parts)
+  }
+  anchor <- paste(parts[seq_len(k - 1L)], collapse = "/")
+  if (!nzchar(anchor)) {
+    anchor <- if (startsWith(path, "/")) "/" else "."
+  }
+  list(anchor = anchor, rel = paste(parts[k:length(parts)], collapse = "/"))
 }
