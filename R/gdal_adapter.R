@@ -440,6 +440,22 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   a single band, or a `(band, y, x)` numeric array when `band` is a
 #'   vector. With `out = "raw_f32"`: a raw row-major f32 payload (band
 #'   planes contiguous when `band` is a vector).
+# Read a window of `rows` rows in garry's row order (row 1 = north,
+# decision D13). gdal_grid_spec() presents a south-up file (positive y
+# pixel size, e.g. AEF embedding COGs) as a north-up grid with the same
+# footprint, so its rows are read from the mirrored offset and reversed.
+.gdal_read_rows <- function(ds, band, x_off, y_off, x_size, rows) {
+  gt <- ds$getGeoTransform()
+  if (!(gt[[6L]] > 0)) {
+    return(ds$read(band, x_off, y_off, x_size, rows, x_size, rows))
+  }
+  y_file <- ds$getRasterYSize() - y_off - rows
+  v <- ds$read(band, x_off, y_file, x_size, rows, x_size, rows)
+  # row-major: row r occupies ((r - 1) * x_size + 1):(r * x_size)
+  idx <- as.vector(matrix(seq_len(rows * x_size), nrow = x_size)[, rows:1L])
+  v[idx]
+}
+
 gdal_read_window <- function(
   path,
   band,
@@ -526,7 +542,7 @@ gdal_read_window <- function(
     ))
   }
   .gdal_finish_vec(
-    ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size),
+    .gdal_read_rows(ds, band, x_off, y_off, x_size, y_size),
     y_size,
     x_size,
     nodata,
@@ -582,7 +598,7 @@ gdal_read_window <- function(
   while (r0 < y_size) {
     rows <- min(slab, y_size - r0)
     for (k in seq_len(nb)) {
-      v <- ds$read(band[[k]], x_off, y_off + r0, x_size, rows, x_size, rows)
+      v <- .gdal_read_rows(ds, band[[k]], x_off, y_off + r0, x_size, rows)
       if (out == "raw_f32") {
         # Finish straight into the plane's slot of the private buffer
         # (one C pass; no numeric copy, no raw index assignment).

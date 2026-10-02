@@ -41,3 +41,40 @@ test_that("windowed reads take the right sub-block", {
   want <- outer(4:9, 12:16, function(r2, c2) r2 * 100 + c2)
   expect_identical(w, want)
 })
+
+test_that("a south-up file reads the same as its north-up twin", {
+  # Same footprint and content, stored in opposite row orders: garry row r
+  # (north first) holds r * 10 + col, band b scales it by b.
+  twin <- function(south_up) {
+    f <- withr::local_tempfile(fileext = ".tif", .local_envir = parent.frame(2))
+    ds <- gdalraster::create("GTiff", f, 4, 3, 2, "Float32", return_obj = TRUE)
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+    m <- outer(1:3, 1:4, function(r, c) r * 10 + c)
+    if (south_up) {
+      ds$setGeoTransform(c(0, 10, 0, 0, 0, 10))
+      m <- m[3:1, ]
+    } else {
+      ds$setGeoTransform(c(0, 10, 0, 30, 0, -10))
+    }
+    for (b in 1:2) ds$write(b, 0, 0, 4, 3, as.numeric(t(m * b)))
+    ds$close()
+    f
+  }
+  su <- twin(TRUE)
+  nu <- twin(FALSE)
+  expect_identical(collect(lazy_source(su)), collect(lazy_source(nu)))
+  expect_identical(collect(lazy_source(su))[1, 1], 11)
+  expect_identical(
+    gdal_read_window(su, 1L, 1L, 1L, 2L, 2L),
+    gdal_read_window(nu, 1L, 1L, 1L, 2L, 2L)
+  )
+  expect_identical(
+    gdal_read_window(su, 1:2, 0L, 1L, 4L, 2L),
+    gdal_read_window(nu, 1:2, 0L, 1L, 4L, 2L)
+  )
+  g <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 30), dims = c(8L, 6L))
+  expect_equal(
+    collect(align_to(lazy_source(su), g, "near")),
+    collect(align_to(lazy_source(nu), g, "near"))
+  )
+})
