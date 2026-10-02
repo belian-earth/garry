@@ -29,7 +29,6 @@ Imports:
 Remotes:
     hypertidy/vaster,
     firelab/gdalraster,
-    r-xla/anvl,
     belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
