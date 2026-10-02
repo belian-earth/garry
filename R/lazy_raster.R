@@ -1315,6 +1315,17 @@ align_to <- function(x, to, resampling = "bilinear") {
   if (grid_equal(x@grid, target)) {
     return(x)
   }
+  src <- graph_get(x@graph, x@node_id)
+  if (!S7::S7_inherits(src, SourceNode) || length(src@band) > 1L || length(src@collapsed)) {
+    .garry_error(
+      paste0(
+        "warping a computed raster is not supported in v1: align_to() ",
+        "sources before computing on them, or materialise to disk ",
+        "first (write_tif() / materialise())."
+      ),
+      "garry_warp_unsupported_error"
+    )
+  }
   id <- graph_add(
     x@graph,
     WarpNode,

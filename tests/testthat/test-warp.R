@@ -170,7 +170,7 @@ test_that("align_to takes only the target's spatial geometry", {
   )
   stack <- lazy_stack(list(
     align_to(a, coarse, "average"),
-    align_to(a * 2, coarse, "average")
+    align_to(lazy_source(fixture_gradient_f32()), coarse, "near")
   ))
   w <- align_to(a, stack, resampling = "average")
   expect_identical(dim(w), dim(align_to(a, coarse, "average")))
@@ -207,4 +207,13 @@ test_that("a band stack cannot be warped, before or after a collect collapses it
   invisible(collect(st * 2)) # collapses the stack into a multi-band read
   expect_error(collect(align_to(st, coarse)),
                class = "garry_warp_unsupported_error")
+})
+
+test_that("align_to refuses a computed raster when it is built", {
+  a <- lazy_source(fixture_gradient_f32())
+  g <- a@grid
+  coarse <- grid_spec(crs = grid_crs(g), extent = grid_bbox(g), dims = c(30L, 20L))
+  expect_error(align_to(a * 2, coarse), class = "garry_warp_unsupported_error")
+  x2 <- a * 2
+  expect_identical(align_to(x2, x2)@node_id, x2@node_id) # same grid: a no-op
 })
