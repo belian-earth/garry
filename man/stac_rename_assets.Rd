@@ -34,7 +34,6 @@ slices), so ragged bands reduce over exactly their own observations.
 }
 \seealso{
 Other stac helpers:
-\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
 \code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
 \code{\link[=stac_filter_assets]{stac_filter_assets()}},
 \code{\link[=stac_filter_cloud]{stac_filter_cloud()}},

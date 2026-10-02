@@ -11,7 +11,7 @@ NULL
 # so it stays in Suggests and everything downstream tests offline.
 #
 # The source table IS the mosaic index: stac_gti_index() writes it as a
-# GTI-readable layer, and lazy_stac_stack() opens one FILTERed slice
+# GTI-readable layer, and lazy_dataset() opens one FILTERed slice
 # per datetime group (D18). Planetary Computer signing, measured on the
 # HLS benchmark: PRE-SIGN hrefs before stac_sources() (one cached SAS
 # token per collection, e.g. rstac::items_sign 'sign_planetary_computer'
@@ -280,7 +280,7 @@ stac_sign_mpc <- function(
 #'
 #' One row per item x asset. The result is a plain data frame: the
 #' `stac_filter_*` helpers operate on it in ordinary R, and
-#' [lazy_dataset()] / [lazy_stac_stack()] consume it to build lazy
+#' [lazy_dataset()] consumes it to build lazy
 #' mosaics.
 #'
 #' @param items An rstac `doc_items` object (or any list with the same
@@ -504,7 +504,7 @@ stac_drop_duplicates <- function(sources) {
 #' Group acquisitions into time slices.
 #'
 #' Adds a `slice` column (the datetime truncated to `granularity`);
-#' tiles sharing a slice mosaic together in [lazy_stac_stack()].
+#' tiles sharing a slice mosaic together in [lazy_dataset()].
 #'
 #' `"day"` truncates the UTC datetime: one satellite overpass that
 #' crosses local midnight in UTC terms splits into two slices.
@@ -694,9 +694,8 @@ stac_merge <- function(...) {
 #' mosaics the indexed rasters on the fly. Footprints are stored in
 #' `crs` (transformed from the table's EPSG:4326 bboxes), so the index
 #' layer SRS matches the grid the GTI dataset will be pinned to and the
-#' culling geometry is exact. Most users reach this via [lazy_dataset()]
-#' or [lazy_stac_stack()], which build the index internally, and rarely
-#' call it directly.
+#' culling geometry is exact. Most users reach this through
+#' [lazy_dataset()], which builds the index internally.
 #'
 #' @param sources A `stac_sources()` table with a `slice` column (see
 #'   [stac_time_slices()]).
@@ -752,85 +751,3 @@ stac_gti_index <- function(
   invisible(path)
 }
 
-#' Lazy time-sliced stack of one STAC asset on a target grid.
-#'
-#' Builds a GTI (GDAL Tile Index; see [stac_gti_index()]) index for
-#' `asset`, then opens one mosaic per time slice pinned to `grid`
-#' (mixed source CRS is fine: the GTI driver reprojects per tile) and
-#' stacks them along `t`. Overlaps within a slice resolve by ascending
-#' `sort_field` (highest drawn on top).
-#'
-#' @param sources A `stac_sources()` table.
-#' @param grid Target [GridSpec()] for every slice.
-#' @param asset Asset name to stack.
-#' @param granularity Slice granularity (see [stac_time_slices()]).
-#' @param sort_field Index field ordering overlaps within a slice.
-#' @param nodata Optional nodata override passed to each slice source.
-#' @param lon Longitude for `granularity = "solar_day"` (see
-#'   [stac_time_slices()]).
-#' @param scale,offset Read affine, as in [lazy_source()]: `FALSE`
-#'   (default) reads raw values, `TRUE` discovers the file's band
-#'   scale/offset (probing the mosaic, then the first item), a numeric
-#'   supplies it explicitly.
-#' @return A list: `stack` (`LazyRaster`), `slices` (character),
-#'   `index` (path).
-#' @seealso [collect()] to materialise the stack; [lazy_dataset()], the
-#'   higher-level multi-band interface most users want.
-#' @family stac helpers
-#' @export
-lazy_stac_stack <- function(
-  sources,
-  grid,
-  asset,
-  granularity = "day",
-  sort_field = "datetime",
-  nodata = NULL,
-  lon = NULL,
-  scale = FALSE,
-  offset = NULL
-) {
-  sources <- stac_time_slices(sources, granularity, lon = lon)
-  idx <- stac_gti_index(sources, asset, crs = grid@crs)
-  slices <- sort(unique(sources$slice[sources$asset == asset]))
-  # One metadata probe per asset, not per slice: every slice opens the
-  # same index pinned to the same grid, so the only unknowns (source
-  # dtype, native block, file nodata) are shared. Per-slice discovery
-  # costs a remote COG header fetch each, serially, on the host.
-  meta <- gdal_grid_spec(
-    paste0("GTI:", idx),
-    open_options = gti_open_options(grid)
-  )
-  if (is.null(nodata) && length(meta$nodata) == 1L) {
-    nodata <- meta$nodata
-  }
-  aff <- .resolve_scale(
-    scale,
-    offset,
-    function() {
-      if (length(meta$scale) == 1L) {
-        return(meta)
-      }
-      gdal_grid_spec(sources$location[sources$asset == asset][[1L]])
-    },
-    what = asset
-  )
-  graph <- graph_new()
-  layers <- lapply(slices, function(sl) {
-    lazy_source(
-      paste0("GTI:", idx),
-      graph = graph,
-      nodata = nodata,
-      open_options = gti_open_options(
-        grid,
-        filter = .glue("slice = '{sl}'"),
-        sort_field = sort_field
-      ),
-      grid = meta$grid,
-      block_dim = meta$block_dim,
-      scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-      offset = if (length(aff$offset) == 1L) aff$offset else NULL,
-      name = asset
-    )
-  })
-  list(stack = lazy_stack(layers), slices = slices, index = idx)
-}

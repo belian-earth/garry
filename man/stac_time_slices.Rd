@@ -25,7 +25,7 @@ The table with a \code{slice} column.
 }
 \description{
 Adds a \code{slice} column (the datetime truncated to \code{granularity});
-tiles sharing a slice mosaic together in \code{\link[=lazy_stac_stack]{lazy_stac_stack()}}.
+tiles sharing a slice mosaic together in \code{\link[=lazy_dataset]{lazy_dataset()}}.
 }
 \details{
 \code{"day"} truncates the UTC datetime: one satellite overpass that
@@ -38,7 +38,6 @@ of the UTC date line at \code{lon}.
 }
 \seealso{
 Other stac helpers:
-\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
 \code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
 \code{\link[=stac_filter_assets]{stac_filter_assets()}},
 \code{\link[=stac_filter_cloud]{stac_filter_cloud()}},

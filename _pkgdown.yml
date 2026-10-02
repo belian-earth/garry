@@ -37,7 +37,6 @@ reference:
   - stac_merge
   - stac_time_slices
   - stac_gti_index
-  - lazy_stac_stack
   - lazy_source
 - title: Datasets
   desc: |

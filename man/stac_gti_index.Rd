@@ -30,13 +30,11 @@ GTI (GDAL Tile Index) raster driver, available from GDAL 3.9, which
 mosaics the indexed rasters on the fly. Footprints are stored in
 \code{crs} (transformed from the table's EPSG:4326 bboxes), so the index
 layer SRS matches the grid the GTI dataset will be pinned to and the
-culling geometry is exact. Most users reach this via \code{\link[=lazy_dataset]{lazy_dataset()}}
-or \code{\link[=lazy_stac_stack]{lazy_stac_stack()}}, which build the index internally, and rarely
-call it directly.
+culling geometry is exact. Most users reach this through
+\code{\link[=lazy_dataset]{lazy_dataset()}}, which builds the index internally.
 }
 \seealso{
 Other stac helpers:
-\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
 \code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
 \code{\link[=stac_filter_assets]{stac_filter_assets()}},
 \code{\link[=stac_filter_cloud]{stac_filter_cloud()}},
