@@ -265,16 +265,20 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
   for (j in seq_len(nrow(it))) {
     inputs <- lapply(src_meta, function(meta) {
       g_upload(
-        .exec_read_padded(
-          meta$node@path,
-          meta$node@band,
-          meta$node@nodata,
-          meta$chunks,
-          it[j, ],
-          open_options = meta$node@open_options,
-          scale = meta$node@scale,
-          offset = meta$node@offset
-        ),
+        do.call(.exec_read_padded, {
+          ra <- .source_read_args(meta$node)
+          list(
+            ra$path,
+            ra$band,
+            ra$nodata,
+            meta$chunks,
+            it[j, ],
+            open_options = ra$open_options,
+            scale = ra$scale,
+            offset = ra$offset,
+            resampling = ra$resampling
+          )
+        }),
         meta$dtype
       )
     })

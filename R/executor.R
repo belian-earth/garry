@@ -133,6 +133,22 @@ NULL
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
 # coalesced band stack) reads as a (band, y, x) cube; the halo pads
 # the spatial dims only.
+# How a SourceNode is read: the path wrapped for its resampling (a GTI
+# source takes the method through its connection string) and the
+# per-read arguments. Shared by the executor and the gradient path, which
+# must read a source identically.
+.source_read_args <- function(node) {
+  list(
+    path = .gti_resampled_path(node@path, node@resampling),
+    band = node@band,
+    nodata = node@nodata,
+    open_options = node@open_options,
+    scale = node@scale,
+    offset = node@offset,
+    resampling = node@resampling
+  )
+}
+
 .exec_read_padded <- function(
   path,
   band,
@@ -1037,13 +1053,14 @@ execute_plan <- function(
         key <- .key(wnode@id)
       } else {
         node <- graph_get(graph, s@members[[1L]])
-        rpath <- .gti_resampled_path(node@path, node@resampling)
-        rband <- node@band
-        rresamp <- node@resampling
-        rnodata <- node@nodata
-        roo <- node@open_options
-        rsc <- node@scale
-        rof <- node@offset
+        ra <- .source_read_args(node)
+        rpath <- ra$path
+        rband <- ra$band
+        rresamp <- ra$resampling
+        rnodata <- ra$nodata
+        roo <- ra$open_options
+        rsc <- ra$scale
+        rof <- ra$offset
         rdecim <- NULL
         key <- .key(node@id)
       }

@@ -102,3 +102,25 @@ test_that("NaN produced inside the pipeline is skipped, as collect() skips it", 
   expect_equal(got$value, collect(build(k0)), tolerance = 1e-5)
   expect_equal(got$grad, .fd_kernel_grad(build, k0), tolerance = 5e-3)
 })
+
+test_that("the gradient path reads a source as collect() does (resampling)", {
+  f <- fixture_gradient_f32()
+  ext <- c(500000, 4599600, 500600, 4600000)
+  coarse <- grid_spec("EPSG:32632", extent = ext, dims = c(20L, 10L), dtype = "f32")
+  gti <- withr::local_tempfile(fileext = ".gti.fgb")
+  gti_index_create(
+    data.frame(location = f, xmin = ext[1], ymin = ext[2], xmax = ext[3], ymax = ext[4]),
+    gti, crs = "EPSG:32632"
+  )
+  src <- lazy_source(
+    paste0("GTI:", gti),
+    open_options = gti_open_options(coarse),
+    grid = coarse,
+    resampling = "average"
+  )
+  k0 <- matrix(c(0, 0.1, 0, 0.1, 0.6, 0.1, 0, 0.1, 0), 3, 3)
+  fk <- focal_kernel(src / 1000, k0)
+  loss <- reduce_over(fk, "mean", c("x", "y"))
+  got <- lazy_value_and_grad(loss, fk)
+  expect_equal(got$value, collect(loss), tolerance = 1e-5)
+})
