@@ -58,10 +58,18 @@ NULL
     return(NA_real_)
   }
   read1 <- function(f) {
+    if (!file.exists(f)) {
+      return(NA_character_)
+    }
     tryCatch(readLines(f, n = 1L), error = function(e) NA_character_)
   }
   inactive_file <- function(dir) {
-    st <- tryCatch(readLines(file.path(dir, "memory.stat")), error = function(e) character(0))
+    f <- file.path(dir, "memory.stat")
+    st <- if (file.exists(f)) {
+      tryCatch(readLines(f), error = function(e) character(0))
+    } else {
+      character(0)
+    }
     v <- sub("^inactive_file ", "", grep("^inactive_file ", st, value = TRUE))
     if (length(v)) suppressWarnings(as.numeric(v[[1L]])) else 0
   }
