@@ -68,6 +68,13 @@ NULL
 #'   list, directory, and `{group}` forms).
 #' @seealso [collect()] to return the result in the R session;
 #'   [materialise()] to checkpoint to local cubes and stay lazy.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' nir <- lazy_source(f, band = 3L)
+#' out <- tempfile(fileext = ".tif")
+#' write_tif((nir - red) / (nir + red), out)
+#' file.exists(out)
 #' @export
 write_tif <- function(
   x,

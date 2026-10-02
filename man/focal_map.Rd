@@ -39,6 +39,13 @@ and the result is f32.
 Over a \code{LazyDataset}, the stencil is applied to every value band per slice;
 \code{bands} restricts which bands.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+# a 3 x 3 window mean; cells at the raster edge are NaN
+sm <- focal_map(red, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh))
+collect(sm)[1:3, 1:3]
+}
 \seealso{
 \code{\link[=focal_kernel]{focal_kernel()}}, \code{\link[=bilateral_focal]{bilateral_focal()}}, \code{\link[=shrink_footprint]{shrink_footprint()}}
 }

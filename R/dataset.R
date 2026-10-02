@@ -190,6 +190,11 @@ LazyDataset <- S7::new_class(
 #'   logical.
 #' @return A `LazyDataset`.
 #' @seealso [group_by_time()], [collect()]
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' ds <- lazy_dataset(f)
+#' names(ds)
+#' ds$nir
 #' @export
 lazy_dataset <- function(
   sources,
@@ -1130,6 +1135,12 @@ stack_bands <- function(x) {
 #'   `"inner"` pairs on the shared slice names and reports what
 #'   dropped.
 #' @return A `LazyDataset` with masked value bands.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' ds <- lazy_dataset(f)
+#' # QA values 2 and 8 flag bad pixels
+#' masked <- apply_mask(ds, from = "qa", where = c(2, 8))
+#' sum(is.nan(collect(masked$red)))
 #' @export
 apply_mask <- function(
   x,

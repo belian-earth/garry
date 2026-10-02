@@ -28,6 +28,12 @@ NULL
 #'   `gdalraster::read_ds()` (`type`, `bbox` = `c(xmin, ymin, xmax, ymax)`,
 #'   `dim` = `c(nx, ny, nbands)`, `srs` = WKT, `datatype`), so the array is
 #'   self-describing and [preview()] can set real-world axes without the grid.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' nir <- lazy_source(f, band = 3L)
+#' ndvi <- collect((nir - red) / (nir + red))
+#' dim(ndvi)
 #' @export
 collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   .collect_impl(x, plan_only = plan_only, distributed = distributed)

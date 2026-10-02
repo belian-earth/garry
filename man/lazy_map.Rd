@@ -35,6 +35,13 @@ Over a \code{LazyDataset}, \code{fn} is applied to every value band (a single da
 input only); \code{bands} restricts which bands, and non-selected bands pass
 through unchanged.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+ndvi <- lazy_map(nir, red, fn = function(n, r) (n - r) / (n + r))
+range(collect(ndvi))
+}
 \seealso{
 \code{\link[=collect]{collect()}}
 }

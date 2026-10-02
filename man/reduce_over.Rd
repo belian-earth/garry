@@ -34,6 +34,13 @@ Over a \code{LazyDataset}, each band is reduced independently (over \code{"t"}: 
 the band's slices and collapse time to a composite); \code{bands} restricts which
 bands. \code{over = "band"} collapses the band axis, returning a \code{LazyRaster}.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+collect(reduce_over(red, "mean", c("x", "y")))
+stk <- lazy_stack(list(a = red, b = red * 2))
+dim(collect(reduce_over(stk, "median", "t")))
+}
 \seealso{
 \code{\link[=geomedian]{geomedian()}} and \code{\link[=medoid]{medoid()}} for multivariate time
 composites; \code{\link[=band_project]{band_project()}} and \code{\link[=mlp_project]{mlp_project()}} for band-axis

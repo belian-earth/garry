@@ -77,6 +77,12 @@ slice. \code{grid} must describe the dataset exactly as \code{path} +
 not checked. With \code{grid} given, file nodata is NOT consulted (pass
 \code{nodata} explicitly if the source has a sentinel).
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+red
+dim(red)
+}
 \seealso{
 \code{\link[=collect]{collect()}}, \code{\link[=lazy_dataset]{lazy_dataset()}}
 }

@@ -109,6 +109,11 @@ LazyRaster <- S7::new_class(
 #'   asset/band name automatically.
 #' @return A `LazyRaster`.
 #' @seealso [collect()], [lazy_dataset()]
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' red
+#' dim(red)
 #' @export
 lazy_source <- function(
   path,
@@ -233,6 +238,12 @@ lazy_source <- function(
 #' @param bands `LazyDataset` only: bands to map over (default: all value bands).
 #' @return A `LazyRaster`, or a `LazyDataset` when given one.
 #' @seealso [collect()]
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' nir <- lazy_source(f, band = 3L)
+#' ndvi <- lazy_map(nir, red, fn = function(n, r) (n - r) / (n + r))
+#' range(collect(ndvi))
 #' @export
 lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   xs <- list(...)
@@ -854,6 +865,12 @@ for (op_name in c("^", "%%")) {
 #' @return A `LazyRaster` on the same grid as `x`, or a `LazyDataset`
 #'   when given one.
 #' @seealso [focal_kernel()], [bilateral_focal()], [shrink_footprint()]
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' # a 3 x 3 window mean; cells at the raster edge are NaN
+#' sm <- focal_map(red, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh))
+#' collect(sm)[1:3, 1:3]
 #' @export
 focal_map <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset)) {
@@ -1101,6 +1118,12 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 #'   composites; [band_project()] and [mlp_project()] for band-axis
 #'   models; [group_by_time()] for calendar-grouped reduction;
 #'   [scan_over()] for order-preserving passes.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' collect(reduce_over(red, "mean", c("x", "y")))
+#' stk <- lazy_stack(list(a = red, b = red * 2))
+#' dim(collect(reduce_over(stk, "median", "t")))
 #' @export
 reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
   if (S7::S7_inherits(x, LazyDatasetGroups)) {
@@ -1159,6 +1182,16 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
 #' @param dtype Optional output dtype override (default: input dtype).
 #' @param bands `LazyDataset` only: bands to scan (default: all).
 #' @return A `LazyRaster` on the unchanged grid, or a `LazyDataset`.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' stk <- lazy_stack(list(a = red, b = red, c = red))
+#' # a running sum along t
+#' cs <- scan_over(stk, over = "t", fn = function(xs, margin) {
+#'   g_scan(0, function(carry, v) list(carry = carry + v, out = carry + v),
+#'          xs = xs[[1L]])$out
+#' })
+#' dim(collect(cs))
 #' @export
 scan_over <- function(
   x,
@@ -1317,6 +1350,11 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' @param to Target grid: a `GridSpec` or another `LazyRaster`.
 #' @param resampling GDAL resampling method.
 #' @return A `LazyRaster` on the target grid.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' coarse <- grid_spec(crs = grid_crs(red), extent = grid_bbox(red), dims = c(30L, 20L))
+#' dim(collect(align_to(red, coarse, resampling = "average")))
 #' @export
 align_to <- function(x, to, resampling = "bilinear") {
   .assert_class(x, LazyRaster, "LazyRaster")

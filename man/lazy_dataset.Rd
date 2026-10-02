@@ -102,6 +102,12 @@ All bands share one intermediate representation (IR) graph, so a mask
 defined once (see \code{\link[=apply_mask]{apply_mask()}}) is computed once and dedup'd across bands, and
 \code{\link[=collect]{collect()}} plans the whole dataset in one pass.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+ds <- lazy_dataset(f)
+names(ds)
+ds$nir
+}
 \seealso{
 \code{\link[=group_by_time]{group_by_time()}}, \code{\link[=collect]{collect()}}
 }

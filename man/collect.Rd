@@ -37,3 +37,10 @@ checkpoint to local cubes and stay lazy, use \code{\link[=materialise]{materiali
 \code{plan_only = TRUE} runs the planner passes and returns the \code{Plan}
 without executing, for inspection.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+ndvi <- collect((nir - red) / (nir + red))
+dim(ndvi)
+}

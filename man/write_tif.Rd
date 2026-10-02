@@ -86,6 +86,14 @@ sequential pass is the trade every COG producer makes; the temporary
 file is removed even on failure, so \code{path} never holds a half-written
 COG.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+out <- tempfile(fileext = ".tif")
+write_tif((nir - red) / (nir + red), out)
+file.exists(out)
+}
 \seealso{
 \code{\link[=collect]{collect()}} to return the result in the R session;
 \code{\link[=materialise]{materialise()}} to checkpoint to local cubes and stay lazy.

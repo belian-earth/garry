@@ -30,3 +30,9 @@ nothing warps. Only EXACT equality pastes (unlike odc-stac's
 tolerance-based \code{ttol}): a sub-pixel-shifted paste would silently
 move every pixel by up to half a cell, so near-misses warp.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+coarse <- grid_spec(crs = grid_crs(red), extent = grid_bbox(red), dims = c(30L, 20L))
+dim(collect(align_to(red, coarse, resampling = "average")))
+}

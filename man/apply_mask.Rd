@@ -53,3 +53,10 @@ morphology, set bad pixels to NaN (nodata) on every value band, and drop the
 QA band. The mask is a shared subgraph computed once per slice and reused
 across all value bands.
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+ds <- lazy_dataset(f)
+# QA values 2 and 8 flag bad pixels
+masked <- apply_mask(ds, from = "qa", where = c(2, 8))
+sum(is.nan(collect(masked$red)))
+}
