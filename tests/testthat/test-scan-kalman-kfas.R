@@ -407,3 +407,20 @@ test_that("boundaries: traced (PJRT) body matches the untraced oracle", {
     expect_lt(max(abs(traced - untraced), na.rm = TRUE), 1e-3)
   }
 })
+
+test_that("kalman_smooth checks its dataset arguments", {
+  f <- fixture_gradient_f32()
+  g <- graph_new()
+  s <- function(k) lazy_source(f, graph = g) * k
+  ds <- as_dataset(list(
+    a = list(t1 = s(1), t2 = s(2), t3 = s(3)),
+    b = list(t1 = s(4), t2 = s(5), t3 = s(6))
+  ))
+  expect_error(
+    kalman_smooth(ds, 1, 0.1, obs_var = ds$a),
+    "need a <garry::LazyRaster>|LazyRaster"
+  )
+  expect_error(kalman_smooth(ds$a, 1, 0.1, bands = "a"), "applies to a")
+  sm <- kalman_smooth(ds, 1, 0.1, bands = "a")
+  expect_true(S7::S7_inherits(sm$mean, LazyDataset))
+})

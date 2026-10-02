@@ -399,6 +399,8 @@ kalman_llt <- function(
 #'   forward-filtered `"fmean"`, `"fsd"`, and `"innov"`; see
 #'   [kalman_llt()]).
 #' @param dtype Output dtype (default f32).
+#' @param bands `LazyDataset` only: bands to smooth (default: all value
+#'   bands). A dataset takes no `obs_var` or `boundaries`.
 #' @inheritParams kalman_llt
 #' @param ... Passed to [kalman_llt()].
 #' @return A named list of lazy objects, one per requested output.
@@ -414,11 +416,21 @@ kalman_smooth <- function(
   boundaries = NULL,
   outputs = c("mean", "sd"),
   dtype = "f32",
+  bands = NULL,
   ...
 ) {
   outputs <- match.arg(outputs, c("mean", "sd", "fmean", "fsd", "innov"), several.ok = TRUE)
   if (!is.null(boundaries) && is.null(obs_var)) {
     cli::cli_abort("{.arg boundaries} needs {.arg obs_var} (a stack of ones for none)")
+  }
+  if (S7::S7_inherits(x, LazyDataset) && !is.null(obs_var)) {
+    cli::cli_abort(c(
+      "{.arg obs_var} and {.arg boundaries} need a {.cls LazyRaster} {.arg x}, not a dataset.",
+      "i" = "Smooth one band at a time, e.g. {.code kalman_smooth(ds$ndvi, ..., obs_var = v)}."
+    ))
+  }
+  if (!is.null(bands) && !S7::S7_inherits(x, LazyDataset)) {
+    cli::cli_abort("{.arg bands} applies to a {.cls LazyDataset} {.arg x} only.")
   }
   target <- if (is.null(obs_var)) x else if (is.null(boundaries)) list(x, obs_var) else list(x, obs_var, boundaries)
   stats::setNames(
@@ -435,7 +447,8 @@ kalman_smooth <- function(
         ),
         over = "t",
         direction = "bidir",
-        dtype = dtype
+        dtype = dtype,
+        bands = bands
       )
     }),
     outputs

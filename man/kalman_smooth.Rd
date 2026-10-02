@@ -13,6 +13,7 @@ kalman_smooth(
   boundaries = NULL,
   outputs = c("mean", "sd"),
   dtype = "f32",
+  bands = NULL,
   ...
 )
 }
@@ -35,6 +36,9 @@ forward-filtered \code{"fmean"}, \code{"fsd"}, and \code{"innov"}; see
 \code{\link[=kalman_llt]{kalman_llt()}}).}
 
 \item{dtype}{Output dtype (default f32).}
+
+\item{bands}{\code{LazyDataset} only: bands to smooth (default: all value
+bands). A dataset takes no \code{obs_var} or \code{boundaries}.}
 
 \item{...}{Passed to \code{\link[=kalman_llt]{kalman_llt()}}.}
 }
