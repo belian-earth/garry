@@ -376,7 +376,8 @@ grid_equal <- function(a, b, tol = 1e-9) {
     all(abs(a@transform - b@transform) < tol) &&
     all(abs(a@extent - b@extent) < tol) &&
     length(a@dims) == length(b@dims) &&
-    all(a@dims == b@dims)
+    all(a@dims == b@dims) &&
+    identical(names(a@dims), names(b@dims))
 }
 
 #' Describe how two grids differ.
@@ -410,11 +411,13 @@ grid_diff <- function(a, b, tol = 1e-9) {
       " px in x, {formatC(max(abs(off[c(2L, 4L)])), format = 'g', digits = 3, width = 1)} px in y"
     ))
   }
-  if (length(a@dims) != length(b@dims) || any(a@dims != b@dims)) {
-    return(.glue(
-      "dims differ: ({paste(a@dims, collapse = ',')}) vs ",
-      "({paste(b@dims, collapse = ',')})"
-    ))
+  if (
+    length(a@dims) != length(b@dims) ||
+      any(a@dims != b@dims) ||
+      !identical(names(a@dims), names(b@dims))
+  ) {
+    fmt <- function(d) paste(paste0(names(d), "=", d), collapse = ",")
+    return(.glue("dims differ: ({fmt(a@dims)}) vs ({fmt(b@dims)})"))
   }
   "grids are equal"
 }

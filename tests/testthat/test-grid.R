@@ -73,3 +73,12 @@ test_that("grid accessors forward from LazyRaster to its grid", {
   expect_identical(grid_bbox(a)[["xmax"]], grid_bbox(a@grid)[["xmax"]])
   expect_identical(grid_bbox(a)[["ymax"]], grid_bbox(a@grid)[["ymax"]])
 })
+
+test_that("a time stack and a band stack of equal length are different grids", {
+  a <- lazy_source(fixture_gradient_f32())
+  t3 <- lazy_stack(list(a, a, a), along = "t")
+  b3 <- lazy_stack(list(a, a, a), along = "band")
+  expect_false(grid_equal(t3@grid, b3@grid))
+  expect_match(grid_diff(t3@grid, b3@grid), "t=3")
+  expect_error(t3 + b3, "grids differ")
+})
