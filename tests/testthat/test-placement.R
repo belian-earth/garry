@@ -169,3 +169,10 @@ test_that("a source that is itself a sink keeps its window (defect H1)", {
     options(old_m)
   }
 })
+
+test_that("an empty placement table has the same columns as a full one", {
+  p <- plan_lazy(lazy_source(fixture_gradient_f32()))
+  t0 <- garry_explain_placement(p)
+  expect_identical(nrow(t0), 0L)
+  expect_true("tiles" %in% names(t0))
+})
