@@ -10,6 +10,9 @@
 \code{NULL}, invisibly.
 }
 \description{
+Returns the close errors, named by output path (empty when all closed).
+}
+\details{
 Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

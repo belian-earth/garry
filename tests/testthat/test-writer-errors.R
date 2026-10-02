@@ -74,3 +74,25 @@ test_that("the writer_on = FALSE host-inline fallback still matches the oracle",
   got <- gdal_read_window(path, 1L, 0L, 0L, 60L, 40L)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
 })
+
+test_that("a failed close on the writer fails the write", {
+  local_pools(2, 1)
+  withr::local_options(garry.chunk_target_px = 600)
+  x <- lazy_source(fixture_gradient_f32()) + 1
+  invisible(collect(x, distributed = TRUE)) # cache the ABI check first
+  mirai::everywhere({
+    ns <- asNamespace("garry")
+    unlockBinding(".daemon_write_close", ns)
+    .we_real_close <<- get(".daemon_write_close", envir = ns)
+    assign(".daemon_write_close", function() {
+      .we_real_close()
+      c("/some/out.tif" = "disk full")
+    }, envir = ns)
+  }, .compute = "garry_write")
+  # the pools are torn down at the end of the test, mock included
+  path <- withr::local_tempfile(fileext = ".tif")
+  expect_error(
+    write_tif(x, path, distributed = TRUE),
+    class = "garry_write_error"
+  )
+})

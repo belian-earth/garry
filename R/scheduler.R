@@ -2267,7 +2267,18 @@ execute_plan_mirai <- function(
       asNamespace("garry")$.daemon_write_close(),
       .compute = "garry_write"
     )
-    invisible(lapply(wcl, function(m) m[]))
+    failed <- unlist(Filter(is.character, lapply(wcl, function(m) m[])))
+    if (length(failed)) {
+      .garry_error(
+        paste0(
+          "closing output ",
+          names(failed)[[1L]],
+          " failed (the file is incomplete): ",
+          failed[[1L]]
+        ),
+        "garry_write_error"
+      )
+    }
     flush_drops(force = TRUE)
   }
   read_chunk <- chunk_of # fused-aware (see chunk_of above)

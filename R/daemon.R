@@ -481,6 +481,8 @@ NULL
 
 #' Daemon task body: close every output the writer holds open.
 #'
+#' Returns the close errors, named by output path (empty when all closed).
+#'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @return `NULL`, invisibly.
@@ -492,13 +494,25 @@ NULL
   # never closed and the file stayed an unflushed zero-filled shell
   # (diagnosed 2026-08-13: pools + relative path + cog wrote "all
   # zeros" while the data sat in the writer's block cache).
+  # Close is where GDAL flushes the last dirty blocks, so a failure here
+  # (a full disk, an I/O error) means an incomplete file: report it.
   ks <- ls(.daemon_ds, all.names = TRUE)
+  failed <- character(0)
   for (p in ks) {
-    try(.daemon_ds[[p]]$close(), silent = TRUE)
+    err <- tryCatch(
+      {
+        .daemon_ds[[p]]$close()
+        NULL
+      },
+      error = function(e) conditionMessage(e)
+    )
+    if (!is.null(err)) {
+      failed[[p]] <- err
+    }
   }
   rm(list = ks, envir = .daemon_ds)
   gc(FALSE)
-  invisible(NULL)
+  failed
 }
 
 #' Daemon task body: fetch one item-asset's target-window bytes to a
