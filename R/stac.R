@@ -52,7 +52,8 @@ NULL
 #' @param stac_source STAC API root URL.
 #' @param collection Collection id.
 #' @param start_date,end_date Search bounds, both inclusive: `Date`s,
-#'   `POSIXct`s, or strings `as.POSIXct()` parses in UTC. A date without a
+#'   `POSIXct`s, or strings `as.POSIXct()` parses in UTC (such as
+#'   `"2023-06-01"` or `"2023-06-01 12:00:00"`). A date without a
 #'   time covers that whole day, so `end_date = "2023-12-31"` includes
 #'   acquisitions made on the 31st.
 #' @param limit Page size requested from the API.
@@ -70,6 +71,14 @@ stac_query <- function(
   limit = 999
 ) {
   .require_rstac()
+  .check_bbox(bbox)
+  for (d in list(start_date, end_date)) {
+    if (length(d) != 1L || is.na(tryCatch(as.POSIXct(d, tz = "UTC"), error = function(e) NA))) {
+      cli::cli_abort(
+        "{.arg start_date} and {.arg end_date} must each be one date or date-time, not {.val {d}}."
+      )
+    }
+  }
   datetime <- .stac_datetime_range(start_date, end_date)
   search <- rstac::stac_search(
     rstac::stac(stac_source),
@@ -78,8 +87,18 @@ stac_query <- function(
     datetime = datetime,
     limit = limit
   )
-  res <- tryCatch(rstac::get_request(search), error = function(e) {
-    rstac::post_request(search)
+  # some APIs accept only POST searches; when that fails too, report both
+  res <- tryCatch(rstac::get_request(search), error = function(get_err) {
+    tryCatch(rstac::post_request(search), error = function(post_err) {
+      cli::cli_abort(
+        c(
+          "the STAC search failed with GET and with POST.",
+          "x" = "GET: {conditionMessage(get_err)}",
+          "x" = "POST: {conditionMessage(post_err)}"
+        ),
+        parent = get_err
+      )
+    })
   })
   rstac::items_fetch(res)
 }
@@ -340,6 +359,14 @@ stac_sources <- function(items, assets = NULL) {
   }
   rows <- lapply(seq_along(feats), function(i) {
     ft <- feats[[i]]
+    bb <- suppressWarnings(as.numeric(unlist(ft$bbox)))
+    if (length(bb) == 4L && all(is.finite(bb)) && bb[[1L]] > bb[[3L]]) {
+      # GeoJSON encodes an antimeridian crossing as xmin > xmax
+      cli::cli_abort(c(
+        "STAC item {.val {ft$id %||% i}} crosses the antimeridian (bbox xmin > xmax).",
+        "i" = "garry does not index antimeridian-crossing items yet; filter them out or split the area of interest."
+      ))
+    }
     .check_bbox(
       ft$bbox,
       what = "bbox of STAC item {.val {ft$id %||% i}}"
@@ -357,7 +384,10 @@ stac_sources <- function(items, assets = NULL) {
       item_id = ft$id %||% NA_character_,
       asset = anames,
       location = vapply(hrefs, .gdal_href, character(1), USE.NAMES = FALSE),
-      datetime = ft$properties$datetime %||% NA_character_,
+      # a range-only item (datetime null) is dated by its start
+      datetime = ft$properties$datetime %||%
+        ft$properties$start_datetime %||%
+        NA_character_,
       cloud_cover = if (is.null(cc)) NA_real_ else as.numeric(cc),
       xmin = ft$bbox[[1L]],
       ymin = ft$bbox[[2L]],
@@ -367,6 +397,20 @@ stac_sources <- function(items, assets = NULL) {
     )
   })
   out <- do.call(rbind, rows)
+  if (is.null(out)) {
+    have <- unique(unlist(lapply(feats, function(f) names(f$assets))))
+    cli::cli_abort(c(
+      "no STAC item carries the requested asset{?s} {.val {assets}}.",
+      "i" = "Assets in these items: {.val {have}}."
+    ))
+  }
+  undated <- is.na(out$datetime)
+  if (any(undated)) {
+    cli::cli_warn(
+      "dropping {length(unique(out$item_id[undated]))} item{?s} with no datetime or start_datetime."
+    )
+    out <- out[!undated, , drop = FALSE]
+  }
   out[order(out$datetime, out$item_id, out$asset), , drop = FALSE]
 }
 
