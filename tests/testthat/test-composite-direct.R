@@ -63,3 +63,28 @@ test_that("composite_direct writes to path identically to in-memory", {
   cube <- gdal_read_window(path, 1:2, 0L, 0L, 60L, 40L, nodata = -9999)
   .gg_close(aperm(cube, c(2L, 3L, 1L)), mem)
 })
+
+test_that("bands with different per-slice fns do not take the fast path", {
+  local_pools(2, 2)
+  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+  g <- graph_new()
+  sl <- function(gti) {
+    list(.gg_slice(gti, "s1", g), .gg_slice(gti, "s2", g))
+  }
+  a <- sl(gA)
+  b <- sl(gB)
+  minus <- lazy_stack(Map(`-`, a, b))
+  times <- lazy_stack(Map(`*`, a, b))
+  x <- lazy_stack(
+    list(
+      d = reduce_over(minus, "mean", "t"),
+      p = reduce_over(times, "mean", "t")
+    ),
+    along = "band"
+  )
+  expect_null(.cd_spec(collect(x, plan_only = TRUE)))
+  want <- collect(x, distributed = FALSE)
+  got <- collect(x, distributed = TRUE)
+  .gg_close(got, want)
+})

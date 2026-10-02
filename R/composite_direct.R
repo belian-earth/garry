@@ -311,15 +311,19 @@ NULL
     return(NULL)
   }
   s1 <- specs[[1L]]
-  masked <- length(s1$mask_chain) > 0L
+  # The route computes every band with band 1's per-slice fn, mask chain
+  # and mask sources, so every band must share them; anything else falls
+  # through to the reduce decomposition, which groups by fn and chain.
+  fn_sig <- function(f) if (is.null(f)) "" else .cd_fn_sig(f)
   ok <- vapply(
     specs,
     function(s) {
       identical(s$op, s1$op) &&
         identical(s$nan_rm, s1$nan_rm) &&
-        (length(s$mask_chain) > 0L) == masked &&
-        (!masked || identical(s$fmask, s1$fmask))
-    }, # one shared mask across bands
+        identical(fn_sig(s$F), fn_sig(s1$F)) &&
+        identical(.cd_chain_sig(s$mask_chain), .cd_chain_sig(s1$mask_chain)) &&
+        identical(s$fmask, s1$fmask)
+    },
     logical(1)
   )
   if (!all(ok)) {
@@ -335,7 +339,8 @@ NULL
   # route (multi-band) or the scheduler (single-band).
   n_bands <- length(specs)
   n_slices <- length(s1$band)
-  grid_px <- sink@grid@dims[["x"]] * sink@grid@dims[["y"]]
+  # in double: GridSpec dims are integer and the product passes 2^31
+  grid_px <- as.numeric(sink@grid@dims[["x"]]) * sink@grid@dims[["y"]]
   weight <- (n_bands + (s1$halo > 0L)) * n_slices * grid_px
   if (
     weight > garry_opt("gd_compute_budget") &&
@@ -660,7 +665,7 @@ NULL
         do.call(
           c,
           lapply(ids, function(id) {
-            readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L)
+            readBin(info[[as.character(id)]]$bin, "raw", n = as.numeric(ny) * nx * 4)
           })
         ),
         "f32",
@@ -1119,7 +1124,7 @@ NULL
     )
     inputs <- lapply(gspec$input_nodes, function(id) {
       a <- g_upload_raw(
-        readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L),
+        readBin(info[[as.character(id)]]$bin, "raw", n = as.numeric(ny) * nx * 4),
         "f32",
         c(ny, nx),
         device = dev

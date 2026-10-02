@@ -860,7 +860,7 @@ NULL
   fm <- g_upload_raw(
     do.call(
       c,
-      lapply(k$fmask_bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))
+      lapply(k$fmask_bins, function(f) readBin(f, "raw", n = as.numeric(k$ny) * k$nx * 4))
     ),
     "f32",
     c(n, k$ny, k$nx),
@@ -911,12 +911,12 @@ NULL
   strip <- h < k$ny
   read_rows <- function(f, base_rows = 0) {
     if (!strip && base_rows == 0) {
-      return(readBin(f, "raw", n = h * nx * 4L))
+      return(readBin(f, "raw", n = as.numeric(h) * nx * 4))
     }
     con <- file(f, "rb")
     on.exit(close(con))
     seek(con, (base_rows + as.numeric(y0)) * nx * 4)
-    readBin(con, "raw", n = h * nx * 4L)
+    readBin(con, "raw", n = as.numeric(h) * nx * 4)
   }
   cube <- function(bins) {
     g_upload_raw(
@@ -937,7 +937,7 @@ NULL
   out <- if (masked) {
     mask_strip <- if (!strip) {
       g_upload_raw(
-        readBin(k$mask_bin, "raw", n = n * k$ny * nx * 4L),
+        readBin(k$mask_bin, "raw", n = as.numeric(n) * k$ny * nx * 4),
         "f32",
         c(n, h, nx),
         device = dev
