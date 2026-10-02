@@ -101,3 +101,19 @@ test_that("bitwise family decodes QA masks exactly", {
   expect_identical(g_shiftl(g_shiftr(qa, 4L), 4L),
                    g_bitand(qa, bitwNot(15L)))
 })
+
+test_that("unary, logical and summary operators on lazy rasters", {
+  x <- lazy_source(fixture_gradient_f32())
+  v <- collect(x)
+  expect_equal(collect(-x), -v, ignore_attr = TRUE)
+  expect_equal(collect(+x), v, ignore_attr = TRUE)
+  m <- x > 2000
+  n <- x < 3000
+  expect_identical(as.vector(collect(!m)), as.numeric(!(v > 2000)))
+  expect_identical(as.vector(collect(m & n)), as.numeric(v > 2000 & v < 3000))
+  expect_identical(as.vector(collect(m | n)), as.numeric(v > 2000 | v < 3000))
+  expect_equal(collect(x * TRUE), v, ignore_attr = TRUE)
+  expect_equal(collect(x - x * 2 + 1), -v + 1, ignore_attr = TRUE)
+  expect_error(x + c(1, 2), "single number")
+  expect_error(max(x), "reduce_over")
+})

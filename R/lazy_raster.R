@@ -480,6 +480,15 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   divide = FALSE,
   dtype = NULL
 ) {
+  if (!is.numeric(s) && !is.logical(s) || length(s) != 1L || is.na(s) && !is.nan(s)) {
+    cli::cli_abort(
+      "a scalar operand must be a single number, not {.val {s}}; combine rasters with rasters.",
+      call = rlang::caller_env(2)
+    )
+  }
+  if (is.logical(s)) {
+    s <- as.integer(s)
+  }
   fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
   floats <- divide || is.double(s)
   grid <- .grid_retype(
@@ -519,6 +528,84 @@ for (op_name in c("+", "-", "*", "/")) {
       d <- is_div
       function(e1, e2) .lazy_scalar_op(e2, e1, f, TRUE, divide = d)
     })
+}
+
+# Logical scalars combine as 0/1, like comparisons' masks.
+for (op_name in c("+", "-", "*", "/", "^", "%%", ">", "<", ">=", "<=", "==", "!=")) {
+  local({
+    f <- get(op_name, envir = baseenv())
+    S7::method(f, list(LazyRaster, S7::class_logical)) <- function(e1, e2) f(e1, as.integer(e2))
+    S7::method(f, list(S7::class_logical, LazyRaster)) <- function(e1, e2) f(as.integer(e1), e2)
+  })
+}
+
+# Unary +/-: S7 0.2's Ops dispatch needs two operands, so `-` and `+`
+# are S3 methods. A binary call takes the same paths as the S7 methods
+# registered above.
+.lazy_pm <- function(op, e1, e2, generic) {
+  r1 <- S7::S7_inherits(e1, LazyRaster)
+  r2 <- S7::S7_inherits(e2, LazyRaster)
+  scalar <- function(v) is.numeric(v) || is.logical(v)
+  if (r1 && r2) {
+    return(.lazy_binop(e1, e2, op))
+  }
+  if (r1 && scalar(e2)) {
+    return(.lazy_scalar_op(e1, if (is.logical(e2)) as.integer(e2) else e2, op, FALSE))
+  }
+  if (r2 && scalar(e1)) {
+    return(.lazy_scalar_op(e2, if (is.logical(e1)) as.integer(e1) else e1, op, TRUE))
+  }
+  asNamespace("S7")$base_ops[[generic]](e1, e2) # S7's own dispatch
+}
+#' @rawNamespace S3method("-", "garry::LazyRaster", .lazy_minus_raster)
+.lazy_minus_raster <- function(e1, e2) {
+  if (missing(e2)) {
+    return(lazy_map(e1, fn = function(v) -v, dtype = e1@grid@dtype))
+  }
+  .lazy_pm(`-`, e1, e2, "-")
+}
+#' @rawNamespace S3method("+", "garry::LazyRaster", .lazy_plus_raster)
+.lazy_plus_raster <- function(e1, e2) {
+  if (missing(e2)) {
+    return(e1)
+  }
+  .lazy_pm(`+`, e1, e2, "+")
+}
+
+# Logical algebra over 0/1 f32 masks (what comparisons return): nonzero is
+# true, the result is a 0/1 f32 mask, and nodata stays nodata.
+.mask_of <- function(v) g_cast(v != 0, "f32")
+#' @rawNamespace S3method("!", "garry::LazyRaster", .lazy_not_raster)
+.lazy_not_raster <- function(x) {
+  lazy_map(
+    x,
+    fn = function(v) g_ifelse(g_is_nodata(v), NaN, 1 - .mask_of(v)),
+    dtype = "f32"
+  )
+}
+for (op_name in c("&", "|")) {
+  local({
+    both <- op_name == "&"
+    combine <- function(x, y) {
+      a <- .mask_of(x)
+      b <- .mask_of(y)
+      out <- if (both) a * b else a + b - a * b
+      out <- g_ifelse(g_is_nodata(x), NaN, out)
+      g_ifelse(g_is_nodata(y), NaN, out)
+    }
+    gen <- get(op_name, envir = baseenv())
+    S7::method(gen, list(LazyRaster, LazyRaster)) <-
+      function(e1, e2) .lazy_binop(e1, e2, combine, dtype = "f32")
+  })
+}
+
+#' @rawNamespace S3method(Summary, "garry::LazyRaster", .lazy_summary_raster)
+.lazy_summary_raster <- function(..., na.rm = FALSE) {
+  gen <- .Generic
+  cli::cli_abort(c(
+    "{.fn {gen}} of a lazy raster is a reduction.",
+    "i" = "Use {.code reduce_over(x, \"{gen}\", c(\"x\", \"y\"))} (or over {.val t}/{.val band})."
+  ))
 }
 
 # Comparisons produce f32 0/1 masks, not logical: the map-algebra
