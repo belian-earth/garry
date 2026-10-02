@@ -1,6 +1,6 @@
 Package: garry
 Title: Lazy, Spatial-Aware Raster Arrays with JIT-Compiled Kernels
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R:
     person("Hugh", "Graham", email = "hugh@belian.earth", role = c("aut", "cre"))
 Description: Experimental. Lazy raster arrays with CRS/transform-aware
@@ -18,7 +18,7 @@ Imports:
     anvl (>= 0.5.1),
     cli,
     codetools,
-    gdalraster (>= 2.6.1.9001),
+    gdalraster (>= 2.7.0),
     glue,
     memuse,
     methods,
@@ -28,7 +28,6 @@ Imports:
     wk
 Remotes:
     hypertidy/vaster,
-    firelab/gdalraster,
     belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
