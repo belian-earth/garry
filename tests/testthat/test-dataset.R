@@ -348,3 +348,21 @@ test_that("distributed masked composite equals the oracle", {
                collect(build(), distributed = FALSE),
                tolerance = 1e-6)
 })
+
+test_that("assigning band math to a multi-slice dataset keeps per-slice layers", {
+  f <- fixture_gradient_f32()
+  ds <- ds_fixture(f)
+  ds$r <- (ds$V1 - ds$V2) / (ds$V1 + ds$V2)
+  expect_identical(names(ds@bands$r), c("s1", "s2"))
+  expect_identical(dim(ds$r), dim(ds$V1))
+  comp <- reduce_over(ds, "mean", "t", bands = "r")
+  want <- mean(c((1 - 3) / (1 + 3), (2 - 4) / (2 + 4)))
+  expect_equal(unique(as.vector(collect(comp$r))), want, tolerance = 1e-6)
+  # the other per-slice verbs accept it too
+  expect_no_error(apply_mask(ds, where = qa_bits(0:1)))
+  # a t axis with no per-slice form is refused, not stored as one layer
+  expect_error(
+    ds$bad <- focal_map(ds$V1, fn = function(sh) Reduce(`+`, sh), radius = 1L),
+    "cannot be split"
+  )
+})

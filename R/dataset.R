@@ -540,7 +540,81 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 # and R < 4.6's `checking replacement functions` calls get() on that entry
 # and halts.
 #' @rawNamespace S3method("[[<-", "garry::LazyDataset", .lazy_dataset_assign)
+# Split a (t, y, x) raster into its per-slice layers: a stack along t
+# gives its inputs back, and an elementwise map over t-stacks is rebuilt
+# once per slice over the matching slice of each input. Anything else
+# (a reduction, a scan, a focal over the stack) has no per-slice form.
+.split_t <- function(x) {
+  graph <- x@graph
+  memo <- new.env(parent = emptyenv())
+  slice_of <- function(id, k) {
+    key <- paste(id, k)
+    if (!is.null(memo[[key]])) {
+      return(memo[[key]])
+    }
+    n <- graph_get(graph, id)
+    if (!"t" %in% names(n@grid@dims)) {
+      return(id) # a 2-D input broadcasts across slices
+    }
+    out <- if (S7::S7_inherits(n, StackNode) && identical(n@along, "t")) {
+      n@parents[[k]]
+    } else if (S7::S7_inherits(n, MapNode)) {
+      g <- n@grid
+      keep <- names(g@dims) != "t"
+      # forced before graph_add(), which allocates this node's id first
+      parents <- vapply(n@parents, slice_of, integer(1), k = k)
+      graph_add(
+        graph,
+        MapNode,
+        parents = parents,
+        grid = GridSpec(
+          crs = g@crs,
+          transform = g@transform,
+          extent = g@extent,
+          dims = g@dims[keep],
+          dtype = g@dtype,
+          labels = g@labels[names(g@labels) != "t"]
+        ),
+        fn = n@fn,
+        role = n@role
+      )
+    } else {
+      NA_integer_
+    }
+    memo[[key]] <- out
+    out
+  }
+  n_t <- x@grid@dims[["t"]]
+  ids <- vapply(seq_len(n_t), function(k) slice_of(x@node_id, k), integer(1))
+  if (anyNA(ids)) {
+    return(NULL)
+  }
+  layers <- lapply(ids, function(id) {
+    LazyRaster(graph = graph, node_id = id, grid = graph_get(graph, id)@grid)
+  })
+  stats::setNames(layers, x@grid@labels[["t"]])
+}
+
 .lazy_dataset_assign <- function(x, i, value) {
+  if (S7::S7_inherits(value, LazyRaster) && "t" %in% names(value@grid@dims)) {
+    # ds[["ndvi"]] <- (ds$nir - ds$red) / (ds$nir + ds$red) on a multi-slice
+    # dataset: store per-slice layers like every other band.
+    split <- .split_t(value)
+    if (is.null(split)) {
+      cli::cli_abort(c(
+        "assigned band {.val {i}} has a {.val t} axis that cannot be split into slices.",
+        "i" = "Assign a list of per-slice {.cls LazyRaster}s instead."
+      ))
+    }
+    value <- split
+  } else if (
+    S7::S7_inherits(value, LazyRaster) &&
+      length(setdiff(names(value@grid@dims), c("x", "y")))
+  ) {
+    cli::cli_abort(
+      "assigned band {.val {i}} has a non-spatial axis; a band holds 2-D layers."
+    )
+  }
   layers <- if (S7::S7_inherits(value, LazyRaster)) {
     list(value)
   } else if (is.list(value)) {
