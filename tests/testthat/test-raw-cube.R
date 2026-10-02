@@ -138,3 +138,11 @@ test_that("stage_raw_cube carries each band's nodata, affine, type and name", {
   expect_identical(g$getDescription(1L), "a<b & c")
   expect_identical(g$getDataTypeName(2L), "Float64")
 })
+
+test_that("the raw-cube fast read refuses a window outside the cube", {
+  f <- fixture_gradient_f32()
+  v <- withr::local_tempfile(fileext = ".vrt")
+  stage_raw_cube(f, v)
+  expect_error(gdal_read_window(v, 1L, 0L, 30L, 60L, 20L), "out of range")
+  expect_error(gdal_read_window(v, 1L, 50L, 0L, 20L, 10L, out = "raw_f32"), "out of range")
+})

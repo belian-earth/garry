@@ -1034,6 +1034,14 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   scale = numeric(0),
   offset = numeric(0)
 ) {
+  if (
+    x_off < 0 || y_off < 0 || x_size < 1 || y_size < 1 ||
+      x_off + x_size > info$nx || y_off + y_size > info$ny
+  ) {
+    cli::cli_abort(
+      "Access window out of range: {x_off},{y_off} {x_size}x{y_size} on a {info$nx}x{info$ny} raw cube."
+    )
+  }
   con <- file(info$bin, "rb")
   on.exit(close(con))
   es <- info$bytes
@@ -1051,7 +1059,8 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   ) {
     idx <- if (!full) {
       within <- (x_off * 4L + 1L):((x_off + x_size) * 4L)
-      rep((seq_len(y_size) - 1L) * (nx * 4L), each = length(within)) +
+      # in double: rows x width x 4 bytes passes 2^31 on large cubes
+      rep((seq_len(y_size) - 1) * (nx * 4), each = length(within)) +
         within
     }
     parts <- vector("list", nb)
