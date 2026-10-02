@@ -373,9 +373,17 @@ g_pad <- function(x, h, value = 0) {
       high = c(lead, h, h)
     ))
   }
-  out <- matrix(value, nrow(x) + 2L * h, ncol(x) + 2L * h)
-  out[(h + 1L):(h + nrow(x)), (h + 1L):(h + ncol(x))] <- x
-  out
+  # the last two (spatial) dims of any rank, as on the traced path
+  d <- dim(x)
+  r <- length(d)
+  nd <- d
+  nd[c(r - 1L, r)] <- d[c(r - 1L, r)] + 2L * h
+  out <- array(value, nd)
+  idx <- c(
+    lapply(d[seq_len(r - 2L)], seq_len),
+    list(h + seq_len(d[[r - 1L]]), h + seq_len(d[[r]]))
+  )
+  do.call(`[<-`, c(list(out), idx, list(value = x)))
 }
 
 #' Shifted slice of a padded matrix (the stencil building block).
@@ -434,7 +442,10 @@ g_cast <- function(x, dtype) {
   out <- if (fam == "float") {
     x + 0
   } else if (fam == "pred") {
-    x != 0
+    # NaN is nonzero, as the traced convert treats it
+    out <- x != 0
+    out[is.nan(x)] <- TRUE
+    out
   } else {
     trunc(x)
   }
@@ -456,6 +467,9 @@ g_stack <- function(values) {
     return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
   d <- dim(values[[1L]])
+  if (is.null(d)) {
+    return(unlist(values)) # scalars (or vectors) stack along one axis
+  }
   arr <- simplify2array(values) # (d..., k)
   aperm(arr, c(length(d) + 1L, seq_along(d))) # -> (k, d...)
 }
