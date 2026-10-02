@@ -442,6 +442,9 @@ NULL
     if (!is.null(got)) {
       .garry_state$comp_threads <- got
     }
+    # comp_threads alone cannot describe a mixed pool: the next uniform
+    # plan must re-mask the scan daemons even when its width matches
+    .garry_state$comp_mixed <- TRUE
     return(invisible(NULL))
   }
   k_want <- if (plan_has_scan) {
@@ -449,12 +452,16 @@ NULL
   } else {
     max(2L, cores %/% max(1L, n_comp))
   }
-  if (identical(.garry_state$comp_threads, k_want)) {
+  if (
+    identical(.garry_state$comp_threads, k_want) &&
+      !isTRUE(.garry_state$comp_mixed)
+  ) {
     return(invisible(NULL))
   }
   got <- .pool_affinity_apply(NULL, n_comp, k = k_want, pids = pids)
   if (!is.null(got)) {
     .garry_state$comp_threads <- got
+    .garry_state$comp_mixed <- FALSE
   }
   invisible(NULL)
 }
@@ -465,9 +472,10 @@ NULL
 #' tasks (and any kernels the placement pass fuses onto them), while
 #' `compute` daemons run the materialised XLA stages. The resource
 #' model is: **pool width is slots, admission is concurrency**. Every
-#' daemon is pinned to a disjoint slice of the machine at creation
-#' (`garry_opt("pool_affinity")`), so an XLA client created anywhere is
-#' narrow rather than all-cores; the scheduler's live-RAM byte budgets
+#' daemon is pinned to a bounded, interleaved CPU mask at creation
+#' (`garry_opt("pool_affinity")`; masks within a pool are mostly disjoint,
+#' while read and compute masks overlap), so an XLA client created
+#' anywhere is narrow rather than all-cores; the scheduler's live-RAM byte budgets
 #' decide how many tasks are actually in flight; excess daemons idle
 #' lean. Called with no arguments it sizes the pools to the machine:
 #' `read` = all logical cores (remote fetch is latency-bound, so a
@@ -671,6 +679,7 @@ garry_daemons <- function(
   ) {
     .pool_affinity_apply(NULL, compute, pids = .garry_state$comp_pids)
   }
+  .garry_state$comp_mixed <- FALSE
   invisible(list(read = read, compute = compute))
 }
 
