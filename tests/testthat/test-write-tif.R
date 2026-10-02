@@ -246,3 +246,18 @@ test_that("band_names reach the file and the collected result", {
   skip_if_not_installed("terra")
   expect_identical(names(as_terra(collect(ds))), c("a", "b"))
 })
+
+test_that("write targets are checked before anything runs", {
+  f <- fixture_gradient_f32()
+  x <- list(a = lazy_source(f), b = lazy_source(f) * 2)
+  d <- withr::local_tempdir()
+  expect_error(write_tif(x, file.path(d, c("a.tif", "b.tif"))), "one path per sink")
+  expect_error(write_tif(x, file.path(d, "one.tif")), "existing directory")
+  expect_error(
+    write_tif(x, c(a = file.path(d, "a.tif"), z = file.path(d, "z.tif"))),
+    "named like"
+  )
+  expect_error(write_tif(lazy_source(f), file.path(d, c("a.tif", "b.tif"))), "single file path")
+  out <- write_tif(x, c(a = file.path(d, "a.tif"), b = file.path(d, "b.tif")))
+  expect_true(all(file.exists(file.path(d, c("a.tif", "b.tif")))))
+})

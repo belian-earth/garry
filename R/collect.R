@@ -46,6 +46,9 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   wspec = NULL
 ) {
   .garry_opt_check()
+  if (!is.null(path)) {
+    .check_write_path(x, path)
+  }
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.
@@ -379,4 +382,38 @@ garry_last_route <- function() .garry_state$route
     return(aperm(res, c(2L, 3L, 1L)))
   }
   res
+}
+
+# The accepted write targets: one path for a raster, dataset or grouped
+# dataset (a {group} placeholder or a directory expands per group), and
+# for a named list of rasters either an existing directory or a path per
+# sink named like the list.
+.check_write_path <- function(x, path, call = rlang::caller_env()) {
+  if (!is.character(path) || anyNA(path) || !all(nzchar(path))) {
+    cli::cli_abort("{.arg path} must be a character vector of file paths.", call = call)
+  }
+  multi <- is.list(x) &&
+    !S7::S7_inherits(x, LazyRaster) &&
+    !S7::S7_inherits(x, LazyDataset) &&
+    !S7::S7_inherits(x, LazyDatasetGroups)
+  if (!multi) {
+    if (length(path) != 1L) {
+      cli::cli_abort("{.arg path} must be a single file path.", call = call)
+    }
+    return(invisible(path))
+  }
+  if (length(path) == 1L && is.null(names(path)) && dir.exists(path)) {
+    return(invisible(path))
+  }
+  if (is.null(names(path)) || !setequal(names(path), names(x)) ||
+      length(path) != length(x)) {
+    cli::cli_abort(
+      c(
+        "{.arg path} for a list of rasters must be an existing directory or one path per sink, named like {.arg x}.",
+        "i" = "Sinks: {.val {names(x)}}."
+      ),
+      call = call
+    )
+  }
+  invisible(path)
 }
