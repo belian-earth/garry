@@ -13,7 +13,10 @@ stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
 
 \item{collection}{Collection id.}
 
-\item{start_date, end_date}{Dates (any lubridate-parseable form).}
+\item{start_date, end_date}{Search bounds, both inclusive: \code{Date}s,
+\code{POSIXct}s, or strings \code{as.POSIXct()} parses in UTC. A date without a
+time covers that whole day, so \code{end_date = "2023-12-31"} includes
+acquisitions made on the 31st.}
 
 \item{limit}{Page size requested from the API.}
 }

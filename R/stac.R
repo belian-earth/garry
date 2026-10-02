@@ -25,6 +25,23 @@ NULL
   rlang::check_installed("rstac", reason = "for STAC queries.")
 }
 
+# STAC datetime interval for inclusive bounds. A bound without a time of
+# day (a Date, or a "YYYY-MM-DD" string) spans the whole day: the end bound
+# runs to 23:59:59, not midnight, or the last day's acquisitions drop out.
+.stac_datetime_range <- function(start_date, end_date) {
+  date_only <- function(d) {
+    inherits(d, "Date") ||
+      (is.character(d) && grepl("^\\d{4}-\\d{2}-\\d{2}$", d))
+  }
+  fmt <- function(d) format(as.POSIXct(d, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
+  end <- if (date_only(end_date)) {
+    paste0(format(as.Date(end_date)), "T23:59:59Z")
+  } else {
+    fmt(end_date)
+  }
+  paste0(fmt(start_date), "/", end)
+}
+
 #' Query a STAC API and return the item collection.
 #'
 #' Searches the collection with a GET request, falling back to POST when
@@ -34,7 +51,10 @@ NULL
 #' @param bbox Length-4 numeric, EPSG:4326 (xmin, ymin, xmax, ymax).
 #' @param stac_source STAC API root URL.
 #' @param collection Collection id.
-#' @param start_date,end_date Dates (any lubridate-parseable form).
+#' @param start_date,end_date Search bounds, both inclusive: `Date`s,
+#'   `POSIXct`s, or strings `as.POSIXct()` parses in UTC. A date without a
+#'   time covers that whole day, so `end_date = "2023-12-31"` includes
+#'   acquisitions made on the 31st.
 #' @param limit Page size requested from the API.
 #' @return An rstac `doc_items` object.
 #' @seealso [stac_sign_mpc()], [stac_sources()], and [lazy_dataset()] as
@@ -50,11 +70,7 @@ stac_query <- function(
   limit = 999
 ) {
   .require_rstac()
-  datetime <- paste0(
-    format(as.POSIXct(start_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
-    "/",
-    format(as.POSIXct(end_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
-  )
+  datetime <- .stac_datetime_range(start_date, end_date)
   search <- rstac::stac_search(
     rstac::stac(stac_source),
     collections = collection,

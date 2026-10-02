@@ -100,3 +100,21 @@ test_that("harmonised HLS-style collections build a ragged dataset that composit
   expect_equal(unname(comp[1, 1, 2]), 101.5, tolerance = 1e-4)   # N2: Landsat 101,102
   expect_equal(unname(comp[1, 1, 3]), 201.5, tolerance = 1e-4)   # N: Sentinel 201,202
 })
+
+test_that("stac_query bounds are inclusive of a date-only end date", {
+  expect_identical(
+    .stac_datetime_range("2023-01-01", "2023-12-31"),
+    "2023-01-01T00:00:00Z/2023-12-31T23:59:59Z"
+  )
+  expect_identical(
+    .stac_datetime_range(as.Date("2023-01-01"), as.Date("2023-12-31")),
+    "2023-01-01T00:00:00Z/2023-12-31T23:59:59Z"
+  )
+  expect_identical(
+    .stac_datetime_range(
+      "2023-01-01",
+      as.POSIXct("2023-06-01 12:00:00", tz = "UTC")
+    ),
+    "2023-01-01T00:00:00Z/2023-06-01T12:00:00Z"
+  )
+})
