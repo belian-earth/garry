@@ -139,27 +139,35 @@ NULL
 # branch carrying a multiplicity.
 # ---------------------------------------------------------------------------
 
-.ir_tree <- function(graph, id) {
+# Memoised by node id: a shared subgraph (x + x, a mask feeding every band)
+# is built once, so the work grows with the graph, not with its unfolding.
+# Each node carries a compact signature (a hash over its own label and its
+# children's signatures) for sibling folding.
+.ir_tree <- function(graph, id, memo = new.env(parent = emptyenv())) {
+  key <- as.character(id)
+  if (!is.null(memo[[key]])) {
+    return(memo[[key]])
+  }
   node <- graph_get(graph, id)
-  kids <- lapply(node@parents, function(p) .ir_tree(graph, p))
-  list(
+  kids <- lapply(node@parents, function(p) .ir_tree(graph, p, memo))
+  children <- .collapse_children(kids)
+  out <- list(
+    id = id,
     kind = .node_kind(node),
     label = .node_label(node),
-    children = .collapse_children(kids),
-    mult = 1L
+    children = children,
+    mult = 1L,
+    sig = rlang::hash(list(
+      .node_kind(node),
+      .node_label(node),
+      vapply(children, function(k) paste0(k$sig, "x", k$mult), character(1))
+    ))
   )
+  memo[[key]] <- out
+  out
 }
 
-.tree_sig <- function(n) {
-  paste0(
-    n$kind,
-    "|",
-    n$label,
-    "(",
-    paste(vapply(n$children, .tree_sig, character(1)), collapse = ","),
-    ")"
-  )
-}
+.tree_sig <- function(n) n$sig
 
 .collapse_children <- function(kids) {
   if (!length(kids)) {
@@ -183,7 +191,8 @@ NULL
   prefix = "",
   is_last = TRUE,
   is_root = TRUE,
-  box = .box_chars()
+  box = .box_chars(),
+  seen = new.env(parent = emptyenv())
 ) {
   conn <- if (is_root) {
     ""
@@ -199,7 +208,24 @@ NULL
   } else {
     ""
   }
-  line <- paste0(prefix, conn, .kind_glyph(node$kind), " ", node$label, mult)
+  # a subgraph already drawn is shown once: later uses point back to it
+  repeated <- length(node$children) > 0L && !is.null(node$id) &&
+    !is.null(seen[[as.character(node$id)]])
+  line <- paste0(
+    prefix,
+    conn,
+    .kind_glyph(node$kind),
+    " ",
+    node$label,
+    mult,
+    if (repeated) cli::col_grey("  (shown above)") else ""
+  )
+  if (repeated) {
+    return(line)
+  }
+  if (!is.null(node$id)) {
+    seen[[as.character(node$id)]] <- TRUE
+  }
   child_prefix <- paste0(
     prefix,
     if (is_root) {
@@ -215,7 +241,7 @@ NULL
   for (i in seq_len(n)) {
     lines <- c(
       lines,
-      .render_tree(node$children[[i]], child_prefix, i == n, FALSE, box)
+      .render_tree(node$children[[i]], child_prefix, i == n, FALSE, box, seen)
     )
   }
   lines

@@ -71,3 +71,11 @@ test_that("print(LazyRaster) headlines the op and hints plan_draw()", {
   expect_match(out, "median")
   expect_match(out, "draw\\(x\\)")
 })
+
+test_that("plan_draw scales with the graph, not its unfolding", {
+  x <- lazy_source(fixture_gradient_f32())
+  for (i in 1:25) x <- x + x # 2^25 paths through 26 nodes
+  t <- system.time(out <- capture.output(plan_draw(x)))[["elapsed"]]
+  expect_lt(t, 5)
+  expect_lt(length(out), 60)
+})
