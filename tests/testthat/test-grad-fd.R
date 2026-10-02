@@ -80,3 +80,25 @@ test_that("gradients on nodata rasters are poison-free and match FD", {
   fd <- .fd_kernel_grad(build, k0)
   expect_equal(got$grad, fd, tolerance = 5e-3)
 })
+
+test_that("NaN produced inside the pipeline is skipped, as collect() skips it", {
+  f <- fixture_gradient_f32()
+  k0 <- matrix(c(0.05, 0.2, 0.0,
+                 0.10, 0.4, 0.05,
+                 0.00, 0.1, 0.10), 3, 3, byrow = TRUE)
+  # a map that gates part of the focal output to nodata, on a condition
+  # that does not move with the kernel (so finite differences are valid)
+  gate <- function(v, s) g_ifelse(s > 2500, NaN, v)
+  build <- function(k) {
+    src <- lazy_source(f)
+    fk <- focal_kernel(src / 1000, k)
+    reduce_over(lazy_map(fk, src, fn = gate, dtype = "f32"), "mean", c("x", "y"))
+  }
+  src <- lazy_source(f)
+  fk <- focal_kernel(src / 1000, k0)
+  loss <- reduce_over(lazy_map(fk, src, fn = gate, dtype = "f32"), "mean", c("x", "y"))
+  got <- lazy_value_and_grad(loss, fk)
+  expect_false(is.nan(got$value))
+  expect_equal(got$value, collect(build(k0)), tolerance = 1e-5)
+  expect_equal(got$grad, .fd_kernel_grad(build, k0), tolerance = 5e-3)
+})

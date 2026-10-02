@@ -72,6 +72,12 @@ NULL
         )
         v <- do.call(node@fn, pv)
         m <- Reduce(`*`, pm)
+        # NaN the node produces itself (a gate, a log of a negative) is
+        # nodata too: mask it and keep it out of the arithmetic, as the
+        # stage inputs are
+        nd <- g_is_nodata(v)
+        m <- m * g_cast(!nd, "f32")
+        v <- g_ifelse(nd, 0, v)
       } else if (S7::S7_inherits(node, FocalNode)) {
         r <- node@radius
         x <- pv[[1L]]
