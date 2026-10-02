@@ -234,6 +234,7 @@ execute_plan_mirai <- function(
     }
     best
   }
+  .assert_pools_alive(profiles)
   .garry_abi_check(unique(c(
     profiles,
     if (

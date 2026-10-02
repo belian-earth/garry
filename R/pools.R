@@ -216,6 +216,26 @@ NULL
 # (probed 2026-08-02; a substitute()-based first attempt relied on a
 # nonexistent .expr_quoted argument and was backed out). `quiet`
 # tolerates down profiles (teardown-adjacent broadcasts).
+# Abort if any of `profiles` has no connected daemon. A width-1 profile
+# whose daemon died (an OOM kill, a crash) stays registered, and a task
+# sent to it never resolves: without this check the next run blocks
+# forever on its first broadcast.
+.assert_pools_alive <- function(profiles, call = rlang::caller_env()) {
+  dead <- profiles[vapply(profiles, .gd_n_compute, integer(1)) == 0L]
+  if (length(dead)) {
+    cli::cli_abort(
+      c(
+        "{length(dead)} garry daemon pool{?s} {?has/have} no running daemon: {.val {dead}}.",
+        "i" = "A daemon was probably killed (out of memory?).",
+        "i" = "Call {.fn garry_daemons} to restart the pools."
+      ),
+      class = "garry_pool_error",
+      call = call
+    )
+  }
+  invisible(profiles)
+}
+
 .pool_broadcast <- function(
   expr,
   profiles = .comp_profiles(),
@@ -224,6 +244,13 @@ NULL
 ) {
   args <- c(list(expr), list(...))
   out <- list()
+  # a task sent to a profile with no daemon never resolves: skip those
+  # when quiet, refuse otherwise
+  if (quiet) {
+    profiles <- profiles[vapply(profiles, .gd_n_compute, integer(1)) > 0L]
+  } else {
+    .assert_pools_alive(profiles)
+  }
   for (p in profiles) {
     h <- if (quiet) {
       tryCatch(
