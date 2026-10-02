@@ -973,8 +973,11 @@ execute_plan_mirai <- function(
       okeys <- vapply(s@exports, .key, character(1))
       cd <- s@chunks@chunk_dim
       need <- s@halo + s@out_pad
+      # clipped to the grid, as the store and warm-up estimates are: the
+      # plan-wide chunk dim can exceed a small grid
+      cd_eff <- pmin(as.numeric(cd), as.numeric(s@grid@dims[c("x", "y")]))
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
-        prod(as.numeric(cd) + 2 * need) /
+        prod(cd_eff + 2 * need) /
         2^20
       # The /2 discount reflects mori's zero-copy shared INPUT mappings:
       # the per-px estimate is calibrated for private R-double inputs, but
