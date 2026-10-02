@@ -74,6 +74,11 @@ reflectance file is half the raw bytes of float32 and compresses far
 better. NaN demotes to \code{nodata}, which is stored in DN units and must
 sit outside the quantized data range.
 
+Integer outputs saturate: a value beyond the dtype's range is written
+as the nearest limit, without a warning. When \code{nodata} is one of those
+limits, quantized values saturate one step inside it, so they never
+read back as nodata; choose \code{scale} and \code{offset} so the data fits.
+
 \code{cog = TRUE} streams to a temporary tiled GeoTIFF beside \code{path}, then
 finalises with one \code{gdal_translate} pass to the COG driver (which is
 copy-only by design: overviews precede full-res data). The extra

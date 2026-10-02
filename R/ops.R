@@ -179,9 +179,9 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
 g_fill <- function(value, dim, dtype = "f32", device = NULL) {
   .require_anvl()
   if (is.null(device)) {
-    anvl::nv_fill(value, dim, dtype)
+    anvl::nv_fill(value, dim, .to_anvl_dtype(dtype))
   } else {
-    anvl::nv_fill(value, dim, dtype, device = device)
+    anvl::nv_fill(value, dim, .to_anvl_dtype(dtype), device = device)
   }
 }
 
@@ -273,6 +273,15 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
     cli::cli_abort("unsupported quantize dtype {.val {dtype}}")
   }
   q <- g_round((x - offset) / scale)
+  # Out-of-range values saturate at the dtype's limits; a sentinel on one
+  # of those limits is kept for nodata alone, so a saturated valid pixel
+  # never reads back as nodata.
+  if (length(nodata) == 1L && nodata == rng[[1L]]) {
+    rng[[1L]] <- rng[[1L]] + 1
+  }
+  if (length(nodata) == 1L && nodata == rng[[2L]]) {
+    rng[[2L]] <- rng[[2L]] - 1
+  }
   q <- g_clamp(q, rng[[1L]], rng[[2L]])
   if (length(nodata) == 1L) {
     q <- g_ifelse(g_is_nodata(x), nodata, q)
@@ -302,10 +311,20 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
   anvl::shape(x)
 }
 
-# Dtype string of an AnvlArray output (bridge for the executor's
-# f32-only raw download dispatch).
+# garry names unsigned integers u8..u64, anvl names them ui8..ui64; the
+# two vocabularies agree otherwise.
+.anvl_dtype_names <- c(u8 = "ui8", u16 = "ui16", u32 = "ui32", u64 = "ui64")
+.to_anvl_dtype <- function(dtype) {
+  unname(.anvl_dtype_names[dtype]) %|NA|% dtype
+}
+`%|NA|%` <- function(a, b) if (is.na(a)) b else a
+
+# Dtype of an AnvlArray in garry's vocabulary (bridge for the executor's
+# raw download dispatch).
 .g_dtype <- function(x) {
-  as.character(anvl::dtype(x))
+  dt <- as.character(anvl::dtype(x))
+  hit <- match(dt, .anvl_dtype_names)
+  if (is.na(hit)) dt else names(.anvl_dtype_names)[[hit]]
 }
 
 #' Elementwise select: `yes` where `cond`, else `no`.
@@ -417,7 +436,7 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
 g_cast <- function(x, dtype) {
   stopifnot(dtype_valid(dtype))
   if (.g_traced(x)) {
-    return(anvl::nv_convert(x, dtype))
+    return(anvl::nv_convert(x, .to_anvl_dtype(dtype)))
   }
   fam <- .dtype_family(dtype)
   out <- if (fam == "float") {
@@ -551,9 +570,12 @@ g_index_scalar <- function(v, i) {
       return(i)
     }
     if (.g_traced(i)) {
-      anvl::nv_broadcast_to(anvl::nv_convert(i, .g_dtype(p)), .g_shape(p))
+      anvl::nv_broadcast_to(
+        anvl::nv_convert(i, .to_anvl_dtype(.g_dtype(p))),
+        .g_shape(p)
+      )
     } else {
-      anvl::nv_fill(i, shape = .g_shape(p), dtype = .g_dtype(p))
+      anvl::nv_fill(i, shape = .g_shape(p), dtype = .to_anvl_dtype(.g_dtype(p)))
     }
   })
 }
@@ -849,10 +871,9 @@ g_expand <- function(x, axis, n) {
 #' @name g-reductions
 NULL
 
-# Accumulator dtype for integer sums, keyed by anvl dtype name: 8- and
-# 16-bit integers sum in i32, 32-bit unsigned (an i64 carrier on upload)
-# in i64.
-.g_sum_widen <- c(i8 = "i32", i16 = "i32", ui8 = "i32", ui16 = "i32", ui32 = "i64")
+# Accumulator dtype for integer sums: 8- and 16-bit integers sum in i32,
+# 32-bit unsigned in i64.
+.g_sum_widen <- c(i8 = "i32", i16 = "i32", u8 = "i32", u16 = "i32", u32 = "i64")
 
 #' @rdname g-reductions
 #' @export

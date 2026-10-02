@@ -26,6 +26,11 @@ NULL
 #' better. NaN demotes to `nodata`, which is stored in DN units and must
 #' sit outside the quantized data range.
 #'
+#' Integer outputs saturate: a value beyond the dtype's range is written
+#' as the nearest limit, without a warning. When `nodata` is one of those
+#' limits, quantized values saturate one step inside it, so they never
+#' read back as nodata; choose `scale` and `offset` so the data fits.
+#'
 #' `cog = TRUE` streams to a temporary tiled GeoTIFF beside `path`, then
 #' finalises with one `gdal_translate` pass to the COG driver (which is
 #' copy-only by design: overviews precede full-res data). The extra

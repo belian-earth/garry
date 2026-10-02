@@ -273,3 +273,12 @@ test_that("a directory target returns the per-sink files", {
   expect_setequal(basename(unlist(out2)), c("a.tif", "b.tif"))
   expect_setequal(list.files(d2), c("a.tif", "b.tif"))
 })
+
+test_that("quantized values saturating at a nodata limit stay valid", {
+  f <- fixture_gradient_f32()
+  path <- withr::local_tempfile(fileext = ".tif")
+  # everything far above u8's range, nodata at its top
+  write_tif(lazy_source(f) * 1000, path, dtype = "u8", scale = 1, offset = 0, nodata = 255)
+  v <- gdal_read_window(path, 1L, 0L, 0L, 60L, 40L)
+  expect_true(all(v == 254))
+})
