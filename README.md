@@ -75,10 +75,13 @@ format conversion belong to GDAL at that boundary, not to the engine.
 ## Installation
 
 You can install the development version of garry from
-[GitHub](https://github.com/) with:
+[GitHub](https://github.com/). Its XLA stack (anvl, pjrt, stablehlo,
+xlamisc) is published on the [r-xla r-universe](https://r-xla.r-universe.dev),
+which pak must be told about:
 
 ``` r
 # install.packages("pak")
+options(repos = c(rxla = "https://r-xla.r-universe.dev", getOption("repos")))
 pak::pak("belian-earth/garry")
 ```
 
