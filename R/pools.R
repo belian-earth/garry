@@ -33,41 +33,51 @@ NULL
   list(physical = as.integer(phys), logical = as.integer(logi))
 }
 
-# Headroom left in this process's cgroup (v2), in MB: memory.max minus
-# current usage. NA when unlimited or unreadable. /proc/meminfo reports
-# the HOST, so inside a container, a SLURM/systemd scope or a memory
-# cgroup it can report tens of free GB while this process is a breath
-# away from its own limit -- budgeting on it would overcommit straight
-# into a cgroup OOM kill.
-.garry_cgroup_avail_mb <- function() {
-  if (!file.exists("/proc/self/cgroup")) {
+# Headroom left in this process's cgroups (v2), in MB: the tightest of
+# (memory.max - memory.current + inactive file cache) over the process's
+# cgroup and every ancestor with a finite limit. NA when no level is
+# limited or the files are unreadable. /proc/meminfo reports the HOST, so
+# inside a container, a SLURM step or a systemd scope it can report tens
+# of free GB while this process is a breath away from its own limit --
+# budgeting on it would overcommit straight into a cgroup OOM kill.
+# Limits often sit on an ancestor (SLURM's job cgroup, a systemd slice),
+# and memory.current counts the page cache the kernel reclaims at the
+# limit, so the leaf alone either misses the limit or reads near-zero
+# headroom in any run that has read a few GB. `root` and `self` are
+# injectable for tests.
+.garry_cgroup_avail_mb <- function(
+  root = "/sys/fs/cgroup",
+  self = "/proc/self/cgroup"
+) {
+  if (!file.exists(self)) {
     return(NA_real_)
   } # non-Linux
-  ln <- tryCatch(readLines("/proc/self/cgroup", n = 5L), error = function(e) {
-    character(0)
-  })
+  ln <- tryCatch(readLines(self, n = 5L), error = function(e) character(0))
   rel <- sub("^0::", "", grep("^0::", ln, value = TRUE)[1L])
   if (is.na(rel) || !nzchar(rel)) {
     return(NA_real_)
   }
-  base <- file.path("/sys/fs/cgroup", sub("^/", "", rel))
-  f_max <- file.path(base, "memory.max")
-  f_cur <- file.path(base, "memory.current")
-  if (!file.exists(f_max) || !file.exists(f_cur)) {
-    return(NA_real_)
+  read1 <- function(f) {
+    tryCatch(readLines(f, n = 1L), error = function(e) NA_character_)
   }
-  mx <- tryCatch(readLines(f_max, n = 1L), error = function(e) "max")
-  if (identical(mx, "max")) {
-    return(NA_real_)
-  } # unlimited
-  mx <- suppressWarnings(as.numeric(mx))
-  cur <- suppressWarnings(as.numeric(
-    tryCatch(readLines(f_cur, n = 1L), error = function(e) NA)
-  ))
-  if (is.na(mx) || is.na(cur)) {
-    return(NA_real_)
+  inactive_file <- function(dir) {
+    st <- tryCatch(readLines(file.path(dir, "memory.stat")), error = function(e) character(0))
+    v <- sub("^inactive_file ", "", grep("^inactive_file ", st, value = TRUE))
+    if (length(v)) suppressWarnings(as.numeric(v[[1L]])) else 0
   }
-  max(0, (mx - cur) / 2^20)
+  parts <- strsplit(sub("^/", "", rel), "/", fixed = TRUE)[[1L]]
+  best <- NA_real_
+  for (k in rev(seq_along(parts))) {
+    dir <- file.path(root, paste(parts[seq_len(k)], collapse = "/"))
+    mx <- suppressWarnings(as.numeric(read1(file.path(dir, "memory.max"))))
+    cur <- suppressWarnings(as.numeric(read1(file.path(dir, "memory.current"))))
+    if (is.na(mx) || is.na(cur)) {
+      next # "max" (unlimited) or unreadable
+    }
+    avail <- max(0, (mx - cur + inactive_file(dir)) / 2^20)
+    best <- min(best, avail, na.rm = TRUE)
+  }
+  best
 }
 
 # macOS reclaimable memory in MB via vm_stat, NA elsewhere or on parse

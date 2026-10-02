@@ -81,3 +81,30 @@ test_that("Darwin reclaimable-memory parser reads vm_stat shapes", {
     c("Mach Virtual Memory Statistics: (page size of 16384 bytes)",
       "Pages wired down: 100."))))
 })
+
+test_that("cgroup headroom: tightest ancestor limit, page cache counted free", {
+  root <- withr::local_tempdir()
+  self <- file.path(root, "self")
+  writeLines("0::/job/step/task", self)
+  lvl <- function(path, mx, cur, inactive = NULL) {
+    d <- file.path(root, path)
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    writeLines(mx, file.path(d, "memory.max"))
+    writeLines(as.character(cur), file.path(d, "memory.current"))
+    if (!is.null(inactive)) {
+      writeLines(c("anon 1", paste("inactive_file", inactive)), file.path(d, "memory.stat"))
+    }
+  }
+  mb <- 2^20
+  lvl("job", as.character(10000 * mb), 9000 * mb, inactive = 3000 * mb) # 4000 MB
+  lvl("job/step", "max", 1)
+  lvl("job/step/task", "max", 1) # the leaf is unlimited
+  expect_equal(.garry_cgroup_avail_mb(root, self), 4000)
+  lvl("job/step", as.character(5000 * mb), 4000 * mb) # 1000 MB, tighter
+  expect_equal(.garry_cgroup_avail_mb(root, self), 1000)
+  writeLines("0::/free", self)
+  dir.create(file.path(root, "free"))
+  writeLines("max", file.path(root, "free", "memory.max"))
+  writeLines("1", file.path(root, "free", "memory.current"))
+  expect_true(is.na(.garry_cgroup_avail_mb(root, self)))
+})
