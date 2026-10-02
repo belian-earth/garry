@@ -219,8 +219,19 @@ write_tif <- function(
   }
   for (i in seq_along(streamed)) {
     dir.create(dirname(finals[[i]]), recursive = TRUE, showWarnings = FALSE)
-    ok <- gdal_translate_file(streamed[[i]], finals[[i]], cl)
-    if (!isTRUE(ok) || !file.exists(finals[[i]])) {
+    # translate beside the target, then rename: an interrupted or failed
+    # translate never leaves a partial COG at the final path
+    part <- tempfile("garry-cog-", tmpdir = dirname(finals[[i]]), fileext = ".tif")
+    ok <- tryCatch(
+      gdal_translate_file(streamed[[i]], part, cl),
+      error = function(e) FALSE,
+      interrupt = function(e) {
+        unlink(part)
+        stop(e)
+      }
+    )
+    if (!isTRUE(ok) || !file.exists(part) || !file.rename(part, finals[[i]])) {
+      unlink(part)
       cli::cli_abort("COG finalise failed for {.path {finals[[i]]}}.")
     }
   }
