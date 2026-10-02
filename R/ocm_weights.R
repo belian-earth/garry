@@ -332,6 +332,9 @@ ocm_fetch_weights <- function(dir = NULL, quiet = FALSE) {
       cli::cli_inform("downloading {.file {f}} ...")
     }
     tmp <- paste0(dest, ".part")
+    # ~29 MB each: R's default 60 s timeout fails on slow links
+    old <- options(timeout = max(600, getOption("timeout")))
+    on.exit(options(old), add = TRUE)
     status <- utils::download.file(
       paste0(.ocm_release_base, f),
       tmp,
@@ -349,7 +352,10 @@ ocm_fetch_weights <- function(dir = NULL, quiet = FALSE) {
         "i" = "the mirror may be corrupt or altered; not installing it"
       ))
     }
-    file.rename(tmp, dest)
+    if (!file.rename(tmp, dest)) {
+      unlink(tmp)
+      cli::cli_abort("could not move {.file {f}} into {.path {dir}}.")
+    }
   }
   invisible(dir)
 }

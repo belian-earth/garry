@@ -27,8 +27,20 @@
   if (!dir.exists(base)) {
     return(fetched)
   }
-  vers <- sort(list.dirs(base, recursive = FALSE), decreasing = TRUE)
-  if (length(vers)) vers[[1L]] else fetched
+  # the newest Python cache version that holds the v4 weight files
+  # (numeric order: "10.0" is newer than "9.2")
+  vers <- list.dirs(base, recursive = FALSE)
+  has_v4 <- vapply(
+    vers,
+    function(d) all(.ocm_release_files %in% list.files(d)),
+    logical(1)
+  )
+  vers <- vers[has_v4]
+  if (!length(vers)) {
+    return(fetched)
+  }
+  v <- suppressWarnings(numeric_version(basename(vers), strict = FALSE))
+  vers[[order(v, decreasing = TRUE, na.last = TRUE)[[1L]]]]
 }
 
 #' Cloud and shadow masking with OmniCloudMask

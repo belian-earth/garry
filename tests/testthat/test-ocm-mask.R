@@ -87,3 +87,14 @@ test_that("ocm_model validates and prints", {
   expect_output(print(m), "ocm_model")
   expect_match(m$kernel_id, "^ocm-")
 })
+
+test_that("the default OCM weights dir is the newest Python cache with v4 files", {
+  home <- withr::local_tempdir()
+  base <- file.path(home, ".local", "share", "omnicloudmask")
+  for (v in c("9.2", "10.0", "11.0")) dir.create(file.path(base, v), recursive = TRUE)
+  for (v in c("9.2", "10.0")) {
+    file.create(file.path(base, v, garry:::.ocm_release_files))
+  }
+  withr::local_envvar(HOME = home, GARRY_OCM_WEIGHTS = "", R_USER_DATA_DIR = home)
+  expect_identical(basename(garry:::.ocm_default_dir()), "10.0")
+})
