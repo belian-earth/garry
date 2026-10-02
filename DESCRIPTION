@@ -12,7 +12,7 @@ SystemRequirements: GDAL (>= 3.9, for the GTI mosaic driver)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:
-    R (>= 4.3)
+    R (>= 4.4.0)
 Imports:
     S7,
     anvl (>= 0.5.1),
