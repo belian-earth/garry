@@ -472,6 +472,10 @@ gdal_read_window <- function(
   decim = NULL
 ) {
   out <- rlang::arg_match(out)
+  # a scale alone means no offset (v * scale + numeric(0) is numeric(0))
+  if (length(scale) == 1L && length(offset) == 0L) {
+    offset <- 0
+  }
   # Warper bypass (see .rio_direct_spec()): the window arrives in TARGET
   # pixels; translate it to the source window and let RasterIO resample
   # in the same pass as the read. Takes precedence over the raw-BSQ path
