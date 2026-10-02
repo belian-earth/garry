@@ -431,10 +431,15 @@ NULL
       band = n@band,
       nodata = n@nodata,
       block_dim = n@block_dim,
-      open_options = .coarsen_open_options(n@open_options, cg)
+      open_options = .coarsen_open_options(n@open_options, cg),
+      resampling = n@resampling,
+      scale = n@scale,
+      offset = n@offset,
+      name = n@name,
+      role = n@role
     )
   } else if (S7::S7_inherits(n, MapNode)) {
-    graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn)
+    graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn, role = n@role)
   } else if (S7::S7_inherits(n, FocalNode)) {
     graph_add(
       ng,
@@ -599,7 +604,7 @@ preview <- function(
     rd <- .pv_read_path(x, bands, target)
     arr <- rd$arr
     grid <- rd$grid
-    if (is.null(bands)) bands <- rd$bands
+    bands <- rd$bands # positions in the array read, which holds only `bands`
   } else if (is.array(x) || is.matrix(x)) {
     # A collect() result carries a `gis` attribute (extent/CRS); use it for
     # real-world axes. Capture it before decimation, which drops attributes.
