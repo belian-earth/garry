@@ -87,3 +87,18 @@ test_that("a focal over integer data without nodata has NaN edges", {
   expect_identical((x * 2L)@grid@dtype, "i16")
   expect_error(focal_map(x, radius = -1, fn = identity), "non-negative")
 })
+
+test_that("comparisons keep nodata as nodata", {
+  f <- fixture_i16_nodata() # has nodata cells
+  x <- lazy_source(f, nodata = -9999)
+  v <- collect(x)
+  m <- collect(x > 50)
+  expect_identical(is.nan(m), is.nan(v))
+  expect_true(all(m[!is.nan(v)] %in% c(0, 1)))
+  mm <- collect(x == x)
+  expect_identical(is.nan(mm), is.nan(v))
+  # the masked fraction skips nodata rather than counting it as "no"
+  st <- lazy_stack(list(x, x))
+  frac <- collect(reduce_over(st > 50, "mean", "t"))
+  expect_identical(is.nan(frac), is.nan(v))
+})

@@ -523,6 +523,17 @@ for (op_name in c("+", "-", "*", "/")) {
 
 # Comparisons produce f32 0/1 masks, not logical: the map-algebra
 # masking idiom then composes directly ((x > 5) * y, mask sums, ...).
+# Nodata compares as nodata (R: NA > 5 is NA), not as a valid 0, so a
+# nan_rm reduction of a mask skips it.
+.cmp_nodata <- function(f) {
+  force(f)
+  function(x, y) {
+    out <- g_cast(f(x, y), "f32")
+    if (!is.numeric(x) || length(x) != 1L) out <- g_ifelse(g_is_nodata(x), NaN, out)
+    if (!is.numeric(y) || length(y) != 1L) out <- g_ifelse(g_is_nodata(y), NaN, out)
+    out
+  }
+}
 for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
   op_fn <- get(op_name, envir = baseenv())
   S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
@@ -532,7 +543,7 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
         .lazy_binop(
           e1,
           e2,
-          function(x, y) g_cast(f(x, y), "f32"),
+          .cmp_nodata(f),
           dtype = "f32"
         )
       }
@@ -544,7 +555,7 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
         .lazy_scalar_op(
           e1,
           e2,
-          function(x, y) g_cast(f(x, y), "f32"),
+          .cmp_nodata(f),
           FALSE,
           dtype = "f32"
         )
@@ -557,7 +568,7 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
         .lazy_scalar_op(
           e2,
           e1,
-          function(x, y) g_cast(f(x, y), "f32"),
+          .cmp_nodata(f),
           TRUE,
           dtype = "f32"
         )
