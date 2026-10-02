@@ -1298,8 +1298,11 @@ gdal_mosaic_vrt <- function(
   if (!file.exists(dst)) {
     cli::cli_abort("buildVRT mosaic failed.")
   }
-  n_in <- length(grep("<SourceFilename", readLines(dst, warn = FALSE), fixed = TRUE))
-  if (n_in < length(files)) {
+  # one <SourceFilename> per band per source: count distinct sources
+  xml <- paste(readLines(dst, warn = FALSE), collapse = "\n")
+  srcs <- regmatches(xml, gregexpr("<SourceFilename[^>]*>[^<]*</SourceFilename>", xml))[[1L]]
+  n_in <- length(unique(sub("^<SourceFilename[^>]*>([^<]*)</SourceFilename>$", "\\1", srcs)))
+  if (n_in < length(unique(files))) {
     unlink(dst)
     cli::cli_abort(
       "buildVRT mosaic took {n_in} of {length(files)} source{?s}; the rest were skipped (see the GDAL warnings)."

@@ -71,3 +71,20 @@ test_that("tiles the mosaic cannot hold stay a multi-path node the warper reads 
   srcn <- src_of(dn@bands[[1L]][[1L]])
   expect_length(srcn@path, 1L); expect_match(srcn@path, "\\.vrt$")
 })
+
+test_that("a multi-band mosaic that skipped a tile is an error, not a hole", {
+  mk <- function(x0, nb) {
+    f <- withr::local_tempfile(fileext = ".tif", .local_envir = parent.frame(2))
+    d <- gdalraster::create("GTiff", f, 4, 4, nb, "Float32", return_obj = TRUE)
+    d$setGeoTransform(c(x0, 10, 0, 40, 0, -10))
+    d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+    for (b in seq_len(nb)) d$write(b, 0, 0, 4, 4, rep(b, 16))
+    d$close()
+    f
+  }
+  files <- c(mk(0, 3), mk(40, 3), mk(80, 2)) # buildVRT skips the 2-band tile
+  expect_error(
+    suppressWarnings(gdal_mosaic_vrt(withr::local_tempfile(fileext = ".vrt"), files)),
+    "took 2 of 3"
+  )
+})
