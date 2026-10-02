@@ -80,9 +80,20 @@ safetensors_read <- function(path, names = NULL) {
   names(out) <- keep
   for (nm in keep) {
     t <- hdr$tensors[[nm]]
-    seek(con, hdr$offset + t$begin)
     n <- (t$end - t$begin) / 4
+    want <- prod(t$shape) # a scalar's empty shape gives 1
+    if (t$end < t$begin || n != want) {
+      cli::cli_abort(
+        "tensor {.val {nm}}: data offsets hold {n} values but its shape needs {want}."
+      )
+    }
+    seek(con, hdr$offset + t$begin)
     v <- readBin(con, "numeric", n = n, size = 4L, endian = "little")
+    if (length(v) != n) {
+      cli::cli_abort(
+        "tensor {.val {nm}}: the file ends after {length(v)} of {n} values (truncated?)."
+      )
+    }
     out[[nm]] <- if (length(t$shape) <= 1L) {
       v
     } else {

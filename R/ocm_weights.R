@@ -29,7 +29,11 @@
     cli::cli_abort("missing BN tensors under {.val {bn}}")
   }
   s <- g / sqrt(v + .ocm_eps)
-  list(w = sweep(w, 1L, s, `*`), b = as.numeric(b - mu * s))
+  cb <- std[[sub("\\.weight$", ".bias", conv)]] # absent = 0
+  if (is.null(cb)) {
+    cb <- 0
+  }
+  list(w = sweep(w, 1L, s, `*`), b = as.numeric(b + (cb - mu) * s))
 }
 
 # Plain conv with its own bias (no BN), e.g. the segmentation head.
@@ -199,12 +203,10 @@
         base$conv_dw <- .ocm_wb(std, paste0(p, ".conv_dw"))
         return(base)
       }
+      pe <- gsub(".", "\\.", p, fixed = TRUE) # p as a regex literal
       ci <- unique(regmatches(
         keys,
-        regexpr(
-          .glue("^{gsub('\\.', '\\\\.', p)}\\.convs\\.\\d+"),
-          keys
-        )
+        regexpr(.glue("^{pe}\\.convs\\.\\d+"), keys)
       ))
       ci <- ci[order(as.integer(sub(".*convs\\.", "", ci)))]
       base$convs <- lapply(ci, function(cp) .ocm_wb(std, cp))
@@ -379,9 +381,25 @@ ocm_load_weights <- function(dir, models = c("regnety", "edgenext")) {
     ""
   )
 
+  file_hash <- vapply(paths, rlang::hash_file, "")
+  # a file carrying the release's name must be the release's bytes: a
+  # truncated or altered copy would otherwise fold into garbage weights
+  for (m in models) {
+    if (
+      basename(paths[[m]]) == .ocm_release_files[[m]] &&
+        !identical(file_hash[[m]], .ocm_release_hash[[m]])
+    ) {
+      cli::cli_abort(c(
+        "{.path {paths[[m]]}} does not match the OCM v4 release (truncated or altered?).",
+        "i" = "Re-download it with {.run garry::ocm_fetch_weights()}."
+      ))
+    }
+  }
+  # the folding code is part of the key: a garry upgrade that changes it
+  # must not serve weights folded by the old code
   hash <- rlang::hash(list(
-    version = 1L,
-    lapply(paths, function(p) rlang::hash_file(p))
+    garry = as.character(utils::packageVersion("garry")),
+    file_hash
   ))
   cache <- file.path(
     tools::R_user_dir("garry", "cache"),
@@ -389,8 +407,10 @@ ocm_load_weights <- function(dir, models = c("regnety", "edgenext")) {
     paste0(hash, ".rds")
   )
   if (file.exists(cache)) {
-    out <- readRDS(cache)
-    if (identical(sort(names(out$weights)), sort(models))) return(out)
+    out <- tryCatch(readRDS(cache), error = function(e) NULL) # partial: rebuild
+    if (!is.null(out) && identical(sort(names(out$weights)), sort(models))) {
+      return(out)
+    }
   }
 
   weights <- lapply(stats::setNames(nm = models), function(m) {
@@ -403,6 +423,11 @@ ocm_load_weights <- function(dir, models = c("regnety", "edgenext")) {
   })
   out <- list(weights = weights, kernel_id = hash, paths = paths)
   dir.create(dirname(cache), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(out, cache)
+  # write then rename, so a concurrent session never reads a partial file
+  tmp <- tempfile("ocm-", tmpdir = dirname(cache), fileext = ".rds")
+  saveRDS(out, tmp)
+  if (!file.rename(tmp, cache)) {
+    unlink(tmp)
+  }
   out
 }
