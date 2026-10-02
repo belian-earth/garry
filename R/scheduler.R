@@ -1940,11 +1940,12 @@ execute_plan_mirai <- function(
       slot = "",
       mb = "",
       store_mb = "",
-      ready = ""
+      ready = "",
+      time = Sys.time()
     ) {
       cat(
         .glue(
-          "{formatC(unclass(Sys.time()), format = 'f', digits = 3)},",
+          "{formatC(unclass(time), format = 'f', digits = 3)},",
           "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"
         ),
         "\n",
@@ -1954,6 +1955,7 @@ execute_plan_mirai <- function(
       )
     }
   }
+  log_line("run_start", run_id) # runs share a log file: mark each one
   t_drain0 <- unclass(Sys.time()) # zero-dep tasks are ready at drain start
   n_total <- length(tasks)
   last_report <- Sys.time()
@@ -2247,13 +2249,18 @@ execute_plan_mirai <- function(
         # the diverging-lines plot every memory postmortem rebuilt by
         # hand (crop=0 flood, scan-compile OOM).
         if (!is.null(task_log)) {
+          # one timestamp per sweep: the report sums a sweep's rows
+          sweep_t <- Sys.time()
           for (p in .garry_state$pool_pids) {
             a <- .garry_anon_mb_of(p)
-            if (is.finite(a)) log_line("rss", as.character(p), mb = round(a, 1))
+            if (is.finite(a)) {
+              log_line("rss", as.character(p), mb = round(a, 1), time = sweep_t)
+            }
           }
           log_line(
             "model",
             "-",
+            time = sweep_t,
             mb = round(mb_inflight, 1),
             store_mb = round(mb_store_resident, 1)
           )

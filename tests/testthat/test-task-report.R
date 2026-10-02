@@ -40,3 +40,32 @@ test_that("garry_task_report refuses a non-log file, classed", {
   expect_error(garry_task_report(f), class = "garry_report_error")
   expect_error(garry_task_report(tempfile()), class = "garry_report_error")
 })
+
+test_that("garry_task_report pairs within runs, sums sweeps and survives empty logs", {
+  f <- withr::local_tempfile(fileext = ".csv")
+  rows <- c(
+    "time,event,key,pool,slot,mb,store_mb,ready",
+    "1.000,run_start,1x1,,,,,",
+    "1.100,launch,s1_c1,read,1,10,0,1.0",
+    "1.500,done,s1_c1,,,,,",
+    "1.600,rss,101,,,100,,",
+    "1.600,rss,102,,,50,,",
+    "1.700,drain_end,-,,,,,",
+    "1.800,host_end,-,,,,,",
+    "5.000,run_start,1x2,,,,,",
+    "5.100,launch,s1_c1,read,1,10,0,5.0",
+    "5.200,done,s1_c1,,,,,",
+    "5.300,drain_end,-,,,,,",
+    "5.600,host_end,-,,,,,"
+  )
+  writeLines(rows, f)
+  r <- suppressMessages(garry_task_report(f))
+  expect_identical(nrow(r$tasks), 2L) # not the 4 a cross product gives
+  expect_equal(sort(r$tasks$run_s), c(0.1, 0.4), tolerance = 1e-9)
+  expect_equal(r$drain_s, 0.3, tolerance = 1e-9) # the last run's
+  expect_equal(r$peak_rss_mb, 150)
+  empty <- withr::local_tempfile(fileext = ".csv")
+  writeLines(rows[1:2], empty)
+  e <- suppressMessages(garry_task_report(empty))
+  expect_identical(nrow(e$stages), 0L)
+})
