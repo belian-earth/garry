@@ -246,7 +246,7 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
       if (!ok) {
         cli::cli_abort(paste0(
           "input {i} is not on the same grid ",
-          "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"
+          "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align_to} it first"
         ))
       }
       if (identical(graph@nodes, x@graph@nodes)) {
@@ -301,7 +301,7 @@ lazy_stack <- function(xs, along = "t") {
       if (!grid_equal(xs[[1L]]@grid, x@grid)) {
         cli::cli_abort(paste0(
           "layer {i} is not on the same grid ",
-          "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align} it first"
+          "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align_to} it first"
         ))
       }
       if (identical(graph@nodes, x@graph@nodes)) {
