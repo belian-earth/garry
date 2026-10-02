@@ -642,6 +642,71 @@ for (op_name in c("^", "%%")) {
 # Methods
 # ---------------------------------------------------------------------------
 
+# The input a halo-consuming verb (focal_map, focal_kernel, lazy_patch)
+# should read: an integer raster is read as f32. Its stage pads beyond
+# the raster edge with NaN, which an integer upload cannot hold (it
+# zero-fills), so window cells past the edge would read as 0 instead of
+# nodata. Integer sources are re-read as f32 copies (exact up to 2^24)
+# and integer maps over them rebuilt at f32. Other consumers of the same
+# sources keep their integer reads. A QA band is untouched: masking
+# morphology runs on the decoded (float) mask, not on the integers.
+.float_halo_input <- function(x) {
+  if (.dtype_family(x@grid@dtype) == "float") {
+    return(x)
+  }
+  g <- x@graph
+  memo <- new.env(parent = emptyenv())
+  float_copy <- function(id) {
+    key <- as.character(id)
+    if (!is.null(memo[[key]])) {
+      return(memo[[key]])
+    }
+    n <- graph_get(g, id)
+    fg <- .grid_retype(n@grid, "f32")
+    out <- if (.dtype_family(n@grid@dtype) == "float") {
+      id
+    } else if (S7::S7_inherits(n, SourceNode)) {
+      p <- S7::props(n)
+      p$id <- NULL
+      p$parents <- integer(0)
+      p$grid <- fg
+      do.call(graph_add, c(list(g, SourceNode), p))
+    } else if (S7::S7_inherits(n, MapNode)) {
+      # parents first: graph_add() allocates this node's id before
+      # forcing its arguments
+      parents <- vapply(n@parents, float_copy, integer(1))
+      graph_add(g, MapNode, parents = parents, grid = fg, fn = n@fn, role = n@role)
+    } else {
+      # no float form to rebuild (a reduce, a warp of integers): cast
+      graph_add(
+        g,
+        MapNode,
+        parents = id,
+        grid = fg,
+        fn = function(v) g_cast(v, "f32")
+      )
+    }
+    memo[[key]] <- out
+    out
+  }
+  id <- float_copy(x@node_id)
+  LazyRaster(graph = g, node_id = id, grid = graph_get(g, id)@grid)
+}
+
+# A halo radius: one non-negative whole number.
+.check_radius <- function(radius, call = rlang::caller_env()) {
+  if (
+    !is.numeric(radius) || length(radius) != 1L || is.na(radius) ||
+      radius < 0 || radius != round(radius)
+  ) {
+    cli::cli_abort(
+      "{.arg radius} must be a single non-negative whole number, not {.val {radius}}.",
+      call = call
+    )
+  }
+  as.integer(radius)
+}
+
 #' Focal (stencil) op.
 #'
 #' `fn` receives a LIST of (2r+1)^2 shifted arrays, row-major over
@@ -651,7 +716,9 @@ for (op_name in c("^", "%%")) {
 #' ...). Example, a 3x3 sum: `function(sh) Reduce("+", sh)`.
 #'
 #' Cells beyond the raster edge are NaN (nodata): v1 supports only this
-#' `boundary = "nodata"` policy; reflect/wrap are not implemented.
+#' `boundary = "nodata"` policy; reflect/wrap are not implemented. An
+#' integer raster is read as f32 for the stencil, so the edge can be NaN,
+#' and the result is f32.
 #'
 #' Over a `LazyDataset`, the stencil is applied to every value band per slice;
 #' `bands` restricts which bands.
@@ -679,13 +746,15 @@ focal_map <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   }
   .assert_class(x, LazyRaster, "LazyRaster")
   boundary <- rlang::arg_match(boundary, "nodata")
+  radius <- .check_radius(radius)
+  x <- .float_halo_input(x)
   id <- graph_add(
     x@graph,
     FocalNode,
     parents = x@node_id,
     grid = x@grid,
     fn = fn,
-    radius = as.integer(radius),
+    radius = radius,
     boundary = boundary
   )
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
@@ -758,12 +827,14 @@ lazy_patch <- function(
   flops_px = 1e4
 ) {
   .assert_class(x, LazyRaster, "LazyRaster")
+  radius <- .check_radius(radius)
+  x <- .float_halo_input(x)
   node_tmp <- PatchNode(
     id = 0L,
     parents = x@node_id,
     grid = x@grid,
     fn = fn,
-    radius = as.integer(radius),
+    radius = radius,
     out_bands = as.integer(out_bands),
     dtype = dtype,
     kernel_id = as.character(kernel_id),
@@ -1080,11 +1151,13 @@ band_project <- function(weights, center = NULL) {
 #' @param x A `LazyRaster`.
 #' @param weights Square odd-sided numeric matrix, rows = dy, cols = dx.
 #' @param boundary Boundary policy; only "nodata" in v1.
-#' @return A `LazyRaster`.
+#' @return A `LazyRaster` (f32 for an integer `x`, which is read as f32
+#'   so cells beyond the raster edge can be NaN).
 #' @export
 focal_kernel <- function(x, weights, boundary = "nodata") {
   .assert_class(x, LazyRaster, "LazyRaster")
   boundary <- rlang::arg_match(boundary, "nodata")
+  x <- .float_halo_input(x)
   weights <- as.matrix(weights)
   stopifnot(nrow(weights) == ncol(weights), nrow(weights) %% 2L == 1L)
   radius <- (nrow(weights) - 1L) %/% 2L

@@ -14,7 +14,8 @@ focal_kernel(x, weights, boundary = "nodata")
 \item{boundary}{Boundary policy; only "nodata" in v1.}
 }
 \value{
-A \code{LazyRaster}.
+A \code{LazyRaster} (f32 for an integer \code{x}, which is read as f32
+so cells beyond the raster edge can be NaN).
 }
 \description{
 The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the

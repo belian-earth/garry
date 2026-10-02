@@ -32,7 +32,9 @@ plain arithmetic and the \verb{g_*} vocabulary (\code{\link[=g_ifelse]{g_ifelse(
 }
 \details{
 Cells beyond the raster edge are NaN (nodata): v1 supports only this
-\code{boundary = "nodata"} policy; reflect/wrap are not implemented.
+\code{boundary = "nodata"} policy; reflect/wrap are not implemented. An
+integer raster is read as f32 for the stencil, so the edge can be NaN,
+and the result is f32.
 
 Over a \code{LazyDataset}, the stencil is applied to every value band per slice;
 \code{bands} restricts which bands.

@@ -63,3 +63,27 @@ test_that("nan-aware focal kernel shrinks the window instead", {
   want <- want / cnt
   expect_equal(got, want, tolerance = 1e-5, ignore_attr = "gis")
 })
+
+test_that("a focal over integer data without nodata has NaN edges", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 6, 5, 1, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 50, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  ds$write(1, 0, 0, 6, 5, as.numeric(1:30))
+  ds$close()
+  x <- lazy_source(f)
+  expect_identical(x@grid@dtype, "i16")
+  for (fx in list(
+    focal_map(x, radius = 1L, fn = function(sh) Reduce(`+`, sh) / 9),
+    focal_kernel(x + 1L, matrix(1 / 9, 3, 3))
+  )) {
+    expect_identical(fx@grid@dtype, "f32")
+    r <- collect(fx)
+    expect_true(all(is.nan(r[c(1, 5), ])))
+    expect_true(all(is.nan(r[, c(1, 6)])))
+    expect_false(anyNA(r[2:4, 2:5]))
+  }
+  # other consumers of the same source still read integers
+  expect_identical((x * 2L)@grid@dtype, "i16")
+  expect_error(focal_map(x, radius = -1, fn = identity), "non-negative")
+})
