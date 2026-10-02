@@ -150,3 +150,38 @@ test_that("a named list of lazy rasters materialises in one execution, one cube 
   expect_error(materialise(list(a * 2, a + 1), dir = d), "names")
   expect_error(materialise(x, dir = d, name = "pred"), "exist|overwrite")
 })
+
+test_that("materialise keeps every band or slice of a stacked raster", {
+  x0 <- lazy_source(fixture_gradient_f32())
+  s <- lazy_stack(list(a = x0, b = x0 * 2, c = x0 * 3), along = "band")
+  m <- materialise(s, withr::local_tempdir())
+  expect_identical(dim(m), dim(s))
+  expect_identical(m@grid@labels$band, c("a", "b", "c"))
+  expect_identical(collect(m), collect(s))
+
+  t <- lazy_stack(list(d1 = x0, d2 = x0 + 1), along = "t")
+  mt <- materialise(t, withr::local_tempdir())
+  expect_identical(time_labels(mt), c("d1", "d2"))
+  expect_identical(collect(mt), collect(t))
+
+  ml <- materialise(list(p = s, q = x0 * 5), withr::local_tempdir())
+  expect_identical(collect(ml$p), collect(s))
+
+  st <- lazy_stack(list(s, s), along = "t")
+  expect_error(materialise(st, withr::local_tempdir()), "more than one outer axis")
+})
+
+test_that("materialise writes integer data as GeoTIFF and keeps its dtype", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 30, 20, 1, "UInt16", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 200, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, 30, 20, as.numeric(1:600))
+  ds$close()
+  x <- lazy_source(f)
+  dir <- withr::local_tempdir()
+  m <- materialise(x, dir)
+  expect_identical(m@grid@dtype, "u16")
+  expect_true(file.exists(file.path(dir, "garry.tif")))
+  expect_identical(collect(m), collect(x))
+})
