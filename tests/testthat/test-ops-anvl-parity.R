@@ -108,3 +108,10 @@ test_that("bitwise family matches under tracing", {
   expect_equal(got$xored, g_bitxor(qa, 43690L), tolerance = 0)
   expect_equal(got$shl, g_shiftl(g_shiftr(qa, 4L), 4L), tolerance = 0)
 })
+
+test_that("g_ifelse with two scalar branches runs traced", {
+  x <- lazy_source(fixture_gradient_f32())
+  y <- lazy_map(x, fn = function(v) g_ifelse(v > 2000, 1, 0), dtype = "f32")
+  got <- collect(y)
+  expect_equal(as.vector(got), as.numeric(as.vector(collect(x)) > 2000), ignore_attr = TRUE)
+})

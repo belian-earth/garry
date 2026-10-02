@@ -335,6 +335,13 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
 #' @export
 g_ifelse <- function(cond, yes, no) {
   if (.g_traced(cond)) {
+    if (
+      is.numeric(yes) && length(yes) == 1L &&
+        is.numeric(no) && length(no) == 1L
+    ) {
+      # both branches scalars: nothing to take a dtype from, so f32
+      yes <- anvl::nv_fill(yes, .g_shape(cond), "f32")
+    }
     if (is.numeric(yes) && length(yes) == 1L) {
       yes <- .g_scalar_like(no, yes)
     }
