@@ -61,7 +61,7 @@ test_that("reduce over unknown dims errors", {
 test_that("full pipeline grids: Source -> Map -> Focal -> Reduce", {
   a <- lazy_source_stub("x.tif")            # stub: 100x100 f32, EPSG:4326
   m <- a + 1
-  f <- focal(m, fn = function(n) mean(n), radius = 1L)
+  f <- focal_map(m, fn = function(n) mean(n), radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
 
   expect_identical(m@grid@dims, a@grid@dims)

@@ -14,7 +14,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.path = "figure/",
                       fig.width = 6, fig.height = 5, dpi = 96, error = FALSE)
 ```
 
-garry is a lazy raster engine. Verbs like `lazy_source()`, `focal()`, and
+garry is a lazy raster engine. Verbs like `lazy_source()`, `focal_map()`, and
 `reduce_over()` do not compute anything; each one adds a node to an
 intermediate representation (IR) graph, and the whole graph runs only when you
 call `collect()`. At that point garry plans the computation, splits it into
@@ -47,8 +47,8 @@ carries a one-node graph. Accessors read the grid without touching the file
 again:
 
 ```{r hood-accessors}
-res(el)
-c(xmin(el), ymin(el), xmax(el), ymax(el))
+grid_res(el)
+grid_bbox(el)
 ```
 
 ```{r hood-preview}
@@ -67,13 +67,13 @@ el_km <- el / 1000
 el_km
 ```
 
-`focal()` applies a moving-window (stencil) operation. Its `fn` receives a
+`focal_map()` applies a moving-window (stencil) operation. Its `fn` receives a
 list of the `(2r + 1)^2` shifted copies of the window, ordered row-major over
 `(dy, dx)` offsets, and processes the whole neighbourhood vectorised across
 every pixel at once. A 3x3 mean is one line:
 
 ```{r hood-smooth}
-sm <- focal(el, radius = 1L, fn = function(sh) Reduce(`+`, sh) / 9)
+sm <- focal_map(el, radius = 1L, fn = function(sh) Reduce(`+`, sh) / 9)
 ```
 
 The same convention supports real terrain analysis. For a radius-1 stencil
@@ -85,11 +85,11 @@ hillshade:
 
 ```{r hood-hillshade-def}
 hillshade <- function(elev, azimuth = 315, altitude = 45) {
-  rs  <- res(elev)
+  rs  <- unname(grid_res(elev))
   az  <- (90 - azimuth) * pi / 180
   alt <- altitude * pi / 180
   sun <- c(cos(alt) * cos(az), cos(alt) * sin(az), sin(alt))
-  focal(elev, radius = 1L, fn = function(sh) {
+  focal_map(elev, radius = 1L, fn = function(sh) {
     dzdx <- (sh[[6]] - sh[[4]]) / (2 * rs[[1]])   # east - west
     dzdy <- (sh[[2]] - sh[[8]]) / (2 * rs[[2]])   # north - south
     v <- (-dzdx * sun[[1]] - dzdy * sun[[2]] + sun[[3]]) /
@@ -109,7 +109,7 @@ into a compiled XLA kernel (execution). You never choose; garry does.
 ## The graph is the object
 
 ```{r hood-draw}
-draw(hs)
+plan_draw(hs)
 ```
 
 That is the whole mental model: `hs` *is* this pipeline, not an array. When
@@ -120,13 +120,13 @@ its body once, and run it chunk by chunk.
 
 Every `LazyRaster` is pinned to its grid, and binary operations refuse
 operands whose grids differ; there is no silent resampling. Build a coarser
-270 m grid and aggregate onto it with `align()`:
+270 m grid and aggregate onto it with `align_to()`:
 
 ```{r hood-align}
 coarse <- grid_spec(crs = "EPSG:26910",
-                    extent = c(xmin(el), ymin(el), xmax(el), ymax(el)),
+                    extent = unname(grid_bbox(el)),
                     res = 270)
-el_mean <- align(el, coarse, resampling = "average")
+el_mean <- align_to(el, coarse, resampling = "average")
 ```
 
 Mixing the two grids is an error, and the error is a feature: an analysis
@@ -143,12 +143,12 @@ differencing on the shared grid gives a local relief model: elevation
 relative to the neighbourhood mean.
 
 ```{r hood-relief}
-el_pt  <- align(el, coarse, resampling = "bilinear")
+el_pt  <- align_to(el, coarse, resampling = "bilinear")
 relief <- el_pt - el_mean
 preview(relief, main = "Local relief (m)")
 ```
 
-One v1 rule to know: `align()` applies to *sources*, not to computed
+One v1 rule to know: `align_to()` applies to *sources*, not to computed
 results (warping a computed raster raises an error suggesting the
 alternatives). Align inputs onto the analysis grid first, then compute; or
 materialise a result with `write_tif()` and re-open it.

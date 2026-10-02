@@ -23,7 +23,7 @@ test_that("map pipeline is chunk-invariant", {
 test_that("focal pipeline is chunk-invariant (halo across seams)", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
-  expr <- focal(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  expr <- focal_map(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
   whole <- .collect_with_px(expr, 1e6)
   for (px in c(17 * 23, 32 * 32)) {
@@ -32,11 +32,11 @@ test_that("focal pipeline is chunk-invariant (halo across seams)", {
   }
 })
 
-test_that("stacked focal (halo 3) is chunk-invariant", {
+test_that("stacked focal_map (halo 3) is chunk-invariant", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
   s9 <- function(sh) Reduce(`+`, sh)
-  expr <- focal(focal(a, s9, 1L), s9, 2L)
+  expr <- focal_map(focal_map(a, s9, 1L), s9, 2L)
 
   whole <- .collect_with_px(expr, 1e6)
   got <- .collect_with_px(expr, 19 * 19)

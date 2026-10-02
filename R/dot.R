@@ -8,7 +8,7 @@ NULL
 #'   accepts (a `LazyRaster`, a `LazyDataset`, or a named list of
 #'   `LazyRaster`s), which is planned first.
 #' @return A single DOT string.
-#' @seealso [plan_view()] for the interactive DAG, [draw()] for the
+#' @seealso [plan_view()] for the interactive DAG, [plan_draw()] for the
 #'   user-facing pipeline visualisation.
 #' @export
 plan_dot <- function(plan) {

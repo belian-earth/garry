@@ -22,7 +22,7 @@ test_that("focal over nodata: NaN propagates without nan-aware kernel", {
   m <- gdal_read_window(f, 1L, 0L, 0L, 70L, 50L,
                         nodata = gdal_grid_spec(f)$nodata)
   a <- lazy_source(f)
-  expr <- focal(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  expr <- focal_map(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old))
@@ -50,7 +50,7 @@ test_that("nan-aware focal kernel shrinks the window instead", {
     cnt <- Reduce(`+`, lapply(sh, function(s) g_cast(!g_is_nodata(s), "f32")))
     vals / cnt
   }
-  got <- collect(focal(a, nanmean9, 1L))
+  got <- collect(focal_map(a, nanmean9, 1L))
 
   padded <- matrix(NaN, 52, 72)
   padded[2:51, 2:71] <- m

@@ -38,15 +38,15 @@ test_that("plan_view mirrors the plan's stages and wiring", {
 test_that("plan_view subtypes compute stages by fused members", {
   skip_if_not_installed("visNetwork")
   lr <- lazy_source(fixture_gradient_f32())
-  # a focal-bearing compute stage reads as focal (hexagon)
-  nodes_f <- plan_view(plan_lazy(focal(lr * 2, radius = 1L,
+  # a focal-bearing compute stage reads as focal_map (hexagon)
+  nodes_f <- plan_view(plan_lazy(focal_map(lr * 2, radius = 1L,
                                        fn = g_mean)))$x$nodes
   expect_true(any(grepl("focal", nodes_f$label) & nodes_f$shape == "hexagon"))
 
   # a t-axis reduce fuses into the compute stage: the stage reads as the
   # reduce (triangle) and the label carries the op and full composition
   p <- plan_lazy(reduce_over(
-    lazy_stack(list(focal(lr * 2, radius = 1L, fn = g_mean), lr + 1)),
+    lazy_stack(list(focal_map(lr * 2, radius = 1L, fn = g_mean), lr + 1)),
     "median", "t", nan_rm = TRUE
   ))
   nodes <- plan_view(p)$x$nodes
@@ -59,7 +59,7 @@ test_that("plan_view subtypes compute stages by fused members", {
 
   # a spatial reduce is a barrier: partial/combine stages carry the
   # reducer name
-  p2 <- plan_lazy(reduce_over(focal(lr + 1, radius = 1L, fn = g_mean),
+  p2 <- plan_lazy(reduce_over(focal_map(lr + 1, radius = 1L, fn = g_mean),
                               "mean", c("x", "y")))
   nodes2 <- plan_view(p2)$x$nodes
   expect_true(any(grepl("reduce·mean", nodes2$label)))
@@ -128,7 +128,7 @@ test_that("tooltips carry op parameters and dataset provenance", {
 
   # op parameters from member nodes
   nodes <- plan_view(reduce_over(
-    lazy_stack(list(focal(lr, radius = 2L, fn = g_mean), lr + 1)),
+    lazy_stack(list(focal_map(lr, radius = 2L, fn = g_mean), lr + 1)),
     "median", "t", nan_rm = TRUE
   ))$x$nodes
   expect_true(any(grepl("focal: radius 2", nodes$title)))
@@ -148,20 +148,20 @@ test_that("tooltips carry op parameters and dataset provenance", {
   expect_true(any(grepl("band: W · 2023-01-15", nodes2$title)))
 })
 
-test_that("mask() maps are tagged and read as mask in the plan", {
+test_that("apply_mask() maps are tagged and read as mask in the plan", {
   skip_if_not_installed("visNetwork")
   f <- fixture_gradient_f32()
   G <- graph_new()
   v <- lazy_source(f, graph = G)
   q <- lazy_source(f, graph = G)
   ds <- as_dataset(list(V = v, Q = q), mask_asset = "Q") |>
-    mask(where = c(101, 102))
+    apply_mask(where = c(101, 102))
   # the tagged maps classify as mask, and a mask-led stage takes the
   # mask identity (crimson circle)
   nodes <- plan_view(ds)$x$nodes
   expect_true(any(grepl("mask", nodes$label)))
   expect_true(any(nodes$shape == "circle"))
-  # draw()'s vocabulary sees the same role
+  # plan_draw()'s vocabulary sees the same role
   masked_tail <- ds@bands$V[[1L]]@node_id
   expect_identical(garry:::.node_kind(graph_get(ds@graph, masked_tail)),
                    "mask")

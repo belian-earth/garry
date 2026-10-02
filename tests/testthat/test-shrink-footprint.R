@@ -12,7 +12,7 @@ test_that("shrink_footprint erodes nodata boundaries by the radius", {
   lz <- lazy_map(a, dtype = "f32",
                  fn = function(x) g_ifelse(x <= thr, NaN, x))
 
-  # oracle reference: dilate the NaN mask (incl. border) by r = 1
+  # oracle reference: dilate the NaN apply_mask (incl. border) by r = 1
   ref <- m; ref[m <= thr] <- NaN
   bad <- !is.finite(ref)
   n <- nrow(ref); c <- ncol(ref)

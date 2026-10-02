@@ -4,7 +4,7 @@
 \alias{FocalNode}
 \title{Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is one
 of "constant", "reflect", "nearest", "wrap", "none". Created by
-\code{\link[=focal]{focal()}}.}
+\code{\link[=focal_map]{focal_map()}}.}
 \usage{
 FocalNode(
   id = integer(0),
@@ -24,9 +24,9 @@ FocalNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=apply_mask]{apply_mask()}}).
 Pure metadata: never read by the planner or executors; surfaced by
-\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
+\code{\link[=plan_draw]{plan_draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{fn}{Neighbourhood function (over the list of shifted arrays).}
 
@@ -44,5 +44,5 @@ A \code{FocalNode}.
 \description{
 Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is one
 of "constant", "reflect", "nearest", "wrap", "none". Created by
-\code{\link[=focal]{focal()}}.
+\code{\link[=focal_map]{focal_map()}}.
 }

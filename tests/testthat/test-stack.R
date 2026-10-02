@@ -76,7 +76,7 @@ test_that("stack fuses with the temporal reduce into one compute stage", {
 })
 
 test_that("masked median composite matches the R reference", {
-  # The benchmark shape in miniature: per-layer mask (threshold plays the
+  # The benchmark shape in miniature: per-layer apply_mask (threshold plays the
   # role of an Fmask decode) -> stack -> nan_rm median.
   paths <- .stack_fixtures()
   layers <- .read_layers(paths)

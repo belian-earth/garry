@@ -54,7 +54,7 @@ test_that("grid_from_src on a raster keeps its native CRS at the given res", {
 
   g <- grid_from_src(f, res = 30)                         # coarsen in place
   expect_true(crs_equal(g@crs, "EPSG:32736"))             # native CRS, not LAEA
-  expect_equal(unname(res(g)), c(30, 30))
+  expect_equal(unname(grid_res(g)), c(30, 30))
   # native extent (5120 m span) snapped out to whole 30 m multiples; dims match
   expect_equal(g@extent[1], 510000)
   expect_equal(g@extent[3], 510000 + ceiling(5120 / 30) * 30)

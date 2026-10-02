@@ -50,7 +50,7 @@ band names, slice dates, and the \code{mask_asset} into the rebuilt
 dataset; ragged bands (a band missing some slices) survive. A
 \code{LazyRaster} writes one cube and reopens it. A computed raster
 cannot be warped directly, so materialise-then-rewarp is the
-supported route: \code{align(materialise(x, dir), grid)}.
+supported route: \code{align_to(materialise(x, dir), grid)}.
 
 Files land at \verb{dir/name-<slice>.vrt} (dataset) or \code{dir/name.vrt}
 (raster). Existing files are refused unless \code{overwrite = TRUE}:

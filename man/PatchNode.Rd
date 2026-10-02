@@ -25,9 +25,9 @@ PatchNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=apply_mask]{apply_mask()}}).
 Pure metadata: never read by the planner or executors; surfaced by
-\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
+\code{\link[=plan_draw]{plan_draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{fn}{The model body \code{fn(xpad)}.}
 
@@ -49,7 +49,7 @@ A \code{PatchNode}.
 }
 \description{
 Created by \code{\link[=lazy_patch]{lazy_patch()}}. The stencil shape for kernels whose spatial context is far beyond a
-shift-list focal (CNN inference, e.g. OmniCloudMask): \code{fn(xpad)}
+shift-list focal_map (CNN inference, e.g. OmniCloudMask): \code{fn(xpad)}
 receives the parent's value carrying at least \code{radius} halo cells per
 side (a \verb{(C, H, W)} cube, traced or plain) and returns a
 SIZE-PRESERVING result on the same spatial dims, deriving every size

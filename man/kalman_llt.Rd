@@ -13,7 +13,7 @@ kalman_llt(
   robust_threshold = 3,
   robust_inflation = 100,
   kappa = 1e+07,
-  out_dtype = "f32"
+  dtype = "f32"
 )
 }
 \arguments{
@@ -35,7 +35,7 @@ innovation exceeds \code{robust_threshold} MADs by \code{robust_inflation}.}
 
 \item{kappa}{Diffuse-initialisation variance.}
 
-\item{out_dtype}{Output dtype the body casts to (align with
+\item{dtype}{Output dtype the body casts to (align with
 \code{scan_over(dtype = )}; default \code{"f32"}).}
 }
 \value{

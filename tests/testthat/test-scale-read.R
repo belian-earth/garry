@@ -104,7 +104,7 @@ test_that("scaled reads are identical across host and scheduler routes", {
               s2 = sl(gB, "s2", scaleB, offsetB)),
     Q  = list(s1 = .gg_slice(gQ, "s1", g), s2 = .gg_slice(gQ, "s2", g))
   ), mask_asset = "Q")
-  reduce_over(mask(ds, where = c(2)), "median", "t", nan_rm = TRUE)
+  reduce_over(apply_mask(ds, where = c(2)), "median", "t", nan_rm = TRUE)
 }
 
 test_that("composite_direct applies the read affine on the cube path", {

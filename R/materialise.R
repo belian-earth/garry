@@ -32,7 +32,7 @@ NULL
 #' dataset; ragged bands (a band missing some slices) survive. A
 #' `LazyRaster` writes one cube and reopens it. A computed raster
 #' cannot be warped directly, so materialise-then-rewarp is the
-#' supported route: `align(materialise(x, dir), grid)`.
+#' supported route: `align_to(materialise(x, dir), grid)`.
 #'
 #' Files land at `dir/name-<slice>.vrt` (dataset) or `dir/name.vrt`
 #' (raster). Existing files are refused unless `overwrite = TRUE`:

@@ -25,7 +25,7 @@ test_that("golden: two-source NDVI fuses into one compute stage", {
 
 test_that("golden: source -> map -> focal -> reduce(mean over x,y)", {
   a <- lazy_source_stub("x.tif")
-  f <- focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  f <- focal_map(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
   p <- collect(r, plan_only = TRUE)
 
@@ -54,7 +54,7 @@ test_that("golden: align -> map produces a warp barrier stage", {
   a <- lazy_source_stub("x.tif")
   target <- grid_spec("EPSG:4326", extent = c(0, -100, 100, 0),
                       dims = c(50L, 50L))
-  m <- align(a, target) * 2
+  m <- align_to(a, target) * 2
   p <- collect(m, plan_only = TRUE)
 
   expect_identical(.stage_sig(p), list(

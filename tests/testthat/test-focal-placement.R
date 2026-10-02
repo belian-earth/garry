@@ -4,19 +4,19 @@
 test_that("focal after a reduce barrier raises the structured error", {
   a <- lazy_source_stub("x.tif")
   r <- reduce_over(a, "mean", c("x", "y"))
-  f <- focal(r, fn = function(sh) Reduce(`+`, sh), radius = 1L)
+  f <- focal_map(r, fn = function(sh) Reduce(`+`, sh), radius = 1L)
   expect_error(collect(f, plan_only = TRUE),
                class = "garry_focal_placement_error")
 })
 
 test_that("focal directly on a source or warp is allowed", {
   a <- lazy_source_stub("x.tif")
-  f <- focal(a, fn = function(sh) Reduce(`+`, sh), radius = 1L)
+  f <- focal_map(a, fn = function(sh) Reduce(`+`, sh), radius = 1L)
   expect_no_error(collect(f, plan_only = TRUE))
 
   target <- grid_spec("EPSG:4326", extent = c(0, -100, 100, 0),
                       dims = c(50L, 50L))
-  fw <- focal(align(a, target), fn = function(sh) Reduce(`+`, sh),
+  fw <- focal_map(align_to(a, target), fn = function(sh) Reduce(`+`, sh),
               radius = 1L)
   expect_no_error(collect(fw, plan_only = TRUE))
 })

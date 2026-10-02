@@ -651,7 +651,7 @@ NULL
   info <- .gd_warp_sources(plan, spec$grid, tmp)
   masked <- length(spec$fmask_srcs) > 0L
   # COMPUTE: one lean whole-grid kernel in this process (a single band, or
-  # gd_parallel off). The mask (incl. morphology focals) is replayed ONCE on the
+  # gd_parallel off). The apply_mask (incl. morphology focals) is replayed ONCE on the
   # whole fmask cube, vectorised over time, and shared across bands.
   tcomp <- system.time({
     dev <- .exec_device(spec$device)

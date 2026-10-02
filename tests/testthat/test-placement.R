@@ -16,7 +16,7 @@ test_that("single-band source-fed chain fuses with a full spec", {
   # benchmark-mini shape (as test-compute-on-read): qa source -> mask
   # map+focal chain, consumed by two band medians.
   qa <- lazy_source(f)
-  mask <- focal(
+  mask <- focal_map(
     lazy_map(qa, dtype = "f32",
              fn = function(x) g_cast(x > 0.5, "f32")),
     radius = 1L, fn = function(sh) Reduce(`*`, sh))

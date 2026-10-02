@@ -24,12 +24,12 @@ test_that("distributed == single-threaded across pipeline shapes", {
     }),
     focal    = local({
       a <- lazy_source(f)
-      focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+      focal_map(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
     }),
     stacked  = local({
       a <- lazy_source(f)
       s9 <- function(sh) Reduce(`+`, sh)
-      focal(focal(a, s9, 1L), s9, 2L)
+      focal_map(focal_map(a, s9, 1L), s9, 2L)
     }),
     reduce   = local({
       a <- lazy_source(fi)
@@ -96,7 +96,7 @@ test_that("distributed warp pipeline and write sink match", {
   target <- grid_spec("EPSG:4326", extent = b, dims = c(61L, 43L))
 
   a <- lazy_source(f)
-  expr <- align(a, target) * 2
+  expr <- align_to(a, target) * 2
   p <- plan_lazy(expr)
   single <- execute_plan(p)
   dist <- execute_plan_mirai(p)

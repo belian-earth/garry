@@ -61,6 +61,6 @@ resolution so it fetches only what the preview shows (grid-pinned sources
 only; otherwise it collects at full resolution and decimates).
 }
 \seealso{
-\code{\link[=draw]{draw()}}, which plots the pipeline rather than the data;
+\code{\link[=plan_draw]{plan_draw()}}, which plots the pipeline rather than the data;
 \code{\link[=collect]{collect()}} to execute at full resolution.
 }

@@ -25,7 +25,7 @@ one-hop neighbourhood, use the dropdowns to jump to a function or
 filter a subsystem, and scroll to zoom.
 
 Two things are worth reading directly off this graph. First, the
-lazy-verb layer (`lazy_map()`, `focal()`, `reduce_over()`, and
+lazy-verb layer (`lazy_map()`, `focal_map()`, `reduce_over()`, and
 friends) reaches neither backend: building a pipeline touches no data
 and compiles nothing. Second, everything that does reach anvl or GDAL
 funnels through the execution verbs (`collect()`, `materialise()`,
@@ -66,7 +66,7 @@ subsystems:
   and materialisation.
 - **Models & kernels**: OmniCloudMask, the Kalman and Hampel
   smoothers, band projection, and dequantisers.
-- **Viz & UX**: `draw()`, `preview()`, and task reports.
+- **Viz & UX**: `plan_draw()`, `preview()`, and task reports.
 
 ## Regenerating
 

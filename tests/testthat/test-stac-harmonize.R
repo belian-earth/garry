@@ -93,7 +93,7 @@ test_that("harmonised HLS-style collections build a ragged dataset that composit
   expect_length(ds@bands$N2, 2L)
   expect_length(ds@bands$N, 2L)
 
-  comp <- collect(reduce_over(mask(ds, where = qa_bits(0)), "median", "t"))
+  comp <- collect(reduce_over(apply_mask(ds, where = qa_bits(0)), "median", "t"))
   # QA is 0 (clear), so each band's composite is the median over ITS OWN slices.
   # Value bands, in requested order: R (1), N2 (2), N (3).
   expect_equal(unname(comp[1, 1, 1]), 151.5, tolerance = 1e-4)   # R: 101,102,201,202

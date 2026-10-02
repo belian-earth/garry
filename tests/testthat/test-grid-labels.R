@@ -129,7 +129,7 @@ test_that("mask join='inner' pairs shared slices; 'exact' aborts prescriptively"
     V = list(s1 = src() * 1, s2 = src() * 2, s3 = src() * 3),
     Q = list(s1 = src(), s2 = src() + 1)
   ), mask_asset = "Q")
-  expect_error(mask(ds, where = c(2)), "do not align")
-  masked <- suppressMessages(mask(ds, where = c(2), join = "inner"))
+  expect_error(apply_mask(ds, where = c(2)), "do not align")
+  masked <- suppressMessages(apply_mask(ds, where = c(2), join = "inner"))
   expect_identical(names(masked@bands$V), c("s1", "s2"))
 })

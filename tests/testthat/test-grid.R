@@ -16,14 +16,14 @@ test_that("grid_spec derives dims from res and snaps the extent", {
   g <- grid_spec("EPSG:32736", extent = c(510000, 8540000, 525360, 8555360),
                  res = 30)
   expect_equal(unname(g@dims), c(512L, 512L))
-  expect_equal(unname(res(g)), c(30, 30))
+  expect_equal(unname(grid_res(g)), c(30, 30))
   expect_equal(g@extent, c(510000, 8540000, 525360, 8555360))
 
   # non-exact: 1000 / 30 = 33.3 -> 33 whole pixels, extent snapped to the
   # top-left anchor (990 x 990 wide, ymin lifted, xmax pulled in)
   g2 <- grid_spec("EPSG:3857", extent = c(0, 0, 1000, 1000), res = 30)
   expect_equal(unname(g2@dims), c(33L, 33L))
-  expect_equal(unname(res(g2)), c(30, 30))
+  expect_equal(unname(grid_res(g2)), c(30, 30))
   expect_equal(g2@extent, c(0, 10, 990, 1000))
 
   # dims and res are mutually exclusive; exactly one is required
@@ -67,9 +67,9 @@ test_that("halo padding clips at edges", {
 test_that("grid accessors forward from LazyRaster to its grid", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
-  expect_identical(res(a),  res(a@grid))
-  expect_identical(xmin(a), xmin(a@grid))
-  expect_identical(ymin(a), ymin(a@grid))
-  expect_identical(xmax(a), xmax(a@grid))
-  expect_identical(ymax(a), ymax(a@grid))
+  expect_identical(unname(grid_res(a)),  unname(grid_res(a@grid)))
+  expect_identical(grid_bbox(a)[["xmin"]], grid_bbox(a@grid)[["xmin"]])
+  expect_identical(grid_bbox(a)[["ymin"]], grid_bbox(a@grid)[["ymin"]])
+  expect_identical(grid_bbox(a)[["xmax"]], grid_bbox(a@grid)[["xmax"]])
+  expect_identical(grid_bbox(a)[["ymax"]], grid_bbox(a@grid)[["ymax"]])
 })

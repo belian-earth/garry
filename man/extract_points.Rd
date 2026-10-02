@@ -4,10 +4,10 @@
 \alias{extract_points}
 \title{Extract raster values at points.}
 \usage{
-extract_points(raster, xy, bands = NULL, interp = NULL, ...)
+extract_points(x, xy, bands = NULL, interp = NULL, ...)
 }
 \arguments{
-\item{raster}{A \code{LazyRaster}, \code{LazyDataset}, raster path, or
+\item{x}{A \code{LazyRaster}, \code{LazyDataset}, raster path, or
 \code{GDALRaster} object.}
 
 \item{xy}{Points: a \code{\link[wk:xy]{wk::xy()}} vector (its CRS supplies \code{xy_srs}), or a

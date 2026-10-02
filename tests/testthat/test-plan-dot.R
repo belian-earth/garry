@@ -2,7 +2,7 @@
 
 test_that("plan_dot renders the focal/reduce pipeline", {
   a <- lazy_source_stub("x.tif")
-  f <- focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  f <- focal_map(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
   p <- collect(r, plan_only = TRUE)
   expect_snapshot(cat(plan_dot(p)))

@@ -22,7 +22,7 @@ NULL
 #
 # Hard boundaries (documented, structurally rejected):
 # - Warp on the tape: GDAL resampling is outside the tape (D15).
-# - focal() with an arbitrary fn: not differentiable; use focal_kernel().
+# - focal_map() with an arbitrary fn: not differentiable; use focal_kernel().
 # - Non-algebraic or min/max losses: sum and mean only in v1.
 # ---------------------------------------------------------------------------
 
@@ -119,7 +119,7 @@ NULL
     .garry_error(
       paste0(
         "the loss pipeline contains a warp: GDAL resampling is outside ",
-        "the gradient tape (D15). align() inputs, materialise, then fit."
+        "the gradient tape (D15). align_to() inputs, materialise, then fit."
       ),
       "garry_grad_unsupported_error"
     )
@@ -157,7 +157,7 @@ NULL
     if (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L) {
       .garry_error(
         paste0(
-          "focal() with an arbitrary fn is not differentiable; ",
+          "focal_map() with an arbitrary fn is not differentiable; ",
           "use focal_kernel()"
         ),
         "garry_grad_unsupported_error"

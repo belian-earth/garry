@@ -67,6 +67,6 @@
     V2 = list(s1 = .gg_slice(gB, "s1", g), s2 = .gg_slice(gB, "s2", g)),
     Q  = list(s1 = .gg_slice(gQ, "s1", g), s2 = .gg_slice(gQ, "s2", g))
   ), mask_asset = "Q")
-  reduce_over(mask(ds, where = c(2), open = open, dilate = dilate),
+  reduce_over(apply_mask(ds, where = c(2), open = open, dilate = dilate),
               "median", "t", nan_rm = TRUE)
 }

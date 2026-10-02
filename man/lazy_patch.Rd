@@ -37,7 +37,7 @@ A \code{LazyRaster} on the spatial grid (plus \code{out_bands} bands).
 }
 \description{
 The escape hatch behind model-inference verbs such as \code{\link[=ocm_mask]{ocm_mask()}}:
-where \code{\link[=focal]{focal()}} materialises a shift list (unusable beyond small
+where \code{\link[=focal_map]{focal_map()}} materialises a shift list (unusable beyond small
 radii), a patch op hands \code{fn} the raw window carrying \code{radius} halo
 cells per side and crops the contaminated ring off the result. \code{fn}
 must be size-preserving on the last two (spatial) dims, derive every

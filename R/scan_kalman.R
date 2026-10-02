@@ -82,7 +82,7 @@
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
 #' @param robust_threshold,robust_inflation Robust loop constants.
 #' @param kappa Diffuse-initialisation variance.
-#' @param out_dtype Output dtype the body casts to (align with
+#' @param dtype Output dtype the body casts to (align with
 #'   `scan_over(dtype = )`; default `"f32"`).
 #' @return A scan body `fn(xs, margin)` for [scan_over()].
 #' @seealso [kalman_smooth()], [scan_over()], [g_scan()]
@@ -96,7 +96,7 @@ kalman_llt <- function(
   robust_threshold = 3,
   robust_inflation = 100,
   kappa = 1e7,
-  out_dtype = "f32"
+  dtype = "f32"
 ) {
   output <- match.arg(output)
   for (v in list(sigma_lvl, sigma_slp, sigma_obs, kappa)) {
@@ -121,9 +121,9 @@ kalman_llt <- function(
       )
     }
   }
-  if (!dtype_valid(out_dtype)) {
+  if (!dtype_valid(dtype)) {
     cli::cli_abort(
-      "{.arg out_dtype} must be a valid dtype; got {.val {out_dtype}}"
+      "{.arg dtype} must be a valid dtype; got {.val {dtype}}"
     )
   }
 
@@ -377,7 +377,7 @@ kalman_llt <- function(
       }
     }
 
-    g_cast(sm[[output]], out_dtype)
+    g_cast(sm[[output]], dtype)
   }
 }
 
@@ -430,7 +430,7 @@ kalman_smooth <- function(
           sigma_slp,
           sigma_obs,
           output = o,
-          out_dtype = dtype,
+          dtype = dtype,
           ...
         ),
         over = "t",

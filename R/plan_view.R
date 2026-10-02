@@ -57,7 +57,7 @@ NULL
 }
 
 # Stage visual vocabulary. Compute stages are subtyped by the IR nodes
-# fused into them (same classification as draw()); hues stay within the
+# fused into them (same classification as plan_draw()); hues stay within the
 # 5 validated families (all-pairs on white, dataviz six-checks) and
 # shape + label disambiguate within a family, so colour is never the
 # only encoding.
@@ -358,7 +358,7 @@ NULL
 #' Stages are labelled by what they compute, not just their scheduler
 #' kind: a compute stage is classified by the IR nodes fused into it
 #' (`focal`, `scan`, `patch`, `stack`, `map`, most informative first,
-#' the same vocabulary as [draw()]), and reduce stages carry their
+#' the same vocabulary as [plan_draw()]), and reduce stages carry their
 #' reducer (`reduce\u00b7median`). When a `LazyDataset` is passed, derived
 #' bands (`ds[["ndvi"]] <- ...`) are recovered from the dataset's step
 #' record and the stage computing one is labelled with the band name
@@ -389,11 +389,11 @@ NULL
 #'   times the widest level's node count; lower it to compress.
 #' @param height,width Widget size, as CSS units.
 #' @return A `visNetwork` htmlwidget.
-#' @seealso [plan_dot()] for DOT text, [draw()] for pixels.
+#' @seealso [plan_dot()] for DOT text, [plan_draw()] for pixels.
 #' @examples
 #' \dontrun{
 #' lr <- lazy_source("cube.tif")
-#' plan_view(focal(lr * 2, radius = 1L, fn = g_mean))
+#' plan_view(focal_map(lr * 2, radius = 1L, fn = g_mean))
 #' }
 #' @export
 plan_view <- function(x, level_separation = NULL, node_spacing = 90,

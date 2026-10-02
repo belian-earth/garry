@@ -559,7 +559,7 @@ stac_time_slices <- function(
 #'
 #' After renaming, [stac_merge()] concatenates the collections into one table.
 #' A band a collection lacks needs no placeholder: [lazy_dataset()] gives each
-#' band only the slices that carry it, and [mask()] pairs those slices with the
+#' band only the slices that carry it, and [apply_mask()] pairs those slices with the
 #' QA band by name (a Landsat-only thermal band masks against the Landsat Fmask
 #' slices), so ragged bands reduce over exactly their own observations.
 #'

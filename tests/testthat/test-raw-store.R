@@ -48,7 +48,7 @@ test_that("distributed raw f32 store == single-threaded oracle", {
     map    = local({ a <- lazy_source(f); a * 2 + 1 }),
     focal  = local({
       a <- lazy_source(f)
-      focal(a, radius = 1L, fn = function(sh) Reduce(`+`, sh))
+      focal_map(a, radius = 1L, fn = function(sh) Reduce(`+`, sh))
     }),
     median = local({
       a <- lazy_source(f); b <- lazy_source(f)

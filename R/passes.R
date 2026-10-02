@@ -910,7 +910,7 @@ plan_lazy <- function(x) {
       if (!S7::S7_inherits(graph_get(graph, pin), SourceNode)) {
         .garry_error(
           paste0(
-            "warping a computed raster is not supported in v1: align() ",
+            "warping a computed raster is not supported in v1: align_to() ",
             "sources before computing on them, or materialise to disk ",
             "first (write_tif() / materialise())."
           ),

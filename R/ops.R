@@ -964,7 +964,7 @@ g_count <- function(x, dims = NULL) {
 #' @param a,b Integral arrays (or scalar `b`); recycled like base R.
 #' @param n Shift amount in bits.
 #' @return Integral array shaped like `a`.
-#' @seealso [qa_bits()] and [mask()] for the QA-masking verbs built on
+#' @seealso [qa_bits()] and [apply_mask()] for the QA-masking verbs built on
 #'   these ops.
 #' @name g-bitwise
 NULL

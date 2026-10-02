@@ -100,7 +100,7 @@ test_that("patch: distributed == single-threaded", {
 
 test_that("draw renders and gradients refuse", {
   lr <- .toy_patch()
-  expect_output(draw(lr), "patch")
+  expect_output(plan_draw(lr), "patch")
   ln <- lazy_source(fixture_gradient_f32())
   expect_error(
     lazy_value_and_grad(

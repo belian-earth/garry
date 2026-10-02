@@ -42,7 +42,7 @@ NULL
 #' `xy_srs` and GDAL reprojects as needed; a matrix or data frame behaves
 #' exactly as in gdalraster.
 #'
-#' @param raster A `LazyRaster`, `LazyDataset`, raster path, or
+#' @param x A `LazyRaster`, `LazyDataset`, raster path, or
 #'   `GDALRaster` object.
 #' @param xy Points: a [wk::xy()] vector (its CRS supplies `xy_srs`), or a
 #'   two-column matrix/data frame as gdalraster expects.
@@ -62,27 +62,27 @@ NULL
 #' extract_points("composite.tif", pts)   # a path works too
 #' }
 #' @export
-extract_points <- function(raster, xy, bands = NULL, interp = NULL, ...) {
-  if (S7::S7_inherits(raster, LazyDatasetGroups)) {
+extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
     cli::cli_abort(c(
       "{.fn extract_points} does not take a grouped dataset.",
       "i" = "Extract from each group, or {.fn reduce_over} the groups first."
     ))
   }
-  lazy <- S7::S7_inherits(raster, LazyRaster) ||
-    S7::S7_inherits(raster, LazyDataset)
+  lazy <- S7::S7_inherits(x, LazyRaster) ||
+    S7::S7_inherits(x, LazyDataset)
   pt <- .px_points(xy)
   args <- list(xy = pt$xy, bands = bands, interp = interp, ...)
   if (!is.null(pt$srs) && is.null(args$xy_srs)) {
     args$xy_srs <- pt$srs
   }
   if (!lazy) {
-    return(do.call(gdal_pixel_extract, c(list(raster), args)))
+    return(do.call(gdal_pixel_extract, c(list(x), args)))
   }
-  src <- .px_local_sources(raster)
+  src <- .px_local_sources(x)
   if (is.null(src)) {
     cli::cli_abort(c(
-      "{.arg raster} is a lazy pipeline with no pixels to read.",
+      "{.arg x} is a lazy pipeline with no pixels to read.",
       "i" = "Materialise it first: {.code cube <- materialise(x)}, then extract from {.code cube}.",
       "i" = "Extraction reads only the blocks holding points, so it needs the cube on disk -- and you almost always want to keep it."
     ))

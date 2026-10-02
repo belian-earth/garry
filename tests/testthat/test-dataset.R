@@ -53,11 +53,11 @@ test_that("collect on a single-band dataset returns a matrix", {
   expect_equal(dim(out), c(40L, 60L))
 })
 
-test_that("mask(qa_bits) equals a manual bitmask + apply", {
+test_that("apply_mask(qa_bits) equals a manual bitmask + apply", {
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
 
-  masked <- mask(ds, where = qa_bits(0:1))
+  masked <- apply_mask(ds, where = qa_bits(0:1))
   expect_false("Q" %in% names(masked@bands))            # QA dropped
   got <- collect(reduce_over(masked, "median", "t"))
 
@@ -77,14 +77,14 @@ test_that("mask(qa_bits) equals a manual bitmask + apply", {
   expect_equal(got[, , 1], manual, tolerance = 1e-6, ignore_attr = "gis")
 })
 
-test_that("mask(value set) flags category membership", {
+test_that("apply_mask(value set) flags category membership", {
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
 
   # values are r*100+c; mask the exact set of QA values present in slice s1 of Q
   # (Q s1 == the raw fixture). Pick a handful of concrete values.
   vals <- c(101, 202, 303)
-  got <- collect(reduce_over(mask(ds, where = vals), "median", "t"))
+  got <- collect(reduce_over(apply_mask(ds, where = vals), "median", "t"))
 
   g <- graph_new()
   s <- function() lazy_source(f, graph = g)
@@ -104,13 +104,13 @@ test_that("mask(value set) flags category membership", {
 test_that("mask morphology (open + dilate) matches a manual erode/dilate chain", {
   f <- fixture_gradient_f32()
   ds <- ds_fixture(f)
-  got <- collect(reduce_over(mask(ds, where = qa_bits(0:1), open = 2, dilate = 3),
+  got <- collect(reduce_over(apply_mask(ds, where = qa_bits(0:1), open = 2, dilate = 3),
                              "median", "t"))
 
   disk <- function(r) { o <- expand.grid(dx = -r:r, dy = -r:r); which(o$dx^2 + o$dy^2 <= r^2) }
-  ero  <- function(x, r) { sel <- disk(r); focal(x, radius = as.integer(r),
+  ero  <- function(x, r) { sel <- disk(r); focal_map(x, radius = as.integer(r),
                                                  fn = function(sh) Reduce(`*`, sh[sel])) }
-  dil  <- function(x, r) { sel <- disk(r); focal(x, radius = as.integer(r),
+  dil  <- function(x, r) { sel <- disk(r); focal_map(x, radius = as.integer(r),
                                                  fn = function(sh) 1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))) }
   g <- graph_new()
   s <- function() lazy_source(f, graph = g)
@@ -209,7 +209,7 @@ test_that("lazy_dataset builds from a STAC table and masks end to end (offline)"
   expect_length(ds@bands$V, 3L)                          # three day slices
   expect_named(ds@bands$V, c("2023-01-05", "2023-01-15", "2023-02-05"))
 
-  got <- collect(reduce_over(mask(ds, where = qa_bits(0:1)), "median", "t"))
+  got <- collect(reduce_over(apply_mask(ds, where = qa_bits(0:1)), "median", "t"))
 
   # plain-R reference: bad = (int(Q) & 3) > 0 -> NaN, then median over slices
   rd <- function(f) gdal_read_window(f, 1L, 0L, 0L, 20L, 16L)
@@ -342,7 +342,7 @@ test_that("distributed masked composite equals the oracle", {
   on.exit(options(old), add = TRUE)
 
   f <- fixture_gradient_f32()
-  build <- function() reduce_over(mask(ds_fixture(f), where = qa_bits(0:1), dilate = 2),
+  build <- function() reduce_over(apply_mask(ds_fixture(f), where = qa_bits(0:1), dilate = 2),
                                   "median", "t")
   expect_equal(collect(build(), distributed = TRUE),
                collect(build(), distributed = FALSE),

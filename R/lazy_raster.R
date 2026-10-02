@@ -42,13 +42,6 @@ LazyRaster <- S7::new_class(
   }
 }
 
-# Grid accessors forward to the cached GridSpec (generics in grid.R).
-S7::method(xmin, LazyRaster) <- function(x) xmin(x@grid)
-S7::method(ymin, LazyRaster) <- function(x) ymin(x@grid)
-S7::method(xmax, LazyRaster) <- function(x) xmax(x@grid)
-S7::method(ymax, LazyRaster) <- function(x) ymax(x@grid)
-S7::method(res, LazyRaster) <- function(x) res(x@grid)
-
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -206,7 +199,7 @@ lazy_source <- function(
 #' array; it runs fused with adjacent operations in one compiled
 #' kernel. Write it with plain arithmetic and the `g_*` vocabulary
 #' ([g_ifelse()], [g_bitand()], [g_cast()], ...). Inputs must share a
-#' grid ([align()] first otherwise); rasters on different graphs merge
+#' grid ([align_to()] first otherwise); rasters on different graphs merge
 #' automatically.
 #'
 #' The output dtype defaults to the promoted input dtype; pass
@@ -281,7 +274,7 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
 
 #' Stack aligned rasters along a new outer dim (default time).
 #'
-#' All layers must share the spatial grid ([align()] first otherwise);
+#' All layers must share the spatial grid ([align_to()] first otherwise);
 #' dtypes promote to a common type. Chunks carry the stack as
 #' (t, y, x) arrays; temporal reductions
 #' (`reduce_over(x, "median", "t")`) then run chunk-locally.
@@ -434,7 +427,7 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   if (!grid_equal(a@grid, b@grid)) {
     cli::cli_abort(paste0(
       "grids differ ({grid_diff(a@grid, b@grid)}); ",
-      "use {.code align(a, b, to = ...)} first"
+      "put one operand on the other's grid with {.code align_to(b, to = a)} first"
     ))
   }
   graph <- a@graph
@@ -641,7 +634,7 @@ for (op_name in c("^", "%%")) {
 #'   when given one.
 #' @seealso [focal_kernel()], [bilateral_focal()], [shrink_footprint()]
 #' @export
-focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
+focal_map <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset)) {
     return(.ds_focal(
       x,
@@ -674,7 +667,7 @@ focal <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
 #' radiometry just inside their data footprint that QA masks miss, and
 #' on a `(t, y, x)` stack each slice's footprint erodes independently.
 #'
-#' Implemented as a [focal()] kernel (centre plus zero times the window
+#' Implemented as a [focal_map()] kernel (centre plus zero times the window
 #' sum, which is NaN wherever any neighbour is NaN), so it plans and
 #' fuses like any stencil, and applies per band over a `LazyDataset`.
 #'
@@ -689,7 +682,7 @@ shrink_footprint <- function(x, radius = 1L, bands = NULL) {
   if (length(radius) != 1L || is.na(radius) || radius < 1L) {
     cli::cli_abort("{.arg radius} must be a positive integer")
   }
-  focal(x, radius = radius, bands = bands, fn = function(sh) {
+  focal_map(x, radius = radius, bands = bands, fn = function(sh) {
     sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh)
   })
 }
@@ -697,7 +690,7 @@ shrink_footprint <- function(x, radius = 1L, bands = NULL) {
 #' Whole-window model op (advanced): apply `fn` to the raw padded chunk.
 #'
 #' The escape hatch behind model-inference verbs such as [ocm_mask()]:
-#' where [focal()] materialises a shift list (unusable beyond small
+#' where [focal_map()] materialises a shift list (unusable beyond small
 #' radii), a patch op hands `fn` the raw window carrying `radius` halo
 #' cells per side and crops the contaminated ring off the result. `fn`
 #' must be size-preserving on the last two (spatial) dims, derive every
@@ -761,14 +754,14 @@ lazy_patch <- function(
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
 
-#' A bilateral (edge-preserving) focal body for [focal()].
+#' A bilateral (edge-preserving) focal body for [focal_map()].
 #'
 #' Returns a focal `fn(shifts)` computing the classic bilateral filter:
 #' each output pixel is the window mean weighted by a spatial Gaussian
 #' (distance from the centre, `sigma_d`) times a range Gaussian
 #' (difference from the centre VALUE, `sigma_r`), so smoothing stays
 #' within regions of similar value and stops at sharp transitions. Use
-#' as `focal(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
+#' as `focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
 #'
 #' A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
 #' outside the raster) drop out of the weighted mean (the semantics of
@@ -781,8 +774,8 @@ lazy_patch <- function(
 #' @param sigma_d Spatial Gaussian standard deviation in pixels
 #'   (default 1, matching the default 3x3 window).
 #' @param radius Window radius the body is built for; must match the
-#'   `radius` passed to [focal()] (default 1 = 3x3).
-#' @return A focal body `fn(shifts)` for [focal()].
+#'   `radius` passed to [focal_map()] (default 1 = 3x3).
+#' @return A focal body `fn(shifts)` for [focal_map()].
 #' @export
 bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
   if (
@@ -804,7 +797,7 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
     cli::cli_abort("{.arg sigma_d} must be a finite positive scalar")
   }
   r <- as.integer(radius)
-  # spatial weights in focal()'s shift order (expand.grid(dx, dy) row-major)
+  # spatial weights in focal_map()'s shift order (expand.grid(dx, dy) row-major)
   off <- expand.grid(dx = -r:r, dy = -r:r)
   sw <- exp(-(off$dx^2 + off$dy^2) / (2 * sigma_d^2))
   inv2sr2 <- 1 / (2 * sigma_r^2)
@@ -832,7 +825,7 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
     }
     if (length(shifts) != length(sw)) {
       cli::cli_abort(
-        "bilateral_focal(radius = {r}) got {length(shifts)} shifts; pass the same radius to focal()"
+        "bilateral_focal(radius = {r}) got {length(shifts)} shifts; pass the same radius to focal_map()"
       )
     }
     centre <- shifts[[(length(shifts) + 1L) %/% 2L]]
@@ -1047,7 +1040,7 @@ band_project <- function(weights, center = NULL) {
 #' Linear focal op with an explicit kernel (differentiable).
 #'
 #' The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
-#' weighted sum over the window. Unlike [focal()] with an arbitrary
+#' weighted sum over the window. Unlike [focal_map()] with an arbitrary
 #' `fn`, a kernel focal is differentiable with respect to its weights:
 #' pass the returned LazyRaster as `wrt` to [lazy_value_and_grad()].
 #'
@@ -1085,7 +1078,7 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' Alignment stays explicit: binary ops never auto-resample.
 #'
 #' Paste fast path: when `x` is already exactly on the target grid
-#' (same CRS, transform, extent and dims; `grid_equal()`), `align()`
+#' (same CRS, transform, extent and dims; `grid_equal()`), `align_to()`
 #' is a no-op returning `x`: reads stay plain windowed reads, with no
 #' warp barrier splitting the plan. This is the single-CRS-zone
 #' workflow: pin the analysis grid to the sources' native grid and
@@ -1098,7 +1091,7 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' @param resampling GDAL resampling method.
 #' @return A `LazyRaster` on the target grid.
 #' @export
-align <- function(x, to, resampling = "bilinear") {
+align_to <- function(x, to, resampling = "bilinear") {
   .assert_class(x, LazyRaster, "LazyRaster")
   target <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
   .assert_class(target, GridSpec, "GridSpec", arg = "to")
@@ -1117,4 +1110,4 @@ align <- function(x, to, resampling = "bilinear") {
   LazyRaster(graph = x@graph, node_id = id, grid = target)
 }
 
-# print() cards and draw() live in draw.R.
+# print() cards and plan_draw() live in draw.R.

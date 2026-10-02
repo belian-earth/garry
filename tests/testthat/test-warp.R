@@ -25,7 +25,7 @@ test_that("align + collect matches terra::project (bilinear)", {
   f <- fixture_gradient_f32()
   target <- .warp_target()
   a <- lazy_source(f)
-  got <- collect(align(a, target, resampling = "bilinear"))
+  got <- collect(align_to(a, target, resampling = "bilinear"))
   want <- as.matrix(
     terra::project(terra::rast(f), .terra_template(target),
                    method = "bilinear"), wide = TRUE)
@@ -42,7 +42,7 @@ test_that("align + collect matches terra::project (nearest, tie-tolerant)", {
   f <- fixture_gradient_f32()
   target <- .warp_target()
   a <- lazy_source(f)
-  got <- collect(align(a, target, resampling = "nearest"))
+  got <- collect(align_to(a, target, resampling = "nearest"))
   want <- as.matrix(
     terra::project(terra::rast(f), .terra_template(target),
                    method = "near"), wide = TRUE)
@@ -61,7 +61,7 @@ test_that("align + collect matches terra::project (nearest, tie-tolerant)", {
 test_that("warp is chunk-invariant (VRT window reads == whole warp)", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
-  w <- align(a, .warp_target(), resampling = "bilinear")
+  w <- align_to(a, .warp_target(), resampling = "bilinear")
 
   old <- options(garry.chunk_target_px = 1e6)
   whole <- collect(w)
@@ -81,7 +81,7 @@ test_that("warp propagates integer nodata correctly", {
   target <- grid_spec("EPSG:4326", extent = b, dims = c(59L, 41L))
 
   a <- lazy_source(f)                    # f32 + NaN (D8)
-  got <- collect(align(a, target, resampling = "nearest"))
+  got <- collect(align_to(a, target, resampling = "nearest"))
   want <- as.matrix(
     terra::project(terra::rast(f),
                    terra::rast(nrows = 41, ncols = 59,
@@ -98,7 +98,7 @@ test_that("warping a computed raster raises the structured error", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
   m <- a * 2
-  expect_error(collect(align(m, .warp_target()), plan_only = TRUE),
+  expect_error(collect(align_to(m, .warp_target()), plan_only = TRUE),
                class = "garry_warp_unsupported_error")
 })
 
@@ -109,9 +109,9 @@ test_that("align to the identical grid pastes: no WarpNode, no warp
   a <- lazy_source(f)
 
   # no-op at the IR level (any resampling: nothing is resampled)
-  same <- align(a, g, resampling = "bilinear")
+  same <- align_to(a, g, resampling = "bilinear")
   expect_identical(same@node_id, a@node_id)
-  expect_identical(align(a, a)@node_id, a@node_id)
+  expect_identical(align_to(a, a)@node_id, a@node_id)
 
   p <- collect(same + 0, plan_only = TRUE)
   expect_false(any(vapply(p@stages, function(s) s@kind == "warp",
@@ -127,7 +127,7 @@ test_that("align to the identical grid pastes: no WarpNode, no warp
                   extent = g@extent + g@transform[[2L]] / 2,
                   dims = unname(g@dims[c("x", "y")]),
                   dtype = g@dtype)
-  shifted <- align(a, g2, resampling = "nearest")
+  shifted <- align_to(a, g2, resampling = "nearest")
   expect_false(identical(shifted@node_id, a@node_id))
   p2 <- collect(shifted, plan_only = TRUE)
   expect_true(any(vapply(p2@stages, function(s) s@kind == "warp",

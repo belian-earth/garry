@@ -33,7 +33,7 @@ band names to select (file form, when the file carries band
 descriptions).}
 
 \item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}); loaded
-alongside the value assets and used as the default \code{from} in \code{\link[=mask]{mask()}}.}
+alongside the value assets and used as the default \code{from} in \code{\link[=apply_mask]{apply_mask()}}.}
 
 \item{granularity}{Time-slice granularity (see \code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
@@ -53,7 +53,7 @@ different sentinels, so the named form is typical, e.g.
 back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardless, since
 interpolating packed QA bits corrupts them. \code{"near"} (the default)
 preserves exact source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"},
-... to interpolate. Resample after the fact instead with \code{\link[=align]{align()}}.}
+... to interpolate. Resample after the fact instead with \code{\link[=align_to]{align_to()}}.}
 
 \item{scale}{Apply each value band's scale/offset at read. \code{FALSE}
 (default) reads raw digital numbers. \code{TRUE} discovers the affine from
@@ -93,13 +93,13 @@ source, so reads fan out band-by-band across the reader pool (per-band
 tasks through per-daemon handles: the measured fastest remote shape,
 design/gdal-multiband-fanout.md). Bands are named by their file band
 descriptions when present, else \verb{b<index>}; \code{grid = NULL} stays on the
-file's native grid, and a supplied \code{grid} inserts an \code{\link[=align]{align()}} warp per
+file's native grid, and a supplied \code{grid} inserts an \code{\link[=align_to]{align_to()}} warp per
 band. Value transforms (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}) go downstream as
 \code{\link[=lazy_map]{lazy_map()}}s, which fuse onto the read at \code{\link[=collect]{collect()}}.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask
-defined once (see \code{\link[=mask]{mask()}}) is computed once and dedup'd across bands, and
+defined once (see \code{\link[=apply_mask]{apply_mask()}}) is computed once and dedup'd across bands, and
 \code{\link[=collect]{collect()}} plans the whole dataset in one pass.
 }
 \seealso{

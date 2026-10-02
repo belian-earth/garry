@@ -25,7 +25,7 @@ kfas_llt <- function(y, q_lvl, q_slp, h) {
 # sigma_obs 2  =>  q_lvl 1, q_slp 0.01, H 4.
 .k_body <- function(output, ...) {
   kalman_llt(sigma_lvl = 1, sigma_slp = 0.1, sigma_obs = 2,
-             output = output, out_dtype = "f64", ...)
+             output = output, dtype = "f64", ...)
 }
 
 .k_series <- function(T_ = 15) {
@@ -199,8 +199,8 @@ test_that("kalman_llt validates its arguments", {
   expect_error(kalman_llt(1, 0.1, 2, robust_iters = NA), "robust_iters")
   expect_error(kalman_llt(1, 0.1, 2, robust_threshold = Inf), "robust_threshold")
   expect_error(kalman_llt(1, 0.1, 2, robust_inflation = 0), "robust_inflation")
-  expect_error(kalman_llt(1, 0.1, 2, out_dtype = "f128"), "out_dtype")
-  body <- kalman_llt(1, 0.1, 2, out_dtype = "f64")
+  expect_error(kalman_llt(1, 0.1, 2, dtype = "f128"), "dtype")
+  body <- kalman_llt(1, 0.1, 2, dtype = "f64")
   cube <- array(stats::rnorm(12), c(4, 3, 1))
   expect_error(body(list(cube), 2L), "margin")
 })
@@ -382,7 +382,7 @@ test_that("a regime boundary splits the series into two independent smoothers", 
   y <- c(rep(3, b - 1L), rep(9, T_ - b + 1L)) + stats::rnorm(T_, 0, 0.5)
   cube <- array(y, c(T_, 1, 1)); r <- array(1, c(T_, 1, 1))
   bd <- array(0, c(T_, 1, 1)); bd[b, , ] <- 1
-  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, out_dtype = "f64")
+  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, dtype = "f64")
   got <- function(o) as.numeric(body(o)(list(cube, r, bd), 1L))
   plain <- function(o) as.numeric(body(o)(list(cube, r), 1L))
   # before the boundary: the smoother of y[1:(b-1)] alone (no observation

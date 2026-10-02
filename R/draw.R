@@ -3,7 +3,7 @@
 NULL
 
 # ---------------------------------------------------------------------------
-# Terminal rendering of lazy objects: compact `print()` cards and `draw()`,
+# Terminal rendering of lazy objects: compact `print()` cards and `plan_draw()`,
 # a visual of the pipeline BEFORE execution. A LazyDataset draws as its step
 # pipeline (source -> mask -> reduce ...); a LazyRaster draws as its IR tree,
 # with structurally identical sibling branches collapsed to "xN" so a 250-node
@@ -270,7 +270,7 @@ S7::method(print, LazyRaster) <- function(x, ...) {
         )
       )
     ),
-    hint = "draw(x) to see the pipeline"
+    hint = "plan_draw(x) to see the pipeline"
   )
   invisible(x)
 }
@@ -307,7 +307,7 @@ S7::method(print, LazyDataset) <- function(x, ...) {
         )
       )
     ),
-    hint = "draw(x) to see the pipeline"
+    hint = "plan_draw(x) to see the pipeline"
   )
   invisible(x)
 }
@@ -384,7 +384,7 @@ S7::method(print, LazyDatasetGroups) <- function(x, ...) {
 }
 
 # ---------------------------------------------------------------------------
-# draw(): the pipeline visual
+# plan_draw(): the pipeline visual
 # ---------------------------------------------------------------------------
 
 #' Draw the pipeline of a lazy object.
@@ -401,9 +401,9 @@ S7::method(print, LazyDatasetGroups) <- function(x, ...) {
 #' @seealso [preview()], which plots the data rather than the pipeline;
 #'   [plan_dot()] for a Graphviz rendering of the execution plan.
 #' @export
-draw <- S7::new_generic("draw", "x")
+plan_draw <- S7::new_generic("plan_draw", "x")
 
-S7::method(draw, LazyRaster) <- function(x, ...) {
+S7::method(plan_draw, LazyRaster) <- function(x, ...) {
   g <- x@grid
   cat(
     cli::rule(
@@ -422,7 +422,7 @@ S7::method(draw, LazyRaster) <- function(x, ...) {
   invisible(x)
 }
 
-S7::method(draw, LazyDataset) <- function(x, ...) {
+S7::method(plan_draw, LazyDataset) <- function(x, ...) {
   g <- .ds_grid(x)
   nl <- lengths(x@bands)
   cat(

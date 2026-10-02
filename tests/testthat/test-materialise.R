@@ -24,11 +24,11 @@ test_that("a materialised raster reopens with identical values", {
   expect_equal(collect(m, distributed = FALSE),
                collect(lr, distributed = FALSE),
                tolerance = 1e-6, ignore_attr = TRUE)
-  # the checkpoint unlocks align() on what was a computed raster
+  # the checkpoint unlocks align_to() on what was a computed raster
   coarse <- grid_spec(crs = m@grid@crs,
-                      extent = c(xmin(m), ymin(m), xmax(m), ymax(m)),
-                      res = 3 * res(m)[[1L]])
-  expect_s7_class(align(m, coarse, resampling = "average"),
+                      extent = unname(grid_bbox(m)),
+                      res = 3 * unname(grid_res(m))[[1L]])
+  expect_s7_class(align_to(m, coarse, resampling = "average"),
                   garry::LazyRaster)
 })
 
@@ -86,9 +86,9 @@ test_that("masking works unchanged on the rebuilt dataset", {
   ds <- .mat_fixture()
   d <- withr::local_tempdir()
   m <- materialise(ds, d, name = "z", distributed = FALSE)
-  masked <- mask(m, where = function(f) g_cast(f > 15, "f32"))
+  masked <- apply_mask(m, where = function(f) g_cast(f > 15, "f32"))
   out <- collect(masked[["B04"]], distributed = FALSE)
-  ref <- collect(mask(ds, where = function(f) g_cast(f > 15, "f32"))[["B04"]],
+  ref <- collect(apply_mask(ds, where = function(f) g_cast(f > 15, "f32"))[["B04"]],
                  distributed = FALSE)
   expect_equal(out, ref, tolerance = 1e-6, ignore_attr = TRUE)
 })

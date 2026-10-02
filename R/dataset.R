@@ -23,15 +23,15 @@ NULL
 #' `LazyRaster`s on a shared grid and intermediate representation (IR) graph.
 #' Construct one with [lazy_dataset()] (from a STAC source table) or
 #' [as_dataset()] (from `LazyRaster`s you already have) rather than calling
-#' this class constructor directly. Apply [lazy_map()], [focal()],
-#' [reduce_over()] and [mask()] across all bands; index a single band with
+#' this class constructor directly. Apply [lazy_map()], [focal_map()],
+#' [reduce_over()] and [apply_mask()] across all bands; index a single band with
 #' `ds[["B04"]]` or a sub-dataset with `ds[c("B04", "B03")]`; [collect()] to
 #' materialise.
 #'
 #' @param graph The shared IR `Graph`.
 #' @param bands Named list; each element is a list of per-slice `LazyRaster`s.
 #' @param mask_asset Length-0 or length-1 name of the QA/mask band, if any.
-#' @param steps Internal display-only pipeline log, shown by `draw()`; does
+#' @param steps Internal display-only pipeline log, shown by `plan_draw()`; does
 #'   not affect execution.
 #' @return A `LazyDataset`.
 #' @export
@@ -65,7 +65,7 @@ LazyDataset <- S7::new_class(
 # Value bands are every band except the QA/mask band.
 .ds_value_bands <- function(x) setdiff(names(x@bands), x@mask_asset)
 
-# One display step for the pipeline log (see draw()); execution ignores it.
+# One display step for the pipeline log (see plan_draw()); execution ignores it.
 .step <- function(kind, label, detail = NULL) {
   list(kind = kind, label = label, detail = detail)
 }
@@ -122,12 +122,12 @@ LazyDataset <- S7::new_class(
 #'   tasks through per-daemon handles: the measured fastest remote shape,
 #'   design/gdal-multiband-fanout.md). Bands are named by their file band
 #'   descriptions when present, else `b<index>`; `grid = NULL` stays on the
-#'   file's native grid, and a supplied `grid` inserts an [align()] warp per
+#'   file's native grid, and a supplied `grid` inserts an [align_to()] warp per
 #'   band. Value transforms (e.g. [dequantize_aef()]) go downstream as
 #'   [lazy_map()]s, which fuse onto the read at [collect()].
 #'
 #' All bands share one intermediate representation (IR) graph, so a mask
-#' defined once (see [mask()]) is computed once and dedup'd across bands, and
+#' defined once (see [apply_mask()]) is computed once and dedup'd across bands, and
 #' [collect()] plans the whole dataset in one pass.
 #'
 #' @param sources A STAC `doc_items` (from [stac_query()], optionally
@@ -142,7 +142,7 @@ LazyDataset <- S7::new_class(
 #' @param bands File form only: integer source band indices to select
 #'   (default: all). Mutually exclusive with `assets`.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
-#'   alongside the value assets and used as the default `from` in [mask()].
+#'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
 #' @param sort_field Index field ordering overlaps within a slice.
 #' @param nodata Nodata handling: `NULL` (per-asset file metadata), a scalar
@@ -157,7 +157,7 @@ LazyDataset <- S7::new_class(
 #'   back to `"near"`). `mask_asset` is always read `"near"` regardless, since
 #'   interpolating packed QA bits corrupts them. `"near"` (the default)
 #'   preserves exact source values; use `"bilinear"`, `"average"`, `"cubic"`,
-#'   ... to interpolate. Resample after the fact instead with [align()].
+#'   ... to interpolate. Resample after the fact instead with [align_to()].
 #' @param scale Apply each value band's scale/offset at read. `FALSE`
 #'   (default) reads raw digital numbers. `TRUE` discovers the affine from
 #'   the assets' file metadata (the GDAL band scale/offset QGIS applies;
@@ -479,7 +479,7 @@ lazy_dataset <- function(
         name = nm
       )
       if (!is.null(grid)) {
-        x <- align(x, grid, resampling = resolve_rs(nm))
+        x <- align_to(x, grid, resampling = resolve_rs(nm))
       }
       x
     },
@@ -583,7 +583,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   )
 }
 
-# print() cards and draw() live in draw.R.
+# print() cards and plan_draw() live in draw.R.
 
 # ---------------------------------------------------------------------------
 # Polymorphic-verb backends (dispatched from lazy_map/focal/reduce_over).
@@ -621,7 +621,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   newbands <- x@bands
   for (a in sel) {
     newbands[[a]] <- lapply(x@bands[[a]], function(lr) {
-      focal(lr, fn = fn, radius = radius, boundary = boundary)
+      focal_map(lr, fn = fn, radius = radius, boundary = boundary)
     })
   }
   LazyDataset(
@@ -1038,7 +1038,7 @@ stack_bands <- function(x) {
 #'   dropped.
 #' @return A `LazyDataset` with masked value bands.
 #' @export
-mask <- function(
+apply_mask <- function(
   x,
   from = NULL,
   where,
@@ -1173,7 +1173,7 @@ mask <- function(
 
 #' Build a QA-bitmask predicate.
 #'
-#' Returns a predicate `\(f) ...` for [mask()]'s `where` argument that flags a
+#' Returns a predicate `\(f) ...` for [apply_mask()]'s `where` argument that flags a
 #' pixel bad when any of the given bits is set. Nodata pixels are treated as
 #' clear (matching the QA-fill convention). Use for packed-flag QA bands (HLS
 #' Fmask, Landsat QA_PIXEL) where a value list cannot express the test;
@@ -1181,7 +1181,7 @@ mask <- function(
 #'
 #' @param bits Integer bit positions (0-based) that mark a pixel as bad.
 #' @return A predicate function of one array, returning a 0/1 mask:
-#'   pass it as [mask()]'s `where`, or apply it directly with
+#'   pass it as [apply_mask()]'s `where`, or apply it directly with
 #'   [lazy_map()].
 #' @export
 qa_bits <- function(bits) {
@@ -1213,7 +1213,7 @@ qa_bits <- function(bits) {
 
 # Binary morphology on a 0/1 mask, disk structuring element. Erosion of a 0/1
 # mask is the product over the disk offsets; dilation is its dual. NaN (beyond-
-# edge halo pad) propagates and reads as clear in mask()'s final ifelse,
+# edge halo pad) propagates and reads as clear in apply_mask()'s final ifelse,
 # matching scipy's constant-0 border.
 .disk_sel <- function(r) {
   o <- expand.grid(dx = -r:r, dy = -r:r)
@@ -1221,11 +1221,11 @@ qa_bits <- function(bits) {
 }
 .erode <- function(x, r) {
   sel <- .disk_sel(r)
-  focal(x, radius = as.integer(r), fn = function(sh) Reduce(`*`, sh[sel]))
+  focal_map(x, radius = as.integer(r), fn = function(sh) Reduce(`*`, sh[sel]))
 }
 .dilate <- function(x, r) {
   sel <- .disk_sel(r)
-  focal(x, radius = as.integer(r), fn = function(sh) {
+  focal_map(x, radius = as.integer(r), fn = function(sh) {
     1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))
   })
 }

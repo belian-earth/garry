@@ -18,7 +18,7 @@ LazyDataset(
 
 \item{mask_asset}{Length-0 or length-1 name of the QA/mask band, if any.}
 
-\item{steps}{Internal display-only pipeline log, shown by \code{draw()}; does
+\item{steps}{Internal display-only pipeline log, shown by \code{plan_draw()}; does
 not affect execution.}
 }
 \value{
@@ -29,8 +29,8 @@ The dataset holds one entry per band; each entry is a list of per-time-slice
 \code{LazyRaster}s on a shared grid and intermediate representation (IR) graph.
 Construct one with \code{\link[=lazy_dataset]{lazy_dataset()}} (from a STAC source table) or
 \code{\link[=as_dataset]{as_dataset()}} (from \code{LazyRaster}s you already have) rather than calling
-this class constructor directly. Apply \code{\link[=lazy_map]{lazy_map()}}, \code{\link[=focal]{focal()}},
-\code{\link[=reduce_over]{reduce_over()}} and \code{\link[=mask]{mask()}} across all bands; index a single band with
+this class constructor directly. Apply \code{\link[=lazy_map]{lazy_map()}}, \code{\link[=focal_map]{focal_map()}},
+\code{\link[=reduce_over]{reduce_over()}} and \code{\link[=apply_mask]{apply_mask()}} across all bands; index a single band with
 \code{ds[["B04"]]} or a sub-dataset with \code{ds[c("B04", "B03")]}; \code{\link[=collect]{collect()}} to
 materialise.
 }

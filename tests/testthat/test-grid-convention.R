@@ -11,11 +11,11 @@ test_that("GridSpec extent order is (xmin, ymin, xmax, ymax)", {
     dims       = c(100L, 80L),
     dtype     = "f32"
   )
-  expect_identical(xmin(g), 500000)
-  expect_identical(ymin(g), 4600000 - 2400)
-  expect_identical(xmax(g), 503000)
-  expect_identical(ymax(g), 4600000)
-  expect_identical(res(g), c(30, 30))
+  expect_identical(grid_bbox(g)[["xmin"]], 500000)
+  expect_identical(grid_bbox(g)[["ymin"]], 4600000 - 2400)
+  expect_identical(grid_bbox(g)[["xmax"]], 503000)
+  expect_identical(grid_bbox(g)[["ymax"]], 4600000)
+  expect_identical(unname(grid_res(g)), c(30, 30))
 })
 
 test_that("incoherent extent/transform/dim is rejected", {

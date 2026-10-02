@@ -564,7 +564,7 @@ NULL
 #'   them transparent. Useful to make a mask's footprint explicit.
 #' @param ... Unused.
 #' @return `x`, invisibly.
-#' @seealso [draw()], which plots the pipeline rather than the data;
+#' @seealso [plan_draw()], which plots the pipeline rather than the data;
 #'   [collect()] to execute at full resolution.
 #' @export
 preview <- function(

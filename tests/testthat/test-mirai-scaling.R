@@ -20,7 +20,7 @@ test_that("distributed execution scales on a compute-heavy pipeline", {
   build <- function() {
     a <- lazy_source(f)
     s25 <- function(sh) Reduce(`+`, sh) / 25
-    reduce_over(focal(focal(a, s25, 2L), s25, 2L), "mean", c("x", "y"))
+    reduce_over(focal_map(focal_map(a, s25, 2L), s25, 2L), "mean", c("x", "y"))
   }
   old <- options(garry.chunk_target_px = 250000)
   on.exit(options(old), add = TRUE)

@@ -26,7 +26,7 @@ radiometry just inside their data footprint that QA masks miss, and
 on a \verb{(t, y, x)} stack each slice's footprint erodes independently.
 }
 \details{
-Implemented as a \code{\link[=focal]{focal()}} kernel (centre plus zero times the window
+Implemented as a \code{\link[=focal_map]{focal_map()}} kernel (centre plus zero times the window
 sum, which is NaN wherever any neighbour is NaN), so it plans and
 fuses like any stencil, and applies per band over a \code{LazyDataset}.
 }
