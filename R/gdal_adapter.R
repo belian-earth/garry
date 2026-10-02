@@ -1046,7 +1046,7 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #'
 #' @param src_path Source path/VSI URL. One source: gdalwarp writes a
 #'   VRT from a single input only. A multi-path source node is read by
-#'   [gdal_warp_window()] instead.
+#'   `gdal_warp_window()` instead.
 #' @param band 1-based source band (the VRT has this single band).
 #' @param target_grid `GridSpec` to warp onto.
 #' @param resampling GDAL resampling method name.

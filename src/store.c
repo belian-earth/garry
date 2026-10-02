@@ -8,10 +8,18 @@
  * pass over the payload with no index vector, so a writer daemon does
  * IO rather than R vector arithmetic.
  *
- * FP contraction is off (src/Makevars): `v * scale + offset` must
- * round twice, exactly as the R expression it replaces, or the f32
- * store stops being byte-identical to the doubles oracle on FMA hosts.
+ * FP contraction is off: `v * scale + offset` must round twice,
+ * exactly as the R expression it replaces, or the f32 store stops being
+ * byte-identical to the doubles oracle on FMA hosts. It is set here
+ * rather than as a Makevars flag, which R CMD check rejects as
+ * non-portable: GCC ignores the standard pragma and takes its own.
  */
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC optimize("fp-contract=off")
+#else
+#pragma STDC FP_CONTRACT OFF
+#endif
+
 #include <R.h>
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>

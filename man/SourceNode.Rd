@@ -51,6 +51,10 @@ inside the read kernel after sentinel -> NaN (see \code{\link[=lazy_source]{lazy
 
 \item{name}{Optional display name (the asset or band name). Pure
 metadata, shown by \code{\link[=plan_view]{plan_view()}}; set by \code{\link[=lazy_dataset]{lazy_dataset()}}.}
+
+\item{collapsed}{Node ids of the single-band sources a band-stack
+collapse folded into this multi-band read, in band order. Length 0
+for an ordinary source.}
 }
 \value{
 A \code{SourceNode}.

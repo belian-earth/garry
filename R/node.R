@@ -86,6 +86,9 @@ Node <- S7::new_class(
 #'   source onto the analysis grid (default "near").
 #' @param scale,offset Length-0 (absent) or length-1 band affine applied
 #'   inside the read kernel after sentinel -> NaN (see [lazy_source()]).
+#' @param collapsed Node ids of the single-band sources a band-stack
+#'   collapse folded into this multi-band read, in band order. Length 0
+#'   for an ordinary source.
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(

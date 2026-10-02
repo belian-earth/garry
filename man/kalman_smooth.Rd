@@ -10,6 +10,7 @@ kalman_smooth(
   sigma_slp,
   sigma_obs = 1,
   obs_var = NULL,
+  boundaries = NULL,
   outputs = c("mean", "sd"),
   dtype = "f32",
   ...
@@ -25,7 +26,13 @@ disturbance, slope disturbance, observation).}
 \item{obs_var}{Optional relative observation-variance stack on the
 same grid (\code{Var(v_t) = sigma_obs^2 * obs_var_t}).}
 
-\item{outputs}{Which outputs to build (\code{"mean"}, \code{"sd"}).}
+\item{boundaries}{Optional 0/1 stack on the same grid marking years
+that start a new regime (see \code{\link[=kalman_llt]{kalman_llt()}}, section "Regime
+boundaries"); needs \code{obs_var} (pass a stack of ones for none).}
+
+\item{outputs}{Which outputs to build (\code{"mean"}, \code{"sd"}, the
+forward-filtered \code{"fmean"}, \code{"fsd"}, and \code{"innov"}; see
+\code{\link[=kalman_llt]{kalman_llt()}}).}
 
 \item{dtype}{Output dtype (default f32).}
 
