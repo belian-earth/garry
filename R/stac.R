@@ -116,8 +116,17 @@ stac_sign_mpc <- function(
     cli::cli_warn("No STAC items to sign.")
     return(items)
   }
-  token <- .mpc_token(items$features[[1L]]$collection, subscription_key)
+  colls <- vapply(items$features, function(f) f$collection %||% NA_character_, "")
+  if (anyNA(colls)) {
+    cli::cli_abort(
+      "{sum(is.na(colls))} item{?s} carr{?ies/y} no {.field collection}; cannot pick a signing token."
+    )
+  }
+  # one token per collection: merged collections (HLS L30 + S30) live in
+  # different storage containers
+  tokens <- lapply(stats::setNames(nm = unique(colls)), .mpc_token, subscription_key)
   items$features <- lapply(items$features, function(f) {
+    token <- tokens[[f$collection]]
     f$assets <- lapply(f$assets, function(a) {
       a$href <- .sign_href(a$href, token)
       a
@@ -127,19 +136,23 @@ stac_sign_mpc <- function(
   items
 }
 
-# Attach a SAS query string to an href. A previously signed href (a
-# query carrying a SAS `sig=`) has its token replaced, so re-signing is
-# idempotent; any other existing query is extended with `&`, never a
-# second `?`.
+# Azure SAS query keys: a re-sign replaces these and keeps any other
+# parameter the href carried.
+.sas_keys <- c(
+  "sv", "ss", "srt", "sp", "se", "st", "spr", "sig", "sr", "si", "sip",
+  "skoid", "sktid", "skt", "ske", "sks", "skv", "sdd", "ses",
+  "rscc", "rscd", "rsce", "rscl", "rsct"
+)
+
+# Attach a SAS query string to an href. A previously signed href has its
+# SAS parameters replaced, so re-signing is idempotent; other parameters
+# are kept, joined with `&`, never a second `?`.
 .sign_href <- function(href, token) {
-  q <- regmatches(href, regexpr("\\?.*$", href))
-  if (!length(q)) {
-    return(paste0(href, "?", token))
-  }
-  if (grepl("(^\\?|&)sig=", q)) {
-    return(paste0(sub("\\?.*$", "", href), "?", token))
-  }
-  paste0(href, "&", token)
+  base <- sub("\\?.*$", "", href)
+  q <- if (grepl("?", href, fixed = TRUE)) sub("^[^?]*\\?", "", href) else ""
+  kv <- if (nzchar(q)) strsplit(q, "&", fixed = TRUE)[[1L]] else character(0)
+  keep <- kv[!sub("=.*$", "", kv) %in% .sas_keys]
+  paste0(base, "?", paste(c(keep, token), collapse = "&"))
 }
 
 # Signed-expiry epoch (numeric, UTC) of a SAS query string, NA when
@@ -193,14 +206,16 @@ stac_sign_mpc <- function(
       if (is.na(se) || se - margin > as.numeric(Sys.time())) {
         return(u)
       }
+      # the cached token must outlive the same margin, or the "fresh"
+      # URL carries one about to expire
       tok <- tryCatch(
-        .mpc_token(paste0(parts[[3L]], "/", parts[[4L]])),
+        .mpc_token(paste0(parts[[3L]], "/", parts[[4L]]), margin = margin),
         error = function(e) NULL
       )
       if (is.null(tok)) {
         return(u)
       }
-      paste0(sub("\\?.*$", "", u), "?", tok)
+      .sign_href(u, tok)
     },
     character(1),
     USE.NAMES = FALSE
@@ -211,9 +226,10 @@ stac_sign_mpc <- function(
 # (saved to both). Reused until msft:expiry.
 .mpc_token <- function(
   collection,
-  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)
+  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA),
+  margin = 0
 ) {
-  hit <- .mpc_token_lookup(collection)
+  hit <- .mpc_token_lookup(collection, margin)
   if (!is.null(hit)) {
     return(hit)
   }
@@ -228,22 +244,30 @@ stac_sign_mpc <- function(
       "Ocp-Apim-Subscription-Key" = subscription_key
     )
   }
+  # the endpoint rate-limits (429); retry, honouring Retry-After
+  req <- httr2::req_retry(req, max_tries = 5)
   tok <- httr2::resp_body_json(httr2::req_perform(req))
   assign(collection, tok, envir = .mpc_token_cache)
-  saveRDS(tok, .mpc_token_file(collection))
+  # daemons share the file: write beside it, then rename into place
+  f <- .mpc_token_file(collection)
+  tmp <- tempfile("tok-", tmpdir = dirname(f), fileext = ".rds")
+  saveRDS(tok, tmp)
+  if (!file.rename(tmp, f)) {
+    unlink(tmp)
+  }
   tok$token
 }
 
 # The valid token string from the memory or disk cache, or NULL. Expired entries
 # are dropped from memory as a side effect.
-.mpc_token_lookup <- function(collection) {
+.mpc_token_lookup <- function(collection, margin = 0) {
   unexpired <- function(tok) {
     exp <- as.POSIXct(
       tok[["msft:expiry"]],
       format = "%Y-%m-%dT%H:%M:%SZ",
       tz = "UTC"
     )
-    !is.na(exp) && exp > Sys.time()
+    !is.na(exp) && as.numeric(exp) - margin > as.numeric(Sys.time())
   }
   if (exists(collection, envir = .mpc_token_cache, inherits = FALSE)) {
     tok <- get(collection, envir = .mpc_token_cache)
@@ -254,8 +278,8 @@ stac_sign_mpc <- function(
   }
   f <- .mpc_token_file(collection)
   if (file.exists(f)) {
-    tok <- readRDS(f)
-    if (unexpired(tok)) {
+    tok <- tryCatch(readRDS(f), error = function(e) NULL) # partial: a miss
+    if (!is.null(tok) && unexpired(tok)) {
       assign(collection, tok, envir = .mpc_token_cache)
       return(tok$token)
     }
