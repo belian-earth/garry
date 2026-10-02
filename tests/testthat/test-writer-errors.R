@@ -50,10 +50,10 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
     class = "garry_write_error")
   expect_match(conditionMessage(err), "mock write failure")
 
-  # The abort-path handler closed the writer's open handle: the partial
-  # output is deletable and the SAME pools serve a clean re-run.
-  expect_true(file.exists(path))
-  expect_true(file.remove(path))
+  # The abort-path handler closed the writer's open handle, so the partial
+  # output could be removed (Windows cannot delete an open file), and the
+  # SAME pools serve a clean re-run.
+  expect_false(file.exists(path))
   .we_fix_writer()
   path2 <- withr::local_tempfile(fileext = ".tif")
   write_tif(x, path2, distributed = TRUE)
@@ -95,4 +95,13 @@ test_that("a failed close on the writer fails the write", {
     write_tif(x, path, distributed = TRUE),
     class = "garry_write_error"
   )
+})
+
+test_that("a failed write leaves no half-written file", {
+  x <- lazy_map(lazy_source(fixture_gradient_f32()), fn = function(v) {
+    stop("boom")
+  }, dtype = "f32")
+  path <- withr::local_tempfile(fileext = ".tif")
+  expect_error(write_tif(x, path, distributed = FALSE))
+  expect_false(file.exists(path))
 })

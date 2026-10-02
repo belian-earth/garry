@@ -196,6 +196,13 @@ write_tif <- function(
     )
   }
 
+  # a failed streamed write must not leave a half-written file behind
+  # (the COG route already writes to temporaries)
+  done <- FALSE
+  if (!isTRUE(cog)) {
+    targets <- .write_targets(x, path)
+    on.exit(if (!done) unlink(targets), add = TRUE)
+  }
   res <- .collect_impl(
     x,
     path = work,
@@ -204,6 +211,7 @@ write_tif <- function(
     band_names = band_names,
     wspec = wspec
   )
+  done <- TRUE
   if (!isTRUE(cog)) {
     return(invisible(res))
   }
@@ -275,4 +283,16 @@ write_tif <- function(
     anchor <- if (startsWith(path, "/")) "/" else "."
   }
   list(anchor = anchor, rel = paste(parts[k:length(parts)], collapse = "/"))
+}
+
+# The files a write of `x` to `path` produces: one path, one per sink of a
+# list (named paths, or "<sink>.tif" in a directory), or one per group.
+.write_targets <- function(x, path) {
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
+    return(unlist(.group_paths(path, names(x@groups))))
+  }
+  if (is.list(x) && !S7::S7_inherits(x, LazyRaster) && !S7::S7_inherits(x, LazyDataset)) {
+    return(unname(.sink_paths(path, names(x))))
+  }
+  path
 }
