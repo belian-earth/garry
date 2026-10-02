@@ -16,8 +16,10 @@ A \code{LazyRaster} (the sub-stack, or the single matching layer).
 }
 \description{
 Label selection on the \code{t} axis (the \code{.sel(time = ...)} analog):
-exact label matches, or prefix matches for partial datetime strings
-(\code{"2023-06"} selects every June slice), or integer/logical positions.
+each selector matches its exact label, or failing that every label it
+prefixes (\code{"2023-06"} selects every June slice); the matches are
+combined. Integer/logical positions work too. A selector that matches
+nothing is an error.
 The raster must be a \code{lazy_stack} along \code{t} whose layers were named
 (slice dates); a single match returns the bare layer.
 }

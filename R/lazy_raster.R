@@ -377,13 +377,20 @@ lazy_stack <- function(xs, along = "t") {
       "along {.val {axis}} (got {.cls {class(node)[[1L]]}})"
     ))
   }
+  if (anyNA(sel)) {
+    cli::cli_abort("{.arg sel} must not contain NA.")
+  }
   keep <- if (is.character(sel)) {
-    m <- labs %in% sel # exact labels first
-    if (!any(m)) {
-      # else prefix ("2023-06")
-      m <- Reduce(`|`, lapply(sel, function(s) startsWith(labs, s)))
+    # each selector on its own: an exact label, else a prefix ("2023-06")
+    hits <- lapply(sel, function(s) {
+      ex <- which(labs == s)
+      if (length(ex)) ex else which(startsWith(labs, s))
+    })
+    none <- sel[lengths(hits) == 0L]
+    if (length(none)) {
+      cli::cli_abort("no {.val {axis}} slices match {.val {none}}")
     }
-    which(m)
+    sort(unique(unlist(hits)))
   } else if (is.logical(sel)) {
     which(rep_len(sel, length(labs)))
   } else {
@@ -413,8 +420,10 @@ lazy_stack <- function(xs, along = "t") {
 #' Select time slices of a stacked raster by label.
 #'
 #' Label selection on the `t` axis (the `.sel(time = ...)` analog):
-#' exact label matches, or prefix matches for partial datetime strings
-#' (`"2023-06"` selects every June slice), or integer/logical positions.
+#' each selector matches its exact label, or failing that every label it
+#' prefixes (`"2023-06"` selects every June slice); the matches are
+#' combined. Integer/logical positions work too. A selector that matches
+#' nothing is an error.
 #' The raster must be a `lazy_stack` along `t` whose layers were named
 #' (slice dates); a single match returns the bare layer.
 #'
