@@ -282,3 +282,13 @@ test_that("quantized values saturating at a nodata limit stay valid", {
   v <- gdal_read_window(path, 1L, 0L, 0L, 60L, 40L)
   expect_true(all(v == 254))
 })
+
+test_that("write_tif validates dtype, nodata and quantization up front", {
+  x <- lazy_source(fixture_gradient_f32())
+  p <- withr::local_tempfile(fileext = ".tif")
+  expect_error(write_tif(x, p, dtype = "f16"), "must be one of")
+  expect_error(write_tif(x, p, nodata = c(1, 2)), "single number")
+  expect_error(write_tif(x, p, nodata = "a"), "single number")
+  expect_error(write_tif(x, p, dtype = "i16", nodata = 1.5), "whole number")
+  expect_error(write_tif(x, p, dtype = "u32", scale = 0.1), "other than u32")
+})

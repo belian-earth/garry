@@ -100,6 +100,21 @@ write_tif <- function(
     ))
   }
 
+  writable <- c(names(.wt_int_range), "f32", "f64")
+  if (!is.null(dtype) && !(is.character(dtype) && length(dtype) == 1L && dtype %in% writable)) {
+    cli::cli_abort("{.arg dtype} must be one of {.val {writable}}, not {.val {dtype}}.")
+  }
+  if (!is.null(nodata)) {
+    float_out <- is.null(dtype) || dtype %in% c("f32", "f64")
+    if (!is.numeric(nodata) || length(nodata) != 1L ||
+        (!float_out && !is.finite(nodata)) || (float_out && is.infinite(nodata))) {
+      cli::cli_abort("{.arg nodata} must be a single number (or NaN for a float output).")
+    }
+    if (!float_out && nodata != round(nodata)) {
+      cli::cli_abort("{.arg nodata} must be a whole number for integer {.arg dtype} {.val {dtype}}.")
+    }
+  }
+
   quantizing <- !is.null(scale) || !is.null(offset)
   if (quantizing) {
     if (is.null(scale)) {
@@ -118,9 +133,9 @@ write_tif <- function(
         "{.arg scale}/{.arg offset} must be finite, non-zero length-1 numerics."
       )
     }
-    if (is.null(dtype) || is.null(.wt_int_range[[dtype]])) {
+    if (is.null(dtype) || is.null(.g_int_range[[dtype]])) {
       cli::cli_abort(c(
-        "quantization ({.arg scale}/{.arg offset}) needs an integer {.arg dtype}.",
+        "quantization ({.arg scale}/{.arg offset}) needs an integer {.arg dtype} other than u32.",
         "i" = "e.g. {.code dtype = \"i16\"} for scaled reflectance."
       ))
     }
