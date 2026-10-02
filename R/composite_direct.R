@@ -530,7 +530,7 @@ NULL
   promise <- lapply(unname(b$jobs), function(j) {
     mirai::mirai(asNamespace("garry")$.cd_fetch_warp(j, k), j = j, k = b$K, .compute = prof)
   })
-  list(info = b$info, promise = promise, t0 = proc.time()[["elapsed"]])
+  list(info = b$info, promise = promise, K = b$K, t0 = proc.time()[["elapsed"]])
 }
 
 # Errors from a collected fetch group: transport failures (miraiError,
@@ -593,6 +593,7 @@ NULL
     ))
   }
   .gd_fetch_fail(.gd_fetch_errs(r), length(info), "source")
+  .gd_nan_fill(vapply(info, `[[`, "", "bin"), launched$K$nx, launched$K$ny)
   if (progress) {
     cli::cli_inform(.glue(
       "[gdal-direct] fetch+warp={formatC(t, format = 'f', digits = 2)}s"
@@ -602,10 +603,13 @@ NULL
 }
 
 # tmpfs dir for a run's per-source .bin payloads.
+# A fresh scratch dir per run: tasks orphaned by an aborted run (the pools
+# have no dispatcher to cancel them) must not write into the next run's
+# files, which reuse node-id names.
 .gd_tmp <- function() {
-  tmp <- file.path(
-    if (dir.exists("/dev/shm")) "/dev/shm" else tempdir(),
-    .glue("gdirect-{Sys.getpid()}")
+  tmp <- tempfile(
+    .glue("gdirect-{Sys.getpid()}-"),
+    tmpdir = if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
   )
   dir.create(tmp)
   tmp
@@ -653,6 +657,18 @@ NULL
 # fetch group under the read-failure contract.
 .gd_check_fetch <- function(r, label) {
   .gd_fetch_fail(.gd_fetch_errs(r), length(r), label)
+}
+
+# Under read_fail = "nodata" a failed warp is tolerated, but a task that
+# died (a crashed or killed daemon) never wrote its .bin: write those as
+# all-nodata f32 planes so the reads that follow see a hole, not a
+# missing file.
+.gd_nan_fill <- function(bins, nx, ny) {
+  n <- as.numeric(nx) * ny
+  for (b in unique(bins[!file.exists(bins)])) {
+    writeBin(rep(NaN, n), b, size = 4L)
+  }
+  invisible(bins)
 }
 
 #' Execute a no-focal composite via the lean GDAL-direct cube path.
@@ -894,12 +910,14 @@ NULL
   if (masked) {
     fmr <- lapply(fmask_p, function(h) h[])
     .gd_check_fetch(fmr, "fmask")
+    .gd_nan_fill(bin_of(spec$fmask_srcs), nx, ny)
     if (progress) {
+      ok <- Filter(function(r) is.list(r) && !is.null(r$tw), fmr)
       cli::cli_inform(.glue(
         "[gdal-direct] fmask ",
         "drain={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
         "({length(fmr)} tasks, warp ",
-        "sum={formatC(sum(vapply(fmr, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"
+        "sum={formatC(sum(vapply(ok, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"
       ))
     }
     Km <- list(
@@ -1003,6 +1021,7 @@ NULL
   for (bi in seq_len(nb)) {
     bres <- lapply(band_p[[bi]], function(h) h[])
     .gd_check_fetch(bres, .glue("band {bi}"))
+    .gd_nan_fill(bin_of(spec$band_srcs[[bi]]), nx, ny)
     if (progress) {
       cli::cli_inform(.glue(
         "[gdal-direct] band {bi} drained at ",
@@ -1010,9 +1029,15 @@ NULL
       ))
     }
     if (!mask_done) {
-      mask_p[]
+      mv <- mask_p[] # the mask .bin must exist first
+      if (inherits(mv, c("miraiError", "errorValue"))) {
+        cli::cli_abort(c(
+          "gdal-direct mask computation failed.",
+          "x" = if (inherits(mv, "miraiError")) conditionMessage(mv) else "the compute daemon died"
+        ))
+      }
       mask_done <- TRUE
-    } # mask .bin must exist first
+    }
     for (si in seq_len(ns)) {
       while (length(inflight) >= cap) {
         harvest()

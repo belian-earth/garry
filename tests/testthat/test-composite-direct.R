@@ -113,3 +113,13 @@ test_that("GTI sources the fast routes cannot read themselves fall through", {
   expect_null(.gti_slice_of("FILTER=slice = 's1' AND x = 2"))
   expect_true(is.na(.gti_slice_of(character(0))))
 })
+
+test_that("a tolerated dead fetch leaves an all-nodata plane, not a missing file", {
+  d <- withr::local_tempdir()
+  have <- file.path(d, "a.bin")
+  writeBin(rep(1, 6), have, size = 4L)
+  gone <- file.path(d, "b.bin")
+  .gd_nan_fill(c(have, gone), nx = 3L, ny = 2L)
+  expect_identical(readBin(have, "numeric", n = 6, size = 4L), rep(1, 6))
+  expect_true(all(is.nan(readBin(gone, "numeric", n = 6, size = 4L))))
+})
