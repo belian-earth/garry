@@ -364,3 +364,38 @@ test_that("assigning band math to a multi-slice dataset keeps per-slice layers",
     "cannot be split"
   )
 })
+
+test_that("dataset verbs check band names and keep the mask out of band reductions", {
+  ds <- ds_fixture(fixture_gradient_f32())
+  expect_error(lazy_map(ds, fn = function(v) v, bands = "typo"), "must name bands")
+  expect_error(ds["typo"], "must name bands")
+  expect_error(reduce_over(ds, "mean", "t", bands = "typo"), "must name bands")
+  red <- reduce_over(reduce_over(ds, "mean", "t"), "mean", "band")
+  v1 <- collect(reduce_over(ds, "mean", "t")$V1)
+  v2 <- collect(reduce_over(ds, "mean", "t")$V2)
+  expect_equal(collect(red), (v1 + v2) / 2, tolerance = 1e-6, ignore_attr = TRUE)
+})
+
+test_that("qa_bits builds the mask from distinct bits", {
+  f <- function(b) qa_bits(b)(matrix(c(2, 4, 6), 1, 3))
+  expect_identical(f(c(1, 1)), f(1))
+  expect_identical(as.vector(f(1)), c(1, 0, 1))
+  expect_error(qa_bits(31), "0..30")
+})
+
+test_that("fill_gaps leaves single-slice bands alone", {
+  f <- fixture_gradient_f32()
+  g <- graph_new()
+  s <- function(k) lazy_source(f, graph = g) * k
+  ds <- as_dataset(list(a = list(t1 = s(1), t2 = s(2)), b = list(t1 = s(3))))
+  out <- fill_gaps(ds, "ffill")
+  expect_identical(collect(out$b), collect(ds$b))
+})
+
+test_that("as_dataset and lazy_map refuse non-raster input clearly", {
+  f <- fixture_gradient_f32()
+  expect_error(as_dataset(list(a = 5)), "must hold")
+  expect_error(lazy_map(5, fn = identity), "LazyRaster")
+  other <- lazy_source(fixture_3857_f64())
+  expect_error(as_dataset(list(a = lazy_source(f), b = other)), "not on the first band's grid")
+})

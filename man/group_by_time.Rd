@@ -15,8 +15,8 @@ function mapping a slice name to a group label.}
 \value{
 A \code{LazyDatasetGroups} (a named list of per-group \code{LazyDataset}s).
 Reduce it with \code{\link[=reduce_over]{reduce_over()}}, then \code{\link[=collect]{collect()}} returns a named list of
-results (or writes one file per group when \code{path} carries a \code{{group}}
-placeholder, e.g. \code{"ndvi_{group}.tif"}).
+results, and \code{\link[=write_tif]{write_tif()}} writes one file per group when its \code{path}
+carries a \code{{group}} placeholder, e.g. \code{write_tif(x, "ndvi_{group}.tif")}.
 }
 \description{
 Partitions every band's slices by period so a following

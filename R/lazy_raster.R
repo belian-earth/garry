@@ -240,6 +240,7 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   if (S7::S7_inherits(xs[[1L]], LazyDataset)) {
     return(.ds_map(xs, fn, dtype, bands))
   }
+  .assert_class(xs[[1L]], LazyRaster, "LazyRaster", arg = "...")
   graph <- xs[[1L]]@graph
   .outer_dims <- function(g) g@dims[!names(g@dims) %in% c("x", "y")]
   ids <- vapply(
