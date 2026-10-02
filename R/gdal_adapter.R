@@ -729,11 +729,17 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   meta <- gdal_grid_spec(src)
   ds <- methods::new(gdalraster::GDALRaster, src)
   nb <- ds$getRasterCount()
-  dtn <- ds$getDataTypeName(1L)
-  descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), character(1))
+  bands <- seq_len(nb)
+  dtn <- vapply(bands, function(b) ds$getDataTypeName(b), character(1))
+  descs <- vapply(bands, function(b) ds$getDescription(b), character(1))
+  # each band's own nodata and affine travel into the cube's VRT, so a
+  # reader recovers them as from the source
+  nodata <- vapply(bands, function(b) as.numeric(ds$getNoDataValue(b)), numeric(1))
+  scale <- vapply(bands, function(b) as.numeric(ds$getScale(b)), numeric(1))
+  offset <- vapply(bands, function(b) as.numeric(ds$getOffset(b)), numeric(1))
   ds$close()
   grid <- meta$grid
-  if (identical(dtn, "Float64")) {
+  if (any(dtn == "Float64")) {
     grid <- .grid_retype(grid, "f64")
   }
   nx <- grid@dims[["x"]]
@@ -741,7 +747,9 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   bytes <- if (identical(grid@dtype, "f64")) 8L else 4L
   bin <- sub("\\.vrt$", ".bin", dst_vrt, ignore.case = TRUE)
   con <- file(bin, "wb")
-  # band-major planes: per band, stream row slabs
+  on.exit(close(con), add = TRUE)
+  # band-major planes: per band, stream row slabs (raw values; the VRT
+  # carries each band's nodata and affine)
   for (b in seq_len(nb)) {
     y0 <- 0L
     while (y0 < ny) {
@@ -752,7 +760,6 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
       y0 <- y0 + rows
     }
   }
-  close(con)
   gt_csv <- paste(
     formatC(grid@transform, format = "g", digits = 17, width = 1),
     collapse = ", "
@@ -765,9 +772,11 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
     grid@crs,
     if (bytes == 4L) "Float32" else "Float64",
     nb,
-    nodata = if (length(meta$nodata) == 1L) meta$nodata else NULL,
-    descriptions = descs
-  ) # QA bands are found BY DESCRIPTION downstream
+    nodata = nodata,
+    descriptions = descs, # QA bands are found BY DESCRIPTION downstream
+    scale = ifelse(scale == 1 & (is.na(offset) | offset == 0), NA, scale),
+    offset = offset
+  )
   writeLines(xml, dst_vrt)
   invisible(dst_vrt)
 }
@@ -835,38 +844,50 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   dtype,
   nbands,
   nodata = NULL,
-  descriptions = NULL
+  descriptions = NULL,
+  scale = NULL,
+  offset = NULL
 ) {
   bytes <- .gdal_dtype_bytes(dtype)
   plane <- as.numeric(nx) * as.numeric(ny) * bytes
-  ndxml <- if (!is.null(nodata)) {
-    .glue(
-      "\n    <NoDataValue>{format(nodata, scientific = FALSE)}",
-      "</NoDataValue>"
-    )
-  } else {
-    ""
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
+  # per-band value (a scalar applies to every band); NA = unset
+  per_band <- function(v, b) {
+    if (!length(v)) NA else if (length(v) == 1L) v[[1L]] else v[[b]]
   }
   bands_xml <- vapply(
     seq_len(nbands),
     function(b) {
-      desc <- if (
-        !is.null(descriptions) &&
-          b <= length(descriptions) &&
-          nzchar(descriptions[[b]])
-      ) {
-        .glue("\n    <Description>{descriptions[[b]]}</Description>")
+      d <- if (b <= length(descriptions)) descriptions[[b]] else ""
+      desc <- if (!is.na(d) && nzchar(d)) {
+        .glue("\n    <Description>{.xml_escape(d)}</Description>")
+      } else {
+        ""
+      }
+      nd <- per_band(nodata, b)
+      ndxml <- if (!is.na(nd) || is.nan(nd)) {
+        .glue("\n    <NoDataValue>{num(nd)}</NoDataValue>")
+      } else {
+        ""
+      }
+      sc <- per_band(scale, b)
+      of <- per_band(offset, b)
+      afxml <- if (!is.na(sc)) {
+        .glue(
+          "\n    <Offset>{num(if (is.na(of)) 0 else of)}</Offset>",
+          "\n    <Scale>{num(sc)}</Scale>"
+        )
       } else {
         ""
       }
       .glue(
         '  <VRTRasterBand dataType="{dtype}" band="{b}" ',
         'subClass="VRTRawRasterBand">{desc}',
-        '\n    <SourceFilename relativeToVRT="1">{src}</SourceFilename>',
+        '\n    <SourceFilename relativeToVRT="1">{.xml_escape(src)}</SourceFilename>',
         "\n    <ImageOffset>",
         "{formatC((b - 1) * plane, format = 'f', digits = 0)}</ImageOffset>",
         "\n    <PixelOffset>{bytes}</PixelOffset>",
-        "\n    <LineOffset>{as.integer(nx * bytes)}</LineOffset>{ndxml}",
+        "\n    <LineOffset>{as.integer(nx * bytes)}</LineOffset>{ndxml}{afxml}",
         "\n  </VRTRasterBand>"
       )
     },
@@ -874,9 +895,17 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   )
   .glue(
     '<VRTDataset rasterXSize="{nx}" rasterYSize="{ny}">',
-    "\n  <SRS>{wkt}</SRS>\n  <GeoTransform>{gt_csv}</GeoTransform>",
+    "\n  <SRS>{.xml_escape(wkt)}</SRS>\n  <GeoTransform>{gt_csv}</GeoTransform>",
     "\n{paste(bands_xml, collapse = '\n')}\n</VRTDataset>"
   )
+}
+
+# Escape text for an XML element body.
+.xml_escape <- function(x) {
+  x <- gsub("&", "&amp;", x, fixed = TRUE)
+  x <- gsub("<", "&lt;", x, fixed = TRUE)
+  x <- gsub(">", "&gt;", x, fixed = TRUE)
+  gsub("\"", "&quot;", x, fixed = TRUE)
 }
 
 # Strict recognition of the .raw_bsq_vrt_xml shape: every band a

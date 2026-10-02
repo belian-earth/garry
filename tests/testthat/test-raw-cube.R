@@ -111,3 +111,30 @@ test_that("a raw cube feeds lazy_source like any raster", {
   got <- collect(lazy_source(vrt) + 1)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = "gis")
 })
+
+test_that("stage_raw_cube carries each band's nodata, affine, type and name", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 6, 4, 2, "Float64", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 40, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  ds$write(1, 0, 0, 6, 4, c(-1, 2:24))
+  ds$write(2, 0, 0, 6, 4, as.numeric(101:124) + 0.123456789)
+  ds$setNoDataValue(1, -1)
+  ds$setScale(1, 0.5)
+  ds$setOffset(1, 1)
+  ds$setDescription(1, "a<b & c")
+  ds$close()
+  v <- withr::local_tempfile(fileext = ".vrt")
+  stage_raw_cube(f, v)
+  for (b in 1:2) {
+    expect_equal(
+      suppressMessages(collect(lazy_source(v, band = b, scale = TRUE))),
+      suppressMessages(collect(lazy_source(f, band = b, scale = TRUE))),
+      ignore_attr = TRUE
+    )
+  }
+  g <- methods::new(gdalraster::GDALRaster, v)
+  on.exit(g$close(), add = TRUE)
+  expect_identical(g$getDescription(1L), "a<b & c")
+  expect_identical(g$getDataTypeName(2L), "Float64")
+})
