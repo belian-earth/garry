@@ -1260,7 +1260,7 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #' every tile skipped no mosaic at all, so a build that lost a source is
 #' an error here. Sources like that do not belong in a mosaic: the file
 #' form of [lazy_dataset()] keeps them as a multi-path source node and
-#' the warper reads them together ([gdal_warp_vrt()]).
+#' the warper reads them together (`gdal_warp_window()`).
 #'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
@@ -1580,8 +1580,7 @@ gdal_warp_to_buffer <- function(
   # (integer/double/complex) and cannot expose raw bytes as Float32, so the
   # pure-R way to zero-copy-warp into an f32 buffer is the data pointer plus an
   # explicit DATATYPE=Float32 MEM DSN. get_data_ptr() is exported from
-  # gdalraster 2.6.1.9001 (previously an internal resolved at runtime), hence
-  # the Remotes pin on the dev version.
+  # gdalraster 2.7.0, hence the version floor.
   ptr <- gdalraster::get_data_ptr(buf)
   dsn <- .glue(
     "MEM:::DATAPOINTER={ptr},PIXELS={nx},LINES={ny},BANDS=1,",
@@ -2003,13 +2002,3 @@ gdal_band_count <- function(path) {
   ds$getRasterCount()
 }
 
-
-# Toggle GDAL error-logging to R off for a code block (thread-safety:
-# gdalraster's R-callback handler aborts the process when a GDAL worker
-# thread warns). Lives here per the gdalraster quarantine.
-.gdal_log_errors_off <- function(code) {
-  prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
-  gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")
-  on.exit(gdalraster::set_config_option("CPL_LOG_ERRORS", prev), add = TRUE)
-  force(code)
-}

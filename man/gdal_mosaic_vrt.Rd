@@ -29,6 +29,6 @@ overlaps a zone boundary). A skipped tile would be a hole, or with
 every tile skipped no mosaic at all, so a build that lost a source is
 an error here. Sources like that do not belong in a mosaic: the file
 form of \code{\link[=lazy_dataset]{lazy_dataset()}} keeps them as a multi-path source node and
-the warper reads them together (\code{\link[=gdal_warp_vrt]{gdal_warp_vrt()}}).
+the warper reads them together (\code{gdal_warp_window()}).
 }
 \keyword{internal}

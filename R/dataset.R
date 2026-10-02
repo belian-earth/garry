@@ -349,7 +349,7 @@ lazy_dataset <- function(
 # slice. A vector of paths mosaics first (same-CRS north-up tiles,
 # gdalbuildvrt); tiles the mosaic cannot hold (south-up, or across a
 # projection boundary) stay a multi-path source node that the warper
-# reads together, band by band (gdal_warp_vrt()). ONE
+# reads together, band by band (gdal_warp_window()). ONE
 # metadata probe serves every band (.gdal_handle caches the dataset handle),
 # and the probed grid is DECLARED on each band source, so construction costs
 # one header fetch however many bands the file carries. Each band is its own

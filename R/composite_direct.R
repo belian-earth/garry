@@ -671,7 +671,8 @@ NULL
   invisible(bins)
 }
 
-#' Execute a no-focal composite via the lean GDAL-direct cube path.
+#' Execute a masked composite (its mask cleanup focals replayed) via the
+#' lean GDAL-direct cube path.
 #' @noRd
 .execute_composite_direct <- function(
   plan,
@@ -683,12 +684,11 @@ NULL
 ) {
   .require_anvl()
   parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
-  # Split pool: the fetch-ordered pipeline overlaps the mask + per-band medians
-  # with the band fetch on the read pool (only the last band's median is exposed
-  # after the drain). A single pool cannot overlap (every daemon is fetching),
-  # so it uses the simpler parallel-or-whole-grid path below.
-  # Parallel multi-band always takes the split-pool pipeline (distributed
-  # execution requires garry_daemons(), so the pools are guaranteed here).
+  # Parallel multi-band takes the split-pool pipeline: it overlaps the mask
+  # and per-band medians with the band fetch on the read pool, so only the
+  # last band's median is exposed after the drain (distributed execution
+  # requires garry_daemons(), so the pools are guaranteed here). Otherwise
+  # the whole-grid kernel below runs once the fetch has drained.
   if (parallel) {
     return(.execute_composite_pipeline(
       plan,
