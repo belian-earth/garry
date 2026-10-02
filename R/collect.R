@@ -125,6 +125,20 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   # as output band descriptions unless the dataset already supplied
   # band names.
   band_names <- band_names %||% .grid_layer_labels(p@stages[[p@sink]]@grid)
+  # A plan that only reads (sources, warps of sources, or a stack of
+  # them) has nothing to compute: read each layer straight into the
+  # result array or output file, skipping the compute stage, chunk
+  # assembly and layout permute. Same reads, same values.
+  ro <- .read_only_spec(p)
+  if (!is.null(ro)) {
+    .garry_state$route <- "read_only"
+    if (!is.null(path)) {
+      return(invisible(.write_read_only(p, ro, path, nodata, band_names, wspec)))
+    }
+    out <- .collect_read_only(p, ro)
+    attr(out, "gis") <- .gis_attr(p@stages[[p@sink]]@grid, ro$nk, band_names)
+    return(out)
+  }
   res <- if (distributed) {
     if (!garry_daemons_set()) {
       cli::cli_abort(c(
@@ -255,10 +269,12 @@ as_terra <- function(x) {
 #' - `"gd_reduce"`: the general reduce-decomposition executor;
 #' - `"scheduler"`: the general distributed scheduler;
 #' - `"single"`: the in-process single-threaded executor
-#'   (`distributed = FALSE`).
+#'   (`distributed = FALSE`);
+#' - `"read_only"`: a plan that only reads and stacks rasters, copied
+#'   from GDAL straight into the result in either mode.
 #'
-#' @return `"composite_direct"`, `"gd_reduce"`, `"scheduler"` or
-#'   `"single"`; `NULL` before any `collect()` in the session.
+#' @return `"composite_direct"`, `"gd_reduce"`, `"scheduler"`, `"single"`
+#'   or `"read_only"`; `NULL` before any `collect()` in the session.
 #' @export
 garry_last_route <- function() .garry_state$route
 
@@ -421,5 +437,154 @@ garry_last_route <- function() .garry_state$route
       call = call
     )
   }
+  invisible(path)
+}
+
+# Dtypes f32 holds exactly: the read-only path moves values as f32, which
+# is what the compute path does with them too.
+.read_only_dtypes <- c("f32", "u8", "i8", "u16", "i16", "pred")
+
+# A read-only plan: NULL unless every layer of the sink is a source
+# (single- or multi-band) or a warp of one, read by its own source_read/
+# warp stage with no halo. Otherwise its read stages, the layers each
+# contributes (`nb`) and the layer each starts at (`k0`).
+.read_only_spec <- function(p) {
+  if (!isTRUE(garry_opt("read_only")) || length(p@sinks) > 1L) {
+    return(NULL)
+  }
+  graph <- p@graph
+  sink <- p@stages[[p@sink]]
+  top <- graph_get(graph, sink@members[[length(sink@members)]])
+  leaves <- if (S7::S7_inherits(top, StackNode)) top@parents else top@id
+  read_stage <- lapply(leaves, function(id) {
+    n <- graph_get(graph, id)
+    multi <- S7::S7_inherits(n, SourceNode) && length(n@band) > 1L
+    dims <- if (multi) c("x", "y", "band") else c("x", "y")
+    if (!S7::S7_inherits(n, SourceNode) && !S7::S7_inherits(n, WarpNode)) {
+      return(NULL)
+    }
+    if (!setequal(names(n@grid@dims), dims) ||
+        !n@grid@dtype %in% .read_only_dtypes) {
+      return(NULL)
+    }
+    for (s in p@stages) {
+      if (s@kind %in% c("source_read", "warp") && identical(s@members[[1L]], id) &&
+          s@halo == 0L && s@out_pad == 0L) {
+        return(s)
+      }
+    }
+    NULL
+  })
+  if (!length(read_stage) || any(vapply(read_stage, is.null, logical(1)))) {
+    return(NULL)
+  }
+  g <- top@grid
+  nb <- vapply(leaves, function(id) {
+    d <- graph_get(graph, id)@grid@dims
+    if ("band" %in% names(d)) as.integer(d[["band"]]) else 1L
+  }, integer(1))
+  nk <- sum(nb)
+  if (length(g@dims) > 3L || nk != prod(g@dims[setdiff(names(g@dims), c("x", "y"))])) {
+    return(NULL)
+  }
+  list(
+    read_stage = read_stage,
+    nb = nb,
+    k0 = cumsum(c(0L, nb))[seq_along(nb)],
+    nk = nk,
+    ny = g@dims[["y"]],
+    nx = g@dims[["x"]]
+  )
+}
+
+# Read every chunk of a read-only plan as raw f32 (the executor's own
+# read, local files decoding on every core) and hand each to
+# emit(v, y_off, x_off, k): `v` holds the (nb[k], h, w) or (h, w) planes
+# of leaf k.
+.read_only_each <- function(p, spec, emit) {
+  graph <- p@graph
+  ra <- lapply(spec$read_stage, function(s) .stage_read_args(graph, s))
+  .with_gdal_threads(unique(unlist(lapply(ra, `[[`, "path"))))
+  for (k in seq_along(spec$read_stage)) {
+    s <- spec$read_stage[[k]]
+    a <- ra[[k]]
+    it <- chunk_iter(s@chunks)
+    for (j in seq_len(nrow(it))) {
+      v <- .exec_read_padded(
+        a$path,
+        a$band,
+        a$nodata,
+        s@chunks,
+        it[j, ],
+        open_options = a$open_options,
+        out = "raw_f32",
+        scale = a$scale,
+        offset = a$offset,
+        decim = a$decim,
+        resampling = a$resampling
+      )
+      emit(v, it$y_off[[j]], it$x_off[[j]], k)
+    }
+  }
+  invisible(NULL)
+}
+
+# The read-only collect: the (y, x) matrix or (y, x, layer) array, each
+# chunk copied into place in one pass.
+.collect_read_only <- function(p, spec) {
+  ny <- spec$ny
+  nx <- spec$nx
+  nk <- spec$nk
+  # every cell is written below (the chunks tile the grid), so the
+  # result is allocated without the NA fill
+  out <- .Call("garry_alloc_double", as.numeric(ny) * nx * nk, PACKAGE = "garry")
+  dim(out) <- if (nk == 1L) c(ny, nx) else c(ny, nx, nk)
+  .read_only_each(p, spec, function(v, y_off, x_off, k) {
+    d <- attr(v, "gdim")
+    .Call(
+      "garry_f32_into_colmajor",
+      out,
+      v,
+      as.numeric(c(y_off, x_off, spec$k0[[k]])),
+      as.numeric(c(ny, nx, nk, spec$nb[[k]], d[[length(d) - 1L]], d[[length(d)]])),
+      PACKAGE = "garry"
+    )
+  })
+  out
+}
+
+# The read-only write: each chunk goes from the read straight to its
+# bands of the output, through the sink write's quantizer.
+.write_read_only <- function(p, spec, path, nodata, band_names, wspec) {
+  sink <- p@stages[[p@sink]]
+  nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
+  ds <- gdal_create_output(
+    path,
+    sink@grid,
+    nodata = nodata,
+    band_names = band_names,
+    dtype = wspec$dtype,
+    options = wspec$options,
+    scale = wspec$scale %||% numeric(0),
+    offset = wspec$offset %||% numeric(0)
+  )
+  on.exit(ds$close(), add = TRUE)
+  wdt <- wspec$dtype %||% sink@grid@dtype
+  wq <- .exec_wq(wspec, nodata)
+  .read_only_each(p, spec, function(v, y_off, x_off, k) {
+    v <- .exec_quantize_value(v, wq)
+    for (b in seq_len(spec$nb[[k]])) {
+      gdal_write_window(
+        ds,
+        x_off,
+        y_off,
+        v,
+        dtype = wdt,
+        nodata = nodata,
+        band = spec$k0[[k]] + b,
+        plane = b
+      )
+    }
+  })
   invisible(path)
 }

@@ -316,6 +316,14 @@
     desc = "GDAL-direct composite fast path (default route)",
     check = .opt_flag()
   ),
+  # Plans that only read (sources, warps and stacks of them) are copied
+  # straight from GDAL into the result, skipping the compute kernels.
+  read_only = list(
+    default = TRUE,
+    tier = "user",
+    desc = "copy read-only plans from GDAL straight into the result",
+    check = .opt_flag()
+  ),
   # Route decision for composite_direct: n_bands (+1 if morphology) x
   # n_slices x grid pixels. Above this, the whole-grid single-process compute
   # is heavy enough that the scheduler's overlapped parallel compute wins, so

@@ -59,6 +59,25 @@ keep; it remains marked experimental while it settles.
 * A small example raster ships in `inst/extdata`; the core verbs have
   runnable examples.
 
+## Performance
+
+Small local jobs no longer pay for the engine built for large remote ones.
+On the kadyb/raster-benchmark Landsat scene (10 bands of 7771 x 7871
+UInt16), single-threaded:
+
+* Plans that only read (sources, warps of them, and band or time stacks)
+  take a new `"read_only"` route: each chunk is copied from GDAL straight
+  into the result, or into the output file, with local files decoded on
+  every core. Loading the scene drops from 30.5 s to 5.1 s, a crop from
+  5.6 s to 1.3 s, a 3x downsample from 6.7 s to 1.9 s and a write from
+  40.1 s to 6.4 s. Values and files are identical to the compute path;
+  `options(garry.read_only = FALSE)` turns the route off.
+* User `creation_options` keep multi-threaded compression unless they set
+  `NUM_THREADS`.
+* Window reads finish in C (nodata, scale and offset, and the transpose to
+  R's column order), with the same double values: an NDVI drops from
+  3.8 s to 1.9 s.
+
 ## Bug fixes
 
 Wrong results:

@@ -146,6 +146,54 @@ static void finish_f32(float *dst, SEXP v, SEXP nodata, SEXP scale,
   }
 }
 
+/* The same tail into a [ny, nx] double matrix: GDAL's row-major buffer
+ * transposed to R's column-major order in the same pass, blocked so
+ * both sides stay in cache. Mirrors .gdal_finish_vec()'s doubles path
+ * (no f32 cast), which the single-threaded executor's values rest on. */
+SEXP garry_finish_matrix(SEXP v, SEXP ny_, SEXP nx_, SEXP nodata,
+                         SEXP scale, SEXP offset) {
+  const R_xlen_t ny = (R_xlen_t) asReal(ny_), nx = (R_xlen_t) asReal(nx_);
+  if (XLENGTH(v) != ny * nx) error("read buffer does not match its window");
+  const int has_nd = LENGTH(nodata) == 1;
+  const double nd = has_nd ? REAL(nodata)[0] : 0.0;
+  const int has_sc = LENGTH(scale) == 1;
+  const double sc = has_sc ? REAL(scale)[0] : 1.0;
+  const double of = has_sc && LENGTH(offset) == 1 ? REAL(offset)[0] : 0.0;
+  const int is_int = TYPEOF(v) == INTSXP || TYPEOF(v) == LGLSXP;
+  if (!is_int && TYPEOF(v) != REALSXP) error("read buffer must be numeric");
+  const int *vi = is_int ? INTEGER(v) : NULL;
+  const double *vd = is_int ? NULL : REAL(v);
+  SEXP out = PROTECT(allocMatrix(REALSXP, (int) ny, (int) nx));
+  double *o = REAL(out);
+  const R_xlen_t B = 64;
+  for (R_xlen_t r0 = 0; r0 < ny; r0 += B) {
+    const R_xlen_t r1 = r0 + B < ny ? r0 + B : ny;
+    for (R_xlen_t c0 = 0; c0 < nx; c0 += B) {
+      const R_xlen_t c1 = c0 + B < nx ? c0 + B : nx;
+      for (R_xlen_t r = r0; r < r1; r++) {
+        for (R_xlen_t c = c0; c < c1; c++) {
+          const R_xlen_t i = r * nx + c;
+          double x;
+          if (is_int) {
+            x = vi[i] == NA_INTEGER ? R_NaN : (double) vi[i];
+          } else {
+            x = vd[i];
+            if (ISNAN(x)) x = R_NaN;
+          }
+          if (has_nd && x == nd) x = R_NaN;
+          if (has_sc) {
+            x = x * sc;
+            x = x + of;
+          }
+          o[r + c * ny] = x;
+        }
+      }
+    }
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 SEXP garry_finish_f32(SEXP v, SEXP nodata, SEXP scale, SEXP offset) {
   SEXP out = PROTECT(allocVector(RAWSXP, XLENGTH(v) * 4));
   finish_f32((float *) RAW(out), v, nodata, scale, offset);
@@ -202,12 +250,64 @@ SEXP garry_sv_window(SEXP v, SEXP dims, SEXP es_, SEXP r0_, SEXP c0_,
   return out;
 }
 
+/* Copy a row-major f32 store payload -- one [h, w] plane or a [nb, h, w]
+ * stack -- into a column-major double array of dims (NY, NX, NK) at
+ * (y0, x0, k0): out[(y0 + y) + (x0 + x) * NY + (k0 + b) * NY * NX] =
+ * plane_b[y * w + x]. The read-only collect path assembles its result
+ * this way in one pass: no per-chunk matrix transpose, no assemble copy,
+ * no final aperm. Blocked so both sides stay cache-resident. */
+SEXP garry_f32_into_colmajor(SEXP out, SEXP raw, SEXP origin, SEXP dims) {
+  const double *o = REAL(origin); /* y0, x0, k0 */
+  const double *d = REAL(dims);   /* NY, NX, NK, nb, h, w */
+  R_xlen_t y0 = (R_xlen_t)o[0], x0 = (R_xlen_t)o[1], k0 = (R_xlen_t)o[2];
+  R_xlen_t NY = (R_xlen_t)d[0], NX = (R_xlen_t)d[1], NK = (R_xlen_t)d[2];
+  R_xlen_t nb = (R_xlen_t)d[3], h = (R_xlen_t)d[4], w = (R_xlen_t)d[5];
+  if (TYPEOF(out) != REALSXP || TYPEOF(raw) != RAWSXP) {
+    Rf_error("garry_f32_into_colmajor: out must be double, raw must be raw");
+  }
+  if (y0 < 0 || x0 < 0 || k0 < 0 || y0 + h > NY || x0 + w > NX || k0 + nb > NK) {
+    Rf_error("garry_f32_into_colmajor: window outside the target array");
+  }
+  if (XLENGTH(raw) < nb * h * w * 4 || XLENGTH(out) < NY * NX * NK) {
+    Rf_error("garry_f32_into_colmajor: payload or target too short");
+  }
+  const float *src = (const float *)RAW(raw);
+  double *dst = REAL(out);
+  const R_xlen_t B = 64;
+  for (R_xlen_t b = 0; b < nb; b++) {
+    const float *plane = src + b * h * w;
+    double *slab = dst + (k0 + b) * NY * NX;
+    for (R_xlen_t yy = 0; yy < h; yy += B) {
+      R_xlen_t ye = yy + B < h ? yy + B : h;
+      for (R_xlen_t xx = 0; xx < w; xx += B) {
+        R_xlen_t xe = xx + B < w ? xx + B : w;
+        for (R_xlen_t x = xx; x < xe; x++) {
+          double *col = slab + (x0 + x) * NY + y0;
+          for (R_xlen_t y = yy; y < ye; y++) {
+            col[y] = (double)plane[y * w + x];
+          }
+        }
+      }
+    }
+  }
+  return R_NilValue;
+}
+
+/* An uninitialised double vector of length n, for a result the caller
+ * fills completely (the read-only collect writes every cell). */
+SEXP garry_alloc_double(SEXP n) {
+  return Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},
   {"garry_sv_plane", (DL_FUNC) &garry_sv_plane, 5},
   {"garry_finish_f32", (DL_FUNC) &garry_finish_f32, 4},
   {"garry_finish_f32_into", (DL_FUNC) &garry_finish_f32_into, 6},
   {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},
+  {"garry_f32_into_colmajor", (DL_FUNC) &garry_f32_into_colmajor, 4},
+  {"garry_alloc_double", (DL_FUNC) &garry_alloc_double, 1},
+  {"garry_finish_matrix", (DL_FUNC) &garry_finish_matrix, 6},
   {NULL, NULL, 0}
 };
 

@@ -133,6 +133,22 @@ NULL
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
 # coalesced band stack) reads as a (band, y, x) cube; the halo pads
 # the spatial dims only.
+# The read behind a source_read or warp stage: a source's own read
+# arguments, or what serves its warp (a direct decimating read or a
+# warped VRT, see .warp_read_plan()). One place, so every executor reads
+# a stage the same way.
+.stage_read_args <- function(graph, s) {
+  if (s@kind == "warp") {
+    wnode <- graph_get(graph, s@members[[1L]])
+    rp <- .warp_read_plan(wnode, graph_get(graph, wnode@parents[[1L]]))
+    rp$resampling <- rp$resampling %||% "near"
+    return(rp)
+  }
+  ra <- .source_read_args(graph_get(graph, s@members[[1L]]))
+  ra$decim <- NULL
+  ra
+}
+
 # How a SourceNode is read: the path wrapped for its resampling (a GTI
 # source takes the method through its connection string) and the
 # per-read arguments. Shared by the executor and the gradient path, which
@@ -1038,32 +1054,16 @@ execute_plan <- function(
       if (s@kind == "source_read" && warp_only[[s@id]]) {
         next
       }
-      if (s@kind == "warp") {
-        wnode <- graph_get(graph, s@members[[1L]])
-        snode <- graph_get(graph, wnode@parents[[1L]])
-        rp <- .warp_read_plan(wnode, snode)
-        rpath <- rp$path
-        rband <- rp$band
-        rnodata <- rp$nodata
-        roo <- rp$open_options
-        rsc <- rp$scale
-        rof <- rp$offset
-        rdecim <- rp$decim
-        rresamp <- rp$resampling %||% "near"
-        key <- .key(wnode@id)
-      } else {
-        node <- graph_get(graph, s@members[[1L]])
-        ra <- .source_read_args(node)
-        rpath <- ra$path
-        rband <- ra$band
-        rresamp <- ra$resampling
-        rnodata <- ra$nodata
-        roo <- ra$open_options
-        rsc <- ra$scale
-        rof <- ra$offset
-        rdecim <- NULL
-        key <- .key(node@id)
-      }
+      ra <- .stage_read_args(graph, s)
+      rpath <- ra$path
+      rband <- ra$band
+      rresamp <- ra$resampling
+      rnodata <- ra$nodata
+      roo <- ra$open_options
+      rsc <- ra$scale
+      rof <- ra$offset
+      rdecim <- ra$decim
+      key <- .key(s@members[[1L]])
       split_cg <- .exec_split_cg(plan, s)
       if (is.null(split_cg)) {
         out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {

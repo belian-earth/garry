@@ -7,8 +7,8 @@
 garry_last_route()
 }
 \value{
-\code{"composite_direct"}, \code{"gd_reduce"}, \code{"scheduler"} or
-\code{"single"}; \code{NULL} before any \code{collect()} in the session.
+\code{"composite_direct"}, \code{"gd_reduce"}, \code{"scheduler"}, \code{"single"}
+or \code{"read_only"}; \code{NULL} before any \code{collect()} in the session.
 }
 \description{
 A diagnostics helper. The distributed \code{collect()} picks its execution
@@ -22,6 +22,8 @@ The values are:
 \item \code{"gd_reduce"}: the general reduce-decomposition executor;
 \item \code{"scheduler"}: the general distributed scheduler;
 \item \code{"single"}: the in-process single-threaded executor
-(\code{distributed = FALSE}).
+(\code{distributed = FALSE});
+\item \code{"read_only"}: a plan that only reads and stacks rasters, copied
+from GDAL straight into the result in either mode.
 }
 }

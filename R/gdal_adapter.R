@@ -91,6 +91,24 @@ NULL
   c(as.numeric(info$mtime), as.numeric(info$size))
 }
 
+# Decode blocks on every core for the rest of the calling function:
+# GDAL_NUM_THREADS is read when a GTiff is opened, so `paths`' cached
+# handles are dropped on entry (they reopen threaded) and on exit (later
+# reads reopen as configured). Only the calling host process is affected.
+.with_gdal_threads <- function(paths, envir = parent.frame()) {
+  prev <- gdalraster::get_config_option("GDAL_NUM_THREADS")
+  gdalraster::set_config_option("GDAL_NUM_THREADS", "ALL_CPUS")
+  for (p in paths) .gdal_handle_drop(p)
+  withr::defer(
+    {
+      gdalraster::set_config_option("GDAL_NUM_THREADS", prev)
+      for (p in paths) .gdal_handle_drop(p)
+    },
+    envir = envir
+  )
+  invisible(NULL)
+}
+
 # Close and forget every cached handle on `path`, whatever its open
 # options (writers call this before replacing a file).
 .gdal_handle_drop <- function(path) {
@@ -400,15 +418,18 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
       gdt = "f32"
     ))
   }
-  v <- as.numeric(v)
-  if (length(nodata) == 1L) {
-    v[!is.na(v) & v == nodata] <- NaN
-  }
-  v[is.na(v) & !is.nan(v)] <- NaN # GDAL-side masked values
-  if (length(scale) == 1L) {
-    v <- v * scale + offset
-  }
-  matrix(v, nrow = y_size, byrow = TRUE)
+  # The same steps in doubles (sentinel and GDAL-masked NA -> NaN,
+  # affine), transposed into the [y, x] matrix in one C pass.
+  .Call(
+    "garry_finish_matrix",
+    v,
+    as.numeric(y_size),
+    as.numeric(x_size),
+    as.numeric(nodata),
+    as.numeric(scale),
+    as.numeric(offset),
+    PACKAGE = "garry"
+  )
 }
 
 # A whole band read at a reduced size in one RasterIO call (GDAL picks
@@ -1460,6 +1481,9 @@ gdal_create_output <- function(
       "NUM_THREADS=ALL_CPUS"
     )
     if (n_bands > 1L) options <- c(options, "INTERLEAVE=BAND")
+  } else if (!any(grepl("^NUM_THREADS=", options, ignore.case = TRUE))) {
+    # user options keep the threaded compression unless they set it
+    options <- c(options, "NUM_THREADS=ALL_CPUS")
   }
   ds <- gdalraster::create(
     "GTiff",

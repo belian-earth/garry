@@ -55,7 +55,8 @@ NULL
 #' @param cog Write a Cloud Optimized GeoTIFF (see Details).
 #' @param creation_options GDAL creation options (`"KEY=VALUE"`). With
 #'   `cog = FALSE` these replace the default tiled-DEFLATE options of the
-#'   streamed write; with `cog = TRUE` they go to the COG translate pass
+#'   streamed write (compression stays multi-threaded unless they set
+#'   `NUM_THREADS`); with `cog = TRUE` they go to the COG translate pass
 #'   (the temporary streamed file keeps the defaults).
 #' @param overview_resampling COG overview resampling (`cog = TRUE`
 #'   only). `"average"` (default) suits continuous data; use `"nearest"`
