@@ -1404,11 +1404,16 @@ execute_plan_mirai <- function(
           },
           silent = TRUE
         )
+        # Wait for the close: everywhere() only dispatches it, and
+        # Windows cannot delete an output the writer still holds open.
         try(
-          mirai::everywhere(
-            garry::.daemon_write_close(),
-            .compute = "garry_write"
-          ),
+          {
+            wcl <- mirai::everywhere(
+              garry::.daemon_write_close(),
+              .compute = "garry_write"
+            )
+            invisible(lapply(wcl, function(m) m[]))
+          },
           silent = TRUE
         )
       },
