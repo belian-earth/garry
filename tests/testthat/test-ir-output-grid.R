@@ -46,7 +46,7 @@ test_that("reduce dtype rules: float ops promote ints; count typed", {
   pg_i <- .stub_grid_3d("i16")
   expect_identical(garry:::.reduce_grid(pg_i, "mean", "t")@dtype, "f32")
   expect_identical(garry:::.reduce_grid(pg_i, "median", "t")@dtype, "f32")
-  expect_identical(garry:::.reduce_grid(pg_i, "sum", "t")@dtype, "i16")
+  expect_identical(garry:::.reduce_grid(pg_i, "sum", "t")@dtype, "i32")
   expect_identical(garry:::.reduce_grid(pg_i, "max", "t")@dtype, "i16")
   expect_identical(garry:::.reduce_grid(pg_i, "count", "t")@dtype, "i32")
   pg_f <- .stub_grid_3d("f64")

@@ -45,11 +45,13 @@ test_that("binary op dtype promotion flows through MapNodes", {
   expect_identical((c / d)@grid@dtype, "f32")
 })
 
-test_that("scalar ops are weakly typed; scalar division floats", {
+test_that("scalar dtypes follow the kernel: doubles and division float", {
   a <- .lazy_source_typed("x.tif", "i16")
-  expect_identical((a + 1)@grid@dtype, "i16")
-  expect_identical((2 * a)@grid@dtype, "i16")
-  expect_identical((a / 2)@grid@dtype, "f32")
+  expect_identical((a + 1L)@grid@dtype, "i16")
+  expect_identical((2L * a)@grid@dtype, "i16")
+  expect_identical((a + 1)@grid@dtype, "f32")
+  expect_identical((2 * a)@grid@dtype, "f32")
+  expect_identical((a / 2L)@grid@dtype, "f32")
   b <- .lazy_source_typed("y.tif", "f64")
   expect_identical((b + 1)@grid@dtype, "f64")
 })

@@ -834,6 +834,9 @@ g_expand <- function(x, axis, n) {
 
 #' Reductions over array margins.
 #'
+#' `g_sum` accumulates 8- and 16-bit integers in i32 (32-bit unsigned in
+#' i64), so a sum does not wrap at the input type's range.
+#'
 #' With `nan_rm = TRUE`, a slice that is entirely NaN reduces to the
 #' reduction's identity value: `g_sum` gives 0, `g_min` gives `Inf`,
 #' `g_max` gives `-Inf`, and `g_mean` / `g_median` give NaN. `g_count`
@@ -846,10 +849,21 @@ g_expand <- function(x, axis, n) {
 #' @name g-reductions
 NULL
 
+# Accumulator dtype for integer sums, keyed by anvl dtype name: 8- and
+# 16-bit integers sum in i32, 32-bit unsigned (an i64 carrier on upload)
+# in i64.
+.g_sum_widen <- c(i8 = "i32", i16 = "i32", ui8 = "i32", ui16 = "i32", ui32 = "i64")
+
 #' @rdname g-reductions
 #' @export
 g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
+    # anvl sums in the input dtype and wraps on overflow; accumulate
+    # narrow integers wider (see .reduce_dtype()).
+    wide <- unname(.g_sum_widen[.g_dtype(x)])
+    if (!is.na(wide)) {
+      x <- anvl::nv_convert(x, wide)
+    }
     return(anvl::nv_sum(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))

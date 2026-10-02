@@ -450,8 +450,10 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
 
-# Scalar op helper: scalar on one side. Scalars are weakly typed: they
-# never widen the raster dtype; only division forces a float result.
+# Scalar op helper: scalar on one side. The declared dtype follows what
+# the kernel computes (anvl's rules): an R integer keeps the raster's
+# dtype, while an R double, like division, makes an integer raster f32.
+# A float raster keeps its own float dtype either way.
 .lazy_scalar_op <- function(
   lr,
   s,
@@ -461,9 +463,10 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   dtype = NULL
 ) {
   fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
+  floats <- divide || is.double(s)
   grid <- .grid_retype(
     lr@grid,
-    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = divide)
+    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
   )
   id <- graph_add(
     lr@graph,
@@ -596,7 +599,20 @@ for (op_name in c("^", "%%")) {
   } else {
     function(v) fn(v)
   }
-  dtype <- if (S7::S7_inherits(x, LazyRaster) && !keeps_dtype) {
+  if (S7::S7_inherits(x, LazyDataset)) {
+    # per layer: bands may carry different dtypes
+    newbands <- x@bands
+    for (a in .ds_value_bands(x)) {
+      newbands[[a]] <- lapply(x@bands[[a]], .lazy_math, generic, ...)
+    }
+    return(LazyDataset(
+      graph = x@graph,
+      bands = newbands,
+      mask_asset = x@mask_asset,
+      steps = c(x@steps, list(.step("math", "math", detail = generic)))
+    ))
+  }
+  dtype <- if (!keeps_dtype) {
     dtype_promote(x@grid@dtype, x@grid@dtype, divide = TRUE)
   }
   lazy_map(x, fn = body_fn, dtype = dtype)

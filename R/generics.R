@@ -147,13 +147,18 @@ S7::method(output_grid, PatchNode) <- function(node, parent_grids) {
 }
 
 # Output dtype of a reduction (decision D7/D12): float-producing ops
-# promote integers to f32; count is i32; the algebraic extremes/sums keep
-# their input dtype.
+# promote integers to f32; count is i32; a sum widens 8- and 16-bit
+# integers to i32 and u32 to i64, as g_sum() accumulates them; the
+# extremes keep their input dtype.
 .reduce_dtype <- function(op, dtype) {
   if (op %in% c("mean", "median")) {
     if (.dtype_family(dtype) == "float") dtype else "f32"
   } else if (op == "count") {
     "i32"
+  } else if (op == "sum" && dtype %in% c("i8", "i16", "u8", "u16")) {
+    "i32"
+  } else if (op == "sum" && dtype == "u32") {
+    "i64"
   } else {
     dtype
   }
