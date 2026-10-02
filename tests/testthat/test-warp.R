@@ -133,3 +133,29 @@ test_that("align to the identical grid pastes: no WarpNode, no warp
   expect_true(any(vapply(p2@stages, function(s) s@kind == "warp",
                          logical(1))))
 })
+
+test_that("a user-declared nodata stays out of warps and decimated reads", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 4, 4, 1, "Float32", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 40, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  v <- rep(100, 16)
+  v[6] <- -9999 # the file declares no nodata
+  ds$write(1, 0, 0, 4, 4, v)
+  ds$close()
+  x <- lazy_source(f, nodata = -9999)
+
+  # cells outside the footprint are nodata, not 0
+  big <- grid_spec("EPSG:3857", extent = c(-20, -20, 60, 60), dims = c(8L, 8L))
+  a <- collect(align_to(x, big, resampling = "near"))
+  expect_identical(sum(is.nan(a)), 49L) # 48 outside + the sentinel cell
+  expect_true(all(a[!is.nan(a)] == 100))
+
+  # the sentinel is never blended into resampled values
+  fine <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(8L, 8L))
+  b <- collect(align_to(x, fine, resampling = "bilinear"))
+  expect_true(all(b[!is.nan(b)] == 100))
+  coarse <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(2L, 2L))
+  d <- collect(align_to(x, coarse, resampling = "average"))
+  expect_true(all(d == 100))
+})

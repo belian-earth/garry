@@ -97,7 +97,8 @@ NULL
     wnode@target_grid,
     wnode@resampling,
     snode@open_options,
-    band = snode@band
+    band = snode@band,
+    nodata = snode@nodata
   )
   if (!is.null(spec)) {
     return(list(

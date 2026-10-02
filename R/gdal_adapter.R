@@ -253,6 +253,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param band 1-based band index the read will use; must be a single
 #'   band (the decimating read is single-band). Its data type drives the
 #'   integer gate above.
+#' @param nodata The source node's sentinel (length 0 or 1). Averaging
+#'   declines unless the file declares the same value.
 #' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
 #' @keywords internal
 .rio_direct_spec <- function(
@@ -260,7 +262,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   target_grid,
   resampling,
   open_options = character(0),
-  band = 1L
+  band = 1L,
+  nodata = numeric(0)
 ) {
   if (length(src_path) != 1L || length(open_options) > 0L || length(band) != 1L) {
     return(NULL)
@@ -278,6 +281,14 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     dtn <- tryCatch(ds$getDataTypeName(band), error = function(e) NULL)
     if (is.null(dtn) || !startsWith(dtn, "Float")) {
       return(NULL)
+    }
+    # RasterIO averaging skips only the file's own nodata; a sentinel the
+    # node declares otherwise would be blended in, so leave it to the warper.
+    if (length(nodata) == 1L) {
+      file_nd <- tryCatch(ds$getNoDataValue(band), error = function(e) NA)
+      if (!isTRUE(identical(as.numeric(file_nd), as.numeric(nodata)))) {
+        return(NULL)
+      }
     }
   }
   gt <- tryCatch(ds$getGeoTransform(), error = function(e) NULL)
@@ -1040,8 +1051,10 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #'
 #' Delegates every pixel of cross-CRS math to the GDAL warper:
 #' `-te`/`-ts` pin the output grid exactly to `target_grid`.
-#' Float targets without a source nodata get `-dstnodata nan` so area
-#' outside the source footprint reads as NaN, not 0.
+#' A source nodata goes to the warper as both `-srcnodata` and
+#' `-dstnodata`, so it never enters resampling and area outside the source
+#' footprint reads as nodata; float targets without one get `-dstnodata
+#' nan`.
 #'
 #' @param src_path Source path/VSI URL. One source: gdalwarp writes a
 #'   VRT from a single input only. A multi-path source node is read by
@@ -1082,10 +1095,12 @@ gdal_warp_vrt <- function(
     "-et",
     "0"
   ) # exact transformer: correctness over warp speed
-  if (
-    length(src_nodata) == 0L &&
-      .dtype_family(target_grid@dtype) == "float"
-  ) {
+  if (length(src_nodata) == 1L) {
+    # The node's sentinel, whether the file declares it or the user did:
+    # the warper must leave it out of resampling, and cells outside the
+    # footprint read as it (then NaN, like every other sentinel cell).
+    args <- c(args, "-srcnodata", num(src_nodata), "-dstnodata", num(src_nodata))
+  } else if (.dtype_family(target_grid@dtype) == "float") {
     args <- c(args, "-dstnodata", "nan")
   }
   do_warp <- function() {
