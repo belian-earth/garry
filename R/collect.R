@@ -125,6 +125,12 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   # as output band descriptions unless the dataset already supplied
   # band names.
   band_names <- band_names %||% .grid_layer_labels(p@stages[[p@sink]]@grid)
+  if (distributed && !garry_daemons_set()) {
+    cli::cli_abort(c(
+      "{.arg distributed} is TRUE but no garry daemon pools are running.",
+      "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."
+    ))
+  }
   # A plan that only reads (sources, warps of sources, or a stack of
   # them) has nothing to compute: read each layer straight into the
   # result array or output file, skipping the compute stage, chunk
@@ -133,19 +139,15 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   if (!is.null(ro)) {
     .garry_state$route <- "read_only"
     if (!is.null(path)) {
-      return(invisible(.write_read_only(p, ro, path, nodata, band_names, wspec)))
+      return(invisible(
+        .write_read_only(p, ro, path, nodata, band_names, wspec, distributed)
+      ))
     }
-    out <- .collect_read_only(p, ro)
+    out <- .collect_read_only(p, ro, distributed)
     attr(out, "gis") <- .gis_attr(p@stages[[p@sink]]@grid, ro$nk, band_names)
     return(out)
   }
   res <- if (distributed) {
-    if (!garry_daemons_set()) {
-      cli::cli_abort(c(
-        "{.arg distributed} is TRUE but no garry daemon pools are running.",
-        "i" = "Call {.fn garry_daemons} first, or pass {.code distributed = FALSE}."
-      ))
-    }
     # Quantized writes (wspec with scale) bypass the cd/gd fast paths:
     # their band kernels do not yet fold g_quantize, and the one-
     # device-quantizer invariant (byte-identical digital numbers on
@@ -498,12 +500,16 @@ garry_last_route <- function() .garry_state$route
 }
 
 # Read every chunk of a read-only plan as raw f32 (the executor's own
-# read, local files decoding on every core) and hand each to
-# emit(v, y_off, x_off, k): `v` holds the (nb[k], h, w) or (h, w) planes
-# of leaf k.
-.read_only_each <- function(p, spec, emit) {
+# read) and hand each to emit(v, y_off, x_off, k): `v` holds the
+# (nb[k], h, w) or (h, w) planes of leaf k. In-process, local files
+# decode on every core; distributed, the read pool reads the chunks
+# and the host only copies them into place, in completion order.
+.read_only_each <- function(p, spec, emit, distributed = FALSE) {
   graph <- p@graph
   ra <- lapply(spec$read_stage, function(s) .stage_read_args(graph, s))
+  if (distributed && .gd_n_compute("garry_read") > 0L) {
+    return(.read_only_each_pool(spec, ra, emit))
+  }
   .with_gdal_threads(unique(unlist(lapply(ra, `[[`, "path"))))
   for (k in seq_along(spec$read_stage)) {
     s <- spec$read_stage[[k]]
@@ -529,9 +535,100 @@ garry_last_route <- function() .garry_state$route
   invisible(NULL)
 }
 
+# The distributed read loop: one read task per chunk on the read pool,
+# at most two a daemon in flight (so finished chunks never pile up on
+# the host), each emitted as it lands.
+.read_only_each_pool <- function(spec, ra, emit) {
+  prof <- "garry_read"
+  .assert_pools_alive(prof)
+  .garry_abi_check(prof)
+  # read policy is resolved host-side: daemons don't inherit options
+  .pool_broadcast(
+    quote({
+      suppressMessages(library(garry))
+      options(garry.read_fail = rf, garry.read_retry = rr)
+    }),
+    profiles = prof,
+    rf = garry_opt("read_fail"),
+    rr = garry_opt("read_retry")
+  )
+  todo <- do.call(rbind, lapply(seq_along(spec$read_stage), function(k) {
+    data.frame(k = k, j = seq_len(nrow(chunk_iter(spec$read_stage[[k]]@chunks))))
+  }))
+  its <- lapply(spec$read_stage, function(s) chunk_iter(s@chunks))
+  cap <- max(2L * .gd_n_compute(prof), 2L)
+  inflight <- list()
+  next_i <- 1L
+  last_check <- Sys.time()
+  launch <- function(i) {
+    k <- todo$k[[i]]
+    a <- ra[[k]]
+    mirai::mirai(
+      asNamespace("garry")$.exec_read_padded(
+        path,
+        band,
+        nodata,
+        cg,
+        core,
+        open_options = oo,
+        out = "raw_f32",
+        scale = sc,
+        offset = of,
+        decim = dcm,
+        resampling = rsm
+      ),
+      path = a$path,
+      band = a$band,
+      nodata = a$nodata,
+      cg = spec$read_stage[[k]]@chunks,
+      core = its[[k]][todo$j[[i]], ],
+      oo = a$open_options,
+      sc = a$scale,
+      of = a$offset,
+      dcm = a$decim,
+      rsm = a$resampling,
+      .compute = prof
+    )
+  }
+  while (next_i <= nrow(todo) || length(inflight)) {
+    while (next_i <= nrow(todo) && length(inflight) < cap) {
+      inflight[[as.character(next_i)]] <- launch(next_i)
+      next_i <- next_i + 1L
+    }
+    harvested <- FALSE
+    for (key in names(inflight)) {
+      h <- inflight[[key]]
+      if (mirai::unresolved(h)) {
+        next
+      }
+      inflight[[key]] <- NULL
+      harvested <- TRUE
+      if (inherits(h$data, c("miraiError", "errorValue"))) {
+        cli::cli_abort(
+          "read task failed on daemon: {as.character(h$data)}",
+          class = c("garry_task_error", "garry_error")
+        )
+      }
+      i <- as.integer(key)
+      k <- todo$k[[i]]
+      core <- its[[k]][todo$j[[i]], ]
+      emit(h$data, core$y_off, core$x_off, k)
+    }
+    if (!harvested) {
+      # a dead read daemon leaves its task unresolved forever
+      if (difftime(Sys.time(), last_check, units = "secs") > 1) {
+        .assert_pools_alive(prof)
+        last_check <- Sys.time()
+      }
+      Sys.sleep(0.002)
+    }
+  }
+  invisible(NULL)
+}
+
 # The read-only collect: the (y, x) matrix or (y, x, layer) array, each
 # chunk copied into place in one pass.
-.collect_read_only <- function(p, spec) {
+.collect_read_only <- function(p, spec, distributed = FALSE) {
   ny <- spec$ny
   nx <- spec$nx
   nk <- spec$nk
@@ -549,13 +646,13 @@ garry_last_route <- function() .garry_state$route
       as.numeric(c(ny, nx, nk, spec$nb[[k]], d[[length(d) - 1L]], d[[length(d)]])),
       PACKAGE = "garry"
     )
-  })
+  }, distributed = distributed)
   out
 }
 
 # The read-only write: each chunk goes from the read straight to its
 # bands of the output, through the sink write's quantizer.
-.write_read_only <- function(p, spec, path, nodata, band_names, wspec) {
+.write_read_only <- function(p, spec, path, nodata, band_names, wspec, distributed = FALSE) {
   sink <- p@stages[[p@sink]]
   nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
   ds <- gdal_create_output(
@@ -585,6 +682,6 @@ garry_last_route <- function() .garry_state$route
         plane = b
       )
     }
-  })
+  }, distributed = distributed)
   invisible(path)
 }

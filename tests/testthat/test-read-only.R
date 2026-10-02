@@ -203,3 +203,75 @@ test_that("a read-only write matches the compute path's file", {
   expect_identical(r$route, "read_only")
   expect_identical(r$fast, r$slow)
 })
+
+test_that("the read pool serves the read-only route with identical results", {
+  skip_on_cran()
+  local_pools(2, 1)
+  withr::local_options(garry.chunk_target_px = 400)
+  mb <- fixture_multiband()
+  f <- fixture_i16_nodata()
+  coarse <- grid_spec(
+    crs = "EPSG:32632",
+    extent = c(400000, 4499000, 401400, 4500000),
+    res = 60
+  )
+  plans <- list(
+    function() {
+      g <- graph_new()
+      lazy_stack(
+        list(
+          lazy_source(fixture_gradient_f32(), graph = g),
+          lazy_source(mb$path, band = 5L, graph = g),
+          lazy_source(mb$path, band = 3L, graph = g)
+        ),
+        along = "band"
+      )
+    },
+    function() {
+      g <- graph_new()
+      lazy_stack(
+        list(
+          align_to(lazy_source(f, graph = g), coarse, resampling = "average"),
+          align_to(lazy_source(f, graph = g), coarse)
+        ),
+        along = "band"
+      )
+    },
+    function() lazy_source(f)
+  )
+  for (build in plans) {
+    pooled <- collect(build(), distributed = TRUE)
+    expect_identical(garry_last_route(), "read_only")
+    withr::with_options(list(garry.read_only = FALSE), {
+      ref <- collect(build(), distributed = FALSE)
+    })
+    expect_identical(pooled, ref)
+  }
+  out <- withr::local_tempfile(fileext = ".tif")
+  ref <- withr::local_tempfile(fileext = ".tif")
+  write_tif(
+    plans[[2]](),
+    out,
+    dtype = "i16",
+    nodata = -9999,
+    distributed = TRUE
+  )
+  expect_identical(garry_last_route(), "read_only")
+  withr::with_options(list(garry.read_only = FALSE), {
+    write_tif(
+      plans[[2]](),
+      ref,
+      dtype = "i16",
+      nodata = -9999,
+      distributed = FALSE
+    )
+  })
+  rd <- function(p) {
+    ds <- methods::new(gdalraster::GDALRaster, p)
+    on.exit(ds$close())
+    nx <- ds$getRasterXSize()
+    ny <- ds$getRasterYSize()
+    lapply(1:2, function(b) ds$read(b, 0, 0, nx, ny, nx, ny))
+  }
+  expect_identical(rd(out), rd(ref))
+})
