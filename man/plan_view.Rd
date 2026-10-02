@@ -60,7 +60,7 @@ change shape as a pipeline is composed.
 \examples{
 \dontrun{
 lr <- lazy_source("cube.tif")
-plan_view(focal_map(lr * 2, radius = 1L, fn = g_mean))
+plan_view(focal_map(lr * 2, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)))
 }
 }
 \seealso{

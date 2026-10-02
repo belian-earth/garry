@@ -39,7 +39,8 @@ ds$write(1, 0, 0, 60, 40, as.numeric(seq_len(60 * 40)))
 ds$close()
 
 lr <- lazy_source(tif, name = "band")
-plan_view(reduce_over(focal_map(lr * 2, radius = 1L, fn = g_mean),
+mean9 <- function(sh) Reduce(`+`, sh) / length(sh) # the 3 x 3 window mean
+plan_view(reduce_over(focal_map(lr * 2, radius = 1L, fn = mean9),
                       "mean", c("x", "y")),
           height = "320px")
 ```

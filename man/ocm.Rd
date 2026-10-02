@@ -95,7 +95,7 @@ distributed with garry; download them once with
 \dontrun{
 ocm_fetch_weights()  # once per machine
 ds <- ds |> ocm_mask(red = "B04", green = "B03", nir = "B8A")
-composite <- ds |> reduce_over("time", "median") |> collect()
+composite <- ds |> reduce_over("median", over = "t") |> collect()
 }
 }
 \seealso{
