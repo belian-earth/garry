@@ -446,13 +446,9 @@ execute_plan_mirai <- function(
       )
       fetch_state[[ipath]] <- st
     }
-    fl <- grep("^FILTER=", roo, value = TRUE)
-    if (length(fl) != 1L) {
-      return(NULL)
-    }
-    slval <- regmatches(fl, regexec("^FILTER=slice = '(.*)'$", fl))[[1]][[2]]
-    if (is.na(slval)) {
-      return(NULL)
+    slval <- .gti_slice_of(roo)
+    if (is.null(slval) || is.na(slval)) {
+      return(NULL) # no slice filter, or one only GDAL can evaluate
     }
     rows <- which(st$slice == slval & st$do)
     keys <- .glue("f{st$id}_{rows}")

@@ -1020,7 +1020,8 @@ NULL
               k$wkt,
               j$locs[order(j$dt)],
               j$nodata,
-              resampling = j$resampling %||% "near"
+              resampling = j$resampling %||% "near",
+              band = j$band
             )
           },
           what = "slice warp"

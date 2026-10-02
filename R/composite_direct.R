@@ -119,6 +119,49 @@ NULL
   }))
 }
 
+# The slice label a GTI source's open options select: NA without a FILTER,
+# the label for exactly FILTER=slice = '<label>', and NULL for any other
+# filter, which only GDAL can evaluate.
+.gti_slice_of <- function(oo) {
+  f <- grep("^FILTER=", oo, value = TRUE)
+  if (!length(f)) {
+    return(NA_character_)
+  }
+  m <- regmatches(f, regexec("^FILTER=slice = '([^']*)'$", f))[[1L]]
+  if (length(f) != 1L || length(m) != 2L) {
+    return(NULL)
+  }
+  m[[2L]]
+}
+
+# Can the warp-on-read routes read this GTI source themselves? They pick a
+# slice's items from the index sidecar and draw them in ascending datetime
+# order, reading one band; any other filter, sort order or band selection
+# is left to GDAL's GTI driver on the scheduler.
+.gd_source_ok <- function(n) {
+  if (length(n@path) != 1L || !grepl("^GTI:", n@path) || length(n@band) != 1L) {
+    return(FALSE)
+  }
+  meta_f <- paste0(sub("^GTI:", "", n@path), ".meta.rds")
+  if (!file.exists(meta_f)) {
+    return(FALSE)
+  }
+  sl <- .gti_slice_of(n@open_options)
+  if (is.null(sl)) {
+    return(FALSE)
+  }
+  if (!is.na(sl) && !"slice" %in% names(readRDS(meta_f)$entries)) {
+    return(FALSE)
+  }
+  opt <- function(key) {
+    v <- grep(paste0("^", key, "="), n@open_options, value = TRUE)
+    if (length(v)) sub("^[^=]*=", "", v[[1L]]) else NA_character_
+  }
+  sf <- opt("SORT_FIELD")
+  asc <- opt("SORT_FIELD_ASC")
+  (is.na(sf) || identical(sf, "datetime")) && (is.na(asc) || toupper(asc) == "YES")
+}
+
 .cd_reduce_spec <- function(gg, red) {
   if (!S7::S7_inherits(red, ReduceNode)) {
     return(NULL)
@@ -283,11 +326,7 @@ NULL
   }
   gg <- function(id) graph_get(graph, id)
   for (s in src_stages) {
-    n <- gg(s@members[[1L]])
-    if (length(n@path) != 1L || !grepl("^GTI:", n@path)) {
-      return(NULL)
-    }
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
+    if (!.gd_source_ok(gg(s@members[[1L]]))) {
       return(NULL)
     }
   }
@@ -428,15 +467,11 @@ NULL
       meta_cache[[gti]] <- readRDS(paste0(gti, ".meta.rds"))
     }
     e <- meta_cache[[gti]]$entries
-    filt <- grep("FILTER=", n@open_options, value = TRUE)
-    er <- if (length(filt)) {
-      sl <- sub(".*'([^']*)'.*", "\\1", filt)
-      e[e$slice == sl, , drop = FALSE]
-    } else {
-      e
-    }
+    sl <- .gti_slice_of(n@open_options) # eligibility made it NA or a label
+    er <- if (is.na(sl)) e else e[e$slice == sl, , drop = FALSE]
     list(
       nid = n@id,
+      band = as.integer(n@band),
       nodata = n@nodata,
       locs = er$location,
       dt = er$datetime,
@@ -458,6 +493,7 @@ NULL
     list(
       locs = .mpc_resign(x$locs),
       dt = x$dt,
+      band = x$band,
       nodata = x$nodata,
       resampling = x$resampling,
       bin = x$bin
@@ -1048,12 +1084,8 @@ NULL
     return(NULL)
   }
   for (s in src_stages) {
-    # every source must be fetchable
-    n <- graph_get(graph, s@members[[1L]])
-    if (length(n@path) != 1L || !grepl("^GTI:", n@path)) {
-      return(NULL)
-    }
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
+    # every source must be one the warp-on-read route can read itself
+    if (!.gd_source_ok(graph_get(graph, s@members[[1L]]))) {
       return(NULL)
     }
   }

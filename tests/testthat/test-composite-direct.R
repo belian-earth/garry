@@ -88,3 +88,28 @@ test_that("bands with different per-slice fns do not take the fast path", {
   got <- collect(x, distributed = TRUE)
   .gg_close(got, want)
 })
+
+test_that("GTI sources the fast routes cannot read themselves fall through", {
+  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+  src <- function(filter = "slice = 's1'", sort_asc = TRUE, band = 1L) {
+    lazy_source(
+      paste0("GTI:", gA),
+      band = band,
+      open_options = gti_open_options(
+        .gg_grid,
+        filter = filter,
+        sort_field = "datetime",
+        sort_asc = sort_asc
+      ),
+      grid = .gg_grid,
+      block_dim = c(60L, 40L)
+    )
+  }
+  n <- function(lr) graph_get(lr@graph, lr@node_id)
+  expect_true(.gd_source_ok(n(src())))
+  expect_false(.gd_source_ok(n(src(filter = "datetime > '2020'"))))
+  expect_false(.gd_source_ok(n(src(sort_asc = FALSE))))
+  expect_identical(.gti_slice_of("FILTER=slice = 's1'"), "s1")
+  expect_null(.gti_slice_of("FILTER=slice = 's1' AND x = 2"))
+  expect_true(is.na(.gti_slice_of(character(0))))
+})
