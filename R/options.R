@@ -28,8 +28,8 @@
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v)) {
       return("must be a single finite number")
     }
-    if (int && v != as.integer(v)) {
-      return("must be a whole number")
+    if (int && (v != round(v) || abs(v) > .Machine$integer.max)) {
+      return("must be a whole number within R's integer range")
     }
     if (v < min || v > max) {
       return(.glue("must be in [{format(min)}, {format(max)}]"))
