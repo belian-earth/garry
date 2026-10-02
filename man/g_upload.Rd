@@ -17,6 +17,5 @@ g_upload(x, dtype, device = NULL)
 An \code{AnvlArray}.
 }
 \description{
-Unsigned dtypes upload via a wider signed carrier: anvl cannot
-construct them from R numerics.
+Unsigned dtypes upload via a wider signed carrier.
 }

@@ -60,7 +60,23 @@
 #'
 #' @param sigma_lvl,sigma_slp,sigma_obs Noise standard deviations (level
 #'   disturbance, slope disturbance, observation).
-#' @param output `"mean"` (smoothed level) or `"sd"` (its standard error).
+#' @param output `"mean"` (smoothed level), `"sd"` (its standard error),
+#'   `"fmean"` (the forward-filtered level: each year from that year and
+#'   earlier ones only), `"fsd"` (its standard error) or `"innov"` (the
+#'   standardised innovation `(y - prediction) / sqrt(F)` of each observed
+#'   year, 0 where missing: the filter's surprise, which a caller tests
+#'   for persistent change).
+#'
+#' @section Regime boundaries:
+#' A third element of `xs`, a `(t, y, x)` stack of 0/1, marks years that
+#' start a new regime. At a marked year the forward pass resets the state
+#' covariance to the diffuse start (the level and slope are re-learned
+#' from that year on), and the backward pass is blocked across it, so the
+#' smoothed level before the boundary uses no observation from it or
+#' after. Without boundaries the two-sided smoother carries change the
+#' model cannot represent (a planting, a clearance) into the years
+#' before it; with them, nothing crosses a boundary in either direction.
+#' Boundaries are found by the caller, typically from `"innov"`.
 #' @param robust_iters Robust reweighting passes (0 = plain smoother).
 #'   Each pass inflates the level noise at years whose smoothed-level
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
@@ -75,7 +91,7 @@ kalman_llt <- function(
   sigma_lvl,
   sigma_slp,
   sigma_obs = 1,
-  output = c("mean", "sd"),
+  output = c("mean", "sd", "fmean", "fsd", "innov"),
   robust_iters = 0L,
   robust_threshold = 3,
   robust_inflation = 100,
@@ -117,6 +133,7 @@ kalman_llt <- function(
     }
     y <- g_cast(xs[[1L]], "f64")
     rrel <- if (length(xs) >= 2L) g_cast(xs[[2L]], "f64") else NULL
+    bnd <- if (length(xs) >= 3L) g_cast(xs[[3L]], "f64") else NULL
     T_ <- if (.g_traced(y)) .g_shape(y)[[1L]] else dim(y)[[1L]]
 
     # [y, x] plane of f64 zeros (NaN-proof); the batched carry template.
@@ -141,6 +158,9 @@ kalman_llt <- function(
       if (!is.null(q_scale)) {
         fxs$qs <- q_scale
       }
+      if (!is.null(bnd)) {
+        fxs$bd <- bnd
+      }
 
       fwd <- g_scan(
         init = list(
@@ -159,6 +179,13 @@ kalman_llt <- function(
           P11p <- carry$P11 + 2 * carry$P12 + carry$P22 + q_lvl
           P12p <- carry$P12 + carry$P22
           P22p <- carry$P22 + q_slp
+          if (!is.null(s$bd)) {
+            # a regime boundary: the diffuse start again (the predicted
+            # mean is kept as the prior's centre; its weight is ~0)
+            P11p <- g_ifelse(s$bd > 0, kap + 0 * P11p, P11p)
+            P12p <- g_ifelse(s$bd > 0, 0 * P12p, P12p)
+            P22p <- g_ifelse(s$bd > 0, kap + 0 * P22p, P22p)
+          }
           # update (analytic gain, Z = [1, 0]); NaN y flows through the
           # update terms and the select keeps the prediction.
           v <- s$y - a1p
@@ -166,6 +193,7 @@ kalman_llt <- function(
           K1 <- P11p / Fv
           K2 <- P12p / Fv
           miss <- g_is_nodata(s$y)
+          z <- g_ifelse(miss, 0 * a1p, v / sqrt(Fv))   # v is NaN there
           a1 <- g_ifelse(miss, a1p, a1p + K1 * v)
           a2 <- g_ifelse(miss, a2p, a2p + K2 * v)
           P11 <- g_ifelse(miss, P11p, (1 - K1) * P11p)
@@ -176,6 +204,10 @@ kalman_llt <- function(
             out = list(
               a1f = a1,
               a2f = a2,
+              P11f = P11,
+              P12f = P12,
+              P22f = P22,
+              z = z,
               a1p = a1p,
               a2p = a2p,
               P11p = P11p,
@@ -193,10 +225,20 @@ kalman_llt <- function(
         list(m = g_ifelse(ok, a1s, NaN), s = g_ifelse(ok, sd, NaN))
       }
       last <- emit(fwd$carry$a1, fwd$carry$P11) # smoothed(T) = filtered(T)
+      # the forward filter at every year: (t, y, x) cubes, gap-masked
+      okT <- g_rep_t(ok, T_)
+      filt <- list(
+        m = g_ifelse(okT, fwd$out$a1f, NaN),
+        s = g_ifelse(okT, sqrt(g_ifelse(fwd$out$P11f > 0, fwd$out$P11f, 0)), NaN),
+        z = g_ifelse(okT, fwd$out$z, NaN)
+      )
       if (T_ == 1L) {
         return(list(
           mean = g_concat_t(list(last$m)),
-          sd = g_concat_t(list(last$s))
+          sd = g_concat_t(list(last$s)),
+          fmean = filt$m,
+          fsd = filt$s,
+          innov = filt$z
         ))
       }
 
@@ -219,6 +261,12 @@ kalman_llt <- function(
       if (!is.null(q_scale)) {
         bxs$qsn <- g_slice_t(q_scale, 2L, T_)
       }
+      if (!is.null(bnd)) {
+        bxs$bdn <- g_slice_t(bnd, 2L, T_)
+        bxs$P11f <- g_slice_t(f$P11f, 1L, T_ - 1L)
+        bxs$P12f <- g_slice_t(f$P12f, 1L, T_ - 1L)
+        bxs$P22f <- g_slice_t(f$P22f, 1L, T_ - 1L)
+      }
       bwd <- g_scan(
         init = list(
           a1s = fwd$carry$a1,
@@ -239,6 +287,11 @@ kalman_llt <- function(
           J12 <- M12 - M22
           J21 <- M21
           J22 <- M22
+          if (!is.null(s$bdn)) {
+            # year t+1 starts a regime: nothing flows back across it
+            keep <- g_ifelse(s$bdn > 0, 0 * J11, 1 + 0 * J11)
+            J11 <- J11 * keep; J12 <- J12 * keep; J21 <- J21 * keep; J22 <- J22 * keep
+          }
           # a_s(t) = a_f(t) + J (a_s(t+1) - a_pred(t+1))
           d1 <- carry$a1s - s$a1pn
           d2 <- carry$a2s - s$a2pn
@@ -259,6 +312,12 @@ kalman_llt <- function(
           P11s <- E11 + JP11 * J11 + JP12 * J12
           P12s <- E12 + JP11 * J21 + JP12 * J22
           P22s <- E22 + JP21 * J21 + JP22 * J22
+          if (!is.null(s$bdn)) {
+            # blocked: the smoothed state at t is the filtered one
+            P11s <- g_ifelse(s$bdn > 0, s$P11f, P11s)
+            P12s <- g_ifelse(s$bdn > 0, s$P12f, P12s)
+            P22s <- g_ifelse(s$bdn > 0, s$P22f, P22s)
+          }
           list(
             carry = list(
               a1s = a1s,
@@ -275,7 +334,10 @@ kalman_llt <- function(
       )
       list(
         mean = g_concat_t(list(bwd$out$m, last$m)),
-        sd = g_concat_t(list(bwd$out$s, last$s))
+        sd = g_concat_t(list(bwd$out$s, last$s)),
+        fmean = filt$m,
+        fsd = filt$s,
+        innov = filt$z
       )
     }
 
@@ -315,7 +377,7 @@ kalman_llt <- function(
       }
     }
 
-    g_cast(if (output == "mean") sm$mean else sm$sd, out_dtype)
+    g_cast(sm[[output]], out_dtype)
   }
 }
 
@@ -330,7 +392,12 @@ kalman_llt <- function(
 #'   `LazyDataset` (each band smoothed independently).
 #' @param obs_var Optional relative observation-variance stack on the
 #'   same grid (`Var(v_t) = sigma_obs^2 * obs_var_t`).
-#' @param outputs Which outputs to build (`"mean"`, `"sd"`).
+#' @param boundaries Optional 0/1 stack on the same grid marking years
+#'   that start a new regime (see [kalman_llt()], section "Regime
+#'   boundaries"); needs `obs_var` (pass a stack of ones for none).
+#' @param outputs Which outputs to build (`"mean"`, `"sd"`, the
+#'   forward-filtered `"fmean"`, `"fsd"`, and `"innov"`; see
+#'   [kalman_llt()]).
 #' @param dtype Output dtype (default f32).
 #' @inheritParams kalman_llt
 #' @param ... Passed to [kalman_llt()].
@@ -344,12 +411,16 @@ kalman_smooth <- function(
   sigma_slp,
   sigma_obs = 1,
   obs_var = NULL,
+  boundaries = NULL,
   outputs = c("mean", "sd"),
   dtype = "f32",
   ...
 ) {
-  outputs <- match.arg(outputs, several.ok = TRUE)
-  target <- if (is.null(obs_var)) x else list(x, obs_var)
+  outputs <- match.arg(outputs, c("mean", "sd", "fmean", "fsd", "innov"), several.ok = TRUE)
+  if (!is.null(boundaries) && is.null(obs_var)) {
+    cli::cli_abort("{.arg boundaries} needs {.arg obs_var} (a stack of ones for none)")
+  }
+  target <- if (is.null(obs_var)) x else if (is.null(boundaries)) list(x, obs_var) else list(x, obs_var, boundaries)
   stats::setNames(
     lapply(outputs, function(o) {
       scan_over(

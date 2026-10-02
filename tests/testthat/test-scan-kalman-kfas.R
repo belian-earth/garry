@@ -13,9 +13,12 @@ kfas_llt <- function(y, q_lvl, q_slp, h) {
     y ~ SSMtrend(degree = 2, Q = list(matrix(q_lvl), matrix(q_slp))),
     H = array(h, c(1, 1, length(y)))
   )
-  ks <- KFAS::KFS(m, smoothing = "state")
+  ks <- KFAS::KFS(m, filtering = "state", smoothing = "state")
   list(mean = as.numeric(ks$alphahat[, "level"]),
-       sd = sqrt(pmax(ks$V[1, 1, ], 0)))
+       sd = sqrt(pmax(ks$V[1, 1, ], 0)),
+       fmean = as.numeric(ks$att[, "level"]),
+       fsd = sqrt(pmax(ks$Ptt[1, 1, ], 0)),
+       innov = as.numeric(ks$v) / sqrt(as.numeric(ks$F)))
 }
 
 # hutan-like hyperparameters used throughout: sigma_lvl 1, sigma_slp 0.1,
@@ -113,7 +116,7 @@ test_that("traced (PJRT) body matches the untraced oracle", {
   set.seed(6)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
   cube[sample(length(cube), 30)] <- NaN
-  for (output in c("mean", "sd")) {
+  for (output in c("mean", "sd", "fmean", "fsd")) {
     body <- .k_body(output)
     jf <- g_jit(function(x) body(list(x), 1L))
     traced <- g_download(jf(g_upload(cube, "f32")))
@@ -327,4 +330,87 @@ test_that("mean+sd collect as ONE multi-sink plan, scans sharing a stage", {
                tolerance = 1e-6)
   expect_equal(both$sd, collect(sm$sd, distributed = FALSE),
                tolerance = 1e-6)
+})
+
+test_that("filtered mean and sd match KFAS; the revision variance is fsd^2 - sd^2", {
+  skip_if_not_installed("KFAS")
+  set.seed(12)
+  cases <- list(
+    dense    = .k_series(),
+    leading  = { y <- .k_series(); y[1:4] <- NaN; y },
+    midgap   = { y <- .k_series(); y[6:9] <- NaN; y },
+    short5   = .k_series(5)
+  )
+  for (nm in names(cases)) {
+    y <- cases[[nm]]
+    cube <- array(y, c(length(y), 1, 1))
+    ref <- kfas_llt(y, q_lvl = 1, q_slp = 0.01, h = 4)
+    fm <- as.numeric(.k_body("fmean")(list(cube), 1L))
+    fs <- as.numeric(.k_body("fsd")(list(cube), 1L))
+    # the local linear trend has two diffuse states: until two years are
+    # observed KFAS (exact diffuse) and garry (kappa) differ by design
+    ok <- cumsum(!is.na(y)) >= 2L
+    expect_lt(max(abs(fm[ok] - ref$fmean[ok]) / pmax(abs(ref$fmean[ok]), 1)), 1e-5,
+              label = paste0(nm, ": filtered mean rel diff"))
+    expect_lt(max(abs(fs[ok] - ref$fsd[ok]) / pmax(ref$fsd[ok], 1e-9)), 1e-5,
+              label = paste0(nm, ": filtered sd rel diff"))
+    # the last year is both filtered and smoothed
+    sm <- as.numeric(.k_body("mean")(list(cube), 1L))
+    ss <- as.numeric(.k_body("sd")(list(cube), 1L))
+    last <- max(which(!is.na(fm)))
+    expect_equal(fm[last], sm[last], tolerance = 1e-10)
+    # smoothing never adds variance: fsd >= sd wherever both are defined
+    expect_true(all(fs[ok] >= ss[ok] - 1e-9))
+  }
+})
+
+
+test_that("innov matches KFAS's standardised innovations after the diffuse phase", {
+  skip_if_not_installed("KFAS")
+  set.seed(14); y <- .k_series(); y[7] <- NaN
+  cube <- array(y, c(length(y), 1, 1))
+  ref <- kfas_llt(y, q_lvl = 1, q_slp = 0.01, h = 4)
+  z <- as.numeric(.k_body("innov")(list(cube), 1L))
+  ok <- cumsum(!is.na(y)) > 2L & !is.na(y)
+  expect_lt(max(abs(z[ok] - ref$innov[ok])), 1e-5)
+  expect_equal(z[7], 0)                                    # a missing year: no surprise
+})
+
+test_that("a regime boundary splits the series into two independent smoothers", {
+  skip_if_not_installed("KFAS")
+  set.seed(15); T_ <- 16L; b <- 10L
+  y <- c(rep(3, b - 1L), rep(9, T_ - b + 1L)) + stats::rnorm(T_, 0, 0.5)
+  cube <- array(y, c(T_, 1, 1)); r <- array(1, c(T_, 1, 1))
+  bd <- array(0, c(T_, 1, 1)); bd[b, , ] <- 1
+  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, out_dtype = "f64")
+  got <- function(o) as.numeric(body(o)(list(cube, r, bd), 1L))
+  plain <- function(o) as.numeric(body(o)(list(cube, r), 1L))
+  # before the boundary: the smoother of y[1:(b-1)] alone (no observation
+  # from the boundary on reaches back)
+  ref_pre <- kfas_llt(y[1:(b - 1L)], q_lvl = 0.01, q_slp = 0.0025, h = 0.25)
+  expect_lt(max(abs(got("mean")[1:(b - 1L)] - ref_pre$mean) / pmax(abs(ref_pre$mean), 1)), 1e-5)
+  expect_lt(max(abs(got("sd")[1:(b - 1L)] - ref_pre$sd) / pmax(ref_pre$sd, 1e-9)), 1e-5)
+  # from the boundary: the smoother of y[b:T] alone, from the diffuse start
+  ref_post <- kfas_llt(y[b:T_], q_lvl = 0.01, q_slp = 0.0025, h = 0.25)
+  ok <- which(cumsum(!is.na(y[b:T_])) >= 2L)              # KFAS's exact-diffuse years differ by design
+  expect_lt(max(abs(got("mean")[b:T_][ok] - ref_post$mean[ok]) / pmax(abs(ref_post$mean[ok]), 1)), 1e-4)
+  # and the plain smoother leaks the step into the years before it
+  expect_gt(plain("mean")[b - 1L] - got("mean")[b - 1L], 0.5)
+  # the forward filter restarts too: the first post-boundary filtered value is that year's observation
+  expect_lt(abs(got("fmean")[b] - y[b]), 1e-3)
+})
+
+test_that("boundaries: traced (PJRT) body matches the untraced oracle", {
+  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
+  set.seed(16)
+  cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3)); cube[sample(length(cube), 20)] <- NaN
+  r <- array(1, dim(cube)); bd <- array(0, dim(cube)); bd[9, , ] <- 1; bd[12, 2, ] <- 1
+  for (output in c("mean", "sd", "fmean", "innov")) {
+    body <- .k_body(output)
+    jf <- g_jit(function(x, r, b) body(list(x, r, b), 1L))
+    traced <- g_download(jf(g_upload(cube, "f32"), g_upload(r, "f32"), g_upload(bd, "f32")))
+    untraced <- body(list(cube, r, bd), 1L)
+    expect_identical(is.na(traced), is.na(untraced))
+    expect_lt(max(abs(traced - untraced), na.rm = TRUE), 1e-3)
+  }
 })
