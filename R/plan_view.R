@@ -244,10 +244,13 @@ NULL
   for (n in mem) {
     if (is.null(n)) next
     if (S7::S7_inherits(n, SourceNode)) {
+      # no query string (a signed URL's SAS token must not land in a
+      # saved widget), and escaped for the HTML tooltip
+      files <- .xml_escape(paste(basename(sub("\\?.*$", "", n@path)), collapse = ", "))
       ln <- if (length(n@name)) {
-        .glue("asset: {n@name} \u00b7 {paste(basename(n@path), collapse = ', ')}")
+        .glue("asset: {.xml_escape(n@name)} \u00b7 {files}")
       } else {
-        .glue("file: {paste(basename(n@path), collapse = ', ')} ",
+        .glue("file: {files} ",
               "(band {paste(n@band, collapse = ',')})")
       }
       if (length(n@scale)) {
@@ -560,9 +563,9 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
       font.color = .pv_ink,
       borderWidth = 2L,
       title = .glue(
-        "<b>{nm}</b><br>grid: {dims} ({sid@grid@dtype})",
+        "<b>{.xml_escape(nm)}</b><br>grid: {dims} ({sid@grid@dtype})",
         "{if (!is.null(bands)) paste0('<br>bands: ',
-          paste(bands, collapse = ', ')) else ''}"
+          .xml_escape(paste(bands, collapse = ', '))) else ''}"
       ),
       stringsAsFactors = FALSE
     )

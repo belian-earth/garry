@@ -245,3 +245,17 @@ test_that("plan_view accepts a lazy object directly", {
   expect_s3_class(w, "visNetwork")
   expect_gte(nrow(w$x$nodes), 1L)
 })
+
+test_that("plan_view tooltips hide URL tokens and escape names", {
+  f <- fixture_gradient_f32()
+  lr <- lazy_source(f)
+  n <- graph_get(lr@graph, lr@node_id)
+  n@path <- paste0(n@path, "?sv=1&sig=SECRET")
+  n@name <- "a<b"
+  lr@graph@nodes[[as.character(lr@node_id)]] <- n
+  skip_if_not_installed("visNetwork")
+  nodes <- plan_view(plan_lazy(lr * 2))$x$nodes
+  tips <- paste(nodes$title, collapse = " ")
+  expect_false(grepl("SECRET", tips, fixed = TRUE))
+  expect_true(grepl("a&lt;b", tips, fixed = TRUE))
+})
