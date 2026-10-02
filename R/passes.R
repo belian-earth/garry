@@ -542,8 +542,7 @@ NULL
 # bands), where the coalesced plan reads the same bytes in one task
 # and one store region.
 #
-# Skips: stacks that are themselves requested sinks (sink retrieval
-# from a coarse split read stage is not wired); stacks consumed by a
+# Skips: stacks consumed by a
 # WarpNode (the warp path takes scalar bands — warping a stack was an
 # error before this pass and stays one); parents with outer dims or
 # multi-band parents (a stack of stacks keeps its compute shape).

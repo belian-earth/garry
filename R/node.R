@@ -142,9 +142,9 @@ MapNode <- S7::new_class(
   )
 )
 
-#' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one
-#' of "constant", "reflect", "nearest", "wrap", "none". Created by
-#' [focal_map()].
+#' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
+#' "nodata", the only policy: cells beyond the raster edge are NaN.
+#' Created by [focal_map()] and [focal_kernel()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -154,7 +154,7 @@ MapNode <- S7::new_class(
 #'   [plan_draw()] and [plan_view()].
 #' @param fn Neighbourhood function (over the list of shifted arrays).
 #' @param radius Halo radius in pixels.
-#' @param boundary Boundary policy.
+#' @param boundary Boundary policy: `"nodata"`.
 #' @param weights Optional linear kernel, flattened row-major over
 #'   (dy, dx), length (2*radius+1)^2. When present the op is the
 #'   weighted sum and is differentiable wrt the weights.
@@ -170,6 +170,12 @@ FocalNode <- S7::new_class(
     weights = S7::class_numeric
   ),
   validator = function(self) {
+    if (!identical(self@boundary, "nodata")) {
+      return("`boundary` must be \"nodata\"")
+    }
+    if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 0L) {
+      return("`radius` must be a single non-negative integer")
+    }
     k <- (2L * self@radius + 1L)^2
     if (length(self@weights) > 0L && length(self@weights) != k) {
       return(.glue("`weights` must have length {k} for radius {self@radius}"))

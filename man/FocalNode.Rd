@@ -2,9 +2,9 @@
 % Please edit documentation in R/node.R
 \name{FocalNode}
 \alias{FocalNode}
-\title{Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is one
-of "constant", "reflect", "nearest", "wrap", "none". Created by
-\code{\link[=focal_map]{focal_map()}}.}
+\title{Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is
+"nodata", the only policy: cells beyond the raster edge are NaN.
+Created by \code{\link[=focal_map]{focal_map()}} and \code{\link[=focal_kernel]{focal_kernel()}}.}
 \usage{
 FocalNode(
   id = integer(0),
@@ -32,7 +32,7 @@ Pure metadata: never read by the planner or executors; surfaced by
 
 \item{radius}{Halo radius in pixels.}
 
-\item{boundary}{Boundary policy.}
+\item{boundary}{Boundary policy: \code{"nodata"}.}
 
 \item{weights}{Optional linear kernel, flattened row-major over
 (dy, dx), length (2*radius+1)^2. When present the op is the
@@ -42,7 +42,7 @@ weighted sum and is differentiable wrt the weights.}
 A \code{FocalNode}.
 }
 \description{
-Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is one
-of "constant", "reflect", "nearest", "wrap", "none". Created by
-\code{\link[=focal_map]{focal_map()}}.
+Focal (stencil) op. \code{radius} is the halo in pixels; \code{boundary} is
+"nodata", the only policy: cells beyond the raster edge are NaN.
+Created by \code{\link[=focal_map]{focal_map()}} and \code{\link[=focal_kernel]{focal_kernel()}}.
 }

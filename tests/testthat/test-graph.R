@@ -9,7 +9,7 @@ test_that("graph build and topo-sort works", {
                         fn = function(x) x + 1)
   focal_id <- graph_add(g, FocalNode,  parents = map_id, grid = gs,
                         fn = function(n) mean(n), radius = 1L,
-                        boundary = "reflect")
+                        boundary = "nodata")
   red_id   <- graph_add(g, ReduceNode, parents = focal_id, grid = gs,
                         op = "mean", over = "x", nan_rm = TRUE)
 
