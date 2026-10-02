@@ -567,9 +567,6 @@ NULL
     if (!S7::S7_inherits(st, StackNode)) {
       next
     }
-    if (id %in% sink_ids) {
-      next
-    }
     parents <- .node_parents(st)
     if (length(parents) < 2L) {
       next
@@ -638,6 +635,7 @@ NULL
         grid = .node_grid(st),
         path = p1@path,
         band = vapply(ps, function(n) n@band, integer(1)),
+        collapsed = as.integer(parents),
         nodata = p1@nodata,
         block_dim = p1@block_dim,
         open_options = p1@open_options,
@@ -1267,6 +1265,18 @@ plan_lazy <- function(x) {
       }
       cons <- cons_idx[[i]]
       if (length(cons) == 0L) {
+        # A source stage with no compute consumer is a sink itself
+        # (a coalesced band stack written or collected as read): the
+        # coarse window exists to amortise consumer chunk splits, and
+        # here the only consumer is the write, so windows stay at
+        # compute chunk size and the writer streams them as each read
+        # lands instead of taking a handful of full-depth regions after
+        # a three-way drain (issue #25: 4 windows x 64 bands, 8 idle
+        # readers). Warp sinks keep the coarse window: the warper's
+        # per-call setup and source block decode do not shrink with it.
+        if (protos[[i]]$kind == "source_read") {
+          return(prod(as.numeric(chunk_dim)))
+        }
         return(read_px)
       }
       min(

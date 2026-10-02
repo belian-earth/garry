@@ -4,7 +4,16 @@
 \alias{gdal_write_window}
 \title{Write a garry-oriented matrix into an open output dataset.}
 \usage{
-gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
+gdal_write_window(
+  ds,
+  x_off,
+  y_off,
+  m,
+  dtype,
+  nodata = numeric(0),
+  band = 1L,
+  plane = 1L
+)
 }
 \arguments{
 \item{ds}{Open dataset from \code{\link[=gdal_create_output]{gdal_create_output()}}.}
@@ -18,6 +27,9 @@ gdal_write_window(ds, x_off, y_off, m, dtype, nodata = numeric(0), band = 1L)
 \item{nodata}{Optional sentinel for NaN demotion.}
 
 \item{band}{1-based destination band.}
+
+\item{plane}{For a rank-3 \verb{(band, y, x)} raw store payload, the
+1-based plane to write (taken by byte offset, no copy of the rest).}
 }
 \value{
 Invisibly, \code{NULL}.

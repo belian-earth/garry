@@ -124,6 +124,19 @@
   # revisit interleaved multi-band files: a pixel-interleaved strip
   # decompresses ALL bands, and only blocks that stay cached let
   # later band reads of the same window skip the re-inflate.
+  # Daemon-side memory hygiene: a task body's transients (read window,
+  # part list, device buffers, chunk payload) are dead when it returns,
+  # but only a full gc frees them and only malloc_trim returns the
+  # pages. Both run once this many MB of transients have accumulated
+  # since the last pass, not after every task: a full gc is ~35 ms on
+  # a daemon (150 ms under a busy fleet) against ~20 ms of real work
+  # in a 2 M pixel band read (issue #25's drain).
+  daemon_gc_mb = list(
+    default = 128,
+    tier = "tuning",
+    desc = "MB of task transients between daemon gc + malloc_trim passes",
+    check = .opt_num(min = 0)
+  ),
   gdal_cachemax_mb = list(
     default = 256,
     tier = "tuning",
