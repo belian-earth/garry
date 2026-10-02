@@ -37,6 +37,7 @@ NULL
 # closes the least-recently-used handle; reopening is milliseconds.
 .gdal_cache <- new.env(parent = emptyenv())
 .gdal_cache$handles <- list() # named, insertion-ordered = LRU order
+.gdal_cache$stamps <- list() # key -> .gdal_local_stamp() at open
 
 # http(s) URLs need the /vsicurl prefix so GDAL reads via HTTP range requests --
 # metadata (header/IFD) and windowed pixel reads only -- instead of downloading
@@ -78,10 +79,43 @@ NULL
   force(code)
 }
 
+# Modification stamp of a local file (mtime and size), or NULL for a
+# remote or virtual path. A cached handle whose file changed since it was
+# opened would serve the old pixels from its block cache.
+.gdal_local_stamp <- function(path) {
+  p <- sub("^GTI:", "", path)
+  if (.gdal_is_remote(p) || !file.exists(p)) {
+    return(NULL)
+  }
+  info <- file.info(p, extra_cols = FALSE)
+  c(as.numeric(info$mtime), as.numeric(info$size))
+}
+
+# Close and forget every cached handle on `path`, whatever its open
+# options (writers call this before replacing a file).
+.gdal_handle_drop <- function(path) {
+  path <- .gdal_href(path)
+  keys <- names(.gdal_cache$handles) %||% character(0)
+  hit <- keys[keys == path | startsWith(keys, paste0(path, "\x1f"))]
+  for (k in hit) {
+    try(.gdal_cache$handles[[k]]$close(), silent = TRUE)
+    .gdal_cache$handles[[k]] <- NULL
+    .gdal_cache$stamps[[k]] <- NULL
+  }
+  invisible(NULL)
+}
+
 .gdal_handle <- function(path, open_options = character(0)) {
   path <- .gdal_href(path) # range-read remote COGs, never pull whole
   key <- paste(c(path, open_options), collapse = "\x1f")
+  stamp <- .gdal_local_stamp(path)
   h <- .gdal_cache$handles[[key]]
+  if (!is.null(h) && !identical(.gdal_cache$stamps[[key]], stamp)) {
+    try(h$close(), silent = TRUE) # the file changed under the handle
+    .gdal_cache$handles[[key]] <- NULL
+    .gdal_cache$stamps[[key]] <- NULL
+    h <- NULL
+  }
   if (!is.null(h)) {
     .gdal_cache$handles[[key]] <- NULL # move to MRU position
     .gdal_cache$handles[[key]] <- h
@@ -121,10 +155,13 @@ NULL
   )
   cap <- garry_opt("handle_cache_max")
   while (length(.gdal_cache$handles) >= cap) {
+    k1 <- names(.gdal_cache$handles)[[1L]]
     try(.gdal_cache$handles[[1L]]$close(), silent = TRUE)
     .gdal_cache$handles[[1L]] <- NULL
+    .gdal_cache$stamps[[k1]] <- NULL
   }
   .gdal_cache$handles[[key]] <- h
+  .gdal_cache$stamps[[key]] <- stamp
   h
 }
 
@@ -133,6 +170,7 @@ NULL
     try(h$close(), silent = TRUE)
   }
   .gdal_cache$handles <- list()
+  .gdal_cache$stamps <- list()
 }
 
 #' Inspect a GDAL source and build its GridSpec (plus read metadata).
@@ -586,6 +624,7 @@ gdal_read_window <- function(
 # host-created files; GTiff is single-writer, so exactly one process
 # holds this handle at a time).
 gdal_open_update <- function(path) {
+  .gdal_handle_drop(path)
   # NUM_THREADS is a per-handle setting: the creation option on the
   # host's handle dies with it, so a GTiff re-opened here compressed
   # its tiles on one thread (14.9 ms a 768x768 plane against 3.5 ms
@@ -1301,6 +1340,7 @@ gdal_create_output <- function(
   scale = numeric(0),
   offset = numeric(0)
 ) {
+  .gdal_handle_drop(path) # a cached reader would serve the old file
   if (!is.null(dtype)) {
     grid <- .grid_retype(grid, dtype)
   }

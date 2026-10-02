@@ -221,3 +221,14 @@ test_that("a composite-shaped quantized write routes to the scheduler, identical
   expect_identical(md$grid@dtype, "i16")
   expect_identical(md$scale, 0.5)
 })
+
+test_that("re-reading a rewritten file returns the new pixels", {
+  f <- fixture_gradient_f32()
+  path <- withr::local_tempfile(fileext = ".tif")
+  x <- lazy_source(f)
+  write_tif(x, path)
+  first <- collect(lazy_source(path))
+  write_tif(x * 2, path)
+  second <- collect(lazy_source(path))
+  expect_equal(second, 2 * first, ignore_attr = TRUE)
+})
