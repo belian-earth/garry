@@ -256,6 +256,12 @@ graph_import <- function(dst, src, root_id) {
     new_id <- dst@nodes$.next_id
     node@id <- new_id
     node@parents <- as.integer(new_parents)
+    if (S7::S7_inherits(node, SourceNode) && length(node@collapsed)) {
+      # provenance ids from the source graph: keep those imported here,
+      # never let one resolve to an unrelated node of `dst`
+      mapped <- lapply(node@collapsed, function(c) id_map[[.key(c)]])
+      node@collapsed <- as.integer(unlist(mapped))
+    }
     dst@nodes[[.key(new_id)]] <- node
     dst@nodes$.next_id <- new_id + 1L
     id_map[[.key(id)]] <- new_id

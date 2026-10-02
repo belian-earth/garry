@@ -907,7 +907,14 @@ plan_lazy <- function(x) {
         new_proto("source_read", id, .node_grid(node), integer(0), id)
     } else if (S7::S7_inherits(node, WarpNode)) {
       pin <- .node_parents(node)[[1L]]
-      if (!S7::S7_inherits(graph_get(graph, pin), SourceNode)) {
+      pn <- graph_get(graph, pin)
+      # A band stack collapsed into a multi-band read (in place, by an
+      # earlier plan) is still a stack: the warper reads one band.
+      if (
+        !S7::S7_inherits(pn, SourceNode) ||
+          length(pn@band) > 1L ||
+          length(pn@collapsed) > 0L
+      ) {
         .garry_error(
           paste0(
             "warping a computed raster is not supported in v1: align_to() ",

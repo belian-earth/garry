@@ -188,3 +188,23 @@ test_that("resampling names are checked when the node is built", {
     "must be one of"
   )
 })
+
+test_that("a band stack cannot be warped, before or after a collect collapses it", {
+  mb <- fixture_multiband()
+  g <- graph_new()
+  st <- lazy_stack(list(
+    a = lazy_source(mb$path, band = 1L, graph = g),
+    b = lazy_source(mb$path, band = 2L, graph = g)
+  ), along = "band")
+  gr <- st@grid
+  coarse <- grid_spec(
+    crs = grid_crs(gr),
+    extent = grid_bbox(gr),
+    dims = as.integer(c(gr@dims[["x"]], gr@dims[["y"]]) / 2)
+  )
+  expect_error(collect(align_to(st, coarse), plan_only = TRUE),
+               class = "garry_warp_unsupported_error")
+  invisible(collect(st * 2)) # collapses the stack into a multi-band read
+  expect_error(collect(align_to(st, coarse)),
+               class = "garry_warp_unsupported_error")
+})
