@@ -41,7 +41,7 @@
 
 #' Read tensors from a safetensors file.
 #'
-#' safetensors (<https://github.com/huggingface/safetensors>) is the
+#' safetensors (<https://github.com/safetensors/safetensors>) is the
 #' simple tensor serialisation format used across the machine-learning
 #' ecosystem, typically for model weights.
 #'

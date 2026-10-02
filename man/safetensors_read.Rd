@@ -16,7 +16,7 @@ read (default: all F32 tensors).}
 Named list of numeric arrays.
 }
 \description{
-safetensors (\url{https://github.com/huggingface/safetensors}) is the
+safetensors (\url{https://github.com/safetensors/safetensors}) is the
 simple tensor serialisation format used across the machine-learning
 ecosystem, typically for model weights.
 }
