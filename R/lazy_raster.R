@@ -1348,7 +1348,14 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #'
 #' @param x A `LazyRaster`.
 #' @param to Target grid: a `GridSpec` or another `LazyRaster`.
-#' @param resampling GDAL resampling method.
+#' @param resampling GDAL resampling method. The default, `"near"`,
+#'   copies source values unchanged, which categorical data (land cover,
+#'   classes) and QA bitmasks need: interpolating them invents classes and
+#'   bit patterns that do not exist. It matches the default of
+#'   [lazy_source()] and [lazy_dataset()]. For continuous data
+#'   (reflectance, elevation, temperature) choose `"bilinear"` (or
+#'   `"cubic"`) when resampling to a similar or finer resolution, and
+#'   `"average"` when aggregating to a coarser one.
 #' @return A `LazyRaster` on the target grid.
 #' @examples
 #' f <- system.file("extdata", "garry-example.tif", package = "garry")
@@ -1356,7 +1363,7 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' coarse <- grid_spec(crs = grid_crs(red), extent = grid_bbox(red), dims = c(30L, 20L))
 #' dim(collect(align_to(red, coarse, resampling = "average")))
 #' @export
-align_to <- function(x, to, resampling = "bilinear") {
+align_to <- function(x, to, resampling = "near") {
   .assert_class(x, LazyRaster, "LazyRaster")
   to_grid <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
   .assert_class(to_grid, GridSpec, "GridSpec", arg = "to")

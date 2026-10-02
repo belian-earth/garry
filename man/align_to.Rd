@@ -4,14 +4,21 @@
 \alias{align_to}
 \title{Lazily resample/reproject onto a target grid.}
 \usage{
-align_to(x, to, resampling = "bilinear")
+align_to(x, to, resampling = "near")
 }
 \arguments{
 \item{x}{A \code{LazyRaster}.}
 
 \item{to}{Target grid: a \code{GridSpec} or another \code{LazyRaster}.}
 
-\item{resampling}{GDAL resampling method.}
+\item{resampling}{GDAL resampling method. The default, \code{"near"},
+copies source values unchanged, which categorical data (land cover,
+classes) and QA bitmasks need: interpolating them invents classes and
+bit patterns that do not exist. It matches the default of
+\code{\link[=lazy_source]{lazy_source()}} and \code{\link[=lazy_dataset]{lazy_dataset()}}. For continuous data
+(reflectance, elevation, temperature) choose \code{"bilinear"} (or
+\code{"cubic"}) when resampling to a similar or finer resolution, and
+\code{"average"} when aggregating to a coarser one.}
 }
 \value{
 A \code{LazyRaster} on the target grid.

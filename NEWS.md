@@ -18,6 +18,9 @@ keep; it remains marked experimental while it settles.
   `focal_map()` and `draw()` is `plan_draw()`. The grid accessors `xmin()`,
   `ymin()`, `xmax()`, `ymax()` and `res()` are replaced by `grid_bbox()` and
   `grid_res()`, joined by `grid_crs()`.
+* `align_to()` defaults to `resampling = "near"` (was `"bilinear"`), as the
+  readers do, so categorical and QA rasters keep their values. Pass
+  `"bilinear"` or `"average"` for continuous data.
 * `kalman_llt()` takes `dtype` (was `out_dtype`), like `kalman_smooth()`;
   `extract_points()` takes `x` (was `raster`) as its first argument.
 * `reduce_over()` accepts only the reducers that execute: `"sum"`, `"mean"`,
