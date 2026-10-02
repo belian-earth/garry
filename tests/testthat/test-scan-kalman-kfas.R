@@ -424,3 +424,23 @@ test_that("kalman_smooth checks its dataset arguments", {
   sm <- kalman_smooth(ds, 1, 0.1, bands = "a")
   expect_true(S7::S7_inherits(sm$mean, LazyDataset))
 })
+
+test_that("a regime with no observation is NaN, not the previous regime's trend", {
+  set.seed(17); T_ <- 12L; b <- 8L
+  y <- 3 + stats::rnorm(T_, 0, 0.5)
+  y[b:T_] <- NaN # the second regime is never observed
+  y[5] <- NaN # a gap inside the first regime
+  cube <- array(y, c(T_, 1, 1)); r <- array(1, c(T_, 1, 1))
+  bd <- array(0, c(T_, 1, 1)); bd[b, , ] <- 1
+  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, dtype = "f64")
+  got <- function(o) as.numeric(body(o)(list(cube, r, bd), 1L))
+  for (o in c("mean", "sd", "fmean", "fsd")) {
+    v <- got(o)
+    expect_true(all(is.nan(v[b:T_])), info = o)
+    expect_false(anyNA(v[1:(b - 1L)]), info = o) # a gap is still estimated
+  }
+  # traced agrees
+  traced <- garry:::g_jit(function(inputs) list(out = body("mean")(inputs, 1L)))
+  tv <- as.numeric(g_download(traced(lapply(list(cube, r, bd), g_upload, dtype = "f64")))$out)
+  expect_equal(is.nan(tv), is.nan(got("mean")))
+})

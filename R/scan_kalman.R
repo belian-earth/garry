@@ -76,7 +76,9 @@
 #' after. Without boundaries the two-sided smoother carries change the
 #' model cannot represent (a planting, a clearance) into the years
 #' before it; with them, nothing crosses a boundary in either direction.
-#' Boundaries are found by the caller, typically from `"innov"`.
+#' A regime with no observation is `NaN` (the forward outputs are `NaN`
+#' until a regime's first observation). Boundaries are found by the
+#' caller, typically from `"innov"`.
 #' @param robust_iters Robust reweighting passes (0 = plain smoother).
 #'   Each pass inflates the level noise at years whose smoothed-level
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
@@ -377,7 +379,39 @@ kalman_llt <- function(
       }
     }
 
-    g_cast(sm[[output]], dtype)
+    out <- sm[[output]]
+    if (!is.null(bnd)) {
+      # A regime with no observation at all has nothing of its own to
+      # estimate: its years would carry the previous regime's level and
+      # slope forward. Mask them. `fwd_seen`: observed since the regime
+      # began (what the forward filter knows); `bwd_seen`: observed later
+      # in the same regime (what the smoother adds).
+      obs <- g_cast(!g_is_nodata(y), "f64")
+      fwd_seen <- g_scan(
+        init = zero,
+        body = function(carry, s) {
+          v <- g_ifelse(s$b > 0, s$o, g_ifelse(s$o > carry, s$o, carry))
+          list(carry = v, out = v)
+        },
+        xs = list(o = obs, b = bnd)
+      )$out
+      seen <- if (output %in% c("fmean", "fsd", "innov")) {
+        fwd_seen
+      } else {
+        bwd_seen <- g_scan(
+          init = zero,
+          body = function(carry, s) {
+            v <- g_ifelse(s$o > carry, s$o, carry)
+            list(carry = g_ifelse(s$b > 0, 0 * v, v), out = v)
+          },
+          xs = list(o = obs, b = bnd),
+          reverse = TRUE
+        )$out
+        fwd_seen + bwd_seen
+      }
+      out <- g_ifelse(seen > 0, out, NaN)
+    }
+    g_cast(out, dtype)
   }
 }
 

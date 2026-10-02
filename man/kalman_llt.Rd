@@ -68,7 +68,9 @@ smoothed level before the boundary uses no observation from it or
 after. Without boundaries the two-sided smoother carries change the
 model cannot represent (a planting, a clearance) into the years
 before it; with them, nothing crosses a boundary in either direction.
-Boundaries are found by the caller, typically from \code{"innov"}.
+A regime with no observation is \code{NaN} (the forward outputs are \code{NaN}
+until a regime's first observation). Boundaries are found by the
+caller, typically from \code{"innov"}.
 }
 
 \seealso{
