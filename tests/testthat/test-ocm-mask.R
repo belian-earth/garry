@@ -64,7 +64,6 @@ test_that("ocm_mask masks value bands per slice and keeps names", {
 test_that("ocm patch stages: distributed == single-threaded", {
   skip_if(!dir.exists(.ocm_wdir2), "OCM weights not present")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)

@@ -35,8 +35,6 @@ test_that("sv helpers mirror matrix slicing exactly", {
 test_that("distributed raw f32 store == single-threaded oracle", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  skip_if(!garry::.g_has_raw_upload(),
-          "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force many chunks
@@ -72,8 +70,6 @@ test_that("distributed raw f32 store == single-threaded oracle", {
 test_that("distributed multiband sink streams to GTiff like the oracle", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
-  skip_if(!garry::.g_has_raw_upload(),
-          "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
@@ -119,7 +115,6 @@ test_that("f64 payloads round-trip the sv layer bit-exactly", {
 })
 
 test_that("f64 raw upload/download round-trips through anvl bit-exactly", {
-  skip_if(!garry:::.g_has_raw_upload(), "no raw upload support")
   m <- matrix(c(1.5, -2.25, pi, 1e-300), 2, 2)
   v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
   up <- g_upload_raw(unclass(v), "f64", garry:::.sv_dim(v))
@@ -320,10 +315,6 @@ test_that("distributed int8 multiband sink with nodata matches the oracle", {
   skip_if(
     !requireNamespace("garry", quietly = TRUE),
     "garry not installed for daemons"
-  )
-  skip_if(
-    !garry::.g_has_raw_upload(),
-    "installed anvl lacks raw payload support"
   )
 
   local_pools(2, 1, gdal_config = TRUE)

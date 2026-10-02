@@ -30,7 +30,6 @@ test_that("g_fill builds a device constant equal to the R fill", {
 })
 
 test_that("strip-decomposed pipeline equals whole-band jobs and the oracle", {
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 2)
   old <- options(garry.gd_parallel = TRUE)
   on.exit(options(old), add = TRUE)
@@ -48,7 +47,6 @@ test_that("strip-decomposed pipeline equals whole-band jobs and the oracle", {
 })
 
 test_that("repeat collect creates no new pipeline kernels (cache + warm)", {
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   skip_on_os("mac")   # daemons start every run cold there (.daemon_jit_reset)
   local_pools(2, 2)
   old <- options(garry.gd_parallel = TRUE, garry.gd_strips = 2)

@@ -308,9 +308,6 @@ NULL
   if (!isTRUE(garry_opt("composite_direct"))) {
     return(NULL)
   }
-  if (!.g_has_raw_upload()) {
-    return(NULL)
-  }
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
   if (sink@kind != "compute") {
@@ -682,7 +679,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
   # Parallel multi-band takes the split-pool pipeline: it overlaps the mask
   # and per-band medians with the band fetch on the read pool, so only the
@@ -777,7 +773,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   tmp <- .gd_tmp()
   on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   .gd_write_result(
@@ -1096,9 +1091,6 @@ NULL
   if (!isTRUE(garry_opt("composite_direct"))) {
     return(NULL)
   }
-  if (!.g_has_raw_upload()) {
-    return(NULL)
-  }
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
   if (sink@kind != "compute") {
@@ -1160,7 +1152,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   graph <- plan@graph
   nx <- gspec$grid@dims[["x"]]
   ny <- gspec$grid@dims[["y"]]
@@ -1389,7 +1380,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   graph <- plan@graph
   tmp <- .gd_tmp()
   on.exit(unlink(tmp, recursive = TRUE), add = TRUE)

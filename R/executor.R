@@ -456,10 +456,9 @@ NULL
 # inherit host options, and the daemons' anvl is assumed to match the
 # host's lib path).
 # The distributed store uses raw f32 payloads (4 B/px, memcpy transport, no
-# R-double conversion) whenever the installed anvl accepts them, else R
-# doubles. (The single-threaded executor always uses doubles: it is the
-# correctness oracle.)
-.exec_use_raw_store <- function() .g_has_raw_upload()
+# R-double conversion). (The single-threaded executor always uses doubles:
+# it is the correctness oracle.)
+.exec_use_raw_store <- function() TRUE
 
 # Output padding a stage's chunks carry: source/warp emit halo-padded
 # windows; compute stages emit their `out_pad` ring (D22, 0 when no
@@ -1005,7 +1004,6 @@ execute_plan <- function(
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   .garry_opt_check()
   graph <- plan@graph
   out <- vector("list", length(plan@stages))

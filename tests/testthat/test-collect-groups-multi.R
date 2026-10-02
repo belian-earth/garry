@@ -89,7 +89,6 @@ test_that("grouped raw-cube (.vrt) writes work through multi-export", {
 
 test_that("grouped multi-export: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)

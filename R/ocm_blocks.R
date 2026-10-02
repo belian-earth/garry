@@ -157,7 +157,6 @@
   logits <- logits / length(weights)
   if (dy > 0L || dx > 0L) {
     # trim the alignment pad off the last two dims
-    sh4 <- if (.g_traced(logits)) .g_shape(logits) else dim(logits)
     logits <- g_shift_slice(logits, 0L, 0L, h, w, 0L)
   }
   cls <- .ocm_argmax4(logits)

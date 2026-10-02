@@ -145,8 +145,6 @@ test_that("a scan body can compute in f64 internally and emit f32", {
 
 test_that("scan: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force many spatial chunks

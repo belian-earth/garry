@@ -112,7 +112,6 @@ test_that("the batched body advances every pixel independently", {
 })
 
 test_that("traced (PJRT) body matches the untraced oracle", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(6)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
   cube[sample(length(cube), 30)] <- NaN
@@ -129,7 +128,6 @@ test_that("traced (PJRT) body matches the untraced oracle", {
 
 test_that("kalman_smooth() through a full scan_over plan matches KFAS", {
   skip_if_not_installed("KFAS")
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(7)
 
   # 4-slice Float32 stack with NaN gaps, written to disk
@@ -172,8 +170,6 @@ test_that("kalman_smooth() through a full scan_over plan matches KFAS", {
 
 test_that("kalman scan: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
@@ -292,7 +288,6 @@ test_that("robust reweighting is per pixel in a batched cube", {
 })
 
 test_that("robust traced (PJRT) body matches the untraced oracle", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(10)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
   cube[8:15, 2, 2] <- cube[8:15, 2, 2] + 25       # one break pixel
@@ -306,7 +301,6 @@ test_that("robust traced (PJRT) body matches the untraced oracle", {
 })
 
 test_that("mean+sd collect as ONE multi-sink plan, scans sharing a stage", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function(k) lazy_source(f, graph = g) * k
   stk <- lazy_stack(list(a = s(1), b = s(2), c = s(3), d = s(4)),
@@ -401,7 +395,6 @@ test_that("a regime boundary splits the series into two independent smoothers", 
 })
 
 test_that("boundaries: traced (PJRT) body matches the untraced oracle", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(16)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3)); cube[sample(length(cube), 20)] <- NaN
   r <- array(1, dim(cube)); bd <- array(0, dim(cube)); bd[9, , ] <- 1; bd[12, 2, ] <- 1

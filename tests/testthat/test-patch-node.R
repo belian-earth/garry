@@ -88,7 +88,6 @@ test_that("chunked equals whole-frame (halo mechanics)", {
 
 test_that("patch: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)

@@ -320,7 +320,6 @@ test_that("collect writes dataset band names as GDAL descriptions", {
 })
 
 test_that("distributed collect writes band descriptions too", {
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 2)
 
   f <- fixture_gradient_f32()
@@ -335,7 +334,6 @@ test_that("distributed collect writes band descriptions too", {
 })
 
 test_that("distributed masked composite equals the oracle", {
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force multiple spatial chunks

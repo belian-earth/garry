@@ -25,15 +25,6 @@
   inherits(x, c("AnvlArray", "GraphBox", "AnvlBox"))
 }
 
-.require_anvl <- function() {
-  if (!rlang::is_installed("anvl")) {
-    cli::cli_abort(c(
-      "The {.pkg anvl} package is required for execution.",
-      "i" = "Install it from {.url https://r-xla.r-universe.dev}."
-    ))
-  }
-}
-
 # Promote a plain R scalar to the traced operand's dtype.
 .g_scalar_like <- function(x, value) {
   anvl::nv_scalar_like(x, value)
@@ -49,7 +40,6 @@
 #' @return A compiled function (anvl `JitFunction`).
 #' @keywords internal
 g_jit <- function(f, device = NULL) {
-  .require_anvl()
   anvl::jit(f, device = device)
 }
 
@@ -63,7 +53,6 @@ g_jit <- function(f, device = NULL) {
 #' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
 #' @keywords internal
 g_value_and_gradient <- function(f, wrt) {
-  .require_anvl()
   anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
 }
 
@@ -84,7 +73,6 @@ g_value_and_gradient <- function(f, wrt) {
 #' @return An `AnvlArray`.
 #' @export
 g_upload <- function(x, dtype, device = NULL) {
-  .require_anvl()
   carrier <- unname(.anvl_upload_dtype[dtype])
   if (!is.na(carrier)) {
     dtype <- carrier
@@ -149,7 +137,6 @@ g_download <- function(x) {
 #' @return An `AnvlArray`.
 #' @keywords internal
 g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
-  .require_anvl()
   attributes(bytes) <- NULL
   if (is.null(device)) {
     anvl::nv_array(bytes, shape = dim, dtype = dtype, byrow = TRUE)
@@ -177,7 +164,6 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
 #' @return An `AnvlArray`.
 #' @export
 g_fill <- function(value, dim, dtype = "f32", device = NULL) {
-  .require_anvl()
   if (is.null(device)) {
     anvl::nv_fill(value, dim, .to_anvl_dtype(dtype))
   } else {
@@ -195,7 +181,6 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 #' @return Raw vector with `gdim` and `gdt` attributes.
 #' @keywords internal
 g_download_raw <- function(x) {
-  .require_anvl()
   dt <- .g_dtype(x)
   # f32/f64 are the store's compute payloads (D19/f64-store); the
   # integer dtypes are SINK-ONLY payloads from g_quantize() -- written
@@ -616,7 +601,6 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
   traced <- .g_tree_any(init, .g_traced) ||
     (!is.null(xs) && .g_tree_any(xs, .g_traced))
   if (traced) {
-    .require_anvl()
     return(anvl::nv_scan(
       .g_scan_settle_init(init, body, xs),
       xs = xs,

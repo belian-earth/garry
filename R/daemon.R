@@ -745,7 +745,6 @@ NULL
 #'
 #' @keywords internal
 .gd_warm <- function() {
-  .require_anvl()
   a <- g_upload_raw(
     writeBin(as.numeric(1:4), raw(), size = 4L),
     "f32",
@@ -825,7 +824,6 @@ NULL
 .gd_warm_pipeline <- function(specs) {
   ok <- tryCatch(
     {
-      .require_anvl()
       for (sp in specs) {
         dev <- .exec_device(sp$dev)
         jf <- .gd_cached_jit(
@@ -868,7 +866,6 @@ NULL
 #'
 #' @keywords internal
 .gd_compute_mask <- function(k) {
-  .require_anvl()
   dev <- .exec_device(k$dev)
   n <- length(k$fmask_bins)
   fm <- g_upload_raw(
@@ -915,7 +912,6 @@ NULL
 #'
 #' @keywords internal
 .gd_compute_masked_band <- function(job, k) {
-  .require_anvl()
   t0 <- proc.time()[["elapsed"]]
   dev <- .exec_device(k$dev)
   n <- length(job$band_bins)
