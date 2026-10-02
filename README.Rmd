@@ -95,6 +95,9 @@ options(repos = c(rxla = "https://r-xla.r-universe.dev", getOption("repos")))
 pak::pak("belian-earth/garry")
 ```
 
+The same setting is needed for `devtools::install()` from a clone. To
+keep it, put the `options()` line in your `~/.Rprofile`.
+
 garry computes through [anvl](https://github.com/r-xla/anvl)/XLA, whose
 PJRT runtime plugin downloads on first use. Fetch it once up front (it
 prompts interactively otherwise, which fails in scripts and on servers):
