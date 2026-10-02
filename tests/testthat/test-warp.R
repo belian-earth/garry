@@ -159,3 +159,32 @@ test_that("a user-declared nodata stays out of warps and decimated reads", {
   d <- collect(align_to(x, coarse, resampling = "average"))
   expect_true(all(d == 100))
 })
+
+test_that("align_to takes only the target's spatial geometry", {
+  a <- lazy_source(fixture_gradient_f32())
+  g <- a@grid
+  coarse <- grid_spec(
+    crs = grid_crs(g),
+    extent = grid_bbox(g),
+    dims = as.integer(c(g@dims[["x"]], g@dims[["y"]]) / 2)
+  )
+  stack <- lazy_stack(list(
+    align_to(a, coarse, "average"),
+    align_to(a * 2, coarse, "average")
+  ))
+  w <- align_to(a, stack, resampling = "average")
+  expect_identical(dim(w), dim(align_to(a, coarse, "average")))
+  expect_null(time_labels(w))
+  # a spatially identical target is a no-op whatever its outer axes
+  same <- lazy_stack(list(a, a * 2))
+  expect_identical(align_to(a, same)@node_id, a@node_id)
+})
+
+test_that("resampling names are checked when the node is built", {
+  a <- lazy_source(fixture_gradient_f32())
+  expect_error(align_to(a, a@grid, resampling = "bilnear"), "must be one of")
+  expect_error(
+    lazy_source(fixture_gradient_f32(), resampling = "bogus"),
+    "must be one of"
+  )
+})

@@ -232,22 +232,7 @@ lazy_dataset <- function(
     as.numeric(nodata) # scalar for every asset
   }
 
-  .valid_resampling <- c(
-    "near",
-    "bilinear",
-    "cubic",
-    "cubicspline",
-    "lanczos",
-    "average",
-    "rms",
-    "mode",
-    "max",
-    "min",
-    "med",
-    "q1",
-    "q3",
-    "sum"
-  )
+  .valid_resampling <- .resampling_methods
   if (!all(resampling %in% .valid_resampling)) {
     cli::cli_abort(c(
       "Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .valid_resampling)}}.",

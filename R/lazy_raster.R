@@ -42,6 +42,23 @@ LazyRaster <- S7::new_class(
   }
 }
 
+# GDAL resampling names garry passes to the warper and RasterIO. Checked
+# when the node is built, so a typo fails here rather than inside GDAL.
+.resampling_methods <- c(
+  "near", "nearest", "bilinear", "cubic", "cubicspline", "lanczos",
+  "average", "rms", "mode", "max", "min", "med", "q1", "q3", "sum"
+)
+.check_resampling <- function(resampling, arg = "resampling", call = rlang::caller_env()) {
+  if (!is.character(resampling) || length(resampling) != 1L ||
+      !resampling %in% .resampling_methods) {
+    cli::cli_abort(
+      "{.arg {arg}} must be one of {.val {(.resampling_methods)}}, not {.val {resampling}}.",
+      call = call
+    )
+  }
+  resampling
+}
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -152,7 +169,7 @@ lazy_source <- function(
     nodata = nodata,
     block_dim = block_dim,
     open_options = open_options,
-    resampling = as.character(resampling),
+    resampling = .check_resampling(resampling),
     scale = aff$scale,
     offset = aff$offset,
     name = if (is.null(name)) character(0) else as.character(name)
@@ -1109,9 +1126,20 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #' @export
 align_to <- function(x, to, resampling = "bilinear") {
   .assert_class(x, LazyRaster, "LazyRaster")
-  target <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
-  .assert_class(target, GridSpec, "GridSpec", arg = "to")
-  target <- .grid_retype(target, x@grid@dtype)
+  to_grid <- if (S7::S7_inherits(to, LazyRaster)) to@grid else to
+  .assert_class(to_grid, GridSpec, "GridSpec", arg = "to")
+  resampling <- .check_resampling(resampling)
+  # Only `to`'s spatial geometry: x keeps its own outer axes and labels
+  # (a warp of a 2-D raster onto a stack's grid is still 2-D).
+  outer <- x@grid@dims[setdiff(names(x@grid@dims), c("x", "y"))]
+  target <- GridSpec(
+    crs = to_grid@crs,
+    transform = to_grid@transform,
+    extent = to_grid@extent,
+    dims = c(to_grid@dims[c("x", "y")], outer),
+    dtype = x@grid@dtype,
+    labels = x@grid@labels
+  )
   if (grid_equal(x@grid, target)) {
     return(x)
   }
