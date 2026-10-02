@@ -172,11 +172,21 @@ NULL
     return(invisible(NULL))
   }
   host <- .garry_abi_token()
-  for (p in profiles) {
-    d <- tryCatch(
-      mirai::mirai(asNamespace("garry")$.garry_abi_token(), .compute = p)[],
-      error = function(e) NA_character_
+  # Ask every pool at once: the first ask loads garry on a fresh daemon
+  # (about a second), and serially that was 6 s of a first collect().
+  asks <- lapply(profiles, function(p) {
+    tryCatch(
+      mirai::mirai(asNamespace("garry")$.garry_abi_token(), .compute = p),
+      error = function(e) NULL
     )
+  })
+  for (i in seq_along(profiles)) {
+    p <- profiles[[i]]
+    d <- if (is.null(asks[[i]])) {
+      NA_character_
+    } else {
+      tryCatch(asks[[i]][], error = function(e) NA_character_)
+    }
     if (inherits(d, "miraiError") || !is.character(d)) {
       d <- NA_character_
     }

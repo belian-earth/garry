@@ -212,6 +212,9 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
     return(invisible(res))
   }
   out <- .collect_layout(res)
+  # `out` can be `res` itself (a matrix passes through): drop the second
+  # reference, or the attribute below duplicates the whole result
+  rm(res)
   # Self-describing result: a gdalraster read_ds()-style `gis` attribute from the
   # plan's output grid. Only for rasters (matrix/array) -- a scalar global
   # reduction is not spatial. preview() reads it for real-world axes.

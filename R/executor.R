@@ -864,11 +864,29 @@ NULL
 # Assemble sink chunks into the full raster; stacks assemble to
 # (t, y, x) arrays (D17), 2D sinks to [y, x] matrices.
 .exec_assemble <- function(chunks, it, grid, sink_pad) {
-  chunks <- lapply(chunks, .sv_materialise)
   dims <- grid@dims
   outer_dims <- dims[!names(dims) %in% c("x", "y")]
   if (length(outer_dims) == 0L) {
     full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
+    # raw f32 chunks (the distributed store) copy into place in one C
+    # pass each; f32 -> double is exact, so the values are those of the
+    # matrix route below
+    if (all(vapply(chunks, function(v) .sv_is(v) && attr(v, "gdt") == "f32", logical(1)))) {
+      for (j in seq_len(nrow(it))) {
+        v <- .exec_trim(chunks[[j]], sink_pad)
+        d <- .sv_dim(v)
+        .Call(
+          "garry_f32_into_colmajor",
+          full,
+          v,
+          as.numeric(c(it$y_off[j], it$x_off[j], 0)),
+          as.numeric(c(dims[["y"]], dims[["x"]], 1, 1, d[[1L]], d[[2L]])),
+          PACKAGE = "garry"
+        )
+      }
+      return(full)
+    }
+    chunks <- lapply(chunks, .sv_materialise)
     for (j in seq_len(nrow(it))) {
       full[
         (it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
@@ -879,6 +897,7 @@ NULL
     return(full)
   }
   stopifnot(length(outer_dims) == 1L)
+  chunks <- lapply(chunks, .sv_materialise)
   full <- array(NA_real_, c(outer_dims[[1L]], dims[["y"]], dims[["x"]]))
   for (j in seq_len(nrow(it))) {
     full[,
