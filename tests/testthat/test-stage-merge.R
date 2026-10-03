@@ -144,7 +144,7 @@ test_that("focal stages do not merge (halo guard) and still execute", {
   fx <- .merge_fixtures()
   layers <- lapply(c(0, 100), function(off) {
     sm <- .masked_slice(fx$b1, fx$qa, off)
-    focal(sm, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+    focal_map(sm, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   })
   out <- reduce_over(lazy_stack(layers), "median", "t", nan_rm = TRUE)
 

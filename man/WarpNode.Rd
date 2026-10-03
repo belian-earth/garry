@@ -2,7 +2,7 @@
 % Please edit documentation in R/node.R
 \name{WarpNode}
 \alias{WarpNode}
-\title{Lazy resample/reproject to a target grid. Created by \code{\link[=align]{align()}}.
+\title{Lazy resample/reproject to a target grid. Created by \code{\link[=align_to]{align_to()}}.
 Barrier. At execution time this materialises as a gdalraster VRT warp.}
 \usage{
 WarpNode(
@@ -21,9 +21,9 @@ WarpNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=apply_mask]{apply_mask()}}).
 Pure metadata: never read by the planner or executors; surfaced by
-\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
+\code{\link[=plan_draw]{plan_draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{target_grid}{\code{GridSpec} to warp onto.}
 
@@ -33,6 +33,6 @@ Pure metadata: never read by the planner or executors; surfaced by
 A \code{WarpNode}.
 }
 \description{
-Lazy resample/reproject to a target grid. Created by \code{\link[=align]{align()}}.
+Lazy resample/reproject to a target grid. Created by \code{\link[=align_to]{align_to()}}.
 Barrier. At execution time this materialises as a gdalraster VRT warp.
 }

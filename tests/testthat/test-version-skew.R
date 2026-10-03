@@ -1,4 +1,4 @@
-# Host/daemon ABI skew guard: daemons resolve garry::.daemon_* from the
+# Host/daemon ABI skew guard: daemons resolve the .daemon_* bodies from the
 # INSTALLED library while a dev host often runs a load_all() tree. The
 # formals-hash token (.garry_abi_token) is compared host-vs-daemon once
 # per pool generation at execute_plan_mirai entry; a mismatch is a

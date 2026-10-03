@@ -11,11 +11,11 @@ qa_bits(bits)
 }
 \value{
 A predicate function of one array, returning a 0/1 mask:
-pass it as \code{\link[=mask]{mask()}}'s \code{where}, or apply it directly with
+pass it as \code{\link[=apply_mask]{apply_mask()}}'s \code{where}, or apply it directly with
 \code{\link[=lazy_map]{lazy_map()}}.
 }
 \description{
-Returns a predicate \verb{\\(f) ...} for \code{\link[=mask]{mask()}}'s \code{where} argument that flags a
+Returns a predicate \verb{\\(f) ...} for \code{\link[=apply_mask]{apply_mask()}}'s \code{where} argument that flags a
 pixel bad when any of the given bits is set. Nodata pixels are treated as
 clear (matching the QA-fill convention). Use for packed-flag QA bands (HLS
 Fmask, Landsat QA_PIXEL) where a value list cannot express the test;

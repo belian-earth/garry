@@ -22,12 +22,11 @@ and asset.
 \description{
 One row per item x asset. The result is a plain data frame: the
 \verb{stac_filter_*} helpers operate on it in ordinary R, and
-\code{\link[=lazy_dataset]{lazy_dataset()}} / \code{\link[=lazy_stac_stack]{lazy_stac_stack()}} consume it to build lazy
+\code{\link[=lazy_dataset]{lazy_dataset()}} consumes it to build lazy
 mosaics.
 }
 \seealso{
 Other stac helpers:
-\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
 \code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
 \code{\link[=stac_filter_assets]{stac_filter_assets()}},
 \code{\link[=stac_filter_cloud]{stac_filter_cloud()}},

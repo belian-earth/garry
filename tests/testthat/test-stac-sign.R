@@ -63,3 +63,40 @@ test_that(".sign_href joins queries and re-signs idempotently", {
   expect_equal(garry:::.sign_href(once, tok), paste0(plain, "?", tok))
   expect_equal(lengths(regmatches(once, gregexpr("?", once, fixed = TRUE))), 1L)
 })
+
+test_that("stac_sign_mpc signs each item with its own collection's token", {
+  skip_if_not_installed("rstac")
+  skip_if_not_installed("httr2")
+  seen <- character(0)
+  local_mocked_bindings(.mpc_token = function(collection, ...) {
+    seen <<- c(seen, collection)
+    paste0("sv=1&sig=", collection)
+  })
+  item <- function(coll) list(collection = coll, assets = list(B1 = list(href = "https://a.blob.core.windows.net/c/x.tif")))
+  items <- structure(list(features = list(item("hls2-l30"), item("hls2-s30"), item("hls2-l30"))), class = c("doc_items", "list"))
+  out <- stac_sign_mpc(items)
+  expect_setequal(seen, c("hls2-l30", "hls2-s30"))
+  expect_match(out$features[[2L]]$assets$B1$href, "sig=hls2-s30$")
+  expect_match(out$features[[3L]]$assets$B1$href, "sig=hls2-l30$")
+})
+
+test_that("re-signing replaces only the SAS parameters", {
+  h <- "https://a.blob.core.windows.net/c/x.tif?version=2&sv=old&sig=old"
+  out <- .sign_href(h, "sv=new&se=2030-01-01T00%3A00%3A00Z&sig=new")
+  expect_identical(
+    out,
+    "https://a.blob.core.windows.net/c/x.tif?version=2&sv=new&se=2030-01-01T00%3A00%3A00Z&sig=new"
+  )
+})
+
+test_that("a cached token inside the margin is a cache miss", {
+  coll <- paste0("garry-test-", basename(tempfile()))
+  on.exit({
+    rm(list = intersect(coll, ls(.mpc_token_cache)), envir = .mpc_token_cache)
+    unlink(.mpc_token_file(coll))
+  }, add = TRUE)
+  exp <- format(Sys.time() + 300, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  assign(coll, list(token = "t", "msft:expiry" = exp), envir = .mpc_token_cache)
+  expect_identical(.mpc_token_lookup(coll), "t")
+  expect_null(.mpc_token_lookup(coll, margin = 600))
+})

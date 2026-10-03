@@ -97,8 +97,8 @@ test_that("stac_sources() and stac_filter_coverage() reject malformed bboxes", {
   nobox$id <- "missing-bbox"
   expect_error(stac_sources(.di_items(list(ok, nobox))), "missing-bbox")
   rev <- ok
-  rev$bbox <- c(10, 0, 0, 10)
-  expect_error(stac_sources(.di_items(list(rev))), "xmin < xmax")
+  rev$bbox <- c(10, 0, 0, 10) # xmin > xmax: GeoJSON's antimeridian crossing
+  expect_error(stac_sources(.di_items(list(rev))), "antimeridian")
   expect_error(stac_sources(.di_items(list())), "no features")
 
   expect_error(
@@ -112,4 +112,22 @@ test_that("stac_sources() and stac_filter_coverage() reject malformed bboxes", {
   expect_error(stac_filter_coverage(its, c(0, 0, 10, 10), NA_real_), "min_coverage")
   src <- stac_sources(its)
   expect_error(stac_filter_coverage(src, c(0, 0, 10)), "c\\(xmin, ymin, xmax, ymax\\)")
+})
+
+test_that("stac_sources: start_datetime dates range items; clear errors otherwise", {
+  item <- function(id, props, assets = list(B1 = list(href = "/tmp/x.tif")),
+                   bbox = list(0, 0, 1, 1)) {
+    list(id = id, bbox = bbox, properties = props, assets = assets)
+  }
+  items <- list(features = list(
+    item("a", list(datetime = "2023-01-01T00:00:00Z")),
+    item("b", list(datetime = NULL, start_datetime = "2023-02-01T00:00:00Z")),
+    item("c", list())
+  ))
+  expect_warning(out <- stac_sources(items), "dropping 1 item")
+  expect_identical(out$item_id, c("a", "b"))
+  expect_error(stac_sources(items, assets = "B9"), "no STAC item carries")
+  am <- list(features = list(item("d", list(datetime = "2023-01-01T00:00:00Z"),
+                                  bbox = list(179, 0, -179, 1))))
+  expect_error(stac_sources(am), "antimeridian")
 })

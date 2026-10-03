@@ -28,8 +28,8 @@
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v)) {
       return("must be a single finite number")
     }
-    if (int && v != as.integer(v)) {
-      return("must be a whole number")
+    if (int && (v != round(v) || abs(v) > .Machine$integer.max)) {
+      return("must be a whole number within R's integer range")
     }
     if (v < min || v > max) {
       return(.glue("must be in [{format(min)}, {format(max)}]"))
@@ -314,6 +314,14 @@
     default = TRUE,
     tier = "user",
     desc = "GDAL-direct composite fast path (default route)",
+    check = .opt_flag()
+  ),
+  # Plans that only read (sources, warps and stacks of them) are copied
+  # straight from GDAL into the result, skipping the compute kernels.
+  read_only = list(
+    default = TRUE,
+    tier = "user",
+    desc = "copy read-only plans from GDAL straight into the result",
     check = .opt_flag()
   ),
   # Route decision for composite_direct: n_bands (+1 if morphology) x

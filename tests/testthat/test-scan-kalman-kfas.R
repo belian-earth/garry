@@ -25,7 +25,7 @@ kfas_llt <- function(y, q_lvl, q_slp, h) {
 # sigma_obs 2  =>  q_lvl 1, q_slp 0.01, H 4.
 .k_body <- function(output, ...) {
   kalman_llt(sigma_lvl = 1, sigma_slp = 0.1, sigma_obs = 2,
-             output = output, out_dtype = "f64", ...)
+             output = output, dtype = "f64", ...)
 }
 
 .k_series <- function(T_ = 15) {
@@ -112,7 +112,6 @@ test_that("the batched body advances every pixel independently", {
 })
 
 test_that("traced (PJRT) body matches the untraced oracle", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(6)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
   cube[sample(length(cube), 30)] <- NaN
@@ -129,7 +128,6 @@ test_that("traced (PJRT) body matches the untraced oracle", {
 
 test_that("kalman_smooth() through a full scan_over plan matches KFAS", {
   skip_if_not_installed("KFAS")
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(7)
 
   # 4-slice Float32 stack with NaN gaps, written to disk
@@ -172,8 +170,6 @@ test_that("kalman_smooth() through a full scan_over plan matches KFAS", {
 
 test_that("kalman scan: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
@@ -199,8 +195,8 @@ test_that("kalman_llt validates its arguments", {
   expect_error(kalman_llt(1, 0.1, 2, robust_iters = NA), "robust_iters")
   expect_error(kalman_llt(1, 0.1, 2, robust_threshold = Inf), "robust_threshold")
   expect_error(kalman_llt(1, 0.1, 2, robust_inflation = 0), "robust_inflation")
-  expect_error(kalman_llt(1, 0.1, 2, out_dtype = "f128"), "out_dtype")
-  body <- kalman_llt(1, 0.1, 2, out_dtype = "f64")
+  expect_error(kalman_llt(1, 0.1, 2, dtype = "f128"), "dtype")
+  body <- kalman_llt(1, 0.1, 2, dtype = "f64")
   cube <- array(stats::rnorm(12), c(4, 3, 1))
   expect_error(body(list(cube), 2L), "margin")
 })
@@ -292,7 +288,6 @@ test_that("robust reweighting is per pixel in a batched cube", {
 })
 
 test_that("robust traced (PJRT) body matches the untraced oracle", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(10)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3))
   cube[8:15, 2, 2] <- cube[8:15, 2, 2] + 25       # one break pixel
@@ -306,7 +301,6 @@ test_that("robust traced (PJRT) body matches the untraced oracle", {
 })
 
 test_that("mean+sd collect as ONE multi-sink plan, scans sharing a stage", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function(k) lazy_source(f, graph = g) * k
   stk <- lazy_stack(list(a = s(1), b = s(2), c = s(3), d = s(4)),
@@ -382,7 +376,7 @@ test_that("a regime boundary splits the series into two independent smoothers", 
   y <- c(rep(3, b - 1L), rep(9, T_ - b + 1L)) + stats::rnorm(T_, 0, 0.5)
   cube <- array(y, c(T_, 1, 1)); r <- array(1, c(T_, 1, 1))
   bd <- array(0, c(T_, 1, 1)); bd[b, , ] <- 1
-  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, out_dtype = "f64")
+  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, dtype = "f64")
   got <- function(o) as.numeric(body(o)(list(cube, r, bd), 1L))
   plain <- function(o) as.numeric(body(o)(list(cube, r), 1L))
   # before the boundary: the smoother of y[1:(b-1)] alone (no observation
@@ -401,7 +395,6 @@ test_that("a regime boundary splits the series into two independent smoothers", 
 })
 
 test_that("boundaries: traced (PJRT) body matches the untraced oracle", {
-  skip_if(!garry::.g_has_nv_scan(), "installed anvl lacks nv_scan")
   set.seed(16)
   cube <- array(.k_series(15 * 4 * 3), c(15, 4, 3)); cube[sample(length(cube), 20)] <- NaN
   r <- array(1, dim(cube)); bd <- array(0, dim(cube)); bd[9, , ] <- 1; bd[12, 2, ] <- 1
@@ -413,4 +406,41 @@ test_that("boundaries: traced (PJRT) body matches the untraced oracle", {
     expect_identical(is.na(traced), is.na(untraced))
     expect_lt(max(abs(traced - untraced), na.rm = TRUE), 1e-3)
   }
+})
+
+test_that("kalman_smooth checks its dataset arguments", {
+  f <- fixture_gradient_f32()
+  g <- graph_new()
+  s <- function(k) lazy_source(f, graph = g) * k
+  ds <- as_dataset(list(
+    a = list(t1 = s(1), t2 = s(2), t3 = s(3)),
+    b = list(t1 = s(4), t2 = s(5), t3 = s(6))
+  ))
+  expect_error(
+    kalman_smooth(ds, 1, 0.1, obs_var = ds$a),
+    "need a <garry::LazyRaster>|LazyRaster"
+  )
+  expect_error(kalman_smooth(ds$a, 1, 0.1, bands = "a"), "applies to a")
+  sm <- kalman_smooth(ds, 1, 0.1, bands = "a")
+  expect_true(S7::S7_inherits(sm$mean, LazyDataset))
+})
+
+test_that("a regime with no observation is NaN, not the previous regime's trend", {
+  set.seed(17); T_ <- 12L; b <- 8L
+  y <- 3 + stats::rnorm(T_, 0, 0.5)
+  y[b:T_] <- NaN # the second regime is never observed
+  y[5] <- NaN # a gap inside the first regime
+  cube <- array(y, c(T_, 1, 1)); r <- array(1, c(T_, 1, 1))
+  bd <- array(0, c(T_, 1, 1)); bd[b, , ] <- 1
+  body <- function(o) kalman_llt(sigma_lvl = 0.1, sigma_slp = 0.05, sigma_obs = 0.5, output = o, dtype = "f64")
+  got <- function(o) as.numeric(body(o)(list(cube, r, bd), 1L))
+  for (o in c("mean", "sd", "fmean", "fsd")) {
+    v <- got(o)
+    expect_true(all(is.nan(v[b:T_])), info = o)
+    expect_false(anyNA(v[1:(b - 1L)]), info = o) # a gap is still estimated
+  }
+  # traced agrees
+  traced <- garry:::g_jit(function(inputs) list(out = body("mean")(inputs, 1L)))
+  tv <- as.numeric(g_download(traced(lapply(list(cube, r, bd), g_upload, dtype = "f64")))$out)
+  expect_equal(is.nan(tv), is.nan(got("mean")))
 })

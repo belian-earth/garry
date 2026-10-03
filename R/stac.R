@@ -11,7 +11,7 @@ NULL
 # so it stays in Suggests and everything downstream tests offline.
 #
 # The source table IS the mosaic index: stac_gti_index() writes it as a
-# GTI-readable layer, and lazy_stac_stack() opens one FILTERed slice
+# GTI-readable layer, and lazy_dataset() opens one FILTERed slice
 # per datetime group (D18). Planetary Computer signing, measured on the
 # HLS benchmark: PRE-SIGN hrefs before stac_sources() (one cached SAS
 # token per collection, e.g. rstac::items_sign 'sign_planetary_computer'
@@ -25,6 +25,23 @@ NULL
   rlang::check_installed("rstac", reason = "for STAC queries.")
 }
 
+# STAC datetime interval for inclusive bounds. A bound without a time of
+# day (a Date, or a "YYYY-MM-DD" string) spans the whole day: the end bound
+# runs to 23:59:59, not midnight, or the last day's acquisitions drop out.
+.stac_datetime_range <- function(start_date, end_date) {
+  date_only <- function(d) {
+    inherits(d, "Date") ||
+      (is.character(d) && grepl("^\\d{4}-\\d{2}-\\d{2}$", d))
+  }
+  fmt <- function(d) format(as.POSIXct(d, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
+  end <- if (date_only(end_date)) {
+    paste0(format(as.Date(end_date)), "T23:59:59Z")
+  } else {
+    fmt(end_date)
+  }
+  paste0(fmt(start_date), "/", end)
+}
+
 #' Query a STAC API and return the item collection.
 #'
 #' Searches the collection with a GET request, falling back to POST when
@@ -34,7 +51,11 @@ NULL
 #' @param bbox Length-4 numeric, EPSG:4326 (xmin, ymin, xmax, ymax).
 #' @param stac_source STAC API root URL.
 #' @param collection Collection id.
-#' @param start_date,end_date Dates (any lubridate-parseable form).
+#' @param start_date,end_date Search bounds, both inclusive: `Date`s,
+#'   `POSIXct`s, or strings `as.POSIXct()` parses in UTC (such as
+#'   `"2023-06-01"` or `"2023-06-01 12:00:00"`). A date without a
+#'   time covers that whole day, so `end_date = "2023-12-31"` includes
+#'   acquisitions made on the 31st.
 #' @param limit Page size requested from the API.
 #' @return An rstac `doc_items` object.
 #' @seealso [stac_sign_mpc()], [stac_sources()], and [lazy_dataset()] as
@@ -50,11 +71,15 @@ stac_query <- function(
   limit = 999
 ) {
   .require_rstac()
-  datetime <- paste0(
-    format(as.POSIXct(start_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ"),
-    "/",
-    format(as.POSIXct(end_date, tz = "UTC"), "%Y-%m-%dT%H:%M:%SZ")
-  )
+  .check_bbox(bbox)
+  for (d in list(start_date, end_date)) {
+    if (length(d) != 1L || is.na(tryCatch(as.POSIXct(d, tz = "UTC"), error = function(e) NA))) {
+      cli::cli_abort(
+        "{.arg start_date} and {.arg end_date} must each be one date or date-time, not {.val {d}}."
+      )
+    }
+  }
+  datetime <- .stac_datetime_range(start_date, end_date)
   search <- rstac::stac_search(
     rstac::stac(stac_source),
     collections = collection,
@@ -62,8 +87,18 @@ stac_query <- function(
     datetime = datetime,
     limit = limit
   )
-  res <- tryCatch(rstac::get_request(search), error = function(e) {
-    rstac::post_request(search)
+  # some APIs accept only POST searches; when that fails too, report both
+  res <- tryCatch(rstac::get_request(search), error = function(get_err) {
+    tryCatch(rstac::post_request(search), error = function(post_err) {
+      cli::cli_abort(
+        c(
+          "the STAC search failed with GET and with POST.",
+          "x" = "GET: {conditionMessage(get_err)}",
+          "x" = "POST: {conditionMessage(post_err)}"
+        ),
+        parent = get_err
+      )
+    })
   })
   rstac::items_fetch(res)
 }
@@ -100,8 +135,17 @@ stac_sign_mpc <- function(
     cli::cli_warn("No STAC items to sign.")
     return(items)
   }
-  token <- .mpc_token(items$features[[1L]]$collection, subscription_key)
+  colls <- vapply(items$features, function(f) f$collection %||% NA_character_, "")
+  if (anyNA(colls)) {
+    cli::cli_abort(
+      "{sum(is.na(colls))} item{?s} carr{?ies/y} no {.field collection}; cannot pick a signing token."
+    )
+  }
+  # one token per collection: merged collections (HLS L30 + S30) live in
+  # different storage containers
+  tokens <- lapply(stats::setNames(nm = unique(colls)), .mpc_token, subscription_key)
   items$features <- lapply(items$features, function(f) {
+    token <- tokens[[f$collection]]
     f$assets <- lapply(f$assets, function(a) {
       a$href <- .sign_href(a$href, token)
       a
@@ -111,19 +155,23 @@ stac_sign_mpc <- function(
   items
 }
 
-# Attach a SAS query string to an href. A previously signed href (a
-# query carrying a SAS `sig=`) has its token replaced, so re-signing is
-# idempotent; any other existing query is extended with `&`, never a
-# second `?`.
+# Azure SAS query keys: a re-sign replaces these and keeps any other
+# parameter the href carried.
+.sas_keys <- c(
+  "sv", "ss", "srt", "sp", "se", "st", "spr", "sig", "sr", "si", "sip",
+  "skoid", "sktid", "skt", "ske", "sks", "skv", "sdd", "ses",
+  "rscc", "rscd", "rsce", "rscl", "rsct"
+)
+
+# Attach a SAS query string to an href. A previously signed href has its
+# SAS parameters replaced, so re-signing is idempotent; other parameters
+# are kept, joined with `&`, never a second `?`.
 .sign_href <- function(href, token) {
-  q <- regmatches(href, regexpr("\\?.*$", href))
-  if (!length(q)) {
-    return(paste0(href, "?", token))
-  }
-  if (grepl("(^\\?|&)sig=", q)) {
-    return(paste0(sub("\\?.*$", "", href), "?", token))
-  }
-  paste0(href, "&", token)
+  base <- sub("\\?.*$", "", href)
+  q <- if (grepl("?", href, fixed = TRUE)) sub("^[^?]*\\?", "", href) else ""
+  kv <- if (nzchar(q)) strsplit(q, "&", fixed = TRUE)[[1L]] else character(0)
+  keep <- kv[!sub("=.*$", "", kv) %in% .sas_keys]
+  paste0(base, "?", paste(c(keep, token), collapse = "&"))
 }
 
 # Signed-expiry epoch (numeric, UTC) of a SAS query string, NA when
@@ -177,14 +225,16 @@ stac_sign_mpc <- function(
       if (is.na(se) || se - margin > as.numeric(Sys.time())) {
         return(u)
       }
+      # the cached token must outlive the same margin, or the "fresh"
+      # URL carries one about to expire
       tok <- tryCatch(
-        .mpc_token(paste0(parts[[3L]], "/", parts[[4L]])),
+        .mpc_token(paste0(parts[[3L]], "/", parts[[4L]]), margin = margin),
         error = function(e) NULL
       )
       if (is.null(tok)) {
         return(u)
       }
-      paste0(sub("\\?.*$", "", u), "?", tok)
+      .sign_href(u, tok)
     },
     character(1),
     USE.NAMES = FALSE
@@ -195,9 +245,10 @@ stac_sign_mpc <- function(
 # (saved to both). Reused until msft:expiry.
 .mpc_token <- function(
   collection,
-  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)
+  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA),
+  margin = 0
 ) {
-  hit <- .mpc_token_lookup(collection)
+  hit <- .mpc_token_lookup(collection, margin)
   if (!is.null(hit)) {
     return(hit)
   }
@@ -212,22 +263,30 @@ stac_sign_mpc <- function(
       "Ocp-Apim-Subscription-Key" = subscription_key
     )
   }
+  # the endpoint rate-limits (429); retry, honouring Retry-After
+  req <- httr2::req_retry(req, max_tries = 5)
   tok <- httr2::resp_body_json(httr2::req_perform(req))
   assign(collection, tok, envir = .mpc_token_cache)
-  saveRDS(tok, .mpc_token_file(collection))
+  # daemons share the file: write beside it, then rename into place
+  f <- .mpc_token_file(collection)
+  tmp <- tempfile("tok-", tmpdir = dirname(f), fileext = ".rds")
+  saveRDS(tok, tmp)
+  if (!file.rename(tmp, f)) {
+    unlink(tmp)
+  }
   tok$token
 }
 
 # The valid token string from the memory or disk cache, or NULL. Expired entries
 # are dropped from memory as a side effect.
-.mpc_token_lookup <- function(collection) {
+.mpc_token_lookup <- function(collection, margin = 0) {
   unexpired <- function(tok) {
     exp <- as.POSIXct(
       tok[["msft:expiry"]],
       format = "%Y-%m-%dT%H:%M:%SZ",
       tz = "UTC"
     )
-    !is.na(exp) && exp > Sys.time()
+    !is.na(exp) && as.numeric(exp) - margin > as.numeric(Sys.time())
   }
   if (exists(collection, envir = .mpc_token_cache, inherits = FALSE)) {
     tok <- get(collection, envir = .mpc_token_cache)
@@ -238,8 +297,8 @@ stac_sign_mpc <- function(
   }
   f <- .mpc_token_file(collection)
   if (file.exists(f)) {
-    tok <- readRDS(f)
-    if (unexpired(tok)) {
+    tok <- tryCatch(readRDS(f), error = function(e) NULL) # partial: a miss
+    if (!is.null(tok) && unexpired(tok)) {
       assign(collection, tok, envir = .mpc_token_cache)
       return(tok$token)
     }
@@ -280,7 +339,7 @@ stac_sign_mpc <- function(
 #'
 #' One row per item x asset. The result is a plain data frame: the
 #' `stac_filter_*` helpers operate on it in ordinary R, and
-#' [lazy_dataset()] / [lazy_stac_stack()] consume it to build lazy
+#' [lazy_dataset()] consumes it to build lazy
 #' mosaics.
 #'
 #' @param items An rstac `doc_items` object (or any list with the same
@@ -300,6 +359,14 @@ stac_sources <- function(items, assets = NULL) {
   }
   rows <- lapply(seq_along(feats), function(i) {
     ft <- feats[[i]]
+    bb <- suppressWarnings(as.numeric(unlist(ft$bbox)))
+    if (length(bb) == 4L && all(is.finite(bb)) && bb[[1L]] > bb[[3L]]) {
+      # GeoJSON encodes an antimeridian crossing as xmin > xmax
+      cli::cli_abort(c(
+        "STAC item {.val {ft$id %||% i}} crosses the antimeridian (bbox xmin > xmax).",
+        "i" = "garry does not index antimeridian-crossing items yet; filter them out or split the area of interest."
+      ))
+    }
     .check_bbox(
       ft$bbox,
       what = "bbox of STAC item {.val {ft$id %||% i}}"
@@ -317,7 +384,10 @@ stac_sources <- function(items, assets = NULL) {
       item_id = ft$id %||% NA_character_,
       asset = anames,
       location = vapply(hrefs, .gdal_href, character(1), USE.NAMES = FALSE),
-      datetime = ft$properties$datetime %||% NA_character_,
+      # a range-only item (datetime null) is dated by its start
+      datetime = ft$properties$datetime %||%
+        ft$properties$start_datetime %||%
+        NA_character_,
       cloud_cover = if (is.null(cc)) NA_real_ else as.numeric(cc),
       xmin = ft$bbox[[1L]],
       ymin = ft$bbox[[2L]],
@@ -327,6 +397,20 @@ stac_sources <- function(items, assets = NULL) {
     )
   })
   out <- do.call(rbind, rows)
+  if (is.null(out)) {
+    have <- unique(unlist(lapply(feats, function(f) names(f$assets))))
+    cli::cli_abort(c(
+      "no STAC item carries the requested asset{?s} {.val {assets}}.",
+      "i" = "Assets in these items: {.val {have}}."
+    ))
+  }
+  undated <- is.na(out$datetime)
+  if (any(undated)) {
+    cli::cli_warn(
+      "dropping {length(unique(out$item_id[undated]))} item{?s} with no datetime or start_datetime."
+    )
+    out <- out[!undated, , drop = FALSE]
+  }
   out[order(out$datetime, out$item_id, out$asset), , drop = FALSE]
 }
 
@@ -504,7 +588,7 @@ stac_drop_duplicates <- function(sources) {
 #' Group acquisitions into time slices.
 #'
 #' Adds a `slice` column (the datetime truncated to `granularity`);
-#' tiles sharing a slice mosaic together in [lazy_stac_stack()].
+#' tiles sharing a slice mosaic together in [lazy_dataset()].
 #'
 #' `"day"` truncates the UTC datetime: one satellite overpass that
 #' crosses local midnight in UTC terms splits into two slices.
@@ -559,7 +643,7 @@ stac_time_slices <- function(
 #'
 #' After renaming, [stac_merge()] concatenates the collections into one table.
 #' A band a collection lacks needs no placeholder: [lazy_dataset()] gives each
-#' band only the slices that carry it, and [mask()] pairs those slices with the
+#' band only the slices that carry it, and [apply_mask()] pairs those slices with the
 #' QA band by name (a Landsat-only thermal band masks against the Landsat Fmask
 #' slices), so ragged bands reduce over exactly their own observations.
 #'
@@ -694,9 +778,8 @@ stac_merge <- function(...) {
 #' mosaics the indexed rasters on the fly. Footprints are stored in
 #' `crs` (transformed from the table's EPSG:4326 bboxes), so the index
 #' layer SRS matches the grid the GTI dataset will be pinned to and the
-#' culling geometry is exact. Most users reach this via [lazy_dataset()]
-#' or [lazy_stac_stack()], which build the index internally, and rarely
-#' call it directly.
+#' culling geometry is exact. Most users reach this through
+#' [lazy_dataset()], which builds the index internally.
 #'
 #' @param sources A `stac_sources()` table with a `slice` column (see
 #'   [stac_time_slices()]).
@@ -752,85 +835,3 @@ stac_gti_index <- function(
   invisible(path)
 }
 
-#' Lazy time-sliced stack of one STAC asset on a target grid.
-#'
-#' Builds a GTI (GDAL Tile Index; see [stac_gti_index()]) index for
-#' `asset`, then opens one mosaic per time slice pinned to `grid`
-#' (mixed source CRS is fine: the GTI driver reprojects per tile) and
-#' stacks them along `t`. Overlaps within a slice resolve by ascending
-#' `sort_field` (highest drawn on top).
-#'
-#' @param sources A `stac_sources()` table.
-#' @param grid Target [GridSpec()] for every slice.
-#' @param asset Asset name to stack.
-#' @param granularity Slice granularity (see [stac_time_slices()]).
-#' @param sort_field Index field ordering overlaps within a slice.
-#' @param nodata Optional nodata override passed to each slice source.
-#' @param lon Longitude for `granularity = "solar_day"` (see
-#'   [stac_time_slices()]).
-#' @param scale,offset Read affine, as in [lazy_source()]: `FALSE`
-#'   (default) reads raw values, `TRUE` discovers the file's band
-#'   scale/offset (probing the mosaic, then the first item), a numeric
-#'   supplies it explicitly.
-#' @return A list: `stack` (`LazyRaster`), `slices` (character),
-#'   `index` (path).
-#' @seealso [collect()] to materialise the stack; [lazy_dataset()], the
-#'   higher-level multi-band interface most users want.
-#' @family stac helpers
-#' @export
-lazy_stac_stack <- function(
-  sources,
-  grid,
-  asset,
-  granularity = "day",
-  sort_field = "datetime",
-  nodata = NULL,
-  lon = NULL,
-  scale = FALSE,
-  offset = NULL
-) {
-  sources <- stac_time_slices(sources, granularity, lon = lon)
-  idx <- stac_gti_index(sources, asset, crs = grid@crs)
-  slices <- sort(unique(sources$slice[sources$asset == asset]))
-  # One metadata probe per asset, not per slice: every slice opens the
-  # same index pinned to the same grid, so the only unknowns (source
-  # dtype, native block, file nodata) are shared. Per-slice discovery
-  # costs a remote COG header fetch each, serially, on the host.
-  meta <- gdal_grid_spec(
-    paste0("GTI:", idx),
-    open_options = gti_open_options(grid)
-  )
-  if (is.null(nodata) && length(meta$nodata) == 1L) {
-    nodata <- meta$nodata
-  }
-  aff <- .resolve_scale(
-    scale,
-    offset,
-    function() {
-      if (length(meta$scale) == 1L) {
-        return(meta)
-      }
-      gdal_grid_spec(sources$location[sources$asset == asset][[1L]])
-    },
-    what = asset
-  )
-  graph <- graph_new()
-  layers <- lapply(slices, function(sl) {
-    lazy_source(
-      paste0("GTI:", idx),
-      graph = graph,
-      nodata = nodata,
-      open_options = gti_open_options(
-        grid,
-        filter = .glue("slice = '{sl}'"),
-        sort_field = sort_field
-      ),
-      grid = meta$grid,
-      block_dim = meta$block_dim,
-      scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-      offset = if (length(aff$offset) == 1L) aff$offset else NULL,
-      name = asset
-    )
-  })
-  list(stack = lazy_stack(layers), slices = slices, index = idx)
-}

@@ -9,7 +9,7 @@ gdal_warp_vrt(src_path, band, target_grid, resampling, src_nodata = numeric(0))
 \arguments{
 \item{src_path}{Source path/VSI URL. One source: gdalwarp writes a
 VRT from a single input only. A multi-path source node is read by
-\code{\link[=gdal_warp_window]{gdal_warp_window()}} instead.}
+\code{gdal_warp_window()} instead.}
 
 \item{band}{1-based source band (the VRT has this single band).}
 
@@ -25,6 +25,7 @@ Path to the VRT file (in \code{tempdir()}).
 \description{
 Delegates every pixel of cross-CRS math to the GDAL warper:
 \code{-te}/\code{-ts} pin the output grid exactly to \code{target_grid}.
-Float targets without a source nodata get \verb{-dstnodata nan} so area
-outside the source footprint reads as NaN, not 0.
+A source nodata goes to the warper as both \code{-srcnodata} and
+\code{-dstnodata}, so it never enters resampling and area outside the source
+footprint reads as nodata; float targets without one get \verb{-dstnodata nan}.
 }

@@ -33,41 +33,59 @@ NULL
   list(physical = as.integer(phys), logical = as.integer(logi))
 }
 
-# Headroom left in this process's cgroup (v2), in MB: memory.max minus
-# current usage. NA when unlimited or unreadable. /proc/meminfo reports
-# the HOST, so inside a container, a SLURM/systemd scope or a memory
-# cgroup it can report tens of free GB while this process is a breath
-# away from its own limit -- budgeting on it would overcommit straight
-# into a cgroup OOM kill.
-.garry_cgroup_avail_mb <- function() {
-  if (!file.exists("/proc/self/cgroup")) {
+# Headroom left in this process's cgroups (v2), in MB: the tightest of
+# (memory.max - memory.current + inactive file cache) over the process's
+# cgroup and every ancestor with a finite limit. NA when no level is
+# limited or the files are unreadable. /proc/meminfo reports the HOST, so
+# inside a container, a SLURM step or a systemd scope it can report tens
+# of free GB while this process is a breath away from its own limit --
+# budgeting on it would overcommit straight into a cgroup OOM kill.
+# Limits often sit on an ancestor (SLURM's job cgroup, a systemd slice),
+# and memory.current counts the page cache the kernel reclaims at the
+# limit, so the leaf alone either misses the limit or reads near-zero
+# headroom in any run that has read a few GB. `root` and `self` are
+# injectable for tests.
+.garry_cgroup_avail_mb <- function(
+  root = "/sys/fs/cgroup",
+  self = "/proc/self/cgroup"
+) {
+  if (!file.exists(self)) {
     return(NA_real_)
   } # non-Linux
-  ln <- tryCatch(readLines("/proc/self/cgroup", n = 5L), error = function(e) {
-    character(0)
-  })
+  ln <- tryCatch(readLines(self, n = 5L), error = function(e) character(0))
   rel <- sub("^0::", "", grep("^0::", ln, value = TRUE)[1L])
   if (is.na(rel) || !nzchar(rel)) {
     return(NA_real_)
   }
-  base <- file.path("/sys/fs/cgroup", sub("^/", "", rel))
-  f_max <- file.path(base, "memory.max")
-  f_cur <- file.path(base, "memory.current")
-  if (!file.exists(f_max) || !file.exists(f_cur)) {
-    return(NA_real_)
+  read1 <- function(f) {
+    if (!file.exists(f)) {
+      return(NA_character_)
+    }
+    tryCatch(readLines(f, n = 1L), error = function(e) NA_character_)
   }
-  mx <- tryCatch(readLines(f_max, n = 1L), error = function(e) "max")
-  if (identical(mx, "max")) {
-    return(NA_real_)
-  } # unlimited
-  mx <- suppressWarnings(as.numeric(mx))
-  cur <- suppressWarnings(as.numeric(
-    tryCatch(readLines(f_cur, n = 1L), error = function(e) NA)
-  ))
-  if (is.na(mx) || is.na(cur)) {
-    return(NA_real_)
+  inactive_file <- function(dir) {
+    f <- file.path(dir, "memory.stat")
+    st <- if (file.exists(f)) {
+      tryCatch(readLines(f), error = function(e) character(0))
+    } else {
+      character(0)
+    }
+    v <- sub("^inactive_file ", "", grep("^inactive_file ", st, value = TRUE))
+    if (length(v)) suppressWarnings(as.numeric(v[[1L]])) else 0
   }
-  max(0, (mx - cur) / 2^20)
+  parts <- strsplit(sub("^/", "", rel), "/", fixed = TRUE)[[1L]]
+  best <- NA_real_
+  for (k in rev(seq_along(parts))) {
+    dir <- file.path(root, paste(parts[seq_len(k)], collapse = "/"))
+    mx <- suppressWarnings(as.numeric(read1(file.path(dir, "memory.max"))))
+    cur <- suppressWarnings(as.numeric(read1(file.path(dir, "memory.current"))))
+    if (is.na(mx) || is.na(cur)) {
+      next # "max" (unlimited) or unreadable
+    }
+    avail <- max(0, (mx - cur + inactive_file(dir)) / 2^20)
+    best <- min(best, avail, na.rm = TRUE)
+  }
+  best
 }
 
 # macOS reclaimable memory in MB via vm_stat, NA elsewhere or on parse
@@ -216,6 +234,36 @@ NULL
 # (probed 2026-08-02; a substitute()-based first attempt relied on a
 # nonexistent .expr_quoted argument and was backed out). `quiet`
 # tolerates down profiles (teardown-adjacent broadcasts).
+# A run id unique on this machine: the host pid plus a per-session count.
+# It names the run's store regions and fetch directory, so it must not
+# come from the RNG (drawing would move the user's .Random.seed, and two
+# sessions seeded alike would share regions and a fetch directory).
+.garry_run_id <- function() {
+  n <- (.garry_state$run_count %||% 0L) + 1L
+  .garry_state$run_count <- n
+  .glue("{Sys.getpid()}x{n}")
+}
+
+# Abort if any of `profiles` has no connected daemon. A width-1 profile
+# whose daemon died (an OOM kill, a crash) stays registered, and a task
+# sent to it never resolves: without this check the next run blocks
+# forever on its first broadcast.
+.assert_pools_alive <- function(profiles, call = rlang::caller_env()) {
+  dead <- profiles[vapply(profiles, .gd_n_compute, integer(1)) == 0L]
+  if (length(dead)) {
+    cli::cli_abort(
+      c(
+        "{length(dead)} garry daemon pool{?s} {?has/have} no running daemon: {.val {dead}}.",
+        "i" = "A daemon was probably killed (out of memory?).",
+        "i" = "Call {.fn garry_daemons} to restart the pools."
+      ),
+      class = "garry_pool_error",
+      call = call
+    )
+  }
+  invisible(profiles)
+}
+
 .pool_broadcast <- function(
   expr,
   profiles = .comp_profiles(),
@@ -224,6 +272,13 @@ NULL
 ) {
   args <- c(list(expr), list(...))
   out <- list()
+  # a task sent to a profile with no daemon never resolves: skip those
+  # when quiet, refuse otherwise
+  if (quiet) {
+    profiles <- profiles[vapply(profiles, .gd_n_compute, integer(1)) > 0L]
+  } else {
+    .assert_pools_alive(profiles)
+  }
   for (p in profiles) {
     h <- if (quiet) {
       tryCatch(
@@ -395,6 +450,9 @@ NULL
     if (!is.null(got)) {
       .garry_state$comp_threads <- got
     }
+    # comp_threads alone cannot describe a mixed pool: the next uniform
+    # plan must re-mask the scan daemons even when its width matches
+    .garry_state$comp_mixed <- TRUE
     return(invisible(NULL))
   }
   k_want <- if (plan_has_scan) {
@@ -402,12 +460,16 @@ NULL
   } else {
     max(2L, cores %/% max(1L, n_comp))
   }
-  if (identical(.garry_state$comp_threads, k_want)) {
+  if (
+    identical(.garry_state$comp_threads, k_want) &&
+      !isTRUE(.garry_state$comp_mixed)
+  ) {
     return(invisible(NULL))
   }
   got <- .pool_affinity_apply(NULL, n_comp, k = k_want, pids = pids)
   if (!is.null(got)) {
     .garry_state$comp_threads <- got
+    .garry_state$comp_mixed <- FALSE
   }
   invisible(NULL)
 }
@@ -418,9 +480,10 @@ NULL
 #' tasks (and any kernels the placement pass fuses onto them), while
 #' `compute` daemons run the materialised XLA stages. The resource
 #' model is: **pool width is slots, admission is concurrency**. Every
-#' daemon is pinned to a disjoint slice of the machine at creation
-#' (`garry_opt("pool_affinity")`), so an XLA client created anywhere is
-#' narrow rather than all-cores; the scheduler's live-RAM byte budgets
+#' daemon is pinned to a bounded, interleaved CPU mask at creation
+#' (`garry_opt("pool_affinity")`; masks within a pool are mostly disjoint,
+#' while read and compute masks overlap), so an XLA client created
+#' anywhere is narrow rather than all-cores; the scheduler's live-RAM byte budgets
 #' decide how many tasks are actually in flight; excess daemons idle
 #' lean. Called with no arguments it sizes the pools to the machine:
 #' `read` = all logical cores (remote fetch is latency-bound, so a
@@ -469,7 +532,8 @@ NULL
 #' @param gdal_config Apply [garry_gdal_config()] on the host and read
 #'   daemons (default `TRUE`). Set `FALSE` to leave session GDAL config
 #'   untouched (e.g. when mixing local multi-file reads).
-#' @param ... Passed to `mirai::daemons()` for both pools.
+#' @param ... Passed to `mirai::daemons()` for every pool; `dispatcher` is
+#'   garry's to set.
 #' @return Invisibly, `list(read =, compute =)`.
 #' @seealso [garry_daemons_set()], [garry_pool_hygiene()], [collect()]
 #' @export
@@ -509,7 +573,22 @@ garry_daemons <- function(
     }
     if (is.null(read)) read <- cr$logical
   }
-  read_handles <- as.integer(read_handles %||% garry_opt("read_handles"))
+  .garry_opt_check()
+  count <- function(v, arg, min = 0) {
+    if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v < min || v != round(v)) {
+      cli::cli_abort(
+        "{.arg {arg}} must be a single whole number >= {min}, not {.val {v}}.",
+        call = rlang::caller_env(2)
+      )
+    }
+    as.integer(v)
+  }
+  read <- count(read, "read")
+  compute <- count(compute, "compute")
+  read_handles <- count(read_handles %||% garry_opt("read_handles"), "read_handles", 1)
+  if ("dispatcher" %in% names(list(...))) {
+    cli::cli_abort("{.arg dispatcher} is set by {.fn garry_daemons} itself.")
+  }
   # MALLOC_* must be exported BEFORE the daemons spawn (read at exec). The GDAL
   # config is applied on the read daemons below, NOT on the host session:
   # DISABLE_READDIR_ON_OPEN=EMPTY_DIR would hide local sidecars (overviews,
@@ -608,6 +687,7 @@ garry_daemons <- function(
   ) {
     .pool_affinity_apply(NULL, compute, pids = .garry_state$comp_pids)
   }
+  .garry_state$comp_mixed <- FALSE
   invisible(list(read = read, compute = compute))
 }
 
@@ -617,10 +697,11 @@ garry_daemons <- function(
 #' heap pages to the operating system (glibc `malloc_trim`). With
 #' `deep = TRUE` the daemons' jit caches are also evicted, forcing
 #' recompiles on next use (roughly a second per map kernel, tens of
-#' seconds per scan kernel); reserve that for memory pressure. The
-#' scheduler already trims after every compute/write task and at run
-#' start; call this between pipeline phases when the fleet should idle
-#' lean.
+#' seconds per scan kernel); reserve that for memory pressure. Daemons
+#' already trim at run start, and during a run once the task transients
+#' since their last trim pass `garry.daemon_gc_mb` (see
+#' [garry_options()]); call this between pipeline phases when the fleet
+#' should idle lean.
 #'
 #' @param deep Also evict the jit caches?
 #' @return Invisibly `NULL`.
@@ -628,7 +709,7 @@ garry_daemons <- function(
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
   .pool_broadcast(
-    quote(garry::.daemon_hygiene(deep = d)),
+    quote(asNamespace("garry")$.daemon_hygiene(deep = d)),
     profiles = c("garry_read", .comp_profiles(), "garry_write"),
     d = deep,
     quiet = TRUE

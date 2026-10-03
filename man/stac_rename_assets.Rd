@@ -28,13 +28,12 @@ under its own name.
 \details{
 After renaming, \code{\link[=stac_merge]{stac_merge()}} concatenates the collections into one table.
 A band a collection lacks needs no placeholder: \code{\link[=lazy_dataset]{lazy_dataset()}} gives each
-band only the slices that carry it, and \code{\link[=mask]{mask()}} pairs those slices with the
+band only the slices that carry it, and \code{\link[=apply_mask]{apply_mask()}} pairs those slices with the
 QA band by name (a Landsat-only thermal band masks against the Landsat Fmask
 slices), so ragged bands reduce over exactly their own observations.
 }
 \seealso{
 Other stac helpers:
-\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
 \code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
 \code{\link[=stac_filter_assets]{stac_filter_assets()}},
 \code{\link[=stac_filter_cloud]{stac_filter_cloud()}},

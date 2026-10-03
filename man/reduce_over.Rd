@@ -10,8 +10,7 @@ reduce_over(x, op, over, nan_rm = TRUE, bands = NULL)
 \item{x}{A \code{LazyRaster}, or a \code{LazyDataset}.}
 
 \item{op}{Reduction name: one of \code{"sum"}, \code{"mean"}, \code{"min"}, \code{"max"},
-\code{"prod"}, \code{"median"}, \code{"quantile"}, \code{"sd"}, \code{"var"}, \code{"count"},
-\code{"any"}, \code{"all"}. Alternatively a custom reducer: a function
+\code{"median"}, \code{"count"}. Alternatively a custom reducer: a function
 \code{fn(x, dims)} written in the \verb{g_*} vocabulary that collapses the
 margins \code{dims} (e.g. a per-pixel model fit over time).}
 
@@ -34,6 +33,13 @@ NaN nodata sentinel.
 Over a \code{LazyDataset}, each band is reduced independently (over \code{"t"}: stack
 the band's slices and collapse time to a composite); \code{bands} restricts which
 bands. \code{over = "band"} collapses the band axis, returning a \code{LazyRaster}.
+}
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+collect(reduce_over(red, "mean", c("x", "y")))
+stk <- lazy_stack(list(a = red, b = red * 2))
+dim(collect(reduce_over(stk, "median", "t")))
 }
 \seealso{
 \code{\link[=geomedian]{geomedian()}} and \code{\link[=medoid]{medoid()}} for multivariate time

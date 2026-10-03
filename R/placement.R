@@ -337,6 +337,7 @@ NULL
         cost_fuse_s = numeric(0),
         cost_mat_s = numeric(0),
         decision = character(0),
+        tiles = integer(0),
         reason = character(0)
       )
     }
@@ -361,7 +362,8 @@ NULL
 #' @param mode `"rules"` or `"cost"`; default `garry_opt("placement")`.
 #' @return A data.frame with columns `source`, `compute`, `bands`,
 #'   `flops_px`, `move_mb`, `cost_fuse_s`, `cost_mat_s`, `decision`,
-#'   `reason`.
+#'   `tiles` (row tiles a fused kernel runs in), and `reason`; zero rows
+#'   when no read feeds a compute stage.
 #' @seealso [garry_options()], [garry_task_report()]
 #' @export
 garry_explain_placement <- function(

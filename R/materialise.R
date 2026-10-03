@@ -2,10 +2,11 @@
 #' @keywords internal
 NULL
 
-# Refuse (or clear, with overwrite = TRUE) an existing .vrt/.bin pair.
+# Refuse (or clear, with overwrite = TRUE) an existing .vrt/.bin pair or
+# GeoTIFF.
 .mat_check_clear <- function(path, overwrite) {
   bin <- sub("\\.vrt$", ".bin", path)
-  hit <- c(path, bin)[file.exists(c(path, bin))]
+  hit <- unique(c(path, bin)[file.exists(c(path, bin))])
   if (length(hit) && !overwrite) {
     cli::cli_abort(c(
       "target already exists: {.path {hit[[1L]]}}.",
@@ -14,6 +15,39 @@ NULL
     ))
   }
   unlink(c(path, bin))
+}
+
+# Checkpoint file for a sink: a raw-BSQ cube for float data, a GeoTIFF for
+# integer data (raw cubes hold f32/f64 only, and widening would change the
+# dtype the rest of the pipeline sees).
+.mat_path <- function(dir, stem, dtype) {
+  ext <- if (.dtype_family(dtype) == "float") ".vrt" else ".tif"
+  file.path(dir, paste0(stem, ext))
+}
+
+# Reopen a checkpointed LazyRaster with the shape it was written with: one
+# file band per element of its single outer axis, stacked back along that
+# axis with its labels.
+.mat_reopen <- function(path, grid) {
+  outer <- grid@dims[setdiff(names(grid@dims), c("x", "y"))]
+  if (!length(outer)) {
+    return(lazy_source(path))
+  }
+  ax <- names(outer)
+  layers <- lapply(seq_len(outer[[1L]]), function(i) lazy_source(path, band = i))
+  names(layers) <- grid@labels[[ax]]
+  lazy_stack(layers, along = ax)
+}
+
+# A LazyRaster materialise can write and reopen: at most one outer axis.
+.mat_check_raster <- function(x, arg = "x") {
+  outer <- setdiff(names(x@grid@dims), c("x", "y"))
+  if (length(outer) > 1L) {
+    cli::cli_abort(c(
+      "{.arg {arg}} has more than one outer axis ({.val {outer}}).",
+      "i" = "Reduce or select along one of them first, or build a dataset."
+    ), call = rlang::caller_env())
+  }
 }
 
 #' Materialise a lazy object locally and stay lazy.
@@ -32,10 +66,12 @@ NULL
 #' dataset; ragged bands (a band missing some slices) survive. A
 #' `LazyRaster` writes one cube and reopens it. A computed raster
 #' cannot be warped directly, so materialise-then-rewarp is the
-#' supported route: `align(materialise(x, dir), grid)`.
+#' supported route: `align_to(materialise(x, dir), grid)`.
 #'
 #' Files land at `dir/name-<slice>.vrt` (dataset) or `dir/name.vrt`
-#' (raster). Existing files are refused unless `overwrite = TRUE`:
+#' (raster); integer-typed data is written as `.tif` instead, since raw
+#' cubes hold floats only. A raster with a `t` or `band` axis comes back
+#' stacked along that axis with its labels. Existing files are refused unless `overwrite = TRUE`:
 #' the graph may have changed since they were written, and silently
 #' reusing stale pixels is the failure mode a checkpoint must not have.
 #'
@@ -69,16 +105,19 @@ materialise <- function(
   overwrite = FALSE,
   distributed = garry_daemons_set()
 ) {
+  if (S7::S7_inherits(x, LazyRaster)) {
+    .mat_check_raster(x)
+  }
   if (is.null(dir)) {
     dir <- tempfile("materialise-")
     cli::cli_inform("materialising to {.path {dir}} (session-temporary)")
   }
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   if (S7::S7_inherits(x, LazyRaster)) {
-    path <- file.path(dir, paste0(name, ".vrt"))
+    path <- .mat_path(dir, name, x@grid@dtype)
     .mat_check_clear(path, overwrite)
     .collect_impl(x, path = path, nodata = nodata, distributed = distributed)
-    return(lazy_source(path))
+    return(.mat_reopen(path, x@grid))
   }
   if (is.list(x) && !S7::S7_inherits(x, LazyDataset)) {
     # Multi-export: several lazy rasters checkpointed in ONE execution
@@ -91,13 +130,15 @@ materialise <- function(
     if (!all(vapply(x, function(e) S7::S7_inherits(e, LazyRaster), logical(1)))) {
       cli::cli_abort("every element of a list `x` must be a LazyRaster.")
     }
-    paths <- stats::setNames(
-      file.path(dir, paste0(name, "-", names(x), ".vrt")),
-      names(x)
+    for (nm in names(x)) .mat_check_raster(x[[nm]], arg = nm)
+    paths <- vapply(
+      names(x),
+      function(nm) .mat_path(dir, paste0(name, "-", nm), x[[nm]]@grid@dtype),
+      character(1)
     )
     for (p in paths) .mat_check_clear(p, overwrite)
     .collect_impl(x, path = paths, nodata = nodata, distributed = distributed)
-    return(lapply(paths, lazy_source))
+    return(Map(.mat_reopen, paths, lapply(x, function(e) e@grid)))
   }
   .assert_class(x, LazyDataset, "LazyDataset")
 
@@ -106,8 +147,6 @@ materialise <- function(
   # the file form of lazy_dataset(). There are no dates to key cubes by and
   # none are needed -- write ONE cube, a band per dataset band.
   if (is.null(slices) && all(vapply(x@bands, length, integer(1)) == 1L)) {
-    path <- file.path(dir, paste0(name, ".vrt"))
-    .mat_check_clear(path, overwrite)
     bn <- names(x@bands)
     layers <- lapply(x@bands, `[[`, 1L)
     sink <- if (length(layers) == 1L) {
@@ -115,6 +154,8 @@ materialise <- function(
     } else {
       lazy_stack(stats::setNames(layers, bn), along = "band")
     }
+    path <- .mat_path(dir, name, sink@grid@dtype)
+    .mat_check_clear(path, overwrite)
     .collect_impl(
       sink,
       path = path,
@@ -152,9 +193,12 @@ materialise <- function(
       lazy_stack(stats::setNames(layers, order_of[[nm]]), along = "band")
     }
   })
-  paths <- stats::setNames(
-    file.path(dir, paste0(name, "-", slices, ".vrt")),
-    slices
+  paths <- vapply(
+    slices,
+    function(nm) {
+      .mat_path(dir, paste0(name, "-", nm), sinks[[nm]]@grid@dtype)
+    },
+    character(1)
   )
   for (p in paths) {
     .mat_check_clear(p, overwrite)

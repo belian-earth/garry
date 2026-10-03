@@ -26,6 +26,11 @@ NULL
 #' better. NaN demotes to `nodata`, which is stored in DN units and must
 #' sit outside the quantized data range.
 #'
+#' Integer outputs saturate: a value beyond the dtype's range is written
+#' as the nearest limit, without a warning. When `nodata` is one of those
+#' limits, quantized values saturate one step inside it, so they never
+#' read back as nodata; choose `scale` and `offset` so the data fits.
+#'
 #' `cog = TRUE` streams to a temporary tiled GeoTIFF beside `path`, then
 #' finalises with one `gdal_translate` pass to the COG driver (which is
 #' copy-only by design: overviews precede full-res data). The extra
@@ -50,17 +55,27 @@ NULL
 #' @param cog Write a Cloud Optimized GeoTIFF (see Details).
 #' @param creation_options GDAL creation options (`"KEY=VALUE"`). With
 #'   `cog = FALSE` these replace the default tiled-DEFLATE options of the
-#'   streamed write; with `cog = TRUE` they go to the COG translate pass
+#'   streamed write (compression stays multi-threaded unless they set
+#'   `NUM_THREADS`); with `cog = TRUE` they go to the COG translate pass
 #'   (the temporary streamed file keeps the defaults).
 #' @param overview_resampling COG overview resampling (`cog = TRUE`
 #'   only). `"average"` (default) suits continuous data; use `"nearest"`
 #'   for categorical outputs like masks.
-#' @param band_names As in [collect()].
+#' @param band_names Band descriptions written to the file, one per output
+#'   band. Defaults to the dataset's band names, or the labels of a
+#'   `band` stack; given, it takes precedence over both.
 #' @param distributed As in [collect()].
 #' @return The written path(s), invisibly (expanded per sink/group for
 #'   list, directory, and `{group}` forms).
 #' @seealso [collect()] to return the result in the R session;
 #'   [materialise()] to checkpoint to local cubes and stay lazy.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' red <- lazy_source(f, band = 1L)
+#' nir <- lazy_source(f, band = 3L)
+#' out <- tempfile(fileext = ".tif")
+#' write_tif((nir - red) / (nir + red), out)
+#' file.exists(out)
 #' @export
 write_tif <- function(
   x,
@@ -93,6 +108,21 @@ write_tif <- function(
     ))
   }
 
+  writable <- c(names(.wt_int_range), "f32", "f64")
+  if (!is.null(dtype) && !(is.character(dtype) && length(dtype) == 1L && dtype %in% writable)) {
+    cli::cli_abort("{.arg dtype} must be one of {.val {writable}}, not {.val {dtype}}.")
+  }
+  if (!is.null(nodata)) {
+    float_out <- is.null(dtype) || dtype %in% c("f32", "f64")
+    if (!is.numeric(nodata) || length(nodata) != 1L ||
+        (!float_out && !is.finite(nodata)) || (float_out && is.infinite(nodata))) {
+      cli::cli_abort("{.arg nodata} must be a single number (or NaN for a float output).")
+    }
+    if (!float_out && nodata != round(nodata)) {
+      cli::cli_abort("{.arg nodata} must be a whole number for integer {.arg dtype} {.val {dtype}}.")
+    }
+  }
+
   quantizing <- !is.null(scale) || !is.null(offset)
   if (quantizing) {
     if (is.null(scale)) {
@@ -111,9 +141,9 @@ write_tif <- function(
         "{.arg scale}/{.arg offset} must be finite, non-zero length-1 numerics."
       )
     }
-    if (is.null(dtype) || is.null(.wt_int_range[[dtype]])) {
+    if (is.null(dtype) || is.null(.g_int_range[[dtype]])) {
       cli::cli_abort(c(
-        "quantization ({.arg scale}/{.arg offset}) needs an integer {.arg dtype}.",
+        "quantization ({.arg scale}/{.arg offset}) needs an integer {.arg dtype} other than u32.",
         "i" = "e.g. {.code dtype = \"i16\"} for scaled reflectance."
       ))
     }
@@ -152,30 +182,21 @@ write_tif <- function(
         ),
         names(path)
       )
-    } else if (dir.exists(path) || grepl("\\{group\\}|\\{time\\}", path)) {
-      # directory / placeholder targets: stream into a temp dir with the
-      # same layout; final files land beside/inside the real target.
-      td <- tempfile(
-        "garry-cog-",
-        tmpdir = if (dir.exists(path)) {
-          path
-        } else {
-          dirname(path)
-        }
-      )
+    } else {
+      # Stream into a temp dir under the target's fixed prefix, mirroring
+      # the rest of the path (placeholders included), so each streamed
+      # file's final path is its path relative to the temp dir, under the
+      # prefix. The temp dir is removed on exit, whatever was streamed.
+      # normalizePath: a relative target makes the prefix ".", and a
+      # "./"-prefixed temp key would be invisible to any default ls()
+      # over a path-keyed cache (the writer-close bug, 2026-08-13).
+      ca <- .cog_anchor(path)
+      cog_anchor <- ca$anchor
+      dir.create(cog_anchor, recursive = TRUE, showWarnings = FALSE)
+      td <- tempfile("garry-cog-", tmpdir = normalizePath(cog_anchor))
       dir.create(td)
       tmp_dirs <- td
-      work <- if (dir.exists(path)) td else file.path(td, basename(path))
-    } else {
-      # normalizePath: a relative target makes dirname(path) ".", and a
-      # "./"-prefixed temp key would be invisible to any default ls()
-      # over a path-keyed cache (the writer-close bug, 2026-08-13);
-      # absolute temps are unambiguous everywhere.
-      work <- tempfile(
-        "garry-cog-",
-        tmpdir = normalizePath(dirname(path)),
-        fileext = ".tif"
-      )
+      work <- if (nzchar(ca$rel)) file.path(td, ca$rel) else td
     }
     on.exit(
       unlink(c(unname(unlist(work)), tmp_dirs), recursive = TRUE),
@@ -183,6 +204,13 @@ write_tif <- function(
     )
   }
 
+  # a failed streamed write must not leave a half-written file behind
+  # (the COG route already writes to temporaries)
+  done <- FALSE
+  if (!isTRUE(cog)) {
+    targets <- .write_targets(x, path)
+    on.exit(if (!done) unlink(targets), add = TRUE)
+  }
   res <- .collect_impl(
     x,
     path = work,
@@ -191,6 +219,7 @@ write_tif <- function(
     band_names = band_names,
     wspec = wspec
   )
+  done <- TRUE
   if (!isTRUE(cog)) {
     return(invisible(res))
   }
@@ -198,16 +227,18 @@ write_tif <- function(
   # Enumerate the streamed files (a directory target returns the dir).
   wf <- unname(unlist(res))
   streamed <- unique(unlist(lapply(wf, function(p) {
-    if (dir.exists(p)) list.files(p, "\\.tif$", full.names = TRUE) else p
+    if (dir.exists(p)) {
+      list.files(p, "\\.tif$", full.names = TRUE, recursive = TRUE)
+    } else {
+      p
+    }
   })))
   finals <- if (length(path) > 1L) {
     unname(unlist(path))[match(streamed, unname(unlist(work)))]
-  } else if (dir.exists(path)) {
-    file.path(path, basename(streamed))
-  } else if (grepl("\\{group\\}|\\{time\\}", path)) {
-    file.path(dirname(path), basename(streamed))
   } else {
-    path
+    td <- normalizePath(tmp_dirs[[1L]])
+    rel <- substring(normalizePath(streamed), nchar(td) + 2L)
+    file.path(cog_anchor, rel)
   }
   cl <- c(
     "-of",
@@ -223,10 +254,53 @@ write_tif <- function(
     cl <- c(cl, "-co", o)
   }
   for (i in seq_along(streamed)) {
-    ok <- gdal_translate_file(streamed[[i]], finals[[i]], cl)
-    if (!isTRUE(ok) || !file.exists(finals[[i]])) {
+    dir.create(dirname(finals[[i]]), recursive = TRUE, showWarnings = FALSE)
+    # translate beside the target, then rename: an interrupted or failed
+    # translate never leaves a partial COG at the final path
+    part <- tempfile("garry-cog-", tmpdir = dirname(finals[[i]]), fileext = ".tif")
+    ok <- tryCatch(
+      gdal_translate_file(streamed[[i]], part, cl),
+      error = function(e) FALSE,
+      interrupt = function(e) {
+        unlink(part)
+        stop(e)
+      }
+    )
+    if (!isTRUE(ok) || !file.exists(part) || !file.rename(part, finals[[i]])) {
+      unlink(part)
       cli::cli_abort("COG finalise failed for {.path {finals[[i]]}}.")
     }
   }
   invisible(if (length(finals) == 1L) finals[[1L]] else finals)
+}
+
+# Split a COG write target into its fixed prefix (an existing directory,
+# or the path up to the first placeholder component) and the rest. A
+# directory target has an empty rest.
+.cog_anchor <- function(path) {
+  if (dir.exists(path)) {
+    return(list(anchor = path, rel = ""))
+  }
+  parts <- strsplit(path, "/", fixed = TRUE)[[1L]]
+  k <- which(grepl("\\{(group|time)\\}", parts))[1L]
+  if (is.na(k)) {
+    k <- length(parts)
+  }
+  anchor <- paste(parts[seq_len(k - 1L)], collapse = "/")
+  if (!nzchar(anchor)) {
+    anchor <- if (startsWith(path, "/")) "/" else "."
+  }
+  list(anchor = anchor, rel = paste(parts[k:length(parts)], collapse = "/"))
+}
+
+# The files a write of `x` to `path` produces: one path, one per sink of a
+# list (named paths, or "<sink>.tif" in a directory), or one per group.
+.write_targets <- function(x, path) {
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
+    return(unlist(.group_paths(path, names(x@groups))))
+  }
+  if (is.list(x) && !S7::S7_inherits(x, LazyRaster) && !S7::S7_inherits(x, LazyDataset)) {
+    return(unname(.sink_paths(path, names(x))))
+  }
+  path
 }

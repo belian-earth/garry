@@ -93,10 +93,28 @@ test_that("harmonised HLS-style collections build a ragged dataset that composit
   expect_length(ds@bands$N2, 2L)
   expect_length(ds@bands$N, 2L)
 
-  comp <- collect(reduce_over(mask(ds, where = qa_bits(0)), "median", "t"))
+  comp <- collect(reduce_over(apply_mask(ds, where = qa_bits(0)), "median", "t"))
   # QA is 0 (clear), so each band's composite is the median over ITS OWN slices.
   # Value bands, in requested order: R (1), N2 (2), N (3).
   expect_equal(unname(comp[1, 1, 1]), 151.5, tolerance = 1e-4)   # R: 101,102,201,202
   expect_equal(unname(comp[1, 1, 2]), 101.5, tolerance = 1e-4)   # N2: Landsat 101,102
   expect_equal(unname(comp[1, 1, 3]), 201.5, tolerance = 1e-4)   # N: Sentinel 201,202
+})
+
+test_that("stac_query bounds are inclusive of a date-only end date", {
+  expect_identical(
+    .stac_datetime_range("2023-01-01", "2023-12-31"),
+    "2023-01-01T00:00:00Z/2023-12-31T23:59:59Z"
+  )
+  expect_identical(
+    .stac_datetime_range(as.Date("2023-01-01"), as.Date("2023-12-31")),
+    "2023-01-01T00:00:00Z/2023-12-31T23:59:59Z"
+  )
+  expect_identical(
+    .stac_datetime_range(
+      "2023-01-01",
+      as.POSIXct("2023-06-01 12:00:00", tz = "UTC")
+    ),
+    "2023-01-01T00:00:00Z/2023-06-01T12:00:00Z"
+  )
 })

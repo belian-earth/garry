@@ -28,9 +28,9 @@ SourceNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=apply_mask]{apply_mask()}}).
 Pure metadata: never read by the planner or executors; surfaced by
-\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
+\code{\link[=plan_draw]{plan_draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{path}{Path or VSI URL readable by GDAL.}
 
@@ -51,6 +51,10 @@ inside the read kernel after sentinel -> NaN (see \code{\link[=lazy_source]{lazy
 
 \item{name}{Optional display name (the asset or band name). Pure
 metadata, shown by \code{\link[=plan_view]{plan_view()}}; set by \code{\link[=lazy_dataset]{lazy_dataset()}}.}
+
+\item{collapsed}{Node ids of the single-band sources a band-stack
+collapse folded into this multi-band read, in band order. Length 0
+for an ordinary source.}
 }
 \value{
 A \code{SourceNode}.

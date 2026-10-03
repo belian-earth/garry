@@ -18,6 +18,6 @@ A single DOT string.
 Render a Plan as DOT (Graphviz) text.
 }
 \seealso{
-\code{\link[=plan_view]{plan_view()}} for the interactive DAG, \code{\link[=draw]{draw()}} for the
+\code{\link[=plan_view]{plan_view()}} for the interactive DAG, \code{\link[=plan_draw]{plan_draw()}} for the
 user-facing pipeline visualisation.
 }

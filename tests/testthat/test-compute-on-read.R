@@ -21,7 +21,7 @@ test_that("source-fed kernel chains execute on their read tasks", {
   # benchmark-mini shape: qa source -> mask map + focal chain (its own
   # multi-EXPORT-consumer stage) -> two band medians share the mask
   qa <- lazy_source(f)
-  mask <- focal(
+  mask <- focal_map(
     lazy_map(qa, dtype = "f32",
              fn = function(x) g_cast(x > 0.5, "f32")),
     radius = 1L, fn = function(sh) Reduce(`*`, sh))

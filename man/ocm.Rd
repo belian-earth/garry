@@ -46,7 +46,7 @@ to predict from (e.g. \code{"B04"}, \code{"B03"}, \code{"B8A"}).}
 \item{where}{Classes to mask out (default thick cloud, thin cloud,
 and shadow).}
 
-\item{open, dilate}{Morphological cleanup, as in \code{\link[=mask]{mask()}}.}
+\item{open, dilate}{Morphological cleanup, as in \code{\link[=apply_mask]{apply_mask()}}.}
 }
 \value{
 \code{ocm_model()} returns an \code{ocm_model} object; \code{ocm_predict()}
@@ -70,7 +70,7 @@ returns the class band as a new \code{LazyRaster}. Like every garry
 verb it is lazy: nothing reads or computes until \code{\link[=collect]{collect()}}.
 \item \code{ocm_mask()} is the one-step verb for a \code{LazyDataset}: it derives
 the class band from three of the dataset's bands for every time
-slice, then masks every value band with it via \code{\link[=mask]{mask()}}. The
+slice, then masks every value band with it via \code{\link[=apply_mask]{apply_mask()}}. The
 derived class band is consumed by the masking, exactly like a QA
 \code{mask_asset}.
 }
@@ -95,11 +95,11 @@ distributed with garry; download them once with
 \dontrun{
 ocm_fetch_weights()  # once per machine
 ds <- ds |> ocm_mask(red = "B04", green = "B03", nir = "B8A")
-composite <- ds |> reduce_over("time", "median") |> collect()
+composite <- ds |> reduce_over("median", over = "t") |> collect()
 }
 }
 \seealso{
-\code{\link[=ocm_fetch_weights]{ocm_fetch_weights()}} to download the weights; \code{\link[=mask]{mask()}} and
+\code{\link[=ocm_fetch_weights]{ocm_fetch_weights()}} to download the weights; \code{\link[=apply_mask]{apply_mask()}} and
 \code{\link[=qa_bits]{qa_bits()}} for masking from an existing QA band;
 \code{vignette("omnicloudmask", package = "garry")} for a worked
 example.

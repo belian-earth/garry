@@ -12,7 +12,7 @@
 # No empty-band insertion or reordering (vrtility's vrt_add_empty_band /
 # vrt_move_band): lazy_dataset() gives each band only the slices that carry it,
 # so a Landsat-only thermal band (T1/T2) or a Sentinel-only red-edge band
-# (RE1-3, N, WV) reduces over exactly its own observations, and mask() pairs each
+# (RE1-3, N, WV) reduces over exactly its own observations, and apply_mask() pairs each
 # band's slices with the matching Fmask slice by name.
 #
 # Uses the Microsoft Planetary Computer (pre-signed, no Earthdata login needed).
@@ -61,7 +61,7 @@ t <- system.time({
     src, grid = target, assets = bands, mask_asset = "Fmask",
     nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255)
   ) |>
-    mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
+    apply_mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
     reduce_over("median", over = "t")
 
   write_tif(composite, "hls_harmonized.tif", nodata = -9999)

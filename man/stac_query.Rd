@@ -13,7 +13,11 @@ stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
 
 \item{collection}{Collection id.}
 
-\item{start_date, end_date}{Dates (any lubridate-parseable form).}
+\item{start_date, end_date}{Search bounds, both inclusive: \code{Date}s,
+\code{POSIXct}s, or strings \code{as.POSIXct()} parses in UTC (such as
+\code{"2023-06-01"} or \code{"2023-06-01 12:00:00"}). A date without a
+time covers that whole day, so \code{end_date = "2023-12-31"} includes
+acquisitions made on the 31st.}
 
 \item{limit}{Page size requested from the API.}
 }
@@ -30,7 +34,6 @@ the API rejects GET, and fetches every page of results via
 the usual next steps.
 
 Other stac helpers:
-\code{\link[=lazy_stac_stack]{lazy_stac_stack()}},
 \code{\link[=stac_drop_duplicates]{stac_drop_duplicates()}},
 \code{\link[=stac_filter_assets]{stac_filter_assets()}},
 \code{\link[=stac_filter_cloud]{stac_filter_cloud()}},

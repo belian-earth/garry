@@ -150,8 +150,8 @@ test_that("SORT_FIELD controls overlap winners deterministically", {
     f
   }, character(1))
   entries <- data.frame(location = paths,
-                        xmin = xmin(grid), ymin = ymin(grid),
-                        xmax = xmax(grid), ymax = ymax(grid),
+                        xmin = grid_bbox(grid)[["xmin"]], ymin = grid_bbox(grid)[["ymin"]],
+                        xmax = grid_bbox(grid)[["xmax"]], ymax = grid_bbox(grid)[["ymax"]],
                         prio = c(1, 2))
   idx <- file.path(tempdir(), "garry-gti-ovl.gti.gpkg")
   unlink(idx)
@@ -174,7 +174,7 @@ test_that("lazy pipelines on GTI sources are chunk-invariant", {
 
   a <- lazy_source(paste0("GTI:", idx),
                    open_options = gti_open_options(grid))
-  expr <- focal(a * 2, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  expr <- focal_map(a * 2, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
   run <- function(px) {
     old <- options(garry.chunk_target_px = px)

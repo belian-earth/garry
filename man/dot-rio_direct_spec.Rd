@@ -9,7 +9,8 @@
   target_grid,
   resampling,
   open_options = character(0),
-  band = 1L
+  band = 1L,
+  nodata = numeric(0)
 )
 }
 \arguments{
@@ -25,6 +26,9 @@
 \item{band}{1-based band index the read will use; must be a single
 band (the decimating read is single-band). Its data type drives the
 integer gate above.}
+
+\item{nodata}{The source node's sentinel (length 0 or 1). Averaging
+declines unless the file declares the same value.}
 }
 \value{
 \code{NULL}, or a list with \code{fx}, \code{fy}, \code{x_off}, \code{y_off}, \code{resamp}.

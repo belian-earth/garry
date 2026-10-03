@@ -39,7 +39,8 @@ GDAL block cache.}
 daemons (default \code{TRUE}). Set \code{FALSE} to leave session GDAL config
 untouched (e.g. when mixing local multi-file reads).}
 
-\item{...}{Passed to \code{mirai::daemons()} for both pools.}
+\item{...}{Passed to \code{mirai::daemons()} for every pool; \code{dispatcher} is
+garry's to set.}
 }
 \value{
 Invisibly, \code{list(read =, compute =)}.
@@ -49,9 +50,10 @@ Two pools instead of one: \code{read} daemons execute source/warp read
 tasks (and any kernels the placement pass fuses onto them), while
 \code{compute} daemons run the materialised XLA stages. The resource
 model is: \strong{pool width is slots, admission is concurrency}. Every
-daemon is pinned to a disjoint slice of the machine at creation
-(\code{garry_opt("pool_affinity")}), so an XLA client created anywhere is
-narrow rather than all-cores; the scheduler's live-RAM byte budgets
+daemon is pinned to a bounded, interleaved CPU mask at creation
+(\code{garry_opt("pool_affinity")}; masks within a pool are mostly disjoint,
+while read and compute masks overlap), so an XLA client created
+anywhere is narrow rather than all-cores; the scheduler's live-RAM byte budgets
 decide how many tasks are actually in flight; excess daemons idle
 lean. Called with no arguments it sizes the pools to the machine:
 \code{read} = all logical cores (remote fetch is latency-bound, so a

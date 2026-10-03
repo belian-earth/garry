@@ -76,13 +76,15 @@
 #' after. Without boundaries the two-sided smoother carries change the
 #' model cannot represent (a planting, a clearance) into the years
 #' before it; with them, nothing crosses a boundary in either direction.
-#' Boundaries are found by the caller, typically from `"innov"`.
+#' A regime with no observation is `NaN` (the forward outputs are `NaN`
+#' until a regime's first observation). Boundaries are found by the
+#' caller, typically from `"innov"`.
 #' @param robust_iters Robust reweighting passes (0 = plain smoother).
 #'   Each pass inflates the level noise at years whose smoothed-level
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
 #' @param robust_threshold,robust_inflation Robust loop constants.
 #' @param kappa Diffuse-initialisation variance.
-#' @param out_dtype Output dtype the body casts to (align with
+#' @param dtype Output dtype the body casts to (align with
 #'   `scan_over(dtype = )`; default `"f32"`).
 #' @return A scan body `fn(xs, margin)` for [scan_over()].
 #' @seealso [kalman_smooth()], [scan_over()], [g_scan()]
@@ -96,7 +98,7 @@ kalman_llt <- function(
   robust_threshold = 3,
   robust_inflation = 100,
   kappa = 1e7,
-  out_dtype = "f32"
+  dtype = "f32"
 ) {
   output <- match.arg(output)
   for (v in list(sigma_lvl, sigma_slp, sigma_obs, kappa)) {
@@ -121,9 +123,9 @@ kalman_llt <- function(
       )
     }
   }
-  if (!dtype_valid(out_dtype)) {
+  if (!dtype_valid(dtype)) {
     cli::cli_abort(
-      "{.arg out_dtype} must be a valid dtype; got {.val {out_dtype}}"
+      "{.arg dtype} must be a valid dtype; got {.val {dtype}}"
     )
   }
 
@@ -377,7 +379,39 @@ kalman_llt <- function(
       }
     }
 
-    g_cast(sm[[output]], out_dtype)
+    out <- sm[[output]]
+    if (!is.null(bnd)) {
+      # A regime with no observation at all has nothing of its own to
+      # estimate: its years would carry the previous regime's level and
+      # slope forward. Mask them. `fwd_seen`: observed since the regime
+      # began (what the forward filter knows); `bwd_seen`: observed later
+      # in the same regime (what the smoother adds).
+      obs <- g_cast(!g_is_nodata(y), "f64")
+      fwd_seen <- g_scan(
+        init = zero,
+        body = function(carry, s) {
+          v <- g_ifelse(s$b > 0, s$o, g_ifelse(s$o > carry, s$o, carry))
+          list(carry = v, out = v)
+        },
+        xs = list(o = obs, b = bnd)
+      )$out
+      seen <- if (output %in% c("fmean", "fsd", "innov")) {
+        fwd_seen
+      } else {
+        bwd_seen <- g_scan(
+          init = zero,
+          body = function(carry, s) {
+            v <- g_ifelse(s$o > carry, s$o, carry)
+            list(carry = g_ifelse(s$b > 0, 0 * v, v), out = v)
+          },
+          xs = list(o = obs, b = bnd),
+          reverse = TRUE
+        )$out
+        fwd_seen + bwd_seen
+      }
+      out <- g_ifelse(seen > 0, out, NaN)
+    }
+    g_cast(out, dtype)
   }
 }
 
@@ -399,6 +433,8 @@ kalman_llt <- function(
 #'   forward-filtered `"fmean"`, `"fsd"`, and `"innov"`; see
 #'   [kalman_llt()]).
 #' @param dtype Output dtype (default f32).
+#' @param bands `LazyDataset` only: bands to smooth (default: all value
+#'   bands). A dataset takes no `obs_var` or `boundaries`.
 #' @inheritParams kalman_llt
 #' @param ... Passed to [kalman_llt()].
 #' @return A named list of lazy objects, one per requested output.
@@ -414,11 +450,21 @@ kalman_smooth <- function(
   boundaries = NULL,
   outputs = c("mean", "sd"),
   dtype = "f32",
+  bands = NULL,
   ...
 ) {
   outputs <- match.arg(outputs, c("mean", "sd", "fmean", "fsd", "innov"), several.ok = TRUE)
   if (!is.null(boundaries) && is.null(obs_var)) {
     cli::cli_abort("{.arg boundaries} needs {.arg obs_var} (a stack of ones for none)")
+  }
+  if (S7::S7_inherits(x, LazyDataset) && !is.null(obs_var)) {
+    cli::cli_abort(c(
+      "{.arg obs_var} and {.arg boundaries} need a {.cls LazyRaster} {.arg x}, not a dataset.",
+      "i" = "Smooth one band at a time, e.g. {.code kalman_smooth(ds$ndvi, ..., obs_var = v)}."
+    ))
+  }
+  if (!is.null(bands) && !S7::S7_inherits(x, LazyDataset)) {
+    cli::cli_abort("{.arg bands} applies to a {.cls LazyDataset} {.arg x} only.")
   }
   target <- if (is.null(obs_var)) x else if (is.null(boundaries)) list(x, obs_var) else list(x, obs_var, boundaries)
   stats::setNames(
@@ -430,12 +476,13 @@ kalman_smooth <- function(
           sigma_slp,
           sigma_obs,
           output = o,
-          out_dtype = dtype,
+          dtype = dtype,
           ...
         ),
         over = "t",
         direction = "bidir",
-        dtype = dtype
+        dtype = dtype,
+        bands = bands
       )
     }),
     outputs

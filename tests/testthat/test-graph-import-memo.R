@@ -75,3 +75,33 @@ test_that("the memo survives a source graph's env address being recycled", {
   expect_true(nzchar(u))
   expect_identical(garry:::.graph_uid(a), u)
 })
+
+test_that("sources that read different values are not merged", {
+  f <- fixture_gradient_f32()
+  raw <- collect(lazy_source(f))
+
+  # same file and band, different band affine
+  a <- lazy_source(f, scale = 0.5, offset = 0)
+  b <- lazy_source(f)
+  expect_equal(collect(a + b), 1.5 * raw)
+  c2 <- lazy_source(f, scale = 2, offset = 1)
+  expect_equal(collect(a + c2), 0.5 * raw + 2 * raw + 1)
+
+  # same file on a coarser grid, different read-time resampler
+  g <- lazy_source(f)@grid
+  coarse <- grid_spec(
+    crs = grid_crs(g),
+    extent = grid_bbox(g),
+    dims = as.integer(c(g@dims[["x"]], g@dims[["y"]]) / 2)
+  )
+  near <- lazy_source(f, grid = coarse, resampling = "near")
+  avg <- lazy_source(f, grid = coarse, resampling = "average")
+  both <- near - avg
+  n_src <- sum(vapply(
+    graph_ids(both@graph),
+    function(i) S7::S7_inherits(graph_get(both@graph, i), SourceNode),
+    logical(1)
+  ))
+  expect_identical(n_src, 2L)
+  expect_equal(collect(both), collect(near) - collect(avg))
+})

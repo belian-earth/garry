@@ -37,6 +37,7 @@ NULL
 # closes the least-recently-used handle; reopening is milliseconds.
 .gdal_cache <- new.env(parent = emptyenv())
 .gdal_cache$handles <- list() # named, insertion-ordered = LRU order
+.gdal_cache$stamps <- list() # key -> .gdal_local_stamp() at open
 
 # http(s) URLs need the /vsicurl prefix so GDAL reads via HTTP range requests --
 # metadata (header/IFD) and windowed pixel reads only -- instead of downloading
@@ -78,10 +79,61 @@ NULL
   force(code)
 }
 
+# Modification stamp of a local file (mtime and size), or NULL for a
+# remote or virtual path. A cached handle whose file changed since it was
+# opened would serve the old pixels from its block cache.
+.gdal_local_stamp <- function(path) {
+  p <- sub("^GTI:", "", path)
+  if (.gdal_is_remote(p) || !file.exists(p)) {
+    return(NULL)
+  }
+  info <- file.info(p, extra_cols = FALSE)
+  c(as.numeric(info$mtime), as.numeric(info$size))
+}
+
+# Decode blocks on every core for the rest of the calling function:
+# GDAL_NUM_THREADS is read when a GTiff is opened, so `paths`' cached
+# handles are dropped on entry (they reopen threaded) and on exit (later
+# reads reopen as configured). Only the calling host process is affected.
+.with_gdal_threads <- function(paths, envir = parent.frame()) {
+  prev <- gdalraster::get_config_option("GDAL_NUM_THREADS")
+  gdalraster::set_config_option("GDAL_NUM_THREADS", "ALL_CPUS")
+  for (p in paths) .gdal_handle_drop(p)
+  withr::defer(
+    {
+      gdalraster::set_config_option("GDAL_NUM_THREADS", prev)
+      for (p in paths) .gdal_handle_drop(p)
+    },
+    envir = envir
+  )
+  invisible(NULL)
+}
+
+# Close and forget every cached handle on `path`, whatever its open
+# options (writers call this before replacing a file).
+.gdal_handle_drop <- function(path) {
+  path <- .gdal_href(path)
+  keys <- names(.gdal_cache$handles) %||% character(0)
+  hit <- keys[keys == path | startsWith(keys, paste0(path, "\x1f"))]
+  for (k in hit) {
+    try(.gdal_cache$handles[[k]]$close(), silent = TRUE)
+    .gdal_cache$handles[[k]] <- NULL
+    .gdal_cache$stamps[[k]] <- NULL
+  }
+  invisible(NULL)
+}
+
 .gdal_handle <- function(path, open_options = character(0)) {
   path <- .gdal_href(path) # range-read remote COGs, never pull whole
   key <- paste(c(path, open_options), collapse = "\x1f")
+  stamp <- .gdal_local_stamp(path)
   h <- .gdal_cache$handles[[key]]
+  if (!is.null(h) && !identical(.gdal_cache$stamps[[key]], stamp)) {
+    try(h$close(), silent = TRUE) # the file changed under the handle
+    .gdal_cache$handles[[key]] <- NULL
+    .gdal_cache$stamps[[key]] <- NULL
+    h <- NULL
+  }
   if (!is.null(h)) {
     .gdal_cache$handles[[key]] <- NULL # move to MRU position
     .gdal_cache$handles[[key]] <- h
@@ -121,10 +173,13 @@ NULL
   )
   cap <- garry_opt("handle_cache_max")
   while (length(.gdal_cache$handles) >= cap) {
+    k1 <- names(.gdal_cache$handles)[[1L]]
     try(.gdal_cache$handles[[1L]]$close(), silent = TRUE)
     .gdal_cache$handles[[1L]] <- NULL
+    .gdal_cache$stamps[[k1]] <- NULL
   }
   .gdal_cache$handles[[key]] <- h
+  .gdal_cache$stamps[[key]] <- stamp
   h
 }
 
@@ -133,6 +188,7 @@ NULL
     try(h$close(), silent = TRUE)
   }
   .gdal_cache$handles <- list()
+  .gdal_cache$stamps <- list()
 }
 
 #' Inspect a GDAL source and build its GridSpec (plus read metadata).
@@ -253,6 +309,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param band 1-based band index the read will use; must be a single
 #'   band (the decimating read is single-band). Its data type drives the
 #'   integer gate above.
+#' @param nodata The source node's sentinel (length 0 or 1). Averaging
+#'   declines unless the file declares the same value.
 #' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
 #' @keywords internal
 .rio_direct_spec <- function(
@@ -260,7 +318,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   target_grid,
   resampling,
   open_options = character(0),
-  band = 1L
+  band = 1L,
+  nodata = numeric(0)
 ) {
   if (length(src_path) != 1L || length(open_options) > 0L || length(band) != 1L) {
     return(NULL)
@@ -278,6 +337,14 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     dtn <- tryCatch(ds$getDataTypeName(band), error = function(e) NULL)
     if (is.null(dtn) || !startsWith(dtn, "Float")) {
       return(NULL)
+    }
+    # RasterIO averaging skips only the file's own nodata; a sentinel the
+    # node declares otherwise would be blended in, so leave it to the warper.
+    if (length(nodata) == 1L) {
+      file_nd <- tryCatch(ds$getNoDataValue(band), error = function(e) NA)
+      if (!isTRUE(identical(as.numeric(file_nd), as.numeric(nodata)))) {
+        return(NULL)
+      }
     }
   }
   gt <- tryCatch(ds$getGeoTransform(), error = function(e) NULL)
@@ -351,16 +418,51 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
       gdt = "f32"
     ))
   }
-  v <- as.numeric(v)
-  if (length(nodata) == 1L) {
-    v[!is.na(v) & v == nodata] <- NaN
-  }
-  v[is.na(v) & !is.nan(v)] <- NaN # GDAL-side masked values
-  if (length(scale) == 1L) {
-    v <- v * scale + offset
-  }
-  matrix(v, nrow = y_size, byrow = TRUE)
+  # The same steps in doubles (sentinel and GDAL-masked NA -> NaN,
+  # affine), transposed into the [y, x] matrix in one C pass.
+  .Call(
+    "garry_finish_matrix",
+    v,
+    as.numeric(y_size),
+    as.numeric(x_size),
+    as.numeric(nodata),
+    as.numeric(scale),
+    as.numeric(offset),
+    PACKAGE = "garry"
+  )
 }
+
+# A whole band read at a reduced size in one RasterIO call (GDAL picks
+# overviews where the file has them), in garry's row order, nodata as NaN.
+# The preview path: nothing beyond the requested size is read.
+.gdal_read_resampled <- function(path, band, out_nx, out_ny, nodata = numeric(0)) {
+  ds <- .gdal_handle(path)
+  nx <- ds$getRasterXSize()
+  ny <- ds$getRasterYSize()
+  v <- ds$read(band, 0L, 0L, nx, ny, out_nx, out_ny)
+  if (ds$getGeoTransform()[[6L]] > 0) {
+    idx <- as.vector(matrix(seq_len(out_ny * out_nx), nrow = out_nx)[, out_ny:1L])
+    v <- v[idx] # south-up: rows to north-first
+  }
+  .gdal_finish_vec(v, out_ny, out_nx, nodata, numeric(0), numeric(0), "matrix")
+}
+
+# Read a window of `rows` rows in garry's row order (row 1 = north,
+# decision D13). gdal_grid_spec() presents a south-up file (positive y
+# pixel size, e.g. AEF embedding COGs) as a north-up grid with the same
+# footprint, so its rows are read from the mirrored offset and reversed.
+.gdal_read_rows <- function(ds, band, x_off, y_off, x_size, rows) {
+  gt <- ds$getGeoTransform()
+  if (!(gt[[6L]] > 0)) {
+    return(ds$read(band, x_off, y_off, x_size, rows, x_size, rows))
+  }
+  y_file <- ds$getRasterYSize() - y_off - rows
+  v <- ds$read(band, x_off, y_file, x_size, rows, x_size, rows)
+  # row-major: row r occupies ((r - 1) * x_size + 1):(r * x_size)
+  idx <- as.vector(matrix(seq_len(rows * x_size), nrow = x_size)[, rows:1L])
+  v[idx]
+}
+
 
 #' Read a window from a GDAL source as a garry-oriented matrix.
 #'
@@ -391,7 +493,6 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   a single band, or a `(band, y, x)` numeric array when `band` is a
 #'   vector. With `out = "raw_f32"`: a raw row-major f32 payload (band
 #'   planes contiguous when `band` is a vector).
-#' @export
 gdal_read_window <- function(
   path,
   band,
@@ -407,6 +508,10 @@ gdal_read_window <- function(
   decim = NULL
 ) {
   out <- rlang::arg_match(out)
+  # a scale alone means no offset (v * scale + numeric(0) is numeric(0))
+  if (length(scale) == 1L && length(offset) == 0L) {
+    offset <- 0
+  }
   # Warper bypass (see .rio_direct_spec()): the window arrives in TARGET
   # pixels; translate it to the source window and let RasterIO resample
   # in the same pass as the read. Takes precedence over the raw-BSQ path
@@ -478,7 +583,7 @@ gdal_read_window <- function(
     ))
   }
   .gdal_finish_vec(
-    ds$read(band, x_off, y_off, x_size, y_size, x_size, y_size),
+    .gdal_read_rows(ds, band, x_off, y_off, x_size, y_size),
     y_size,
     x_size,
     nodata,
@@ -534,7 +639,7 @@ gdal_read_window <- function(
   while (r0 < y_size) {
     rows <- min(slab, y_size - r0)
     for (k in seq_len(nb)) {
-      v <- ds$read(band[[k]], x_off, y_off + r0, x_size, rows, x_size, rows)
+      v <- .gdal_read_rows(ds, band[[k]], x_off, y_off + r0, x_size, rows)
       if (out == "raw_f32") {
         # Finish straight into the plane's slot of the private buffer
         # (one C pass; no numeric copy, no raw index assignment).
@@ -576,6 +681,7 @@ gdal_read_window <- function(
 # host-created files; GTiff is single-writer, so exactly one process
 # holds this handle at a time).
 gdal_open_update <- function(path) {
+  .gdal_handle_drop(path)
   # NUM_THREADS is a per-handle setting: the creation option on the
   # host's handle dies with it, so a GTiff re-opened here compressed
   # its tiles on one thread (14.9 ms a 768x768 plane against 3.5 ms
@@ -600,7 +706,9 @@ gdal_open_update <- function(path) {
   grid,
   n_bands,
   nodata = numeric(0),
-  band_names = NULL
+  band_names = NULL,
+  scale = numeric(0),
+  offset = numeric(0)
 ) {
   if (!grid@dtype %in% c("f32", "f64")) {
     cli::cli_abort(paste0(
@@ -630,7 +738,9 @@ gdal_open_update <- function(path) {
     if (bytes == 4L) "Float32" else "Float64",
     n_bands,
     nodata = if (length(nodata) == 1L) nodata else NULL,
-    descriptions = band_names
+    descriptions = band_names,
+    scale = if (length(scale) == 1L) scale else NULL,
+    offset = if (length(offset) == 1L) offset else NULL
   )
   writeLines(xml, path)
   gdal_open_update(path)
@@ -659,11 +769,17 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   meta <- gdal_grid_spec(src)
   ds <- methods::new(gdalraster::GDALRaster, src)
   nb <- ds$getRasterCount()
-  dtn <- ds$getDataTypeName(1L)
-  descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), character(1))
+  bands <- seq_len(nb)
+  dtn <- vapply(bands, function(b) ds$getDataTypeName(b), character(1))
+  descs <- vapply(bands, function(b) ds$getDescription(b), character(1))
+  # each band's own nodata and affine travel into the cube's VRT, so a
+  # reader recovers them as from the source
+  nodata <- vapply(bands, function(b) as.numeric(ds$getNoDataValue(b)), numeric(1))
+  scale <- vapply(bands, function(b) as.numeric(ds$getScale(b)), numeric(1))
+  offset <- vapply(bands, function(b) as.numeric(ds$getOffset(b)), numeric(1))
   ds$close()
   grid <- meta$grid
-  if (identical(dtn, "Float64")) {
+  if (any(dtn == "Float64")) {
     grid <- .grid_retype(grid, "f64")
   }
   nx <- grid@dims[["x"]]
@@ -671,7 +787,9 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   bytes <- if (identical(grid@dtype, "f64")) 8L else 4L
   bin <- sub("\\.vrt$", ".bin", dst_vrt, ignore.case = TRUE)
   con <- file(bin, "wb")
-  # band-major planes: per band, stream row slabs
+  on.exit(close(con), add = TRUE)
+  # band-major planes: per band, stream row slabs (raw values; the VRT
+  # carries each band's nodata and affine)
   for (b in seq_len(nb)) {
     y0 <- 0L
     while (y0 < ny) {
@@ -682,7 +800,6 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
       y0 <- y0 + rows
     }
   }
-  close(con)
   gt_csv <- paste(
     formatC(grid@transform, format = "g", digits = 17, width = 1),
     collapse = ", "
@@ -695,9 +812,11 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
     grid@crs,
     if (bytes == 4L) "Float32" else "Float64",
     nb,
-    nodata = if (length(meta$nodata) == 1L) meta$nodata else NULL,
-    descriptions = descs
-  ) # QA bands are found BY DESCRIPTION downstream
+    nodata = nodata,
+    descriptions = descs, # QA bands are found BY DESCRIPTION downstream
+    scale = ifelse(scale == 1 & (is.na(offset) | offset == 0), NA, scale),
+    offset = offset
+  )
   writeLines(xml, dst_vrt)
   invisible(dst_vrt)
 }
@@ -765,38 +884,50 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   dtype,
   nbands,
   nodata = NULL,
-  descriptions = NULL
+  descriptions = NULL,
+  scale = NULL,
+  offset = NULL
 ) {
   bytes <- .gdal_dtype_bytes(dtype)
   plane <- as.numeric(nx) * as.numeric(ny) * bytes
-  ndxml <- if (!is.null(nodata)) {
-    .glue(
-      "\n    <NoDataValue>{format(nodata, scientific = FALSE)}",
-      "</NoDataValue>"
-    )
-  } else {
-    ""
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
+  # per-band value (a scalar applies to every band); NA = unset
+  per_band <- function(v, b) {
+    if (!length(v)) NA else if (length(v) == 1L) v[[1L]] else v[[b]]
   }
   bands_xml <- vapply(
     seq_len(nbands),
     function(b) {
-      desc <- if (
-        !is.null(descriptions) &&
-          b <= length(descriptions) &&
-          nzchar(descriptions[[b]])
-      ) {
-        .glue("\n    <Description>{descriptions[[b]]}</Description>")
+      d <- if (b <= length(descriptions)) descriptions[[b]] else ""
+      desc <- if (!is.na(d) && nzchar(d)) {
+        .glue("\n    <Description>{.xml_escape(d)}</Description>")
+      } else {
+        ""
+      }
+      nd <- per_band(nodata, b)
+      ndxml <- if (!is.na(nd) || is.nan(nd)) {
+        .glue("\n    <NoDataValue>{num(nd)}</NoDataValue>")
+      } else {
+        ""
+      }
+      sc <- per_band(scale, b)
+      of <- per_band(offset, b)
+      afxml <- if (!is.na(sc)) {
+        .glue(
+          "\n    <Offset>{num(if (is.na(of)) 0 else of)}</Offset>",
+          "\n    <Scale>{num(sc)}</Scale>"
+        )
       } else {
         ""
       }
       .glue(
         '  <VRTRasterBand dataType="{dtype}" band="{b}" ',
         'subClass="VRTRawRasterBand">{desc}',
-        '\n    <SourceFilename relativeToVRT="1">{src}</SourceFilename>',
+        '\n    <SourceFilename relativeToVRT="1">{.xml_escape(src)}</SourceFilename>',
         "\n    <ImageOffset>",
         "{formatC((b - 1) * plane, format = 'f', digits = 0)}</ImageOffset>",
         "\n    <PixelOffset>{bytes}</PixelOffset>",
-        "\n    <LineOffset>{as.integer(nx * bytes)}</LineOffset>{ndxml}",
+        "\n    <LineOffset>{as.integer(nx * bytes)}</LineOffset>{ndxml}{afxml}",
         "\n  </VRTRasterBand>"
       )
     },
@@ -804,9 +935,17 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   )
   .glue(
     '<VRTDataset rasterXSize="{nx}" rasterYSize="{ny}">',
-    "\n  <SRS>{wkt}</SRS>\n  <GeoTransform>{gt_csv}</GeoTransform>",
+    "\n  <SRS>{.xml_escape(wkt)}</SRS>\n  <GeoTransform>{gt_csv}</GeoTransform>",
     "\n{paste(bands_xml, collapse = '\n')}\n</VRTDataset>"
   )
+}
+
+# Escape text for an XML element body.
+.xml_escape <- function(x) {
+  x <- gsub("&", "&amp;", x, fixed = TRUE)
+  x <- gsub("<", "&lt;", x, fixed = TRUE)
+  x <- gsub(">", "&gt;", x, fixed = TRUE)
+  gsub("\"", "&quot;", x, fixed = TRUE)
 }
 
 # Strict recognition of the .raw_bsq_vrt_xml shape: every band a
@@ -935,6 +1074,14 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   scale = numeric(0),
   offset = numeric(0)
 ) {
+  if (
+    x_off < 0 || y_off < 0 || x_size < 1 || y_size < 1 ||
+      x_off + x_size > info$nx || y_off + y_size > info$ny
+  ) {
+    cli::cli_abort(
+      "Access window out of range: {x_off},{y_off} {x_size}x{y_size} on a {info$nx}x{info$ny} raw cube."
+    )
+  }
   con <- file(info$bin, "rb")
   on.exit(close(con))
   es <- info$bytes
@@ -952,7 +1099,8 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
   ) {
     idx <- if (!full) {
       within <- (x_off * 4L + 1L):((x_off + x_size) * 4L)
-      rep((seq_len(y_size) - 1L) * (nx * 4L), each = length(within)) +
+      # in double: rows x width x 4 bytes passes 2^31 on large cubes
+      rep((seq_len(y_size) - 1) * (nx * 4), each = length(within)) +
         within
     }
     parts <- vector("list", nb)
@@ -1041,18 +1189,19 @@ stage_raw_cube <- function(src, dst_vrt, slab_rows = 512L) {
 #'
 #' Delegates every pixel of cross-CRS math to the GDAL warper:
 #' `-te`/`-ts` pin the output grid exactly to `target_grid`.
-#' Float targets without a source nodata get `-dstnodata nan` so area
-#' outside the source footprint reads as NaN, not 0.
+#' A source nodata goes to the warper as both `-srcnodata` and
+#' `-dstnodata`, so it never enters resampling and area outside the source
+#' footprint reads as nodata; float targets without one get `-dstnodata
+#' nan`.
 #'
 #' @param src_path Source path/VSI URL. One source: gdalwarp writes a
 #'   VRT from a single input only. A multi-path source node is read by
-#'   [gdal_warp_window()] instead.
+#'   `gdal_warp_window()` instead.
 #' @param band 1-based source band (the VRT has this single band).
 #' @param target_grid `GridSpec` to warp onto.
 #' @param resampling GDAL resampling method name.
 #' @param src_nodata Source sentinel (length 0 or 1), from the SourceNode.
 #' @return Path to the VRT file (in `tempdir()`).
-#' @export
 gdal_warp_vrt <- function(
   src_path,
   band,
@@ -1084,10 +1233,12 @@ gdal_warp_vrt <- function(
     "-et",
     "0"
   ) # exact transformer: correctness over warp speed
-  if (
-    length(src_nodata) == 0L &&
-      .dtype_family(target_grid@dtype) == "float"
-  ) {
+  if (length(src_nodata) == 1L) {
+    # The node's sentinel, whether the file declares it or the user did:
+    # the warper must leave it out of resampling, and cells outside the
+    # footprint read as it (then NaN, like every other sentinel cell).
+    args <- c(args, "-srcnodata", num(src_nodata), "-dstnodata", num(src_nodata))
+  } else if (.dtype_family(target_grid@dtype) == "float") {
     args <- c(args, "-dstnodata", "nan")
   }
   do_warp <- function() {
@@ -1120,7 +1271,6 @@ gdal_warp_vrt <- function(
 #'
 #' @return Integer version number, or `NA_integer_`.
 #' @keywords internal
-#' @export
 gdal_version_num <- function() {
   n <- suppressWarnings(as.integer(gdalraster::gdal_version()[[2L]]))
   if (length(n) != 1L || is.na(n)) NA_integer_ else n
@@ -1129,7 +1279,6 @@ gdal_version_num <- function() {
 #' GDAL runtime version as a human string (adapter).
 #' @return Character, e.g. `"GDAL 3.9.0, released ..."`.
 #' @keywords internal
-#' @export
 gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 
 #' Mosaic already-grid-aligned rasters into a VRT (adapter).
@@ -1147,7 +1296,7 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 #' every tile skipped no mosaic at all, so a build that lost a source is
 #' an error here. Sources like that do not belong in a mosaic: the file
 #' form of [lazy_dataset()] keeps them as a multi-path source node and
-#' the warper reads them together ([gdal_warp_vrt()]).
+#' the warper reads them together (`gdal_warp_window()`).
 #'
 #' @param dst Output VRT path.
 #' @param files Grid-aligned input rasters, low-to-high priority.
@@ -1198,8 +1347,11 @@ gdal_mosaic_vrt <- function(
   if (!file.exists(dst)) {
     cli::cli_abort("buildVRT mosaic failed.")
   }
-  n_in <- length(grep("<SourceFilename", readLines(dst, warn = FALSE), fixed = TRUE))
-  if (n_in < length(files)) {
+  # one <SourceFilename> per band per source: count distinct sources
+  xml <- paste(readLines(dst, warn = FALSE), collapse = "\n")
+  srcs <- regmatches(xml, gregexpr("<SourceFilename[^>]*>[^<]*</SourceFilename>", xml))[[1L]]
+  n_in <- length(unique(sub("^<SourceFilename[^>]*>([^<]*)</SourceFilename>$", "\\1", srcs)))
+  if (n_in < length(unique(files))) {
     unlink(dst)
     cli::cli_abort(
       "buildVRT mosaic took {n_in} of {length(files)} source{?s}; the rest were skipped (see the GDAL warnings)."
@@ -1280,7 +1432,6 @@ gdal_mosaic_vrt <- function(
 #'   band, so readers (QGIS, GDAL, `scale = TRUE` reads) recover
 #'   `stored * scale + offset`.
 #' @return An open dataset object; caller must `$close()`.
-#' @export
 gdal_create_output <- function(
   path,
   grid,
@@ -1291,6 +1442,7 @@ gdal_create_output <- function(
   scale = numeric(0),
   offset = numeric(0)
 ) {
+  .gdal_handle_drop(path) # a cached reader would serve the old file
   if (!is.null(dtype)) {
     grid <- .grid_retype(grid, dtype)
   }
@@ -1310,7 +1462,10 @@ gdal_create_output <- function(
   # tile machinery (~9x on multi-band windows). Update-writes go
   # through the VRT, so the streamed writer daemon works unchanged.
   if (grepl("\\.vrt$", path, ignore.case = TRUE)) {
-    return(.raw_cube_create(path, grid, n_bands, nodata, band_names))
+    if (length(options)) {
+      cli::cli_abort("{.arg options} do not apply to a {.path .vrt} raw cube.")
+    }
+    return(.raw_cube_create(path, grid, n_bands, nodata, band_names, scale, offset))
   }
   if (is.null(options)) {
     # NUM_THREADS parallelises per-tile DEFLATE inside the (single)
@@ -1326,6 +1481,9 @@ gdal_create_output <- function(
       "NUM_THREADS=ALL_CPUS"
     )
     if (n_bands > 1L) options <- c(options, "INTERLEAVE=BAND")
+  } else if (!any(grepl("^NUM_THREADS=", options, ignore.case = TRUE))) {
+    # user options keep the threaded compression unless they set it
+    options <- c(options, "NUM_THREADS=ALL_CPUS")
   }
   ds <- gdalraster::create(
     "GTiff",
@@ -1372,7 +1530,6 @@ gdal_create_output <- function(
 #' @param plane For a rank-3 `(band, y, x)` raw store payload, the
 #'   1-based plane to write (taken by byte offset, no copy of the rest).
 #' @return Invisibly, `NULL`.
-#' @export
 gdal_write_window <- function(
   ds,
   x_off,
@@ -1383,6 +1540,15 @@ gdal_write_window <- function(
   band = 1L,
   plane = 1L
 ) {
+  w <- .write_vec(m, dtype, nodata, plane)
+  ds$write(as.integer(band), x_off, y_off, w$nc, w$nr, w$v)
+  invisible(NULL)
+}
+
+# The vector a window write hands GDAL, in its row-major order, with
+# its window size: list(v, nr, nc). Split from gdal_write_window() so
+# the read pool can prepare a write the writer daemon only performs.
+.write_vec <- function(m, dtype, nodata = numeric(0), plane = 1L) {
   if (.sv_is(m)) {
     # Raw store payloads are already in GDAL's row-major write order;
     # one C pass takes the plane out and folds NaN to the sentinel.
@@ -1395,8 +1561,7 @@ gdal_write_window <- function(
     nc <- d[[length(d)]]
     v <- .sv_plane_vec(m, plane, nodata)
     if (is.integer(v)) {
-      ds$write(as.integer(band), x_off, y_off, nc, nr, v)
-      return(invisible(NULL))
+      return(list(v = v, nr = nr, nc = nc))
     }
   } else {
     nr <- nrow(m)
@@ -1412,8 +1577,7 @@ gdal_write_window <- function(
       "given for integer output dtype {.val {dtype}}"
     ))
   }
-  ds$write(as.integer(band), x_off, y_off, nc, nr, v)
-  invisible(NULL)
+  list(v = v, nr = nr, nc = nc)
 }
 
 #' Extract raster values at points (adapter).
@@ -1427,7 +1591,6 @@ gdal_write_window <- function(
 #' @param ... Passed to [gdalraster::pixel_extract()].
 #' @return As [gdalraster::pixel_extract()].
 #' @keywords internal
-#' @export
 gdal_pixel_extract <- function(raster, ...) {
   gdalraster::pixel_extract(raster, ...)
 }
@@ -1463,8 +1626,7 @@ gdal_warp_to_buffer <- function(
   # (integer/double/complex) and cannot expose raw bytes as Float32, so the
   # pure-R way to zero-copy-warp into an f32 buffer is the data pointer plus an
   # explicit DATATYPE=Float32 MEM DSN. get_data_ptr() is exported from
-  # gdalraster 2.6.1.9001 (previously an internal resolved at runtime), hence
-  # the Remotes pin on the dev version.
+  # gdalraster 2.7.0, hence the version floor.
   ptr <- gdalraster::get_data_ptr(buf)
   dsn <- .glue(
     "MEM:::DATAPOINTER={ptr},PIXELS={nx},LINES={ny},BANDS=1,",
@@ -1886,13 +2048,3 @@ gdal_band_count <- function(path) {
   ds$getRasterCount()
 }
 
-
-# Toggle GDAL error-logging to R off for a code block (thread-safety:
-# gdalraster's R-callback handler aborts the process when a GDAL worker
-# thread warns). Lives here per the gdalraster quarantine.
-.gdal_log_errors_off <- function(code) {
-  prev <- gdalraster::get_config_option("CPL_LOG_ERRORS")
-  gdalraster::set_config_option("CPL_LOG_ERRORS", "OFF")
-  on.exit(gdalraster::set_config_option("CPL_LOG_ERRORS", prev), add = TRUE)
-  force(code)
-}

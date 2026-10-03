@@ -32,7 +32,6 @@ test_that("a custom reducer runs arbitrary anvl math (range = max - min)", {
 
 test_that("custom reducer: distributed == single-threaded oracle", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)   # force many spatial chunks

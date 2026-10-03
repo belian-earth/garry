@@ -51,7 +51,7 @@ test_that(".stage_flops_per_px introspects MLP weights and focal windows", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
   pf <- plan_lazy(reduce_over(
-    focal(a, radius = 2L, fn = function(sh) Reduce(`+`, sh) / 25) * 2,
+    focal_map(a, radius = 2L, fn = function(sh) Reduce(`+`, sh) / 25) * 2,
     "mean", c("x", "y"), nan_rm = TRUE))
   cf <- Find(function(s) s@kind == "compute", pf@stages)
   expect_gte(garry:::.stage_flops_per_px(pf@graph, cf@members), 25)
@@ -109,7 +109,7 @@ test_that("with a thread cap the MLP chain fuses; narrow pools do not", {
 test_that("mask cleanup fuses in both modes; scans never fuse in cost mode", {
   f <- fixture_gradient_f32()
   qa <- lazy_source(f)
-  mask <- focal(
+  mask <- focal_map(
     lazy_map(qa, dtype = "f32",
              fn = function(x) g_cast(x > 0.5, "f32")),
     radius = 1L, fn = function(sh) Reduce(`*`, sh))

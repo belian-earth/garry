@@ -25,15 +25,6 @@
   inherits(x, c("AnvlArray", "GraphBox", "AnvlBox"))
 }
 
-.require_anvl <- function() {
-  if (!rlang::is_installed("anvl")) {
-    cli::cli_abort(c(
-      "The {.pkg anvl} package is required for execution.",
-      "i" = "Install it from {.url https://r-xla.r-universe.dev}."
-    ))
-  }
-}
-
 # Promote a plain R scalar to the traced operand's dtype.
 .g_scalar_like <- function(x, value) {
   anvl::nv_scalar_like(x, value)
@@ -48,9 +39,7 @@
 #'   anvl default device.
 #' @return A compiled function (anvl `JitFunction`).
 #' @keywords internal
-#' @export
 g_jit <- function(f, device = NULL) {
-  .require_anvl()
   anvl::jit(f, device = device)
 }
 
@@ -63,9 +52,7 @@ g_jit <- function(f, device = NULL) {
 #' @param wrt Name of the argument to differentiate with respect to.
 #' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
 #' @keywords internal
-#' @export
 g_value_and_gradient <- function(f, wrt) {
-  .require_anvl()
   anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
 }
 
@@ -86,7 +73,6 @@ g_value_and_gradient <- function(f, wrt) {
 #' @return An `AnvlArray`.
 #' @export
 g_upload <- function(x, dtype, device = NULL) {
-  .require_anvl()
   carrier <- unname(.anvl_upload_dtype[dtype])
   if (!is.na(carrier)) {
     dtype <- carrier
@@ -150,9 +136,7 @@ g_download <- function(x) {
 #' @param device Optional device (e.g. "cuda"); NULL uses the default.
 #' @return An `AnvlArray`.
 #' @keywords internal
-#' @export
 g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
-  .require_anvl()
   attributes(bytes) <- NULL
   if (is.null(device)) {
     anvl::nv_array(bytes, shape = dim, dtype = dtype, byrow = TRUE)
@@ -180,11 +164,10 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
 #' @return An `AnvlArray`.
 #' @export
 g_fill <- function(value, dim, dtype = "f32", device = NULL) {
-  .require_anvl()
   if (is.null(device)) {
-    anvl::nv_fill(value, dim, dtype)
+    anvl::nv_fill(value, dim, .to_anvl_dtype(dtype))
   } else {
-    anvl::nv_fill(value, dim, dtype, device = device)
+    anvl::nv_fill(value, dim, .to_anvl_dtype(dtype), device = device)
   }
 }
 
@@ -197,9 +180,7 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 #' @param x `AnvlArray` (f32 or f64).
 #' @return Raw vector with `gdim` and `gdt` attributes.
 #' @keywords internal
-#' @export
 g_download_raw <- function(x) {
-  .require_anvl()
   dt <- .g_dtype(x)
   # f32/f64 are the store's compute payloads (D19/f64-store); the
   # integer dtypes are SINK-ONLY payloads from g_quantize() -- written
@@ -222,11 +203,12 @@ g_download_raw <- function(x) {
 #'
 #' @param x Traced array or plain numeric.
 #' @return Same shape as `x`.
-#' @keywords internal
 #' @export
 g_round <- function(x) {
-  .require_anvl()
-  anvl::nv_round(x)
+  if (.g_traced(x)) {
+    return(anvl::nv_round(x))
+  }
+  round(x)
 }
 
 #' Clamp values to a closed range, elementwise.
@@ -234,11 +216,14 @@ g_round <- function(x) {
 #' @param x Traced array or plain numeric.
 #' @param lo,hi Range bounds (scalars).
 #' @return Same shape as `x`.
-#' @keywords internal
 #' @export
 g_clamp <- function(x, lo, hi) {
-  .require_anvl()
-  anvl::nv_clamp(x, lo, hi)
+  if (.g_traced(x)) {
+    return(anvl::nv_clamp(x, lo, hi))
+  }
+  out <- pmin(pmax(x, lo), hi)
+  dim(out) <- dim(x)
+  out
 }
 
 # Integer output ranges for quantized sinks (mirrors GDAL's clamp at
@@ -267,13 +252,21 @@ g_clamp <- function(x, lo, hi) {
 #'   `"i32"`).
 #' @return Traced array of `dtype`.
 #' @keywords internal
-#' @export
 g_quantize <- function(x, scale, offset, nodata, dtype) {
   rng <- .g_int_range[[dtype]]
   if (is.null(rng)) {
     cli::cli_abort("unsupported quantize dtype {.val {dtype}}")
   }
   q <- g_round((x - offset) / scale)
+  # Out-of-range values saturate at the dtype's limits; a sentinel on one
+  # of those limits is kept for nodata alone, so a saturated valid pixel
+  # never reads back as nodata.
+  if (length(nodata) == 1L && nodata == rng[[1L]]) {
+    rng[[1L]] <- rng[[1L]] + 1
+  }
+  if (length(nodata) == 1L && nodata == rng[[2L]]) {
+    rng[[2L]] <- rng[[2L]] - 1
+  }
   q <- g_clamp(q, rng[[1L]], rng[[2L]])
   if (length(nodata) == 1L) {
     q <- g_ifelse(g_is_nodata(x), nodata, q)
@@ -303,10 +296,20 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
   anvl::shape(x)
 }
 
-# Dtype string of an AnvlArray output (bridge for the executor's
-# f32-only raw download dispatch).
+# garry names unsigned integers u8..u64, anvl names them ui8..ui64; the
+# two vocabularies agree otherwise.
+.anvl_dtype_names <- c(u8 = "ui8", u16 = "ui16", u32 = "ui32", u64 = "ui64")
+.to_anvl_dtype <- function(dtype) {
+  unname(.anvl_dtype_names[dtype]) %|NA|% dtype
+}
+`%|NA|%` <- function(a, b) if (is.na(a)) b else a
+
+# Dtype of an AnvlArray in garry's vocabulary (bridge for the executor's
+# raw download dispatch).
 .g_dtype <- function(x) {
-  as.character(anvl::dtype(x))
+  dt <- as.character(anvl::dtype(x))
+  hit <- match(dt, .anvl_dtype_names)
+  if (is.na(hit)) dt else names(.anvl_dtype_names)[[hit]]
 }
 
 #' Elementwise select: `yes` where `cond`, else `no`.
@@ -317,6 +320,13 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
 #' @export
 g_ifelse <- function(cond, yes, no) {
   if (.g_traced(cond)) {
+    if (
+      is.numeric(yes) && length(yes) == 1L &&
+        is.numeric(no) && length(no) == 1L
+    ) {
+      # both branches scalars: nothing to take a dtype from, so f32
+      yes <- anvl::nv_fill(yes, .g_shape(cond), "f32")
+    }
     if (is.numeric(yes) && length(yes) == 1L) {
       yes <- .g_scalar_like(no, yes)
     }
@@ -363,9 +373,17 @@ g_pad <- function(x, h, value = 0) {
       high = c(lead, h, h)
     ))
   }
-  out <- matrix(value, nrow(x) + 2L * h, ncol(x) + 2L * h)
-  out[(h + 1L):(h + nrow(x)), (h + 1L):(h + ncol(x))] <- x
-  out
+  # the last two (spatial) dims of any rank, as on the traced path
+  d <- dim(x)
+  r <- length(d)
+  nd <- d
+  nd[c(r - 1L, r)] <- d[c(r - 1L, r)] + 2L * h
+  out <- array(value, nd)
+  idx <- c(
+    lapply(d[seq_len(r - 2L)], seq_len),
+    list(h + seq_len(d[[r - 1L]]), h + seq_len(d[[r]]))
+  )
+  do.call(`[<-`, c(list(out), idx, list(value = x)))
 }
 
 #' Shifted slice of a padded matrix (the stencil building block).
@@ -418,13 +436,16 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
 g_cast <- function(x, dtype) {
   stopifnot(dtype_valid(dtype))
   if (.g_traced(x)) {
-    return(anvl::nv_convert(x, dtype))
+    return(anvl::nv_convert(x, .to_anvl_dtype(dtype)))
   }
   fam <- .dtype_family(dtype)
   out <- if (fam == "float") {
     x + 0
   } else if (fam == "pred") {
-    x != 0
+    # NaN is nonzero, as the traced convert treats it
+    out <- x != 0
+    out[is.nan(x)] <- TRUE
+    out
   } else {
     trunc(x)
   }
@@ -446,6 +467,9 @@ g_stack <- function(values) {
     return(do.call(anvl::nv_concatenate, c(ex, list(axis = 1L))))
   }
   d <- dim(values[[1L]])
+  if (is.null(d)) {
+    return(unlist(values)) # scalars (or vectors) stack along one axis
+  }
   arr <- simplify2array(values) # (d..., k)
   aperm(arr, c(length(d) + 1L, seq_along(d))) # -> (k, d...)
 }
@@ -552,9 +576,12 @@ g_index_scalar <- function(v, i) {
       return(i)
     }
     if (.g_traced(i)) {
-      anvl::nv_broadcast_to(anvl::nv_convert(i, .g_dtype(p)), .g_shape(p))
+      anvl::nv_broadcast_to(
+        anvl::nv_convert(i, .to_anvl_dtype(.g_dtype(p))),
+        .g_shape(p)
+      )
     } else {
-      anvl::nv_fill(i, shape = .g_shape(p), dtype = .g_dtype(p))
+      anvl::nv_fill(i, shape = .g_shape(p), dtype = .to_anvl_dtype(.g_dtype(p)))
     }
   })
 }
@@ -588,7 +615,6 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
   traced <- .g_tree_any(init, .g_traced) ||
     (!is.null(xs) && .g_tree_any(xs, .g_traced))
   if (traced) {
-    .require_anvl()
     return(anvl::nv_scan(
       .g_scan_settle_init(init, body, xs),
       xs = xs,
@@ -835,6 +861,9 @@ g_expand <- function(x, axis, n) {
 
 #' Reductions over array margins.
 #'
+#' `g_sum` accumulates 8- and 16-bit integers in i32 (32-bit unsigned in
+#' i64), so a sum does not wrap at the input type's range.
+#'
 #' With `nan_rm = TRUE`, a slice that is entirely NaN reduces to the
 #' reduction's identity value: `g_sum` gives 0, `g_min` gives `Inf`,
 #' `g_max` gives `-Inf`, and `g_mean` / `g_median` give NaN. `g_count`
@@ -847,10 +876,20 @@ g_expand <- function(x, axis, n) {
 #' @name g-reductions
 NULL
 
+# Accumulator dtype for integer sums: 8- and 16-bit integers sum in i32,
+# 32-bit unsigned in i64.
+.g_sum_widen <- c(i8 = "i32", i16 = "i32", u8 = "i32", u16 = "i32", u32 = "i64")
+
 #' @rdname g-reductions
 #' @export
 g_sum <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
+    # anvl sums in the input dtype and wraps on overflow; accumulate
+    # narrow integers wider (see .reduce_dtype()).
+    wide <- unname(.g_sum_widen[.g_dtype(x)])
+    if (!is.na(wide)) {
+      x <- anvl::nv_convert(x, wide)
+    }
     return(anvl::nv_sum(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) sum(.nan_filter(v, nan_rm)))
@@ -964,7 +1003,7 @@ g_count <- function(x, dims = NULL) {
 #' @param a,b Integral arrays (or scalar `b`); recycled like base R.
 #' @param n Shift amount in bits.
 #' @return Integral array shaped like `a`.
-#' @seealso [qa_bits()] and [mask()] for the QA-masking verbs built on
+#' @seealso [qa_bits()] and [apply_mask()] for the QA-masking verbs built on
 #'   these ops.
 #' @name g-bitwise
 NULL

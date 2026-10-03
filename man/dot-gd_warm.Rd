@@ -9,6 +9,6 @@
 \description{
 Runs one trivial jitted kernel so the first real compute task does
 not pay the cold client initialisation.
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

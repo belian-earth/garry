@@ -32,6 +32,6 @@ reads); \code{reg_key} the daemon registry slot for the result.}
 The shared result (serialises as its region name).
 }
 \description{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

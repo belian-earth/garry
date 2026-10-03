@@ -1,7 +1,7 @@
 # Sharing identical warp-on-read stages between consumers. graph_import()
 # now memoises every imported node, so ONE lazy raster used in two
 # subexpressions imports once; the dedup pass covers the remaining case,
-# identical warps built SEPARATELY (two align() calls on the same band).
+# identical warps built SEPARATELY (two align_to() calls on the same band).
 
 n_warps <- function(x) {
   sum(vapply(collect(x, plan_only = TRUE)@stages,
@@ -31,8 +31,8 @@ test_that("a band used in two subexpressions is read once", {
 
   # one object used twice: the import memo alone shares it
   mk1 <- function() {
-    x <- align(lazy_source(mb$path, band = 1L), target)
-    y <- align(lazy_source(mb$path, band = 2L), target)
+    x <- align_to(lazy_source(mb$path, band = 1L), target)
+    y <- align_to(lazy_source(mb$path, band = 2L), target)
     (x - y) / (x + y)
   }
   expect_identical(n_warps(mk1()), 2L)
@@ -40,9 +40,9 @@ test_that("a band used in two subexpressions is read once", {
 
   # the same warp built twice: only the dedup pass shares it
   mk2 <- function() {
-    x1 <- align(lazy_source(mb$path, band = 1L), target)
-    x2 <- align(lazy_source(mb$path, band = 1L), target)
-    y <- align(lazy_source(mb$path, band = 2L), target)
+    x1 <- align_to(lazy_source(mb$path, band = 1L), target)
+    x2 <- align_to(lazy_source(mb$path, band = 1L), target)
+    y <- align_to(lazy_source(mb$path, band = 2L), target)
     (x1 - y) / (x2 + y)
   }
   # (4 without the pass: x1, x2, and y imported into each operand's
@@ -56,8 +56,8 @@ test_that("dedup does not change the result", {
   target <- target_of(mb$path)
 
   mk <- function() {
-    x <- align(lazy_source(mb$path, band = 1L), target)
-    y <- align(lazy_source(mb$path, band = 2L), target)
+    x <- align_to(lazy_source(mb$path, band = 1L), target)
+    y <- align_to(lazy_source(mb$path, band = 2L), target)
     lazy_stack(list((x - y) / (x + y), (y - x) / (y + x)), along = "band")
   }
 
@@ -72,22 +72,22 @@ test_that("warps differing in grid or resampling are not shared", {
   t2 <- target_of(f, 3L)
 
   # same source and grid, different resampling
-  a <- align(lazy_source(f), t1, resampling = "bilinear")
-  b <- align(lazy_source(f), t1, resampling = "near")
+  a <- align_to(lazy_source(f), t1, resampling = "bilinear")
+  b <- align_to(lazy_source(f), t1, resampling = "near")
   expect_identical(n_warps(a + b), 2L)
 
   # same source and resampling, different grid: grids differ so the sum
   # is not even expressible, but each alone keeps its own warp
-  expect_identical(n_warps(align(lazy_source(f), t1)), 1L)
-  expect_identical(n_warps(align(lazy_source(f), t2)), 1L)
+  expect_identical(n_warps(align_to(lazy_source(f), t1)), 1L)
+  expect_identical(n_warps(align_to(lazy_source(f), t2)), 1L)
 })
 
 test_that("the pass is idempotent and leaves a reused graph valid", {
   mb <- fixture_multiband()
   target <- target_of(mb$path)
 
-  x <- align(lazy_source(mb$path, band = 1L), target)
-  y <- align(lazy_source(mb$path, band = 2L), target)
+  x <- align_to(lazy_source(mb$path, band = 1L), target)
+  y <- align_to(lazy_source(mb$path, band = 2L), target)
   expr <- (x - y) / (x + y)
 
   first <- n_warps(expr)
@@ -104,8 +104,8 @@ test_that("a warp that is itself a requested sink stays canonical", {
   mb <- fixture_multiband()
   target <- target_of(mb$path)
 
-  x <- align(lazy_source(mb$path, band = 1L), target)
-  y <- align(lazy_source(mb$path, band = 2L), target)
+  x <- align_to(lazy_source(mb$path, band = 1L), target)
+  y <- align_to(lazy_source(mb$path, band = 2L), target)
   res <- collect(list(band = y, ratio = (x - y) / (x + y)))
 
   expect_named(res, c("band", "ratio"), ignore.order = TRUE)

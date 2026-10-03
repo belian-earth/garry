@@ -27,8 +27,20 @@
   if (!dir.exists(base)) {
     return(fetched)
   }
-  vers <- sort(list.dirs(base, recursive = FALSE), decreasing = TRUE)
-  if (length(vers)) vers[[1L]] else fetched
+  # the newest Python cache version that holds the v4 weight files
+  # (numeric order: "10.0" is newer than "9.2")
+  vers <- list.dirs(base, recursive = FALSE)
+  has_v4 <- vapply(
+    vers,
+    function(d) all(.ocm_release_files %in% list.files(d)),
+    logical(1)
+  )
+  vers <- vers[has_v4]
+  if (!length(vers)) {
+    return(fetched)
+  }
+  v <- suppressWarnings(numeric_version(basename(vers), strict = FALSE))
+  vers[[order(v, decreasing = TRUE, na.last = TRUE)[[1L]]]]
 }
 
 #' Cloud and shadow masking with OmniCloudMask
@@ -47,7 +59,7 @@
 #'   verb it is lazy: nothing reads or computes until [collect()].
 #' * `ocm_mask()` is the one-step verb for a `LazyDataset`: it derives
 #'   the class band from three of the dataset's bands for every time
-#'   slice, then masks every value band with it via [mask()]. The
+#'   slice, then masks every value band with it via [apply_mask()]. The
 #'   derived class band is consumed by the masking, exactly like a QA
 #'   `mask_asset`.
 #'
@@ -81,7 +93,7 @@
 #' @return `ocm_model()` returns an `ocm_model` object; `ocm_predict()`
 #'   a class `LazyRaster` on the shared spatial grid; `ocm_mask()` the
 #'   masked `LazyDataset` (class band consumed).
-#' @seealso [ocm_fetch_weights()] to download the weights; [mask()] and
+#' @seealso [ocm_fetch_weights()] to download the weights; [apply_mask()] and
 #'   [qa_bits()] for masking from an existing QA band;
 #'   `vignette("omnicloudmask", package = "garry")` for a worked
 #'   example.
@@ -89,7 +101,7 @@
 #' \dontrun{
 #' ocm_fetch_weights()  # once per machine
 #' ds <- ds |> ocm_mask(red = "B04", green = "B03", nir = "B8A")
-#' composite <- ds |> reduce_over("time", "median") |> collect()
+#' composite <- ds |> reduce_over("median", over = "t") |> collect()
 #' }
 #' @rdname ocm
 #' @export
@@ -161,7 +173,7 @@ ocm_predict <- function(red, green, nir, model = ocm_model()) {
 #' @param x A `LazyDataset` whose slices carry the three bands.
 #' @param where Classes to mask out (default thick cloud, thin cloud,
 #'   and shadow).
-#' @param open,dilate Morphological cleanup, as in [mask()].
+#' @param open,dilate Morphological cleanup, as in [apply_mask()].
 #' @rdname ocm
 #' @export
 ocm_mask <- function(
@@ -198,7 +210,7 @@ ocm_mask <- function(
     names(x@bands[[red]])
   )
   x[["ocm"]] <- slices
-  mask(x, from = "ocm", where = where, open = open, dilate = dilate)
+  apply_mask(x, from = "ocm", where = where, open = open, dilate = dilate)
 }
 
 #' @export

@@ -75,11 +75,10 @@ NULL
 #' pressure; the default trim-only pass costs microseconds and gives
 #' back what glibc is hoarding.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param deep Also evict the jit cache?
 #' @return `TRUE` if the trim ran (glibc), invisibly.
 #' @keywords internal
-#' @export
 .daemon_hygiene <- function(deep = FALSE) {
   if (isTRUE(deep)) {
     e <- .daemon_cache
@@ -104,10 +103,9 @@ NULL
 #' still shared across a run's tasks and key-only launches still hit.
 #' A no-op elsewhere.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #' @return `TRUE` if the cache was cleared, invisibly.
 #' @keywords internal
-#' @export
 .daemon_jit_reset <- function() {
   if (!identical(Sys.info()[["sysname"]], "Darwin")) {
     return(invisible(FALSE))
@@ -124,22 +122,21 @@ NULL
 #' Daemon-facing ABI token: a hash of every `.daemon_*` entry point's
 #' formals plus the store layout version.
 #'
-#' Daemons resolve `garry::.daemon_*` from their INSTALLED library while
+#' Daemons resolve the `.daemon_*` bodies from their INSTALLED library while
 #' a development host frequently runs a `load_all()` tree; a namespace
 #' skew yields "unused argument" mirai errors at best and silent
 #' semantic drift at worst (positional renames, new masking arguments).
 #' `packageVersion()` cannot guard this (constant through development);
-#' the formals can. Internal (exported so daemons can evaluate their
-#' own token via `::`).
+#' the formals can. Internal; daemons evaluate their own token through
+#' `asNamespace("garry")`.
 #'
 #' @return A single hash string.
 #' @keywords internal
-#' @export
 .garry_abi_token <- function() {
   ns <- asNamespace("garry")
   # Every cross-process entry point must be enrolled: the .daemon_*
   # family by pattern, plus composite_direct's task bodies, which are
-  # invoked via garry:: on daemons but named .cd_*/.gd_* (deep review
+  # invoked on daemons through asNamespace("garry") but named .cd_*/.gd_* (deep review
   # 2026-08-02: they previously escaped the hash, so .gd_daemon_prep's
   # skew check passed under skew).
   nms <- sort(c(
@@ -175,11 +172,21 @@ NULL
     return(invisible(NULL))
   }
   host <- .garry_abi_token()
-  for (p in profiles) {
-    d <- tryCatch(
-      mirai::mirai(garry::.garry_abi_token(), .compute = p)[],
-      error = function(e) NA_character_
+  # Ask every pool at once: the first ask loads garry on a fresh daemon
+  # (about a second), and serially that was 6 s of a first collect().
+  asks <- lapply(profiles, function(p) {
+    tryCatch(
+      mirai::mirai(asNamespace("garry")$.garry_abi_token(), .compute = p),
+      error = function(e) NULL
     )
+  })
+  for (i in seq_along(profiles)) {
+    p <- profiles[[i]]
+    d <- if (is.null(asks[[i]])) {
+      NA_character_
+    } else {
+      tryCatch(asks[[i]][], error = function(e) NA_character_)
+    }
     if (inherits(d, "miraiError") || !is.character(d)) {
       d <- NA_character_
     }
@@ -212,11 +219,10 @@ NULL
 
 #' Daemon task body: release all pinned shared-memory regions.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @return `NULL`, invisibly.
 #' @keywords internal
-#' @export
 .daemon_shm_clear <- function() {
   rm(list = ls(.daemon_shm, all.names = TRUE), envir = .daemon_shm)
   gc(FALSE)
@@ -225,12 +231,11 @@ NULL
 
 #' Daemon task body: release named shared-memory regions.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param keys Registry keys to drop (missing keys are ignored).
 #' @return `NULL`, invisibly.
 #' @keywords internal
-#' @export
 .daemon_shm_drop <- function(keys) {
   keys <- intersect(keys, ls(.daemon_shm, all.names = TRUE))
   if (length(keys) > 0L) {
@@ -345,7 +350,7 @@ NULL
 #' element zero-copy. (Consumer-side RANGE subsetting of a mapped
 #' matrix would materialise the whole window per input, a large
 #' transient allocation, so the split happens producer-side here too.)
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param path,band,nodata Source identity.
 #' @param cg `ChunkGrid`; `core` the chunk row; `key` the node key;
@@ -357,7 +362,6 @@ NULL
 #'   set when an aligned warp is served by a direct RasterIO read.
 #' @return The shared object (serialises as its region name).
 #' @keywords internal
-#' @export
 .daemon_run_source_shm <- function(
   path,
   band,
@@ -449,7 +453,7 @@ NULL
 #' other task. One writer daemon per session: GTiff is single-writer,
 #' and daemon-persistent open handles amortise the opens.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param path Output file (already created by the host).
 #' @param x_off,y_off Window offsets.
@@ -459,7 +463,6 @@ NULL
 #' @param pad,dtype,nodata,n_chunks As the host-side write path.
 #' @return `TRUE`.
 #' @keywords internal
-#' @export
 .daemon_write_chunk <- function(
   path,
   x_off,
@@ -486,13 +489,94 @@ NULL
   TRUE
 }
 
+#' Daemon task body: read a chunk and prepare its band writes.
+#'
+#' The read half of the read-only route's streamed write, on the read
+#' pool: reads the chunk as raw f32, turns each band plane into the
+#' vector GDAL writes (nodata folded, the integer-output check made)
+#' and shares the planes in one shared-memory region pinned under
+#' `reg`. The writer daemon maps the region by name, so the payload
+#' never passes through the host and the writer only writes.
+#'
+#' Internal; daemons reach it through `asNamespace("garry")`.
+#'
+#' @param ra Read arguments (as `.stage_read_args()`).
+#' @param cg,core Chunk grid and chunk row.
+#' @param dtype,nodata Output dtype and sentinel.
+#' @param reg Registry key pinning the region until the host drops it.
+#' @return list(name, reg, nr, nc, mb): the region name and registry
+#'   key, the window size and the region's size in MB.
+#' @keywords internal
+.daemon_read_for_write <- function(ra, cg, core, dtype, nodata, reg) {
+  v <- .exec_read_padded(
+    ra$path,
+    ra$band,
+    ra$nodata,
+    cg,
+    core,
+    open_options = ra$open_options,
+    out = "raw_f32",
+    scale = ra$scale,
+    offset = ra$offset,
+    decim = ra$decim,
+    resampling = ra$resampling
+  )
+  d <- .sv_dim(v)
+  planes <- lapply(seq_len(if (length(d) == 3L) d[[1L]] else 1L), function(b) {
+    .write_vec(v, dtype, nodata, b)$v
+  })
+  sh <- mori::share(planes)
+  .daemon_shm[[reg]] <- sh
+  bytes_shared <- .payload_bytes(planes)
+  bytes <- .payload_bytes(v) + bytes_shared
+  rm(v, planes)
+  .daemon_gc_after(bytes)
+  list(
+    name = mori::shared_name(sh),
+    reg = reg,
+    nr = d[[length(d) - 1L]],
+    nc = d[[length(d)]],
+    mb = bytes_shared / 2^20
+  )
+}
+
+#' Daemon task body: write prepared band planes to an output.
+#'
+#' The write half of the read-only route's streamed write: maps the
+#' planes `.daemon_read_for_write()` shared and writes plane `b` to band
+#' `band0 + b` of the output the host created. Shares the writer's
+#' open-handle cache with `.daemon_write_chunk`.
+#'
+#' Internal; daemons reach it through `asNamespace("garry")`.
+#'
+#' @param path Output file (already created by the host).
+#' @param x_off,y_off Window offsets.
+#' @param w The read task's result: region name and window size.
+#' @param band0 Bands before this chunk's first.
+#' @return `TRUE`.
+#' @keywords internal
+.daemon_write_shared <- function(path, x_off, y_off, w, band0) {
+  ds <- .daemon_ds[[path]]
+  if (is.null(ds)) {
+    ds <- gdal_open_update(path)
+    .daemon_ds[[path]] <- ds
+  }
+  planes <- mori::map_shared(w$name)
+  for (b in seq_along(planes)) {
+    ds$write(as.integer(band0 + b), x_off, y_off, w$nc, w$nr, planes[[b]])
+  }
+  rm(planes)
+  TRUE
+}
+
 #' Daemon task body: close every output the writer holds open.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Returns the close errors, named by output path (empty when all closed).
+#'
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @return `NULL`, invisibly.
 #' @keywords internal
-#' @export
 .daemon_write_close <- function() {
   # all.names: the cache is keyed by OUTPUT PATH, and ls() hides
   # dot-prefixed names by default -- a "./out.tif" key (every cog=TRUE
@@ -500,13 +584,25 @@ NULL
   # never closed and the file stayed an unflushed zero-filled shell
   # (diagnosed 2026-08-13: pools + relative path + cog wrote "all
   # zeros" while the data sat in the writer's block cache).
+  # Close is where GDAL flushes the last dirty blocks, so a failure here
+  # (a full disk, an I/O error) means an incomplete file: report it.
   ks <- ls(.daemon_ds, all.names = TRUE)
+  failed <- character(0)
   for (p in ks) {
-    try(.daemon_ds[[p]]$close(), silent = TRUE)
+    err <- tryCatch(
+      {
+        .daemon_ds[[p]]$close()
+        NULL
+      },
+      error = function(e) conditionMessage(e)
+    )
+    if (!is.null(err)) {
+      failed[[p]] <- err
+    }
   }
   rm(list = ks, envir = .daemon_ds)
   gc(FALSE)
-  invisible(NULL)
+  failed
 }
 
 #' Daemon task body: fetch one item-asset's target-window bytes to a
@@ -521,7 +617,7 @@ NULL
 #' reads a hole instead of erroring (Int16 when a nodata sentinel is
 #' declared, Byte 255 otherwise, the HLS QA convention).
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param location Source path/URL.
 #' @param out_file Local destination.
@@ -530,7 +626,6 @@ NULL
 #' @param margin Source-pixel margin around the window.
 #' @return `TRUE`.
 #' @keywords internal
-#' @export
 .daemon_fetch_window <- function(
   location,
   out_file,
@@ -573,7 +668,7 @@ NULL
 #' Daemon task body: run one jitted stage closure on shared-memory
 #' inputs.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param cache_key Per-run jit cache key.
 #' @param fn Stage closure; `in_vals`/`in_keys`/`trims`/`dtypes`
@@ -582,7 +677,6 @@ NULL
 #'   reads); `reg_key` the daemon registry slot for the result.
 #' @return The shared result (serialises as its region name).
 #' @keywords internal
-#' @export
 .daemon_run_compute_shm <- function(
   cache_key,
   fn,
@@ -690,14 +784,13 @@ NULL
 #' failures are swallowed (warm-up is an optimisation, never a
 #' correctness dependency).
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param specs List of per-stage specs: `ck` cache key, `fn` stage
 #'   closure, `dtypes` per-input upload dtypes, `nr`/`nc` modal input
 #'   dims.
 #' @return `NULL`, invisibly.
 #' @keywords internal
-#' @export
 .daemon_warm_jit <- function(specs) {
   for (sp in specs) {
     tryCatch(
@@ -738,12 +831,10 @@ NULL
 #'
 #' Runs one trivial jitted kernel so the first real compute task does
 #' not pay the cold client initialisation.
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @keywords internal
-#' @export
 .gd_warm <- function() {
-  .require_anvl()
   a <- g_upload_raw(
     writeBin(as.numeric(1:4), raw(), size = 4L),
     "f32",
@@ -758,10 +849,9 @@ NULL
 
 #' Daemon task body: pipeline JitFunctions created in this process so far.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #' @return Integer count.
 #' @keywords internal
-#' @export
 .daemon_jit_creates <- function() .gd_jit_stats$creates %||% 0L
 
 # Get-or-create a content-addressed JitFunction for a pipeline kernel.
@@ -816,16 +906,14 @@ NULL
 #' back to the plain client wake; warm-up is an optimisation, never a
 #' correctness dependency.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param specs List of kernel specs: `ck`, `F`, `op`, `nan_rm`,
 #'   `affine`, `masked`, `dev`, `n` slice count, `hs` strip heights, `nx`.
 #' @return `NULL`, invisibly.
 #' @keywords internal
-#' @export
 .gd_warm_pipeline <- function(specs) {
   ok <- tryCatch(
     {
-      .require_anvl()
       for (sp in specs) {
         dev <- .exec_device(sp$dev)
         jf <- .gd_cached_jit(
@@ -864,18 +952,16 @@ NULL
 #' Replays the mask-cleaning morphology once over the whole QA cube and
 #' writes the resulting f32 mask cube to a file every band task reads,
 #' instead of recomputing the morphology per band.
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @keywords internal
-#' @export
 .gd_compute_mask <- function(k) {
-  .require_anvl()
   dev <- .exec_device(k$dev)
   n <- length(k$fmask_bins)
   fm <- g_upload_raw(
     do.call(
       c,
-      lapply(k$fmask_bins, function(f) readBin(f, "raw", n = k$ny * k$nx * 4L))
+      lapply(k$fmask_bins, function(f) readBin(f, "raw", n = as.numeric(k$ny) * k$nx * 4))
     ),
     "f32",
     c(n, k$ny, k$nx),
@@ -912,12 +998,10 @@ NULL
 #'
 #' Reads a band cube plus the shared cleaned-mask cube, applies the
 #' masked-apply function and reduces over time to a raw f32 payload.
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @keywords internal
-#' @export
 .gd_compute_masked_band <- function(job, k) {
-  .require_anvl()
   t0 <- proc.time()[["elapsed"]]
   dev <- .exec_device(k$dev)
   n <- length(job$band_bins)
@@ -927,12 +1011,12 @@ NULL
   strip <- h < k$ny
   read_rows <- function(f, base_rows = 0) {
     if (!strip && base_rows == 0) {
-      return(readBin(f, "raw", n = h * nx * 4L))
+      return(readBin(f, "raw", n = as.numeric(h) * nx * 4))
     }
     con <- file(f, "rb")
     on.exit(close(con))
     seek(con, (base_rows + as.numeric(y0)) * nx * 4)
-    readBin(con, "raw", n = h * nx * 4L)
+    readBin(con, "raw", n = as.numeric(h) * nx * 4)
   }
   cube <- function(bins) {
     g_upload_raw(
@@ -953,7 +1037,7 @@ NULL
   out <- if (masked) {
     mask_strip <- if (!strip) {
       g_upload_raw(
-        readBin(k$mask_bin, "raw", n = n * k$ny * nx * 4L),
+        readBin(k$mask_bin, "raw", n = as.numeric(n) * k$ny * nx * 4),
         "f32",
         c(n, h, nx),
         device = dev
@@ -991,12 +1075,11 @@ NULL
 # task instead throttles the dispatcher and starves the daemon pool).
 #' Daemon task body: warp one slice's remote items into an f32 buffer.
 #'
-#' Internal (exported only so mirai daemons can address it via `::`).
+#' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param j Per-slice job (locs/dt/nodata/resampling/bin).
 #' @param k Grid-constant bundle (nx/ny/gtstr/wkt).
-#' @return List with `err`, `tf`, `tw`.
+#' @return List with `err` and `tw` (warp seconds).
 #' @keywords internal
-#' @export
 .cd_fetch_warp <- function(j, k) {
   nx <- k$nx
   ny <- k$ny
@@ -1023,7 +1106,8 @@ NULL
               k$wkt,
               j$locs[order(j$dt)],
               j$nodata,
-              resampling = j$resampling %||% "near"
+              resampling = j$resampling %||% "near",
+              band = j$band
             )
           },
           what = "slice warp"
@@ -1037,5 +1121,5 @@ NULL
   rm(buf)
   gc(FALSE)
   .garry_malloc_trim()
-  list(err = err, tf = 0, tw = tw)
+  list(err = err, tw = tw)
 }

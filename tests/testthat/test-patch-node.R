@@ -88,7 +88,6 @@ test_that("chunked equals whole-frame (halo mechanics)", {
 
 test_that("patch: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
@@ -100,7 +99,7 @@ test_that("patch: distributed == single-threaded", {
 
 test_that("draw renders and gradients refuse", {
   lr <- .toy_patch()
-  expect_output(draw(lr), "patch")
+  expect_output(plan_draw(lr), "patch")
   ln <- lazy_source(fixture_gradient_f32())
   expect_error(
     lazy_value_and_grad(

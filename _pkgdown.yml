@@ -37,7 +37,6 @@ reference:
   - stac_merge
   - stac_time_slices
   - stac_gti_index
-  - lazy_stac_stack
   - lazy_source
 - title: Datasets
   desc: |
@@ -53,7 +52,7 @@ reference:
   desc: |
     Mask value bands from a QA band or from a pre-trained cloud model. The ocm_* functions run the OmniCloudMask segmentation model natively (no Python) to derive cloud/shadow masks from red, green, and NIR bands.
   contents:
-  - mask
+  - apply_mask
   - qa_bits
   - ocm_mask
   - ocm_predict
@@ -86,7 +85,7 @@ reference:
   contents:
   - lazy_map
   - lazy_stack
-  - focal
+  - focal_map
   - focal_kernel
   - bilateral_focal
   - reduce_over
@@ -94,7 +93,7 @@ reference:
   - mlp_project
   - scan_over
   - lazy_patch
-  - align
+  - align_to
 - title: Execution
   desc: Plan, distribute across daemons, and write the result.
   contents:
@@ -114,7 +113,7 @@ reference:
     Inspect data and understand what an execution did: quick plots, pipeline drawings, and run reports.
   contents:
   - preview
-  - draw
+  - plan_draw
   - plan_view
   - garry_last_route
   - garry_task_report
@@ -126,11 +125,12 @@ reference:
   - grid_from_bbox
   - grid_from_src
   - gdal_grid_spec
-  - res
-  - xmin
-  - xmax
-  - ymin
-  - ymax
+  - grid_bbox
+  - grid_res
+  - grid_crs
+  - time_labels
+  - lazy-dim
+  - dataset-bands
   - grid_equal
   - grid_diff
   - crs_equal
@@ -145,6 +145,8 @@ reference:
   - g_ifelse
   - g_is_nodata
   - g_cast
+  - g_round
+  - g_clamp
   - g_fill
   - g_pad
   - g_pad_rb
@@ -179,12 +181,8 @@ reference:
   - lazy_value_and_grad
 - title: GDAL adapter (low-level IO)
   desc: |
-    Direct windowed read/write, warp, staging, and GTI index construction. Used by the cube layer; exposed for bespoke IO.
+    Staging and GTI index construction for bespoke IO.
   contents:
-  - gdal_read_window
-  - gdal_write_window
-  - gdal_create_output
-  - gdal_warp_vrt
   - stage_raw_cube
   - gti_index_create
   - gti_open_options

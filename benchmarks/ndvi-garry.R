@@ -46,7 +46,7 @@ t_all <- system.time({
     nodata = c(B04 = -9999, B08 = -9999, Fmask = 255)
   )
   composite <- ds |>
-    mask(from = "Fmask", where = qa_bits(0:3), open = 2L, dilate = 3L) |>
+    apply_mask(from = "Fmask", where = qa_bits(0:3), open = 2L, dilate = 3L) |>
     reduce_over("median", over = "t", nan_rm = TRUE)
   composite[["ndvi"]] <- (composite[["B08"]] - composite[["B04"]]) /
                          (composite[["B08"]] + composite[["B04"]])

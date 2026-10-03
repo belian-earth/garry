@@ -37,7 +37,7 @@ test_that("map -> focal -> global mean executes identically chunked", {
   want <- mean(conv, na.rm = TRUE)
 
   a <- lazy_source_stub("x.tif")
-  f <- focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  f <- focal_map(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"), nan_rm = TRUE)
 
   for (px in c(17 * 17, 23 * 23, 1e6)) {
@@ -55,7 +55,7 @@ test_that("stacked focals execute identically chunked (halo 3)", {
 
   sum9 <- function(sh) Reduce(`+`, sh)
   a <- lazy_source_stub("x.tif")
-  f2 <- focal(focal(a, sum9, 1L), sum9, 2L)
+  f2 <- focal_map(focal_map(a, sum9, 1L), sum9, 2L)
 
   ref1 <- {
     p <- matrix(NaN, 102, 102); p[2:101, 2:101] <- m

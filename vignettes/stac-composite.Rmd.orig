@@ -58,7 +58,7 @@ boundary.
 
 ```{r sc-grid}
 target <- grid_from_bbox(aoi, res = 10)
-target@dims
+dim(target)
 ```
 
 ## Describe
@@ -92,7 +92,7 @@ with the cloud. Masked pixels become NaN, garry's nodata, on every value
 band, and the QA band is consumed.
 
 ```{r sc-mask}
-ds <- mask(ds, where = c(3, 8, 9, 10), open = 2, dilate = 3)
+ds <- apply_mask(ds, where = c(3, 8, 9, 10), open = 2, dilate = 3)
 ds <- (ds * 0.0001) - 0.1     # STAC raster metadata: scale, then offset
 ds
 ```
@@ -108,11 +108,11 @@ HLS for instance, `lazy_dataset(scale = TRUE)` discovers and applies
 it automatically; these Planetary Computer S2 files carry none, so
 the arithmetic stays explicit.)
 
-Everything so far is graph building. `draw()` shows the pipeline behind
+Everything so far is graph building. `plan_draw()` shows the pipeline behind
 any one band:
 
 ```{r sc-draw}
-draw(ds[["B04"]])
+plan_draw(ds[["B04"]])
 ```
 
 ## Composite, route one: per-band median

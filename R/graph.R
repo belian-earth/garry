@@ -256,6 +256,12 @@ graph_import <- function(dst, src, root_id) {
     new_id <- dst@nodes$.next_id
     node@id <- new_id
     node@parents <- as.integer(new_parents)
+    if (S7::S7_inherits(node, SourceNode) && length(node@collapsed)) {
+      # provenance ids from the source graph: keep those imported here,
+      # never let one resolve to an unrelated node of `dst`
+      mapped <- lapply(node@collapsed, function(c) id_map[[.key(c)]])
+      node@collapsed <- as.integer(unlist(mapped))
+    }
     dst@nodes[[.key(new_id)]] <- node
     dst@nodes$.next_id <- new_id + 1L
     id_map[[.key(id)]] <- new_id
@@ -283,6 +289,9 @@ graph_import <- function(dst, src, root_id) {
       node@path,
       node@band,
       formatC(node@nodata, format = "g", digits = 17, width = 1),
+      formatC(node@scale, format = "g", digits = 17, width = 1),
+      formatC(node@offset, format = "g", digits = 17, width = 1),
+      node@resampling,
       node@open_options
     ),
     collapse = "\x1f"
@@ -321,11 +330,16 @@ graph_import <- function(dst, src, root_id) {
   NULL
 }
 
-# Internal: are two SourceNodes the same physical source?
+# Internal: do two SourceNodes read the same values? The band affine and
+# the read-time resampler change the values, so they are part of the
+# identity, not just the file and band.
 .source_identical <- function(a, b) {
   identical(a@path, b@path) &&
     identical(a@band, b@band) &&
     identical(a@nodata, b@nodata) &&
+    identical(a@scale, b@scale) &&
+    identical(a@offset, b@offset) &&
+    identical(a@resampling, b@resampling) &&
     identical(a@open_options, b@open_options) &&
     grid_equal(a@grid, b@grid) &&
     identical(a@grid@dtype, b@grid@dtype)

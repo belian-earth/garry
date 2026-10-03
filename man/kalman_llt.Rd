@@ -8,19 +8,24 @@ kalman_llt(
   sigma_lvl,
   sigma_slp,
   sigma_obs = 1,
-  output = c("mean", "sd"),
+  output = c("mean", "sd", "fmean", "fsd", "innov"),
   robust_iters = 0L,
   robust_threshold = 3,
   robust_inflation = 100,
   kappa = 1e+07,
-  out_dtype = "f32"
+  dtype = "f32"
 )
 }
 \arguments{
 \item{sigma_lvl, sigma_slp, sigma_obs}{Noise standard deviations (level
 disturbance, slope disturbance, observation).}
 
-\item{output}{\code{"mean"} (smoothed level) or \code{"sd"} (its standard error).}
+\item{output}{\code{"mean"} (smoothed level), \code{"sd"} (its standard error),
+\code{"fmean"} (the forward-filtered level: each year from that year and
+earlier ones only), \code{"fsd"} (its standard error) or \code{"innov"} (the
+standardised innovation \code{(y - prediction) / sqrt(F)} of each observed
+year, 0 where missing: the filter's surprise, which a caller tests
+for persistent change).}
 
 \item{robust_iters}{Robust reweighting passes (0 = plain smoother).
 Each pass inflates the level noise at years whose smoothed-level
@@ -30,7 +35,7 @@ innovation exceeds \code{robust_threshold} MADs by \code{robust_inflation}.}
 
 \item{kappa}{Diffuse-initialisation variance.}
 
-\item{out_dtype}{Output dtype the body casts to (align with
+\item{dtype}{Output dtype the body casts to (align with
 \code{scan_over(dtype = )}; default \code{"f32"}).}
 }
 \value{
@@ -53,6 +58,21 @@ series). Pixels with fewer than 3 valid observations return
 all-NaN. Initialisation is the large-variance diffuse approximation
 \code{P1 = kappa * I}.
 }
+\section{Regime boundaries}{
+
+A third element of \code{xs}, a \verb{(t, y, x)} stack of 0/1, marks years that
+start a new regime. At a marked year the forward pass resets the state
+covariance to the diffuse start (the level and slope are re-learned
+from that year on), and the backward pass is blocked across it, so the
+smoothed level before the boundary uses no observation from it or
+after. Without boundaries the two-sided smoother carries change the
+model cannot represent (a planting, a clearance) into the years
+before it; with them, nothing crosses a boundary in either direction.
+A regime with no observation is \code{NaN} (the forward outputs are \code{NaN}
+until a regime's first observation). Boundaries are found by the
+caller, typically from \code{"innov"}.
+}
+
 \seealso{
 \code{\link[=kalman_smooth]{kalman_smooth()}}, \code{\link[=scan_over]{scan_over()}}, \code{\link[=g_scan]{g_scan()}}
 }

@@ -12,29 +12,16 @@ NULL
 
 # Reduction vocabulary. Named ops (not arbitrary functions) so the
 # planner can decide algebraic decomposition (D12) and output dtype.
-.reduce_ops <- c(
-  "sum",
-  "mean",
-  "min",
-  "max",
-  "prod",
-  "median",
-  "quantile",
-  "sd",
-  "var",
-  "count",
-  "any",
-  "all"
-)
+.reduce_ops <- c("sum", "mean", "min", "max", "median", "count")
 
 #' Abstract IR node.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @return A `Node` subclass instance.
 #' @export
 Node <- S7::new_class(
@@ -44,9 +31,9 @@ Node <- S7::new_class(
     id = S7::class_integer,
     parents = S7::class_integer, # parent ids (may be empty)
     grid = GridSpec,
-    # Semantic role of the node ("mask" for the maps mask() creates).
+    # Semantic role of the node ("mask" for the maps apply_mask() creates).
     # Pure metadata: no planner pass or executor reads it; surfaced by
-    # draw() and plan_view(). Length 0 = none.
+    # plan_draw() and plan_view(). Length 0 = none.
     role = S7::new_property(S7::class_character,
                             default = quote(character(0)))
   )
@@ -71,9 +58,9 @@ Node <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param name Optional display name (the asset or band name). Pure
 #'   metadata, shown by [plan_view()]; set by [lazy_dataset()].
 #' @param path Path or VSI URL readable by GDAL.
@@ -86,6 +73,9 @@ Node <- S7::new_class(
 #'   source onto the analysis grid (default "near").
 #' @param scale,offset Length-0 (absent) or length-1 band affine applied
 #'   inside the read kernel after sentinel -> NaN (see [lazy_source()]).
+#' @param collapsed Node ids of the single-band sources a band-stack
+#'   collapse folded into this multi-band read, in band order. Length 0
+#'   for an ordinary source.
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(
@@ -138,9 +128,9 @@ SourceNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param fn Elementwise R function.
 #' @return A `MapNode`.
 #' @export
@@ -152,19 +142,19 @@ MapNode <- S7::new_class(
   )
 )
 
-#' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one
-#' of "constant", "reflect", "nearest", "wrap", "none". Created by
-#' [focal()].
+#' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
+#' "nodata", the only policy: cells beyond the raster edge are NaN.
+#' Created by [focal_map()] and [focal_kernel()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param fn Neighbourhood function (over the list of shifted arrays).
 #' @param radius Halo radius in pixels.
-#' @param boundary Boundary policy.
+#' @param boundary Boundary policy: `"nodata"`.
 #' @param weights Optional linear kernel, flattened row-major over
 #'   (dy, dx), length (2*radius+1)^2. When present the op is the
 #'   weighted sum and is differentiable wrt the weights.
@@ -180,6 +170,12 @@ FocalNode <- S7::new_class(
     weights = S7::class_numeric
   ),
   validator = function(self) {
+    if (!identical(self@boundary, "nodata")) {
+      return("`boundary` must be \"nodata\"")
+    }
+    if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 0L) {
+      return("`radius` must be a single non-negative integer")
+    }
     k <- (2L * self@radius + 1L)^2
     if (length(self@weights) > 0L && length(self@weights) != k) {
       return(.glue("`weights` must have length {k} for radius {self@radius}"))
@@ -191,8 +187,8 @@ FocalNode <- S7::new_class(
 #' Reduction over named dims. Barrier: forces materialisation of its inputs.
 #'
 #' Created by [reduce_over()]. `op` is normally one of the named
-#' reductions "sum", "mean", "min", "max", "prod", "median",
-#' "quantile", "sd", "var", "count", "any", "all": the planner needs op
+#' reductions "sum", "mean", "min", "max", "median", "count": the
+#' planner needs op
 #' identity to decide algebraic decomposition and output dtype, and
 #' the executor maps it to the ops vocabulary. A CUSTOM reducer may
 #' instead be supplied as `fn` (a length-1 list holding an anvl function
@@ -204,9 +200,9 @@ FocalNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param op Reduction name, e.g. "mean" (one of the names above), or
 #'   "custom".
 #' @param over Names of dims to reduce over.
@@ -271,9 +267,9 @@ ReduceNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes.
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param over Single dim name to scan along (`"t"` or `"band"`).
 #' @param direction One of `"forward"`, `"backward"`, `"bidir"`.
 #' @param fn Length-1 list holding the scan body `fn(xs, margin)`.
@@ -318,15 +314,15 @@ ScanNode <- S7::new_class(
   }
 )
 
-#' Lazy resample/reproject to a target grid. Created by [align()].
+#' Lazy resample/reproject to a target grid. Created by [align_to()].
 #' Barrier. At execution time this materialises as a gdalraster VRT warp.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param target_grid `GridSpec` to warp onto.
 #' @param resampling Resampling method ("nearest", "bilinear", "cubic", ...).
 #' @return A `WarpNode`.
@@ -346,9 +342,9 @@ WarpNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param along Name of the dim to stack along.
 #' @return A `StackNode`.
 #' @export
@@ -366,14 +362,13 @@ StackNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param fn Composed stage function.
 #' @param members Ids of the absorbed nodes.
 #' @param halo Combined halo radius of the members.
 #' @return A `FusedNode`.
-#' @export
 FusedNode <- S7::new_class(
   "FusedNode",
   parent = Node,
@@ -387,7 +382,7 @@ FusedNode <- S7::new_class(
 #' Whole-window model op: fn over the raw padded chunk. Halo-consuming.
 #'
 #' Created by [lazy_patch()]. The stencil shape for kernels whose spatial context is far beyond a
-#' shift-list focal (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
+#' shift-list focal_map (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
 #' receives the parent's value carrying at least `radius` halo cells per
 #' side (a `(C, H, W)` cube, traced or plain) and returns a
 #' SIZE-PRESERVING result on the same spatial dims, deriving every size
@@ -409,9 +404,9 @@ FusedNode <- S7::new_class(
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (length 1).
 #' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [mask()]).
+#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
 #'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [draw()] and [plan_view()].
+#'   [plan_draw()] and [plan_view()].
 #' @param fn The model body `fn(xpad)`.
 #' @param radius Halo consumed per side, pixels.
 #' @param out_bands Output band count; 0 drops the band axis.

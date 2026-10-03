@@ -15,7 +15,7 @@ lazy_stack(xs, along = "t")
 A \code{LazyRaster} with an extra dim.
 }
 \description{
-All layers must share the spatial grid (\code{\link[=align]{align()}} first otherwise);
+All layers must share the spatial grid (\code{\link[=align_to]{align_to()}} first otherwise);
 dtypes promote to a common type. Chunks carry the stack as
 (t, y, x) arrays; temporal reductions
 (\code{reduce_over(x, "median", "t")}) then run chunk-locally.

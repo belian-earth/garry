@@ -119,13 +119,56 @@ NULL
   }))
 }
 
+# The slice label a GTI source's open options select: NA without a FILTER,
+# the label for exactly FILTER=slice = '<label>', and NULL for any other
+# filter, which only GDAL can evaluate.
+.gti_slice_of <- function(oo) {
+  f <- grep("^FILTER=", oo, value = TRUE)
+  if (!length(f)) {
+    return(NA_character_)
+  }
+  m <- regmatches(f, regexec("^FILTER=slice = '([^']*)'$", f))[[1L]]
+  if (length(f) != 1L || length(m) != 2L) {
+    return(NULL)
+  }
+  m[[2L]]
+}
+
+# Can the warp-on-read routes read this GTI source themselves? They pick a
+# slice's items from the index sidecar and draw them in ascending datetime
+# order, reading one band; any other filter, sort order or band selection
+# is left to GDAL's GTI driver on the scheduler.
+.gd_source_ok <- function(n) {
+  if (length(n@path) != 1L || !grepl("^GTI:", n@path) || length(n@band) != 1L) {
+    return(FALSE)
+  }
+  meta_f <- paste0(sub("^GTI:", "", n@path), ".meta.rds")
+  if (!file.exists(meta_f)) {
+    return(FALSE)
+  }
+  sl <- .gti_slice_of(n@open_options)
+  if (is.null(sl)) {
+    return(FALSE)
+  }
+  if (!is.na(sl) && !"slice" %in% names(readRDS(meta_f)$entries)) {
+    return(FALSE)
+  }
+  opt <- function(key) {
+    v <- grep(paste0("^", key, "="), n@open_options, value = TRUE)
+    if (length(v)) sub("^[^=]*=", "", v[[1L]]) else NA_character_
+  }
+  sf <- opt("SORT_FIELD")
+  asc <- opt("SORT_FIELD_ASC")
+  (is.na(sf) || identical(sf, "datetime")) && (is.na(asc) || toupper(asc) == "YES")
+}
+
 .cd_reduce_spec <- function(gg, red) {
   if (!S7::S7_inherits(red, ReduceNode)) {
     return(NULL)
   }
   if (
     !("t" %in% red@over) ||
-      !(red@op %in% c("median", "mean", "min", "max", "sum", "prod"))
+      !(red@op %in% c("median", "mean", "min", "max", "sum"))
   ) {
     return(NULL)
   }
@@ -265,9 +308,6 @@ NULL
   if (!isTRUE(garry_opt("composite_direct"))) {
     return(NULL)
   }
-  if (!.g_has_raw_upload()) {
-    return(NULL)
-  }
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
   if (sink@kind != "compute") {
@@ -283,11 +323,7 @@ NULL
   }
   gg <- function(id) graph_get(graph, id)
   for (s in src_stages) {
-    n <- gg(s@members[[1L]])
-    if (length(n@path) != 1L || !grepl("^GTI:", n@path)) {
-      return(NULL)
-    }
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
+    if (!.gd_source_ok(gg(s@members[[1L]]))) {
       return(NULL)
     }
   }
@@ -311,15 +347,19 @@ NULL
     return(NULL)
   }
   s1 <- specs[[1L]]
-  masked <- length(s1$mask_chain) > 0L
+  # The route computes every band with band 1's per-slice fn, mask chain
+  # and mask sources, so every band must share them; anything else falls
+  # through to the reduce decomposition, which groups by fn and chain.
+  fn_sig <- function(f) if (is.null(f)) "" else .cd_fn_sig(f)
   ok <- vapply(
     specs,
     function(s) {
       identical(s$op, s1$op) &&
         identical(s$nan_rm, s1$nan_rm) &&
-        (length(s$mask_chain) > 0L) == masked &&
-        (!masked || identical(s$fmask, s1$fmask))
-    }, # one shared mask across bands
+        identical(fn_sig(s$F), fn_sig(s1$F)) &&
+        identical(.cd_chain_sig(s$mask_chain), .cd_chain_sig(s1$mask_chain)) &&
+        identical(s$fmask, s1$fmask)
+    },
     logical(1)
   )
   if (!all(ok)) {
@@ -335,7 +375,8 @@ NULL
   # route (multi-band) or the scheduler (single-band).
   n_bands <- length(specs)
   n_slices <- length(s1$band)
-  grid_px <- sink@grid@dims[["x"]] * sink@grid@dims[["y"]]
+  # in double: GridSpec dims are integer and the product passes 2^31
+  grid_px <- as.numeric(sink@grid@dims[["x"]]) * sink@grid@dims[["y"]]
   weight <- (n_bands + (s1$halo > 0L)) * n_slices * grid_px
   if (
     weight > garry_opt("gd_compute_budget") &&
@@ -423,15 +464,11 @@ NULL
       meta_cache[[gti]] <- readRDS(paste0(gti, ".meta.rds"))
     }
     e <- meta_cache[[gti]]$entries
-    filt <- grep("FILTER=", n@open_options, value = TRUE)
-    er <- if (length(filt)) {
-      sl <- sub(".*'([^']*)'.*", "\\1", filt)
-      e[e$slice == sl, , drop = FALSE]
-    } else {
-      e
-    }
+    sl <- .gti_slice_of(n@open_options) # eligibility made it NA or a label
+    er <- if (is.na(sl)) e else e[e$slice == sl, , drop = FALSE]
     list(
       nid = n@id,
+      band = as.integer(n@band),
       nodata = n@nodata,
       locs = er$location,
       dt = er$datetime,
@@ -453,6 +490,7 @@ NULL
     list(
       locs = .mpc_resign(x$locs),
       dt = x$dt,
+      band = x$band,
       nodata = x$nodata,
       resampling = x$resampling,
       bin = x$bin
@@ -470,7 +508,7 @@ NULL
     quote({
       suppressMessages(library(garry))
       garry::garry_gdal_config()
-      garry::.daemon_jit_reset()
+      asNamespace("garry")$.daemon_jit_reset()
       options(garry.read_retry = rr)
     }),
     profiles = prof,
@@ -487,9 +525,9 @@ NULL
   prof <- .gd_profile()
   .gd_daemon_prep(prof)
   promise <- lapply(unname(b$jobs), function(j) {
-    mirai::mirai(garry::.cd_fetch_warp(j, k), j = j, k = b$K, .compute = prof)
+    mirai::mirai(asNamespace("garry")$.cd_fetch_warp(j, k), j = j, k = b$K, .compute = prof)
   })
-  list(info = b$info, promise = promise, t0 = proc.time()[["elapsed"]])
+  list(info = b$info, promise = promise, K = b$K, t0 = proc.time()[["elapsed"]])
 }
 
 # Errors from a collected fetch group: transport failures (miraiError,
@@ -545,14 +583,14 @@ NULL
   r <- lapply(launched$promise, function(h) h[])
   t <- proc.time()[["elapsed"]] - launched$t0
   if (progress) {
-    ok <- Filter(function(x) is.list(x) && !is.null(x$tf), r)
+    ok <- Filter(function(x) is.list(x) && !is.null(x$tw), r)
     cli::cli_inform(.glue(
       "[gdal-direct] per-task sums: ",
-      "fetch={formatC(sum(vapply(ok, function(x) x$tf, 0)), format = 'f', digits = 1)}s ",
       "warp={formatC(sum(vapply(ok, function(x) x$tw, 0)), format = 'f', digits = 1)}s"
     ))
   }
   .gd_fetch_fail(.gd_fetch_errs(r), length(info), "source")
+  .gd_nan_fill(vapply(info, `[[`, "", "bin"), launched$K$nx, launched$K$ny)
   if (progress) {
     cli::cli_inform(.glue(
       "[gdal-direct] fetch+warp={formatC(t, format = 'f', digits = 2)}s"
@@ -562,10 +600,13 @@ NULL
 }
 
 # tmpfs dir for a run's per-source .bin payloads.
+# A fresh scratch dir per run: tasks orphaned by an aborted run (the pools
+# have no dispatcher to cancel them) must not write into the next run's
+# files, which reuse node-id names.
 .gd_tmp <- function() {
-  tmp <- file.path(
-    if (dir.exists("/dev/shm")) "/dev/shm" else tempdir(),
-    .glue("gdirect-{Sys.getpid()}")
+  tmp <- tempfile(
+    .glue("gdirect-{Sys.getpid()}-"),
+    tmpdir = if (dir.exists("/dev/shm")) "/dev/shm" else tempdir()
   )
   dir.create(tmp)
   tmp
@@ -615,7 +656,20 @@ NULL
   .gd_fetch_fail(.gd_fetch_errs(r), length(r), label)
 }
 
-#' Execute a no-focal composite via the lean GDAL-direct cube path.
+# Under read_fail = "nodata" a failed warp is tolerated, but a task that
+# died (a crashed or killed daemon) never wrote its .bin: write those as
+# all-nodata f32 planes so the reads that follow see a hole, not a
+# missing file.
+.gd_nan_fill <- function(bins, nx, ny) {
+  n <- as.numeric(nx) * ny
+  for (b in unique(bins[!file.exists(bins)])) {
+    writeBin(rep(NaN, n), b, size = 4L)
+  }
+  invisible(bins)
+}
+
+#' Execute a masked composite (its mask cleanup focals replayed) via the
+#' lean GDAL-direct cube path.
 #' @noRd
 .execute_composite_direct <- function(
   plan,
@@ -625,14 +679,12 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   parallel <- isTRUE(garry_opt("gd_parallel")) && spec$n_bands > 1L
-  # Split pool: the fetch-ordered pipeline overlaps the mask + per-band medians
-  # with the band fetch on the read pool (only the last band's median is exposed
-  # after the drain). A single pool cannot overlap (every daemon is fetching),
-  # so it uses the simpler parallel-or-whole-grid path below.
-  # Parallel multi-band always takes the split-pool pipeline (distributed
-  # execution requires garry_daemons(), so the pools are guaranteed here).
+  # Parallel multi-band takes the split-pool pipeline: it overlaps the mask
+  # and per-band medians with the band fetch on the read pool, so only the
+  # last band's median is exposed after the drain (distributed execution
+  # requires garry_daemons(), so the pools are guaranteed here). Otherwise
+  # the whole-grid kernel below runs once the fetch has drained.
   if (parallel) {
     return(.execute_composite_pipeline(
       plan,
@@ -651,7 +703,7 @@ NULL
   info <- .gd_warp_sources(plan, spec$grid, tmp)
   masked <- length(spec$fmask_srcs) > 0L
   # COMPUTE: one lean whole-grid kernel in this process (a single band, or
-  # gd_parallel off). The mask (incl. morphology focals) is replayed ONCE on the
+  # gd_parallel off). The apply_mask (incl. morphology focals) is replayed ONCE on the
   # whole fmask cube, vectorised over time, and shared across bands.
   tcomp <- system.time({
     dev <- .exec_device(spec$device)
@@ -660,7 +712,7 @@ NULL
         do.call(
           c,
           lapply(ids, function(id) {
-            readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L)
+            readBin(info[[as.character(id)]]$bin, "raw", n = as.numeric(ny) * nx * 4)
           })
         ),
         "f32",
@@ -721,7 +773,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   tmp <- .gd_tmp()
   on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
   .gd_write_result(
@@ -772,7 +823,7 @@ NULL
   fetch <- function(ids) {
     lapply(ids, function(id) {
       mirai::mirai(
-        garry::.cd_fetch_warp(j, k),
+        asNamespace("garry")$.cd_fetch_warp(j, k),
         j = b$jobs[[as.character(id)]],
         k = K,
         .compute = prof_r
@@ -840,7 +891,7 @@ NULL
     mirai::everywhere(
       {
         suppressMessages(library(garry))
-        try(garry::.gd_warm_pipeline(sp), silent = TRUE)
+        try(asNamespace("garry")$.gd_warm_pipeline(sp), silent = TRUE)
       },
       sp = wsp,
       .compute = p
@@ -854,12 +905,14 @@ NULL
   if (masked) {
     fmr <- lapply(fmask_p, function(h) h[])
     .gd_check_fetch(fmr, "fmask")
+    .gd_nan_fill(bin_of(spec$fmask_srcs), nx, ny)
     if (progress) {
+      ok <- Filter(function(r) is.list(r) && !is.null(r$tw), fmr)
       cli::cli_inform(.glue(
         "[gdal-direct] fmask ",
         "drain={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
         "({length(fmr)} tasks, warp ",
-        "sum={formatC(sum(vapply(fmr, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"
+        "sum={formatC(sum(vapply(ok, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"
       ))
     }
     Km <- list(
@@ -882,7 +935,7 @@ NULL
       ))
     )
     mask_p <- mirai::mirai(
-      garry::.gd_compute_mask(km),
+      asNamespace("garry")$.gd_compute_mask(km),
       km = Km,
       .compute = next_cp()
     )
@@ -963,6 +1016,7 @@ NULL
   for (bi in seq_len(nb)) {
     bres <- lapply(band_p[[bi]], function(h) h[])
     .gd_check_fetch(bres, .glue("band {bi}"))
+    .gd_nan_fill(bin_of(spec$band_srcs[[bi]]), nx, ny)
     if (progress) {
       cli::cli_inform(.glue(
         "[gdal-direct] band {bi} drained at ",
@@ -970,9 +1024,15 @@ NULL
       ))
     }
     if (!mask_done) {
-      mask_p[]
+      mv <- mask_p[] # the mask .bin must exist first
+      if (inherits(mv, c("miraiError", "errorValue"))) {
+        cli::cli_abort(c(
+          "gdal-direct mask computation failed.",
+          "x" = if (inherits(mv, "miraiError")) conditionMessage(mv) else "the compute daemon died"
+        ))
+      }
       mask_done <- TRUE
-    } # mask .bin must exist first
+    }
     for (si in seq_len(ns)) {
       while (length(inflight) >= cap) {
         harvest()
@@ -985,7 +1045,7 @@ NULL
       )
       key <- .glue("b{bi}.s{si}")
       res_p[[key]] <- mirai::mirai(
-        garry::.gd_compute_masked_band(jb, kb),
+        asNamespace("garry")$.gd_compute_masked_band(jb, kb),
         jb = jb,
         kb = Kb,
         .compute = next_cp()
@@ -1031,9 +1091,6 @@ NULL
   if (!isTRUE(garry_opt("composite_direct"))) {
     return(NULL)
   }
-  if (!.g_has_raw_upload()) {
-    return(NULL)
-  }
   graph <- plan@graph
   sink <- plan@stages[[plan@sink]]
   if (sink@kind != "compute") {
@@ -1044,12 +1101,8 @@ NULL
     return(NULL)
   }
   for (s in src_stages) {
-    # every source must be fetchable
-    n <- graph_get(graph, s@members[[1L]])
-    if (length(n@path) != 1L || !grepl("^GTI:", n@path)) {
-      return(NULL)
-    }
-    if (!file.exists(paste0(sub("^GTI:", "", n@path), ".meta.rds"))) {
+    # every source must be one the warp-on-read route can read itself
+    if (!.gd_source_ok(graph_get(graph, s@members[[1L]]))) {
       return(NULL)
     }
   }
@@ -1099,7 +1152,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   graph <- plan@graph
   nx <- gspec$grid@dims[["x"]]
   ny <- gspec$grid@dims[["y"]]
@@ -1119,7 +1171,7 @@ NULL
     )
     inputs <- lapply(gspec$input_nodes, function(id) {
       a <- g_upload_raw(
-        readBin(info[[as.character(id)]]$bin, "raw", n = ny * nx * 4L),
+        readBin(info[[as.character(id)]]$bin, "raw", n = as.numeric(ny) * nx * 4),
         "f32",
         c(ny, nx),
         device = dev
@@ -1328,7 +1380,6 @@ NULL
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   graph <- plan@graph
   tmp <- .gd_tmp()
   on.exit(unlink(tmp, recursive = TRUE), add = TRUE)

@@ -64,7 +64,6 @@ test_that("ocm_mask masks value bands per slice and keeps names", {
 test_that("ocm patch stages: distributed == single-threaded", {
   skip_if(!dir.exists(.ocm_wdir2), "OCM weights not present")
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
 
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
@@ -87,4 +86,15 @@ test_that("ocm_model validates and prints", {
   m <- .ocm_toy_model()
   expect_output(print(m), "ocm_model")
   expect_match(m$kernel_id, "^ocm-")
+})
+
+test_that("the default OCM weights dir is the newest Python cache with v4 files", {
+  home <- withr::local_tempdir()
+  base <- file.path(home, ".local", "share", "omnicloudmask")
+  for (v in c("9.2", "10.0", "11.0")) dir.create(file.path(base, v), recursive = TRUE)
+  for (v in c("9.2", "10.0")) {
+    file.create(file.path(base, v, garry:::.ocm_release_files))
+  }
+  withr::local_envvar(HOME = home, GARRY_OCM_WEIGHTS = "", R_USER_DATA_DIR = home)
+  expect_identical(basename(garry:::.ocm_default_dir()), "10.0")
 })

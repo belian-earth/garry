@@ -36,16 +36,26 @@ garry_task_report <- function(path) {
     )
   }
   df$time <- as.numeric(df$time)
-  events <- table(df$event)
+  df <- df[order(df$time), , drop = FALSE]
+  # A log holds every run that wrote to it, and task keys restart each
+  # run: number the runs at their run_start markers (a log from before
+  # the markers is one run) and pair within a run.
+  df$run <- cumsum(df$event == "run_start")
+  n_runs <- max(1L, length(unique(df$run[df$event != "run_start"])))
+  events <- table(df$event[df$event != "run_start"])
 
   la <- df[
     df$event == "launch",
-    c("time", "key", "pool", "slot", "mb", "store_mb", "ready")
+    c("time", "run", "key", "pool", "slot", "mb", "store_mb", "ready")
   ]
   names(la)[[1L]] <- "t_launch"
-  do <- df[df$event == "done", c("time", "key")]
+  do <- df[df$event == "done", c("time", "run", "key")]
   names(do)[[1L]] <- "t_done"
-  tasks <- merge(la, do, by = "key")
+  # the k-th launch of a key in a run pairs with its k-th done
+  nth <- function(x) stats::ave(seq_along(x$key), x$run, x$key, FUN = seq_along)
+  la$nth <- nth(la)
+  do$nth <- nth(do)
+  tasks <- merge(la, do, by = c("run", "key", "nth"))
   tasks$run_s <- tasks$t_done - tasks$t_launch
   tasks$wait_s <- tasks$t_launch - suppressWarnings(as.numeric(tasks$ready))
   tasks$stage <- sub("^([a-z]+[0-9]+)_.*$", "\\1", tasks$key)
@@ -59,7 +69,15 @@ garry_task_report <- function(path) {
   }
   stages <- do.call(
     rbind,
-    lapply(split(tasks, tasks$stage), function(s) {
+    c(list(data.frame(
+      stage = character(0),
+      pool = character(0),
+      n = integer(0),
+      run_p50 = numeric(0),
+      run_p95 = numeric(0),
+      wait_p50 = numeric(0),
+      wait_p95 = numeric(0)
+    )), lapply(split(tasks, tasks$stage), function(s) {
       data.frame(
         stage = s$stage[[1L]],
         pool = s$pool[[1L]],
@@ -69,7 +87,7 @@ garry_task_report <- function(path) {
         wait_p50 = q(s$wait_s, 0.5),
         wait_p95 = q(s$wait_s, 0.95)
       )
-    })
+    }))
   )
   stages <- stages[order(stages$stage), , drop = FALSE]
   row.names(stages) <- NULL
@@ -80,9 +98,11 @@ garry_task_report <- function(path) {
   delta <- ifelse(ev$event == "launch", 1L, -1L)
   max_conc <- if (nrow(ev)) max(cumsum(delta)) else 0L
 
-  t0 <- min(df$time)
-  t_drain <- df$time[df$event == "drain_end"]
-  t_host <- df$time[df$event == "host_end"]
+  # timings of the last run
+  last <- df[df$run == max(df$run), , drop = FALSE] # from its run_start
+  t0 <- if (nrow(last)) min(last$time) else NA_real_
+  t_drain <- last$time[last$event == "drain_end"]
+  t_host <- last$time[last$event == "host_end"]
   drain_s <- if (length(t_drain)) round(max(t_drain) - t0, 3) else NA_real_
   host_tail_s <- if (length(t_drain) && length(t_host)) {
     round(max(t_host) - max(t_drain), 3)
@@ -119,8 +139,8 @@ garry_task_report <- function(path) {
       "events: ",
       paste(names(events), as.integer(events), sep = "=", collapse = ", ")
     ),
-    "*" = "{nrow(tasks)} launch/done pairs, max concurrency {max_conc}",
-    "*" = paste0("drain ", drain_s, " s; host tail ", host_tail_s, " s"),
+    "*" = "{n_runs} run{?s}; {nrow(tasks)} launch/done pairs, max concurrency {max_conc}",
+    "*" = paste0("last run: drain ", drain_s, " s; host tail ", host_tail_s, " s"),
     "*" = paste0(
       "peak modelled ",
       round(peak_model_mb),

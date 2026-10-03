@@ -25,7 +25,7 @@ test_that("golden: two-source NDVI fuses into one compute stage", {
 
 test_that("golden: source -> map -> focal -> reduce(mean over x,y)", {
   a <- lazy_source_stub("x.tif")
-  f <- focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  f <- focal_map(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   r <- reduce_over(f, "mean", c("x", "y"))
   p <- collect(r, plan_only = TRUE)
 
@@ -54,7 +54,7 @@ test_that("golden: align -> map produces a warp barrier stage", {
   a <- lazy_source_stub("x.tif")
   target <- grid_spec("EPSG:4326", extent = c(0, -100, 100, 0),
                       dims = c(50L, 50L))
-  m <- align(a, target) * 2
+  m <- align_to(a, target) * 2
   p <- collect(m, plan_only = TRUE)
 
   expect_identical(.stage_sig(p), list(
@@ -73,4 +73,11 @@ test_that("golden: diamond on one source stays in one compute stage", {
     list(kind = "source_read", members = 1L, halo = 0L, inputs = integer(0)),
     list(kind = "compute", members = c(2L, 3L, 4L), halo = 0L, inputs = 1L)
   ))
+})
+
+test_that("chunk snapping survives native blocks whose LCM overflows int32", {
+  l <- Reduce(garry:::.lcm2, c(7001L, 6997L, 6991L, 6983L), 1)
+  expect_false(is.na(l))
+  expect_gt(l, .Machine$integer.max)
+  expect_identical(garry:::.lcm2(4L, 6L), 12)
 })

@@ -169,3 +169,42 @@ test_that("na_col paints nodata instead of leaving it transparent", {
   grDevices::dev.off()
   expect_true(file.exists(f) && file.size(f) > 0)
 })
+
+test_that("preview(<file>, bands) plots the bands asked for, in that order", {
+  mb <- fixture_multiband() # 6 bands, band b = gradient * b / 10
+  seen <- NULL
+  local_mocked_bindings(.plot_array = function(arr, ..., bands = NULL) {
+    seen <<- list(arr = arr, bands = bands)
+    invisible(NULL)
+  })
+  preview(mb$path, bands = c(5, 2, 1))
+  red <- seen$arr[, , seen$bands[[1L]]]
+  green <- seen$arr[, , seen$bands[[2L]]]
+  # band 5 is 2.5x band 2 everywhere (both scale the same gradient)
+  expect_equal(red, 2.5 * green, ignore_attr = TRUE, tolerance = 1e-6)
+})
+
+test_that("the coarse preview re-plan keeps a source's affine and resampler", {
+  p <- .pinned_lr()
+  n <- graph_get(p$lr@graph, p$lr@node_id)
+  lr <- lazy_source(
+    n@path,
+    open_options = n@open_options,
+    grid = p$grid,
+    block_dim = c(60L, 40L),
+    scale = 0.5,
+    offset = 1,
+    resampling = "average"
+  )
+  coarse <- .preview_coarsen(lr, 20)
+  src <- graph_get(coarse@graph, .reachable(coarse@graph, coarse@node_id)[[1L]])
+  expect_identical(src@scale, 0.5)
+  expect_identical(src@offset, 1)
+  expect_identical(src@resampling, "average")
+})
+
+test_that("preview refuses a misspelt argument and a 4-D array", {
+  m <- matrix(runif(20), 4, 5)
+  expect_error(preview(m, strech = c(5, 95)), "strech")
+  expect_error(.plot_array(array(0, c(2, 2, 3, 2))), "4 dimensions")
+})

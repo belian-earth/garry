@@ -23,7 +23,8 @@ garry_explain_placement(
 \value{
 A data.frame with columns \code{source}, \code{compute}, \code{bands},
 \code{flops_px}, \code{move_mb}, \code{cost_fuse_s}, \code{cost_mat_s}, \code{decision},
-\code{reason}.
+\code{tiles} (row tiles a fused kernel runs in), and \code{reason}; zero rows
+when no read feeds a compute stage.
 }
 \description{
 Runs the placement pass over

@@ -3,7 +3,7 @@
 #
 # CRS + affine transform + extent + dimensions + dtype. Every LazyRaster
 # carries one. Binary ops require grid equality; mismatches are resolved
-# via explicit `align()`, which injects a WarpNode.
+# via explicit `align_to()`, which injects a WarpNode.
 #
 # Locked conventions (decision register D1-D3, design/implementation-plan.md):
 # - extent order is (xmin, ymin, xmax, ymax) everywhere in garry; vaster's
@@ -347,44 +347,6 @@ grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
   )
 }
 
-# -- Accessors (nothing outside this file indexes @extent positionally) ------
-
-#' Grid extent and resolution accessors.
-#'
-#' @param x A `GridSpec` or a `LazyRaster` (which forwards to its grid).
-#' @param ... Passed to methods.
-#' @return A numeric scalar (`xmin`, `ymin`, `xmax`, `ymax`) or a length-2
-#'   numeric `c(xres, yres)` for `res`.
-#' @name grid-accessors
-NULL
-
-#' @rdname grid-accessors
-#' @export
-xmin <- S7::new_generic("xmin", "x")
-S7::method(xmin, GridSpec) <- function(x) x@extent[1L]
-
-#' @rdname grid-accessors
-#' @export
-ymin <- S7::new_generic("ymin", "x")
-S7::method(ymin, GridSpec) <- function(x) x@extent[2L]
-
-#' @rdname grid-accessors
-#' @export
-xmax <- S7::new_generic("xmax", "x")
-S7::method(xmax, GridSpec) <- function(x) x@extent[3L]
-
-#' @rdname grid-accessors
-#' @export
-ymax <- S7::new_generic("ymax", "x")
-S7::method(ymax, GridSpec) <- function(x) x@extent[4L]
-
-#' @rdname grid-accessors
-#' @export
-res <- S7::new_generic("res", "x")
-S7::method(res, GridSpec) <- function(x) {
-  c(x@transform[2L], -x@transform[6L])
-}
-
 #' Reorder a garry extent for vaster calls.
 #'
 #' garry orders extents (xmin, ymin, xmax, ymax); vaster expects
@@ -394,7 +356,6 @@ S7::method(res, GridSpec) <- function(x) {
 #' @param x A `GridSpec` or a length-4 garry-order extent.
 #' @return Length-4 numeric in vaster order.
 #' @keywords internal
-#' @export
 as_vaster_extent <- function(x) {
   ext <- if (S7::S7_inherits(x, GridSpec)) x@extent else as.numeric(x)
   stopifnot(length(ext) == 4L)
@@ -415,7 +376,8 @@ grid_equal <- function(a, b, tol = 1e-9) {
     all(abs(a@transform - b@transform) < tol) &&
     all(abs(a@extent - b@extent) < tol) &&
     length(a@dims) == length(b@dims) &&
-    all(a@dims == b@dims)
+    all(a@dims == b@dims) &&
+    identical(names(a@dims), names(b@dims))
 }
 
 #' Describe how two grids differ.
@@ -449,11 +411,13 @@ grid_diff <- function(a, b, tol = 1e-9) {
       " px in x, {formatC(max(abs(off[c(2L, 4L)])), format = 'g', digits = 3, width = 1)} px in y"
     ))
   }
-  if (length(a@dims) != length(b@dims) || any(a@dims != b@dims)) {
-    return(.glue(
-      "dims differ: ({paste(a@dims, collapse = ',')}) vs ",
-      "({paste(b@dims, collapse = ',')})"
-    ))
+  if (
+    length(a@dims) != length(b@dims) ||
+      any(a@dims != b@dims) ||
+      !identical(names(a@dims), names(b@dims))
+  ) {
+    fmt <- function(d) paste(paste0(names(d), "=", d), collapse = ",")
+    return(.glue("dims differ: ({fmt(a@dims)}) vs ({fmt(b@dims)})"))
   }
   "grids are equal"
 }

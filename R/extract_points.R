@@ -42,17 +42,21 @@ NULL
 #' `xy_srs` and GDAL reprojects as needed; a matrix or data frame behaves
 #' exactly as in gdalraster.
 #'
-#' @param raster A `LazyRaster`, `LazyDataset`, raster path, or
+#' @param x A `LazyRaster`, `LazyDataset`, raster path, or
 #'   `GDALRaster` object.
 #' @param xy Points: a [wk::xy()] vector (its CRS supplies `xy_srs`), or a
 #'   two-column matrix/data frame as gdalraster expects.
-#' @param bands Bands to extract (default all).
+#' @param bands Bands to extract (default all): band names or positions
+#'   for a `LazyDataset`, file band indices for a path or `GDALRaster`.
+#'   Ignored for a `LazyRaster`, which reads its own band.
 #' @param interp Interpolation: `NULL`/`"nearest"` (default), `"bilinear"`,
 #'   `"cubic"`, `"cubicspline"`.
 #' @param ... Passed to [gdalraster::pixel_extract()] (`krnl_dim`,
 #'   `xy_srs`, `max_ram`, `as_data_frame`).
 #' @return As [gdalraster::pixel_extract()]: a matrix, or a data frame with
-#'   `as_data_frame = TRUE`.
+#'   `as_data_frame = TRUE`. For a garry object, one column per band, named
+#'   by dataset band, with the band's nodata as `NaN` and its scale/offset
+#'   applied, as [collect()] would return them.
 #' @seealso [materialise()], [collect()]
 #' @examples
 #' \dontrun{
@@ -62,44 +66,73 @@ NULL
 #' extract_points("composite.tif", pts)   # a path works too
 #' }
 #' @export
-extract_points <- function(raster, xy, bands = NULL, interp = NULL, ...) {
-  if (S7::S7_inherits(raster, LazyDatasetGroups)) {
+extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
     cli::cli_abort(c(
       "{.fn extract_points} does not take a grouped dataset.",
       "i" = "Extract from each group, or {.fn reduce_over} the groups first."
     ))
   }
-  lazy <- S7::S7_inherits(raster, LazyRaster) ||
-    S7::S7_inherits(raster, LazyDataset)
+  lazy <- S7::S7_inherits(x, LazyRaster) ||
+    S7::S7_inherits(x, LazyDataset)
   pt <- .px_points(xy)
   args <- list(xy = pt$xy, bands = bands, interp = interp, ...)
   if (!is.null(pt$srs) && is.null(args$xy_srs)) {
     args$xy_srs <- pt$srs
   }
   if (!lazy) {
-    return(do.call(gdal_pixel_extract, c(list(raster), args)))
+    return(do.call(gdal_pixel_extract, c(list(x), args)))
   }
-  src <- .px_local_sources(raster)
+  src <- .px_local_sources(x)
   if (is.null(src)) {
     cli::cli_abort(c(
-      "{.arg raster} is a lazy pipeline with no pixels to read.",
+      "{.arg x} is a lazy pipeline with no pixels to read.",
       "i" = "Materialise it first: {.code cube <- materialise(x)}, then extract from {.code cube}.",
       "i" = "Extraction reads only the blocks holding points, so it needs the cube on disk -- and you almost always want to keep it."
     ))
   }
-  if (length(src) == 1L) {
-    return(do.call(gdal_pixel_extract, c(list(unname(src)), args)))
+  if (S7::S7_inherits(x, LazyDataset) && !is.null(bands)) {
+    keep <- if (is.character(bands)) bands else names(src)[bands]
+    unknown <- setdiff(keep, names(src))
+    if (length(unknown) || anyNA(keep)) {
+      cli::cli_abort("{.arg bands} must name bands of {.arg x}: {.val {names(src)}}.")
+    }
+    src <- src[keep]
   }
-  # one file per band (a dataset over separate sources): extract from each
-  # and bind, preserving band order
-  cols <- lapply(unname(src), function(p) {
-    as.matrix(do.call(gdal_pixel_extract, c(list(p), args)))
-  })
-  out <- do.call(cbind, cols)
-  colnames(out) <- rep(names(src), vapply(cols, ncol, integer(1)))
-  out
+  as_df <- isTRUE(args$as_data_frame)
+  args$as_data_frame <- FALSE
+  args$bands <- NULL
+  paths <- vapply(src, `[[`, character(1), "path")
+  cols <- list()
+  for (p in unique(paths)) {
+    on_p <- src[paths == p]
+    m <- as.matrix(do.call(
+      gdal_pixel_extract,
+      c(list(p), args, list(bands = vapply(on_p, `[[`, integer(1), "band")))
+    ))
+    for (k in seq_along(on_p)) {
+      cols[[names(on_p)[[k]]]] <- .px_finish(m[, k], on_p[[k]])
+    }
+  }
+  out <- do.call(cbind, cols[names(src)])
+  if (S7::S7_inherits(x, LazyRaster)) {
+    colnames(out) <- tools::file_path_sans_ext(basename(src[[1L]]$path))
+  }
+  if (as_df) as.data.frame(out) else out
 }
 
+# A band's sampled values as collect() would return them: nodata -> NaN,
+# then the band affine.
+.px_finish <- function(v, s) {
+  v <- as.numeric(v)
+  if (length(s$nodata) == 1L) {
+    v[!is.na(v) & v == s$nodata] <- NaN
+  }
+  if (length(s$scale) == 1L) {
+    v <- v * s$scale + s$offset
+  }
+  v
+}
 # wk_xy -> list(xy = 2-col matrix, srs = CRS string); anything else passes
 # through with no CRS opinion (gdalraster's own xy_srs still applies).
 .px_points <- function(xy) {
@@ -120,7 +153,8 @@ extract_points <- function(raster, xy, bands = NULL, interp = NULL, ...) {
   )
 }
 
-# The local file(s) a lazy object reads directly, or NULL when it needs
+# What a lazy object reads directly, one entry per band (path, file band,
+# nodata, scale, offset), named by dataset band; or NULL when it needs
 # computing first. A bare source graph (one SourceNode per band, no compute)
 # is exactly what materialise() hands back, so sampling its output costs
 # nothing but the read.
@@ -128,25 +162,34 @@ extract_points <- function(raster, xy, bands = NULL, interp = NULL, ...) {
   bands <- if (S7::S7_inherits(x, LazyDataset)) {
     lapply(x@bands, function(b) if (length(b) == 1L) b[[1L]] else NULL)
   } else {
-    list(x)
+    list(value = x)
   }
   if (any(vapply(bands, is.null, logical(1)))) {
     return(NULL) # multi-slice bands: not a plain cube
   }
-  paths <- character(0)
-  for (b in bands) {
+  out <- list()
+  for (nm in names(bands)) {
+    b <- bands[[nm]]
     ids <- .reachable(b@graph, b@node_id)
     if (length(ids) != 1L) {
       return(NULL) # any compute in the graph: must materialise
     }
     n <- graph_get(b@graph, ids[[1L]])
-    if (!S7::S7_inherits(n, SourceNode) || any(.gdal_is_remote(n@path))) {
+    if (
+      !S7::S7_inherits(n, SourceNode) ||
+        length(n@path) != 1L ||
+        length(n@band) != 1L ||
+        .gdal_is_remote(n@path)
+    ) {
       return(NULL)
     }
-    paths <- c(paths, n@path)
+    out[[nm]] <- list(
+      path = n@path,
+      band = as.integer(n@band),
+      nodata = n@nodata,
+      scale = n@scale,
+      offset = n@offset
+    )
   }
-  if (length(unique(paths)) == 1L) {
-    return(paths[[1L]])
-  }
-  stats::setNames(paths, names(bands))
+  out
 }

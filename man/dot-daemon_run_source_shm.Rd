@@ -46,6 +46,6 @@ chunk parts as elements of one shared list: consumers extract their
 element zero-copy. (Consumer-side RANGE subsetting of a mapped
 matrix would materialise the whole window per input, a large
 transient allocation, so the split happens producer-side here too.)
-Internal (exported only so mirai daemons can address it via \code{::}).
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

@@ -542,8 +542,7 @@ NULL
 # bands), where the coalesced plan reads the same bytes in one task
 # and one store region.
 #
-# Skips: stacks that are themselves requested sinks (sink retrieval
-# from a coarse split read stage is not wired); stacks consumed by a
+# Skips: stacks consumed by a
 # WarpNode (the warp path takes scalar bands — warping a stack was an
 # error before this pass and stays one); parents with outer dims or
 # multi-band parents (a stack of stacks keeps its compute shape).
@@ -907,10 +906,17 @@ plan_lazy <- function(x) {
         new_proto("source_read", id, .node_grid(node), integer(0), id)
     } else if (S7::S7_inherits(node, WarpNode)) {
       pin <- .node_parents(node)[[1L]]
-      if (!S7::S7_inherits(graph_get(graph, pin), SourceNode)) {
+      pn <- graph_get(graph, pin)
+      # A band stack collapsed into a multi-band read (in place, by an
+      # earlier plan) is still a stack: the warper reads one band.
+      if (
+        !S7::S7_inherits(pn, SourceNode) ||
+          length(pn@band) > 1L ||
+          length(pn@collapsed) > 0L
+      ) {
         .garry_error(
           paste0(
-            "warping a computed raster is not supported in v1: align() ",
+            "warping a computed raster is not supported in v1: align_to() ",
             "sources before computing on them, or materialise to disk ",
             "first (write_tif() / materialise())."
           ),
@@ -940,7 +946,7 @@ plan_lazy <- function(x) {
             "\" cannot be distributed over spatial ",
             "chunks; algebraic ops (",
             paste(.algebraic_ops, collapse = ", "),
-            ") only (D12). median/quantile remain available over t/band."
+            ") only (D12). median remains available over t/band."
           ),
           "garry_reduce_unsupported_error"
         )
@@ -1579,8 +1585,9 @@ plan_lazy <- function(x) {
   (if (f64) 8 else 4) * (max(1, nb_in) + max(2, maxw))
 }
 
-.gcd2 <- function(a, b) if (b == 0L) a else .gcd2(b, a %% b)
-.lcm2 <- function(a, b) as.integer(a / .gcd2(a, b) * b)
+.gcd2 <- function(a, b) if (b == 0) a else .gcd2(b, a %% b)
+# in double: native blocks of mixed strip widths overflow an int32 LCM
+.lcm2 <- function(a, b) as.numeric(a) / .gcd2(a, b) * b
 
 # Plan-wide chunk dim: ONE spatial tiling for every stage, because the
 # executors align input chunks by index, so chunk tables must tile
@@ -1630,8 +1637,8 @@ plan_lazy <- function(x) {
   block <- vapply(
     1:2,
     function(ax) {
-      l <- Reduce(.lcm2, vapply(blocks, `[[`, integer(1), ax), 1L)
-      if (l > 2L * side) 1L else l
+      l <- Reduce(.lcm2, vapply(blocks, `[[`, integer(1), ax), 1)
+      if (l > 2 * side) 1L else as.integer(l)
     },
     integer(1)
   )

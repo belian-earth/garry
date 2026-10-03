@@ -108,3 +108,30 @@ test_that("bitwise family matches under tracing", {
   expect_equal(got$xored, g_bitxor(qa, 43690L), tolerance = 0)
   expect_equal(got$shl, g_shiftl(g_shiftr(qa, 4L), 4L), tolerance = 0)
 })
+
+test_that("g_ifelse with two scalar branches runs traced", {
+  x <- lazy_source(fixture_gradient_f32())
+  y <- lazy_map(x, fn = function(v) g_ifelse(v > 2000, 1, 0), dtype = "f32")
+  got <- collect(y)
+  expect_equal(as.vector(got), as.numeric(as.vector(collect(x)) > 2000), ignore_attr = TRUE)
+})
+
+test_that("g_pad, g_stack and the pred cast agree with their oracles", {
+  traced <- function(f, x) {
+    jf <- garry:::g_jit(function(inputs) list(out = f(inputs[[1L]])))
+    g_download(jf(list(g_upload(x, "f32"))))$out
+  }
+  cube <- array(c(1, NaN, 3:12), c(3, 2, 2))
+  expect_equal(
+    traced(function(x) g_pad(x, 1L, value = -1), cube),
+    g_pad(cube, 1L, value = -1),
+    ignore_attr = TRUE
+  )
+  m <- matrix(c(0, 2, NaN, -1), 2, 2)
+  expect_equal(
+    traced(function(x) g_cast(g_cast(x, "pred"), "f32"), m),
+    g_cast(g_cast(m, "pred"), "f32") + 0,
+    ignore_attr = TRUE
+  )
+  expect_identical(g_stack(list(1, 2, 3)), c(1, 2, 3))
+})

@@ -63,3 +63,63 @@ test_that("composite_direct writes to path identically to in-memory", {
   cube <- gdal_read_window(path, 1:2, 0L, 0L, 60L, 40L, nodata = -9999)
   .gg_close(aperm(cube, c(2L, 3L, 1L)), mem)
 })
+
+test_that("bands with different per-slice fns do not take the fast path", {
+  local_pools(2, 2)
+  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+  g <- graph_new()
+  sl <- function(gti) {
+    list(.gg_slice(gti, "s1", g), .gg_slice(gti, "s2", g))
+  }
+  a <- sl(gA)
+  b <- sl(gB)
+  minus <- lazy_stack(Map(`-`, a, b))
+  times <- lazy_stack(Map(`*`, a, b))
+  x <- lazy_stack(
+    list(
+      d = reduce_over(minus, "mean", "t"),
+      p = reduce_over(times, "mean", "t")
+    ),
+    along = "band"
+  )
+  expect_null(.cd_spec(collect(x, plan_only = TRUE)))
+  want <- collect(x, distributed = FALSE)
+  got <- collect(x, distributed = TRUE)
+  .gg_close(got, want)
+})
+
+test_that("GTI sources the fast routes cannot read themselves fall through", {
+  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+  src <- function(filter = "slice = 's1'", sort_asc = TRUE, band = 1L) {
+    lazy_source(
+      paste0("GTI:", gA),
+      band = band,
+      open_options = gti_open_options(
+        .gg_grid,
+        filter = filter,
+        sort_field = "datetime",
+        sort_asc = sort_asc
+      ),
+      grid = .gg_grid,
+      block_dim = c(60L, 40L)
+    )
+  }
+  n <- function(lr) graph_get(lr@graph, lr@node_id)
+  expect_true(.gd_source_ok(n(src())))
+  expect_false(.gd_source_ok(n(src(filter = "datetime > '2020'"))))
+  expect_false(.gd_source_ok(n(src(sort_asc = FALSE))))
+  expect_identical(.gti_slice_of("FILTER=slice = 's1'"), "s1")
+  expect_null(.gti_slice_of("FILTER=slice = 's1' AND x = 2"))
+  expect_true(is.na(.gti_slice_of(character(0))))
+})
+
+test_that("a tolerated dead fetch leaves an all-nodata plane, not a missing file", {
+  d <- withr::local_tempdir()
+  have <- file.path(d, "a.bin")
+  writeBin(rep(1, 6), have, size = 4L)
+  gone <- file.path(d, "b.bin")
+  .gd_nan_fill(c(have, gone), nx = 3L, ny = 2L)
+  expect_identical(readBin(have, "numeric", n = 6, size = 4L), rep(1, 6))
+  expect_true(all(is.nan(readBin(gone, "numeric", n = 6, size = 4L))))
+})

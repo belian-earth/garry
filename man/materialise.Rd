@@ -50,10 +50,12 @@ band names, slice dates, and the \code{mask_asset} into the rebuilt
 dataset; ragged bands (a band missing some slices) survive. A
 \code{LazyRaster} writes one cube and reopens it. A computed raster
 cannot be warped directly, so materialise-then-rewarp is the
-supported route: \code{align(materialise(x, dir), grid)}.
+supported route: \code{align_to(materialise(x, dir), grid)}.
 
 Files land at \verb{dir/name-<slice>.vrt} (dataset) or \code{dir/name.vrt}
-(raster). Existing files are refused unless \code{overwrite = TRUE}:
+(raster); integer-typed data is written as \code{.tif} instead, since raw
+cubes hold floats only. A raster with a \code{t} or \code{band} axis comes back
+stacked along that axis with its labels. Existing files are refused unless \code{overwrite = TRUE}:
 the graph may have changed since they were written, and silently
 reusing stale pixels is the failure mode a checkpoint must not have.
 

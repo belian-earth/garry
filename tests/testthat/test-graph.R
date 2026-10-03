@@ -9,7 +9,7 @@ test_that("graph build and topo-sort works", {
                         fn = function(x) x + 1)
   focal_id <- graph_add(g, FocalNode,  parents = map_id, grid = gs,
                         fn = function(n) mean(n), radius = 1L,
-                        boundary = "reflect")
+                        boundary = "nodata")
   red_id   <- graph_add(g, ReduceNode, parents = focal_id, grid = gs,
                         op = "mean", over = "x", nan_rm = TRUE)
 
@@ -24,7 +24,7 @@ test_that("LazyRaster composes via operators", {
   a <- lazy_source_stub("x.tif")
   b <- lazy_source_stub("y.tif", graph = a@graph)   # share the graph
   c <- a + b
-  d <- focal(c, fn = function(n) mean(n), radius = 1L)
+  d <- focal_map(c, fn = function(n) mean(n), radius = 1L)
 
   expect_true(S7::S7_inherits(d, LazyRaster))
   expect_true(grid_equal(d@grid, a@grid))

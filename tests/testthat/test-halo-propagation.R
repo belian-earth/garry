@@ -28,7 +28,7 @@
   maps <- lapply(1:3, function(b)
     lazy_map(lazy_source(f, graph = g), fn = .hp_cast_fn(b), dtype = "f32"))
   stk <- lazy_stack(maps, along = "band")
-  list(stack = stk, ctx = focal(stk, fn = .hp_mean9, radius = 1L))
+  list(stack = stk, ctx = focal_map(stk, fn = .hp_mean9, radius = 1L))
 }
 
 # Materialise-first reference: write the decoded stack, focal the file.
@@ -38,7 +38,7 @@
   g2 <- graph_new()
   cube <- lazy_stack(lapply(1:3, function(b)
     lazy_source(p, band = b, graph = g2)), along = "band")
-  collect(focal(cube, fn = .hp_mean9, radius = 1L), distributed = FALSE)
+  collect(focal_map(cube, fn = .hp_mean9, radius = 1L), distributed = FALSE)
 }
 
 test_that("focal over computed maps equals the materialise-first reference", {
@@ -99,9 +99,9 @@ test_that("focal after a t-reduce recomputes the ring across the barrier", {
   # reference: materialise the composite, focal the file
   p <- withr::local_tempfile(fileext = ".tif")
   write_tif(build(graph_new()), p, distributed = FALSE)
-  ref <- collect(focal(lazy_source(p), fn = .hp_mean9, radius = 1L),
+  ref <- collect(focal_map(lazy_source(p), fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
-  got <- .hp_px(300, collect(focal(build(graph_new()), fn = .hp_mean9,
+  got <- .hp_px(300, collect(focal_map(build(graph_new()), fn = .hp_mean9,
                                    radius = 1L), distributed = FALSE))
   expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,
                ignore_attr = TRUE)
@@ -124,9 +124,9 @@ test_that("focal after a scan recomputes the ring across the barrier", {
   }
   p <- withr::local_tempfile(fileext = ".tif")
   write_tif(build(graph_new()), p, distributed = FALSE)
-  ref <- collect(focal(lazy_source(p), fn = .hp_mean9, radius = 1L),
+  ref <- collect(focal_map(lazy_source(p), fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
-  got <- .hp_px(300, collect(focal(build(graph_new()), fn = .hp_mean9,
+  got <- .hp_px(300, collect(focal_map(build(graph_new()), fn = .hp_mean9,
                                    radius = 1L), distributed = FALSE))
   expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,
                ignore_attr = TRUE)
@@ -136,24 +136,24 @@ test_that("cross-stage focal towers accumulate pads", {
   f <- fixture_gradient_f32()
   build <- function(g) {
     a <- lazy_source(f, graph = g)
-    f1 <- focal(a + 1, fn = .hp_mean9, radius = 1L)
+    f1 <- focal_map(a + 1, fn = .hp_mean9, radius = 1L)
     # join with a second branch so the narrow rule cuts a stage
     # boundary between the two focals
     stk <- lazy_stack(list(f1, lazy_source(f, graph = g) * 2),
                       along = "band")
-    focal(stk, fn = .hp_mean9, radius = 1L)
+    focal_map(stk, fn = .hp_mean9, radius = 1L)
   }
   # reference: materialise the stacked intermediate, focal the file
   g <- graph_new()
   a <- lazy_source(f, graph = g)
-  f1 <- focal(a + 1, fn = .hp_mean9, radius = 1L)
+  f1 <- focal_map(a + 1, fn = .hp_mean9, radius = 1L)
   stk <- lazy_stack(list(f1, lazy_source(f, graph = g) * 2), along = "band")
   p <- withr::local_tempfile(fileext = ".tif")
   write_tif(stk, p, distributed = FALSE)
   g2 <- graph_new()
   cube <- lazy_stack(lapply(1:2, function(b)
     lazy_source(p, band = b, graph = g2)), along = "band")
-  ref <- collect(focal(cube, fn = .hp_mean9, radius = 1L),
+  ref <- collect(focal_map(cube, fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
   got <- .hp_px(300, collect(build(graph_new()), distributed = FALSE))
   expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,

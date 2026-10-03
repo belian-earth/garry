@@ -97,7 +97,8 @@ NULL
     wnode@target_grid,
     wnode@resampling,
     snode@open_options,
-    band = snode@band
+    band = snode@band,
+    nodata = snode@nodata
   )
   if (!is.null(spec)) {
     return(list(
@@ -132,6 +133,38 @@ NULL
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
 # coalesced band stack) reads as a (band, y, x) cube; the halo pads
 # the spatial dims only.
+# The read behind a source_read or warp stage: a source's own read
+# arguments, or what serves its warp (a direct decimating read or a
+# warped VRT, see .warp_read_plan()). One place, so every executor reads
+# a stage the same way.
+.stage_read_args <- function(graph, s) {
+  if (s@kind == "warp") {
+    wnode <- graph_get(graph, s@members[[1L]])
+    rp <- .warp_read_plan(wnode, graph_get(graph, wnode@parents[[1L]]))
+    rp$resampling <- rp$resampling %||% "near"
+    return(rp)
+  }
+  ra <- .source_read_args(graph_get(graph, s@members[[1L]]))
+  ra$decim <- NULL
+  ra
+}
+
+# How a SourceNode is read: the path wrapped for its resampling (a GTI
+# source takes the method through its connection string) and the
+# per-read arguments. Shared by the executor and the gradient path, which
+# must read a source identically.
+.source_read_args <- function(node) {
+  list(
+    path = .gti_resampled_path(node@path, node@resampling),
+    band = node@band,
+    nodata = node@nodata,
+    open_options = node@open_options,
+    scale = node@scale,
+    offset = node@offset,
+    resampling = node@resampling
+  )
+}
+
 .exec_read_padded <- function(
   path,
   band,
@@ -281,11 +314,6 @@ NULL
 # written bytes: never re-uploaded, never part-sliced.
 .sv_is_int <- function(v) {
   .sv_is(v) && attr(v, "gdt") %in% c("u8", "i8", "i16", "u16", "i32")
-}
-
-# Integer payload -> ROW-major R integer vector (GDAL write order).
-.sv_to_int <- function(v) {
-  .sv_to_vec(v)
 }
 
 # One plane of a payload as the vector GDAL writes: plane `b` of a
@@ -460,10 +488,9 @@ NULL
 # inherit host options, and the daemons' anvl is assumed to match the
 # host's lib path).
 # The distributed store uses raw f32 payloads (4 B/px, memcpy transport, no
-# R-double conversion) whenever the installed anvl accepts them, else R
-# doubles. (The single-threaded executor always uses doubles: it is the
-# correctness oracle.)
-.exec_use_raw_store <- function() .g_has_raw_upload()
+# R-double conversion). (The single-threaded executor always uses doubles:
+# it is the correctness oracle.)
+.exec_use_raw_store <- function() TRUE
 
 # Output padding a stage's chunks carry: source/warp emit halo-padded
 # windows; compute stages emit their `out_pad` ring (D22, 0 when no
@@ -837,11 +864,29 @@ NULL
 # Assemble sink chunks into the full raster; stacks assemble to
 # (t, y, x) arrays (D17), 2D sinks to [y, x] matrices.
 .exec_assemble <- function(chunks, it, grid, sink_pad) {
-  chunks <- lapply(chunks, .sv_materialise)
   dims <- grid@dims
   outer_dims <- dims[!names(dims) %in% c("x", "y")]
   if (length(outer_dims) == 0L) {
     full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
+    # raw f32 chunks (the distributed store) copy into place in one C
+    # pass each; f32 -> double is exact, so the values are those of the
+    # matrix route below
+    if (all(vapply(chunks, function(v) .sv_is(v) && attr(v, "gdt") == "f32", logical(1)))) {
+      for (j in seq_len(nrow(it))) {
+        v <- .exec_trim(chunks[[j]], sink_pad)
+        d <- .sv_dim(v)
+        .Call(
+          "garry_f32_into_colmajor",
+          full,
+          v,
+          as.numeric(c(it$y_off[j], it$x_off[j], 0)),
+          as.numeric(c(dims[["y"]], dims[["x"]], 1, 1, d[[1L]], d[[2L]])),
+          PACKAGE = "garry"
+        )
+      }
+      return(full)
+    }
+    chunks <- lapply(chunks, .sv_materialise)
     for (j in seq_len(nrow(it))) {
       full[
         (it$y_off[j] + 1L):(it$y_off[j] + it$y_size[j]),
@@ -852,6 +897,7 @@ NULL
     return(full)
   }
   stopifnot(length(outer_dims) == 1L)
+  chunks <- lapply(chunks, .sv_materialise)
   full <- array(NA_real_, c(outer_dims[[1L]], dims[["y"]], dims[["x"]]))
   for (j in seq_len(nrow(it))) {
     full[,
@@ -878,6 +924,17 @@ NULL
   }
   band_names %||% .grid_layer_labels(ngrid)
 }
+
+# Per-sink output paths of a multi-sink write, named by sink: an
+# existing directory holds "<sink>.tif" files, otherwise `path` is
+# already named by sink.
+.sink_paths <- function(path, sinks) {
+  if (length(path) == 1L && dir.exists(path)) {
+    return(stats::setNames(file.path(path, paste0(sinks, ".tif")), sinks))
+  }
+  stats::setNames(as.character(path[sinks]), sinks)
+}
+
 
 # (silently lost raw sink) lived in — one implementation means one
 # place to guard it. `chunks_of(stage)` returns the stage's list of
@@ -916,11 +973,7 @@ NULL
       # the exported node's grid, not the stage tail's
       ngrid <- graph_get(graph, nid)@grid
       if (!is.null(path)) {
-        p <- if (length(path) == 1L && dir.exists(path)) {
-          file.path(path, paste0(nm, ".tif"))
-        } else {
-          path[[nm]]
-        }
+        p <- .sink_paths(path, nm)[[nm]]
         sk <- st
         S7::prop(sk, "grid") <- ngrid
         return(.exec_write_sink(
@@ -942,7 +995,7 @@ NULL
       }
     })
     names(res) <- names(plan@sinks)
-    return(if (is.null(path)) res else invisible(path))
+    return(if (is.null(path)) res else invisible(.sink_paths(path, names(plan@sinks))))
   }
   sink <- plan@stages[[plan@sink]]
   key <- .key(sink@members[[length(sink@members)]])
@@ -1002,7 +1055,6 @@ execute_plan <- function(
   band_names = NULL,
   wspec = NULL
 ) {
-  .require_anvl()
   .garry_opt_check()
   graph <- plan@graph
   out <- vector("list", length(plan@stages))
@@ -1021,31 +1073,16 @@ execute_plan <- function(
       if (s@kind == "source_read" && warp_only[[s@id]]) {
         next
       }
-      if (s@kind == "warp") {
-        wnode <- graph_get(graph, s@members[[1L]])
-        snode <- graph_get(graph, wnode@parents[[1L]])
-        rp <- .warp_read_plan(wnode, snode)
-        rpath <- rp$path
-        rband <- rp$band
-        rnodata <- rp$nodata
-        roo <- rp$open_options
-        rsc <- rp$scale
-        rof <- rp$offset
-        rdecim <- rp$decim
-        rresamp <- rp$resampling %||% "near"
-        key <- .key(wnode@id)
-      } else {
-        node <- graph_get(graph, s@members[[1L]])
-        rpath <- .gti_resampled_path(node@path, node@resampling)
-        rband <- node@band
-        rresamp <- node@resampling
-        rnodata <- node@nodata
-        roo <- node@open_options
-        rsc <- node@scale
-        rof <- node@offset
-        rdecim <- NULL
-        key <- .key(node@id)
-      }
+      ra <- .stage_read_args(graph, s)
+      rpath <- ra$path
+      rband <- ra$band
+      rresamp <- ra$resampling
+      rnodata <- ra$nodata
+      roo <- ra$open_options
+      rsc <- ra$scale
+      rof <- ra$offset
+      rdecim <- ra$decim
+      key <- .key(s@members[[1L]])
       split_cg <- .exec_split_cg(plan, s)
       if (is.null(split_cg)) {
         out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {

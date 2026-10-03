@@ -57,7 +57,7 @@ test_that("nested reduce -> map -> reduce runs warp-on-read == scheduler", {
 test_that("a focal on a composite runs warp-on-read == scheduler", {
   local_pools(2, 2)
   cs <- .gg_composites()
-  .gg_equal(focal(cs$A, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)))
+  .gg_equal(focal_map(cs$A, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)))
 })
 
 test_that("collect() routes a derived band through the general path", {

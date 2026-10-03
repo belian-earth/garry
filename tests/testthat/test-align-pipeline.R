@@ -10,7 +10,7 @@ test_that("align -> map matches reference", {
   target <- grid_spec("EPSG:4326", extent = b, dims = c(70L, 50L))
 
   a <- lazy_source(f)
-  got <- collect(align(a, target) * 2 + 1)
+  got <- collect(align_to(a, target, resampling = "bilinear") * 2 + 1)
 
   r <- terra::rast(f)
   tmpl <- terra::rast(nrows = 50, ncols = 70,
@@ -29,7 +29,7 @@ test_that("focal after warp is chunk-invariant (halo on warp stage)", {
   target <- grid_spec("EPSG:4326", extent = b, dims = c(70L, 50L))
 
   a <- lazy_source(f)
-  expr <- focal(align(a, target),
+  expr <- focal_map(align_to(a, target),
                 fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
   p <- collect(expr, plan_only = TRUE)

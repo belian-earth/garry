@@ -96,7 +96,7 @@ n   <- 1e5
 pts <- wk::xy(
   stats::runif(n, xmin(grid), xmax(grid)),
   stats::runif(n, ymin(grid), ymax(grid)),
-  crs = grid@crs
+  crs = grid_crs(grid)
 )
 
 px <- extract_points(cube, pts)              # (100000, 64)

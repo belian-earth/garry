@@ -23,7 +23,7 @@ A \code{LazyRaster}, or a \code{LazyDataset} when given one.
 array; it runs fused with adjacent operations in one compiled
 kernel. Write it with plain arithmetic and the \verb{g_*} vocabulary
 (\code{\link[=g_ifelse]{g_ifelse()}}, \code{\link[=g_bitand]{g_bitand()}}, \code{\link[=g_cast]{g_cast()}}, ...). Inputs must share a
-grid (\code{\link[=align]{align()}} first otherwise); rasters on different graphs merge
+grid (\code{\link[=align_to]{align_to()}} first otherwise); rasters on different graphs merge
 automatically.
 }
 \details{
@@ -34,6 +34,13 @@ that introduces NaN over an integer band.
 Over a \code{LazyDataset}, \code{fn} is applied to every value band (a single dataset
 input only); \code{bands} restricts which bands, and non-selected bands pass
 through unchanged.
+}
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+ndvi <- lazy_map(nir, red, fn = function(n, r) (n - r) / (n + r))
+range(collect(ndvi))
 }
 \seealso{
 \code{\link[=collect]{collect()}}

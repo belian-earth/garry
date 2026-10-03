@@ -42,3 +42,14 @@ is supported over \code{"t"}/\code{"band"} only.
 Over a \code{LazyDataset}, each band's slices are stacked along \code{"t"} and
 scanned independently (\code{bands} restricts which).
 }
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+stk <- lazy_stack(list(a = red, b = red, c = red))
+# a running sum along t
+cs <- scan_over(stk, over = "t", fn = function(xs, margin) {
+  g_scan(0, function(carry, v) list(carry = carry + v, out = carry + v),
+         xs = xs[[1L]])$out
+})
+dim(collect(cs))
+}

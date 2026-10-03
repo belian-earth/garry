@@ -129,7 +129,18 @@ test_that("mask join='inner' pairs shared slices; 'exact' aborts prescriptively"
     V = list(s1 = src() * 1, s2 = src() * 2, s3 = src() * 3),
     Q = list(s1 = src(), s2 = src() + 1)
   ), mask_asset = "Q")
-  expect_error(mask(ds, where = c(2)), "do not align")
-  masked <- suppressMessages(mask(ds, where = c(2), join = "inner"))
+  expect_error(apply_mask(ds, where = c(2)), "do not align")
+  masked <- suppressMessages(apply_mask(ds, where = c(2), join = "inner"))
   expect_identical(names(masked@bands$V), c("s1", "s2"))
+})
+
+test_that("each time selector matches on its own, exact or prefix", {
+  a <- lazy_source(fixture_gradient_f32())
+  st <- lazy_stack(list(
+    "2023-01-01" = a, "2023-02-03" = a * 2, "2023-02-20" = a * 3
+  ))
+  got <- time_sel(st, c("2023-01-01", "2023-02"))
+  expect_identical(time_labels(got), c("2023-01-01", "2023-02-03", "2023-02-20"))
+  expect_error(time_sel(st, c("2023-01-01", "2024")), "2024")
+  expect_error(time_sel(st, c(1L, NA)), "NA")
 })

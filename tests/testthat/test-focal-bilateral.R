@@ -56,7 +56,7 @@ test_that("bilateral_focal through a traced plan matches rf_bilateral", {
   lr <- lazy_source(f)
   sr <- 2.5
   out <- execute_plan(plan_lazy(
-    focal(lr, fn = bilateral_focal(sigma_r = sr), radius = 1L)))
+    focal_map(lr, fn = bilateral_focal(sigma_r = sr), radius = 1L)))
 
   m <- execute_plan(plan_lazy(lr))
   rf <- rustyfilters::rf_bilateral(m, sigma_d = 1, sigma_r = sr, window = 3L)
@@ -87,10 +87,10 @@ test_that("bilateral_focal: per-channel sigma_r filters a cube in one node", {
   })
   stk <- lazy_stack(slices, along = "band")
   got <- execute_plan(plan_lazy(
-    focal(stk, fn = bilateral_focal(sigma_r = sig), radius = 1L)))
+    focal_map(stk, fn = bilateral_focal(sigma_r = sig), radius = 1L)))
   for (k in 1:nch) {
     ref <- execute_plan(plan_lazy(
-      focal(slices[[k]], fn = bilateral_focal(sigma_r = sig[k]), radius = 1L)))
+      focal_map(slices[[k]], fn = bilateral_focal(sigma_r = sig[k]), radius = 1L)))
     expect_equal(got[k, , ], ref, tolerance = 1e-5,
                  ignore_attr = TRUE, label = paste("channel", k))
   }

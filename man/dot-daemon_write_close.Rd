@@ -10,6 +10,9 @@
 \code{NULL}, invisibly.
 }
 \description{
-Internal (exported only so mirai daemons can address it via \code{::}).
+Returns the close errors, named by output path (empty when all closed).
+}
+\details{
+Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

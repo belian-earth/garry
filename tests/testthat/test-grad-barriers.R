@@ -14,7 +14,7 @@ test_that("warp on the tape is rejected", {
   target <- grid_spec("EPSG:4326", extent = b, dims = c(61L, 43L))
 
   a <- lazy_source(f)
-  fk <- focal_kernel(align(a, target), matrix(1 / 9, 3, 3))
+  fk <- focal_kernel(align_to(a, target), matrix(1 / 9, 3, 3))
   loss <- reduce_over(fk, "mean", c("x", "y"))
   expect_error(lazy_value_and_grad(loss, fk),
                class = "garry_grad_unsupported_error")
@@ -22,7 +22,7 @@ test_that("warp on the tape is rejected", {
 
 test_that("arbitrary-fn focal on the tape is rejected", {
   a <- lazy_source(fixture_gradient_f32())
-  fo <- focal(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  fo <- focal_map(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   loss <- reduce_over(fo, "mean", c("x", "y"))
   expect_error(lazy_value_and_grad(loss, fo),
                class = "garry_grad_unsupported_error")

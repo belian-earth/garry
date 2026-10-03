@@ -17,4 +17,3 @@ Same shape as \code{x}.
 \description{
 Clamp values to a closed range, elementwise.
 }
-\keyword{internal}

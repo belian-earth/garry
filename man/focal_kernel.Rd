@@ -14,11 +14,12 @@ focal_kernel(x, weights, boundary = "nodata")
 \item{boundary}{Boundary policy; only "nodata" in v1.}
 }
 \value{
-A \code{LazyRaster}.
+A \code{LazyRaster} (f32 for an integer \code{x}, which is read as f32
+so cells beyond the raster edge can be NaN).
 }
 \description{
 The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
-weighted sum over the window. Unlike \code{\link[=focal]{focal()}} with an arbitrary
+weighted sum over the window. Unlike \code{\link[=focal_map]{focal_map()}} with an arbitrary
 \code{fn}, a kernel focal is differentiable with respect to its weights:
 pass the returned LazyRaster as \code{wrt} to \code{\link[=lazy_value_and_grad]{lazy_value_and_grad()}}.
 }

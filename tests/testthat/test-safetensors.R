@@ -115,3 +115,11 @@ test_that("ocm_fetch_weights verifies and is idempotent", {
   wl <- ocm_load_weights(got, models = "regnety")
   expect_identical(wl$weights$regnety$arch, "regnety_004")
 })
+
+test_that("a truncated safetensors payload is an error, not recycled values", {
+  f <- withr::local_tempfile(fileext = ".safetensors")
+  .st_write(f, list(a = matrix(1:6, 2, 3) + 0.5))
+  full <- readBin(f, "raw", n = file.size(f))
+  writeBin(full[seq_len(length(full) - 8L)], f) # drop the last two floats
+  expect_error(safetensors_read(f), "truncated")
+})

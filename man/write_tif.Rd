@@ -42,14 +42,17 @@ contain NaN.}
 
 \item{creation_options}{GDAL creation options (\code{"KEY=VALUE"}). With
 \code{cog = FALSE} these replace the default tiled-DEFLATE options of the
-streamed write; with \code{cog = TRUE} they go to the COG translate pass
+streamed write (compression stays multi-threaded unless they set
+\code{NUM_THREADS}); with \code{cog = TRUE} they go to the COG translate pass
 (the temporary streamed file keeps the defaults).}
 
 \item{overview_resampling}{COG overview resampling (\code{cog = TRUE}
 only). \code{"average"} (default) suits continuous data; use \code{"nearest"}
 for categorical outputs like masks.}
 
-\item{band_names}{As in \code{\link[=collect]{collect()}}.}
+\item{band_names}{Band descriptions written to the file, one per output
+band. Defaults to the dataset's band names, or the labels of a
+\code{band} stack; given, it takes precedence over both.}
 
 \item{distributed}{As in \code{\link[=collect]{collect()}}.}
 }
@@ -72,12 +75,25 @@ reflectance file is half the raw bytes of float32 and compresses far
 better. NaN demotes to \code{nodata}, which is stored in DN units and must
 sit outside the quantized data range.
 
+Integer outputs saturate: a value beyond the dtype's range is written
+as the nearest limit, without a warning. When \code{nodata} is one of those
+limits, quantized values saturate one step inside it, so they never
+read back as nodata; choose \code{scale} and \code{offset} so the data fits.
+
 \code{cog = TRUE} streams to a temporary tiled GeoTIFF beside \code{path}, then
 finalises with one \code{gdal_translate} pass to the COG driver (which is
 copy-only by design: overviews precede full-res data). The extra
 sequential pass is the trade every COG producer makes; the temporary
 file is removed even on failure, so \code{path} never holds a half-written
 COG.
+}
+\examples{
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+out <- tempfile(fileext = ".tif")
+write_tif((nir - red) / (nir + red), out)
+file.exists(out)
 }
 \seealso{
 \code{\link[=collect]{collect()}} to return the result in the R session;

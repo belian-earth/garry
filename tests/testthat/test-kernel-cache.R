@@ -6,7 +6,7 @@
 test_that("a ragged chunk grid submits at most 4 shapes per stage", {
   f <- fixture_gradient_f32()          # 60 x 40
   a <- lazy_source(f)
-  expr <- focal(a * 2, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  expr <- focal_map(a * 2, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
   old <- options(garry.chunk_target_px = 17 * 23,   # ragged everywhere
                  garry.exec_stats = TRUE)

@@ -73,7 +73,7 @@ mb <- {
   t_rf <- tick() - t0
   fn <- bilateral_focal(sigma_r = sigma_r, sigma_d = sigma_d)
   off <- expand.grid(dx = -1:1, dy = -1:1)
-  jf <- g_jit(function(xpad) {
+  jf <- garry:::g_jit(function(xpad) {
     shifts <- lapply(seq_len(9L), function(k)
       g_shift_slice(xpad, off$dy[k], off$dx[k], side, side, 1L))
     fn(shifts)
@@ -133,7 +133,7 @@ g <- graph_new()
 raw <- lapply(seq_len(n_feat), function(b)
   lazy_source(src_path, band = b, graph = g))
 ctx <- lapply(raw, function(lr)
-  focal(lr, fn = bilateral_focal(sigma_r = sigma_r, sigma_d = sigma_d),
+  focal_map(lr, fn = bilateral_focal(sigma_r = sigma_r, sigma_d = sigma_d),
         radius = 1L))
 ga_out <- file.path(tempdir(), "bilat-pred-garry.tif")
 write_tif(mlp_over(c(raw, ctx)), ga_out)

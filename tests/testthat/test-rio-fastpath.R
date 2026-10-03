@@ -137,14 +137,14 @@ test_that("fast-path reads equal warped-VRT reads", {
   }
 })
 
-test_that("an aligned align() pipeline is unchanged by the fast path", {
+test_that("an aligned align_to() pipeline is unchanged by the fast path", {
   f <- fixture_gradient_f32()
   g <- gdal_grid_spec(f)$grid
   target <- coarser(g, 2L, 30L, 20L)
   # the fast path must actually be in play for this to prove anything
   expect_false(is.null(.rio_direct_spec(f, target, "average")))
 
-  expr <- function() align(lazy_source(f), target, resampling = "average") * 2 + 1
+  expr <- function() align_to(lazy_source(f), target, resampling = "average") * 2 + 1
   got <- collect(expr())
   want <- with_warper(collect(expr()))
 
@@ -173,6 +173,6 @@ test_that("a warp needing reprojection still builds a VRT", {
     lockBinding("gdal_warp_vrt", ns)
   })
 
-  collect(align(lazy_source(f), target))
+  collect(align_to(lazy_source(f), target))
   expect_gt(calls, 0L)
 })

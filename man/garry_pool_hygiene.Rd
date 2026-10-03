@@ -17,10 +17,11 @@ Asks every daemon in the pools to release caches and return freed
 heap pages to the operating system (glibc \code{malloc_trim}). With
 \code{deep = TRUE} the daemons' jit caches are also evicted, forcing
 recompiles on next use (roughly a second per map kernel, tens of
-seconds per scan kernel); reserve that for memory pressure. The
-scheduler already trims after every compute/write task and at run
-start; call this between pipeline phases when the fleet should idle
-lean.
+seconds per scan kernel); reserve that for memory pressure. Daemons
+already trim at run start, and during a run once the task transients
+since their last trim pass \code{garry.daemon_gc_mb} (see
+\code{\link[=garry_options]{garry_options()}}); call this between pipeline phases when the fleet
+should idle lean.
 }
 \seealso{
 \code{\link[=garry_daemons]{garry_daemons()}}

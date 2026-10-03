@@ -22,9 +22,9 @@ ReduceNode(
 
 \item{grid}{Output \code{GridSpec} of this node.}
 
-\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=mask]{mask()}}).
+\item{role}{Optional semantic role tag (e.g. "mask", set by \code{\link[=apply_mask]{apply_mask()}}).
 Pure metadata: never read by the planner or executors; surfaced by
-\code{\link[=draw]{draw()}} and \code{\link[=plan_view]{plan_view()}}.}
+\code{\link[=plan_draw]{plan_draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{op}{Reduction name, e.g. "mean" (one of the names above), or
 "custom".}
@@ -42,8 +42,8 @@ A \code{ReduceNode}.
 }
 \description{
 Created by \code{\link[=reduce_over]{reduce_over()}}. \code{op} is normally one of the named
-reductions "sum", "mean", "min", "max", "prod", "median",
-"quantile", "sd", "var", "count", "any", "all": the planner needs op
+reductions "sum", "mean", "min", "max", "median", "count": the
+planner needs op
 identity to decide algebraic decomposition and output dtype, and
 the executor maps it to the ops vocabulary. A CUSTOM reducer may
 instead be supplied as \code{fn} (a length-1 list holding an anvl function

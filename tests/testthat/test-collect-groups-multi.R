@@ -89,7 +89,6 @@ test_that("grouped raw-cube (.vrt) writes work through multi-export", {
 
 test_that("grouped multi-export: distributed == single-threaded", {
   skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  skip_if(!garry::.g_has_raw_upload(), "installed anvl lacks raw payload support")
   local_pools(2, 1, gdal_config = TRUE)
   old <- options(garry.chunk_target_px = 400)
   on.exit(options(old), add = TRUE)
@@ -106,4 +105,30 @@ test_that("plan_only keeps one plan per group", {
   ps <- collect(gr, plan_only = TRUE)
   expect_identical(names(ps), c("2024-01", "2024-02"))
   expect_true(all(vapply(ps, function(p) S7::S7_inherits(p, garry::Plan), TRUE)))
+})
+
+test_that("write_tif(cog = TRUE) on groups writes what the plain route does", {
+  gr <- .grp_fixture() |> group_by_time("month") |>
+    reduce_over("median", over = "t", nan_rm = TRUE)
+  for (form in c("plain", "file", "dir")) {
+    root <- withr::local_tempdir()
+    path <- switch(form,
+      plain = file.path(root, "comp.tif"),
+      file = file.path(root, "comp-{group}.tif"),
+      dir = file.path(root, "{group}", "comp.tif")
+    )
+    plain_root <- withr::local_tempdir()
+    plain <- write_tif(gr, sub(root, plain_root, path, fixed = TRUE))
+    cog <- write_tif(gr, path, cog = TRUE)
+    rel <- function(p, r) substring(normalizePath(p), nchar(normalizePath(r)) + 2L)
+    expect_setequal(rel(unlist(cog), root), rel(unlist(plain), plain_root))
+    # nothing but the finals is left behind
+    expect_setequal(
+      list.files(root, recursive = TRUE),
+      rel(unlist(cog), root)
+    )
+    for (f in unlist(cog)) {
+      expect_true(file.exists(f))
+    }
+  }
 })

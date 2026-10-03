@@ -111,3 +111,52 @@ test_that("a raw cube feeds lazy_source like any raster", {
   got <- collect(lazy_source(vrt) + 1)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = "gis")
 })
+
+test_that("stage_raw_cube carries each band's nodata, affine, type and name", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 6, 4, 2, "Float64", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 40, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  ds$write(1, 0, 0, 6, 4, c(-1, 2:24))
+  ds$write(2, 0, 0, 6, 4, as.numeric(101:124) + 0.123456789)
+  ds$setNoDataValue(1, -1)
+  ds$setScale(1, 0.5)
+  ds$setOffset(1, 1)
+  ds$setDescription(1, "a<b & c")
+  ds$close()
+  v <- withr::local_tempfile(fileext = ".vrt")
+  stage_raw_cube(f, v)
+  for (b in 1:2) {
+    expect_equal(
+      suppressMessages(collect(lazy_source(v, band = b, scale = TRUE))),
+      suppressMessages(collect(lazy_source(f, band = b, scale = TRUE))),
+      ignore_attr = TRUE
+    )
+  }
+  g <- methods::new(gdalraster::GDALRaster, v)
+  on.exit(g$close(), add = TRUE)
+  expect_identical(g$getDescription(1L), "a<b & c")
+  expect_identical(g$getDataTypeName(2L), "Float64")
+})
+
+test_that("the raw-cube fast read refuses a window outside the cube", {
+  f <- fixture_gradient_f32()
+  v <- withr::local_tempfile(fileext = ".vrt")
+  stage_raw_cube(f, v)
+  expect_error(gdal_read_window(v, 1L, 0L, 30L, 60L, 20L), "out of range")
+  expect_error(gdal_read_window(v, 1L, 50L, 0L, 20L, 10L, out = "raw_f32"), "out of range")
+})
+
+test_that("a .vrt output records scale/offset and refuses GTiff options", {
+  g <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(4L, 4L))
+  p <- withr::local_tempfile(fileext = ".vrt")
+  d <- gdal_create_output(p, g, scale = 0.5, offset = 2)
+  d$close()
+  r <- methods::new(gdalraster::GDALRaster, p)
+  on.exit(r$close(), add = TRUE)
+  expect_identical(c(r$getScale(1L), r$getOffset(1L)), c(0.5, 2))
+  expect_error(
+    gdal_create_output(withr::local_tempfile(fileext = ".vrt"), g, options = "COMPRESS=DEFLATE"),
+    "do not apply"
+  )
+})

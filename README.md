@@ -28,8 +28,8 @@ GPU).
 
 **What it is:**
 
-- **Lazy.** Every operation (`lazy_map()`, `focal()`, `reduce_over()`,
-  `mask()`, `align()`) adds a node to a computation graph and returns
+- **Lazy.** Every operation (`lazy_map()`, `focal_map()`, `reduce_over()`,
+  `apply_mask()`, `align_to()`) adds a node to a computation graph and returns
   immediately. Nothing reads or computes until `collect()`.
 - **Spatial-aware.** Arrays carry their CRS, transform and extent.
   Alignment is explicit: binary ops never silently resample, so a pixel
@@ -75,12 +75,18 @@ format conversion belong to GDAL at that boundary, not to the engine.
 ## Installation
 
 You can install the development version of garry from
-[GitHub](https://github.com/) with:
+[GitHub](https://github.com/). Its XLA stack (anvl, pjrt, stablehlo,
+xlamisc) is published on the [r-xla r-universe](https://r-xla.r-universe.dev),
+which pak must be told about:
 
 ``` r
 # install.packages("pak")
+options(repos = c(rxla = "https://r-xla.r-universe.dev", getOption("repos")))
 pak::pak("belian-earth/garry")
 ```
+
+The same setting is needed for `devtools::install()` from a clone. To
+keep it, put the `options()` line in your `~/.Rprofile`.
 
 garry computes through [anvl](https://github.com/r-xla/anvl)/XLA, whose
 PJRT runtime plugin downloads on first use. Fetch it once up front (it
@@ -137,7 +143,7 @@ composite <- lazy_dataset(
   scale = TRUE,   # apply each file's TIFF scale/offset tags on read -> reflectance
   resampling = "bilinear"
 ) |>
-  mask(where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
+  apply_mask(where = qa_bits(0:3), open = 2, dilate = 3) |>  # clouds/shadows + cleanup
   reduce_over("median", over = "t")       # per-band temporal median
 
 # A derived band is just more graph: NDVI from the NIR/red composites. It joins
@@ -146,7 +152,7 @@ composite[["ndvi"]] <- (composite[["B08"]] - composite[["B04"]]) /
   (composite[["B08"]] + composite[["B04"]])
 
 # Inspect the pipeline before running anything. print() summarises the dataset
-# (bands + grid); draw() renders the IR: a LazyDataset as its ordered pipeline
+# (bands + grid); plan_draw() renders the IR: a LazyDataset as its ordered pipeline
 # steps, a single band as its node tree.
 print(composite)
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
@@ -155,15 +161,15 @@ print(composite)
 #>   grid   2536 x 1480 • f32
 #>   crs    Lambert Azimuthal Equal Area
 #>   graph  206 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
-draw(composite)              # the dataset's pipeline steps
+#>   ℹ plan_draw(x) to see the pipeline
+plan_draw(composite)              # the dataset's pipeline steps
 #> ── <LazyDataset> pipeline ──────────────────────────────────────────────────────
 #>   ◈ source    B04 B03 B02 B08 ndvi  •  15 slices • 2536×1480 f32
 #>   ✕ mask      from Fmask • bits 0–3 • open 2 • dilate 3
 #>   ▸ reduce    median over t
 #>   ⊕ derive    ndvi
 #>   ─ 206 nodes • crs Lambert Azimuthal Equal Area
-draw(composite[["ndvi"]])    # the NDVI band's node tree
+plan_draw(composite[["ndvi"]])    # the NDVI band's node tree
 #> ── <LazyRaster> 2536 x 1480 • f32 ──────────────────────────────────────────────
 #> ƒ map  (2 inputs)
 #> └─ ƒ map  (2 inputs)  ×2
@@ -231,7 +237,7 @@ write_tif(composite, tif,
 ```
 
 The same verbs work on a single raster. `lazy_source()` opens one COG or
-a GDAL mosaic; `lazy_map()` / `focal()` / `reduce_over()` build
-map-algebra graphs; `align()` reprojects onto a target grid; `collect()`
+a GDAL mosaic; `lazy_map()` / `focal_map()` / `reduce_over()` build
+map-algebra graphs; `align_to()` reprojects onto a target grid; `collect()`
 brings the result into R and `write_tif()` streams it to disk. See
 `benchmarks/compare.sh` for the back-to-back garry-vs-ODC benchmark.

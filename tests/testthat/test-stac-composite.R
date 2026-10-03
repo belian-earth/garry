@@ -1,6 +1,6 @@
 # Decision D18 lock (discovery half): items rectangularise into the
 # source table; filters and slicing act on the table; the table becomes
-# the GTI index; lazy_stac_stack composes offline. Fabricated items over
+# the GTI index; lazy_dataset composes offline. Fabricated items over
 # local tiles keep the gate deterministic; live-network smoke is
 # env-gated (GARRY_RUN_NETWORK=1).
 
@@ -110,18 +110,18 @@ test_that("http hrefs gain the vsicurl prefix", {
   expect_identical(src$location[[1]], "/vsicurl/https://example.com/x.tif")
 })
 
-test_that("lazy_stac_stack composes a median through GTI slices", {
+test_that("a STAC dataset composes a median through GTI slices", {
   src <- stac_sources(.fake_items())
   grid <- gdal_grid_spec(src$location[[1]])$grid   # native 3857 grid
 
-  st <- lazy_stac_stack(src, grid, asset = "B1")
-  expect_identical(st$slices,
+  ds <- lazy_dataset(src, grid, assets = "B1")
+  expect_identical(time_labels(ds),
                    c("2023-01-05", "2023-01-15", "2023-02-05"))
-  expect_identical(unname(st$stack@grid@dims[["t"]]), 3L)
+  expect_identical(unname(dim(ds$B1)[["t"]]), 3L)
 
   old <- options(garry.chunk_target_px = 300)
   on.exit(options(old))
-  med <- collect(reduce_over(st$stack, "median", "t", nan_rm = TRUE))
+  med <- collect(reduce_over(ds$B1, "median", "t", nan_rm = TRUE))
 
   layers <- lapply(src$location, function(f)
     gdal_read_window(f, 1L, 0L, 0L, 50L, 40L))
@@ -139,14 +139,16 @@ test_that("the full benchmark shape runs: mask -> stack -> median", {
   # place of an Fmask decode), median composite, written to GTiff.
   src <- stac_sources(.fake_items())
   grid <- gdal_grid_spec(src$location[[1]])$grid
-  st <- lazy_stac_stack(src, grid, asset = "B1")
+  src <- stac_time_slices(src, "day")
+  index <- stac_gti_index(src, "B1", crs = grid_crs(grid))
+  slices <- sort(unique(src$slice))
 
-  masked <- lapply(seq_along(st$slices), function(i) {
-    lr <- lazy_source(paste0("GTI:", st$index),
+  masked <- lapply(seq_along(slices), function(i) {
+    lr <- lazy_source(paste0("GTI:", index),
                       graph = graph_new(),
                       open_options = gti_open_options(
                         grid,
-                        filter = sprintf("slice = '%s'", st$slices[[i]]),
+                        filter = sprintf("slice = '%s'", slices[[i]]),
                         sort_field = "datetime"))
     id <- graph_add(lr@graph, MapNode, parents = lr@node_id,
                     grid = lr@grid,

@@ -74,3 +74,27 @@ test_that("the compute pool is capped too and recorded for the cost model", {
   expect_length(lists, 2L)
   expect_false(lists[[1L]] == lists[[2L]])
 })
+
+test_that("a uniform plan re-masks a pool a mixed scan plan left behind", {
+  st <- garry:::.garry_state
+  old <- mget(c("comp_threads", "comp_pids", "comp_mixed"), envir = st, ifnotfound = list(NULL))
+  on.exit(for (n in names(old)) assign(n, old[[n]], envir = st), add = TRUE)
+  calls <- 0L
+  local_mocked_bindings(
+    .pool_affinity_apply = function(profile, n, k = NULL, pids = NULL) {
+      calls <<- calls + 1L
+      k
+    },
+    .garry_cores = function() list(logical = 8L, physical = 8L)
+  )
+  assign("comp_pids", 1:4, envir = st)
+  assign("comp_threads", 2L, envir = st)
+  garry:::.comp_pool_shape(4L, TRUE, n_scan = 1L) # mixed
+  expect_true(st$comp_mixed)
+  calls <- 0L
+  garry:::.comp_pool_shape(4L, FALSE) # uniform, same width as the narrow masks
+  expect_identical(calls, 1L)
+  expect_false(st$comp_mixed)
+  garry:::.comp_pool_shape(4L, FALSE) # now settled: no re-mask
+  expect_identical(calls, 1L)
+})

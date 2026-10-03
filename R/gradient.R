@@ -22,7 +22,7 @@ NULL
 #
 # Hard boundaries (documented, structurally rejected):
 # - Warp on the tape: GDAL resampling is outside the tape (D15).
-# - focal() with an arbitrary fn: not differentiable; use focal_kernel().
+# - focal_map() with an arbitrary fn: not differentiable; use focal_kernel().
 # - Non-algebraic or min/max losses: sum and mean only in v1.
 # ---------------------------------------------------------------------------
 
@@ -72,6 +72,12 @@ NULL
         )
         v <- do.call(node@fn, pv)
         m <- Reduce(`*`, pm)
+        # NaN the node produces itself (a gate, a log of a negative) is
+        # nodata too: mask it and keep it out of the arithmetic, as the
+        # stage inputs are
+        nd <- g_is_nodata(v)
+        m <- m * g_cast(!nd, "f32")
+        v <- g_ifelse(nd, 0, v)
       } else if (S7::S7_inherits(node, FocalNode)) {
         r <- node@radius
         x <- pv[[1L]]
@@ -119,7 +125,7 @@ NULL
     .garry_error(
       paste0(
         "the loss pipeline contains a warp: GDAL resampling is outside ",
-        "the gradient tape (D15). align() inputs, materialise, then fit."
+        "the gradient tape (D15). align_to() inputs, materialise, then fit."
       ),
       "garry_grad_unsupported_error"
     )
@@ -157,7 +163,7 @@ NULL
     if (S7::S7_inherits(node, FocalNode) && length(node@weights) == 0L) {
       .garry_error(
         paste0(
-          "focal() with an arbitrary fn is not differentiable; ",
+          "focal_map() with an arbitrary fn is not differentiable; ",
           "use focal_kernel()"
         ),
         "garry_grad_unsupported_error"
@@ -259,16 +265,20 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
   for (j in seq_len(nrow(it))) {
     inputs <- lapply(src_meta, function(meta) {
       g_upload(
-        .exec_read_padded(
-          meta$node@path,
-          meta$node@band,
-          meta$node@nodata,
-          meta$chunks,
-          it[j, ],
-          open_options = meta$node@open_options,
-          scale = meta$node@scale,
-          offset = meta$node@offset
-        ),
+        do.call(.exec_read_padded, {
+          ra <- .source_read_args(meta$node)
+          list(
+            ra$path,
+            ra$band,
+            ra$nodata,
+            meta$chunks,
+            it[j, ],
+            open_options = ra$open_options,
+            scale = ra$scale,
+            offset = ra$offset,
+            resampling = ra$resampling
+          )
+        }),
         meta$dtype
       )
     })

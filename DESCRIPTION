@@ -1,6 +1,6 @@
 Package: garry
 Title: Lazy, Spatial-Aware Raster Arrays with JIT-Compiled Kernels
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R:
     person("Hugh", "Graham", email = "hugh@belian.earth", role = c("aut", "cre"))
 Description: Experimental. Lazy raster arrays with CRS/transform-aware
@@ -12,13 +12,13 @@ SystemRequirements: GDAL (>= 3.9, for the GTI mosaic driver)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:
-    R (>= 4.3)
+    R (>= 4.4.0)
 Imports:
     S7,
     anvl (>= 0.5.1),
     cli,
     codetools,
-    gdalraster (>= 2.6.1.9001),
+    gdalraster (>= 2.7.0),
     glue,
     memuse,
     methods,
@@ -28,8 +28,6 @@ Imports:
     wk
 Remotes:
     hypertidy/vaster,
-    firelab/gdalraster,
-    r-xla/anvl,
     belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
@@ -55,26 +53,27 @@ Config/testthat/parallel: true
 Config/testthat/start-first: grad-convergence, routed-dispatch, route-matrix, gd-general, mirai-equivalence, composite-direct, ocm-golden, raw-store, ocm-mask, scheduler-failures
 Config/roxygen2/version: 8.0.0
 Collate: 
-    'band_mlp.R'
     'grid.R'
+    'node.R'
+    'graph.R'
+    'lazy_raster.R'
+    'gdal_adapter.R'
+    'stac.R'
+    'dataset.R'
+    'accessors.R'
+    'band_mlp.R'
     'chunk_grid.R'
     'options.R'
     'ops.R'
-    'node.R'
     'generics.R'
-    'graph.R'
     'plan.R'
     'passes.R'
     'collect.R'
-    'gdal_adapter.R'
     'executor.R'
     'daemon.R'
     'pools.R'
     'scheduler.R'
     'composite_direct.R'
-    'lazy_raster.R'
-    'stac.R'
-    'dataset.R'
     'dequantize.R'
     'dot.R'
     'draw.R'

@@ -234,6 +234,7 @@ execute_plan_mirai <- function(
     }
     best
   }
+  .assert_pools_alive(profiles)
   .garry_abi_check(unique(c(
     profiles,
     if (
@@ -279,16 +280,25 @@ execute_plan_mirai <- function(
   .pool_broadcast(
     quote({
       suppressMessages(library(garry))
-      options(garry.read_fail = rf, garry.read_retry = rr)
-      garry::.daemon_hygiene()
+      options(
+        garry.read_fail = rf,
+        garry.read_retry = rr,
+        garry.daemon_gc_mb = gc_mb
+      )
+      asNamespace("garry")$.daemon_hygiene()
     }),
-    profiles = profiles,
+    # the writer reads daemon_gc_mb too
+    profiles = unique(c(
+      profiles,
+      if (.gd_n_compute("garry_write") > 0L) "garry_write"
+    )),
     rf = garry_opt("read_fail"),
-    rr = garry_opt("read_retry")
+    rr = garry_opt("read_retry"),
+    gc_mb = garry_opt("daemon_gc_mb")
   )
 
   graph <- plan@graph
-  run_id <- as.integer(stats::runif(1, 1, 1e8))
+  run_id <- .garry_run_id()
   # Raw f32 store payloads (phase 12c, D19-D21). Resolved once here:
   # daemon processes do not inherit host options, so the flag rides in
   # every task payload.
@@ -353,7 +363,7 @@ execute_plan_mirai <- function(
   on.exit(
     for (p in profiles) {
       try(
-        mirai::everywhere(garry::.daemon_shm_clear(), .compute = p),
+        mirai::everywhere(asNamespace("garry")$.daemon_shm_clear(), .compute = p),
         silent = TRUE
       )
     },
@@ -380,6 +390,9 @@ execute_plan_mirai <- function(
   fetch_n_idx <- 0L
   fetch_made <- new.env(parent = emptyenv()) # fetch task key -> TRUE
   fetch_files_of <- new.env(parent = emptyenv()) # sid -> files to unlink
+  # fetched files are shared by every stage that reads the same index
+  # slice: count the stages still holding each one, unlink at zero
+  fetch_holders <- new.env(parent = emptyenv()) # file -> stage count
   fetch_reads_left <- new.env(parent = emptyenv()) # sid -> open read tasks
   on.exit(
     if (!is.null(fetch_root)) {
@@ -445,13 +458,9 @@ execute_plan_mirai <- function(
       )
       fetch_state[[ipath]] <- st
     }
-    fl <- grep("^FILTER=", roo, value = TRUE)
-    if (length(fl) != 1L) {
-      return(NULL)
-    }
-    slval <- regmatches(fl, regexec("^FILTER=slice = '(.*)'$", fl))[[1]][[2]]
-    if (is.na(slval)) {
-      return(NULL)
+    slval <- .gti_slice_of(roo)
+    if (is.null(slval) || is.na(slval)) {
+      return(NULL) # no slice filter, or one only GDAL can evaluate
     }
     rows <- which(st$slice == slval & st$do)
     keys <- .glue("f{st$id}_{rows}")
@@ -470,7 +479,7 @@ execute_plan_mirai <- function(
         tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
         add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
           mirai::mirai(
-            garry::.daemon_fetch_window(
+            asNamespace("garry")$.daemon_fetch_window(
               src,
               dst,
               ex,
@@ -718,6 +727,9 @@ execute_plan_mirai <- function(
           fetch_deps <- fp$deps
           rpath <- fp$local
           fetch_files_of[[.key(s@id)]] <- fp$files
+          for (ff in unique(fp$files)) {
+            fetch_holders[[ff]] <- (fetch_holders[[ff]] %||% 0L) + 1L
+          }
           # Fetch-backed assembles are local CPU (warp + any fused
           # kernel): route them to the compute pool, which idles
           # during the drain now that compute-on-read emptied it of
@@ -802,7 +814,7 @@ execute_plan_mirai <- function(
               store_mb = store_mb_read,
               launch = function(prof) {
                 mirai::mirai(
-                  garry::.daemon_run_source_shm(
+                  asNamespace("garry")$.daemon_run_source_shm(
                     p2,
                     b2,
                     nd,
@@ -900,7 +912,7 @@ execute_plan_mirai <- function(
               store_mb = store_mb_read,
               launch = function(prof) {
                 mirai::mirai(
-                  garry::.daemon_run_source_shm(
+                  asNamespace("garry")$.daemon_run_source_shm(
                     p2,
                     b2,
                     nd,
@@ -961,8 +973,11 @@ execute_plan_mirai <- function(
       okeys <- vapply(s@exports, .key, character(1))
       cd <- s@chunks@chunk_dim
       need <- s@halo + s@out_pad
+      # clipped to the grid, as the store and warm-up estimates are: the
+      # plan-wide chunk dim can exceed a small grid
+      cd_eff <- pmin(as.numeric(cd), as.numeric(s@grid@dims[c("x", "y")]))
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
-        prod(as.numeric(cd) + 2 * need) /
+        prod(cd_eff + 2 * need) /
         2^20
       # The /2 discount reflects mori's zero-copy shared INPUT mappings:
       # the per-px estimate is calibrated for private R-double inputs, but
@@ -1109,7 +1124,7 @@ execute_plan_mirai <- function(
               # it costs MBs of host serialization per task (the 145-band
               # predict closure measured 3.36 MB).
               mirai::mirai(
-                garry::.daemon_run_compute_shm(
+                asNamespace("garry")$.daemon_run_compute_shm(
                   ck,
                   fn,
                   in_vals,
@@ -1210,7 +1225,7 @@ execute_plan_mirai <- function(
     for (p in profiles) {
       try(
         mirai::everywhere(
-          garry::.daemon_shm_drop(regs),
+          asNamespace("garry")$.daemon_shm_drop(regs),
           regs = .glue("r{run_id}_{pending_drop}"),
           .compute = p
         ),
@@ -1309,7 +1324,7 @@ execute_plan_mirai <- function(
       sp <- q[[1L]]
       warm_queue[[p]] <<- q[-1L]
       warm_inflight[[p]] <<- list(
-        h = mirai::mirai(garry::.daemon_warm_jit(list(sp)), sp = sp, .compute = p),
+        h = mirai::mirai(asNamespace("garry")$.daemon_warm_jit(list(sp)), sp = sp, .compute = p),
         ck = sp$ck, scan = isTRUE(sp$scan)
       )
       prof_slots[[p]] <<- prof_slots[[p]] + 1L
@@ -1404,11 +1419,16 @@ execute_plan_mirai <- function(
           },
           silent = TRUE
         )
+        # Wait for the close: everywhere() only dispatches it, and
+        # Windows cannot delete an output the writer still holds open.
         try(
-          mirai::everywhere(
-            garry::.daemon_write_close(),
-            .compute = "garry_write"
-          ),
+          {
+            wcl <- mirai::everywhere(
+              asNamespace("garry")$.daemon_write_close(),
+              .compute = "garry_write"
+            )
+            invisible(lapply(wcl, function(m) m[]))
+          },
           silent = TRUE
         )
       },
@@ -1479,11 +1499,7 @@ execute_plan_mirai <- function(
       ) {
         next
       } # unquantizable stream: host tail writes it
-      p <- if (length(path) == 1L && dir.exists(path)) {
-        file.path(path, paste0(nm, ".tif"))
-      } else {
-        path[[nm]]
-      }
+      p <- .sink_paths(path, nm)[[nm]]
       ngrid <- graph_get(plan@graph, nid)@grid
       it <- chunk_iter(.stage_out_chunks(plan, st))
       ds <- gdal_create_output(
@@ -1830,7 +1846,7 @@ execute_plan_mirai <- function(
     wr_inflight[[as.character(wr_seq)]] <<- list(
       rk = ref$rk,
       h = mirai::mirai(
-        garry::.daemon_write_chunk(
+        asNamespace("garry")$.daemon_write_chunk(
           wpath,
           xo,
           yo,
@@ -1924,11 +1940,12 @@ execute_plan_mirai <- function(
       slot = "",
       mb = "",
       store_mb = "",
-      ready = ""
+      ready = "",
+      time = Sys.time()
     ) {
       cat(
         .glue(
-          "{formatC(unclass(Sys.time()), format = 'f', digits = 3)},",
+          "{formatC(unclass(time), format = 'f', digits = 3)},",
           "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"
         ),
         "\n",
@@ -1938,6 +1955,7 @@ execute_plan_mirai <- function(
       )
     }
   }
+  log_line("run_start", run_id) # runs share a log file: mark each one
   t_drain0 <- unclass(Sys.time()) # zero-dep tasks are ready at drain start
   n_total <- length(tasks)
   last_report <- Sys.time()
@@ -2201,7 +2219,13 @@ execute_plan_mirai <- function(
           if (!is.null(left)) {
             fetch_reads_left[[sk]] <- left - 1L
             if (left <= 1L) {
-              unlink(fetch_files_of[[sk]])
+              done_files <- character(0)
+              for (ff in unique(fetch_files_of[[sk]])) {
+                n_left <- (fetch_holders[[ff]] %||% 1L) - 1L
+                fetch_holders[[ff]] <- n_left
+                if (n_left <= 0L) done_files <- c(done_files, ff)
+              }
+              unlink(done_files)
               rm(list = sk, envir = fetch_files_of)
             }
           }
@@ -2225,13 +2249,18 @@ execute_plan_mirai <- function(
         # the diverging-lines plot every memory postmortem rebuilt by
         # hand (crop=0 flood, scan-compile OOM).
         if (!is.null(task_log)) {
+          # one timestamp per sweep: the report sums a sweep's rows
+          sweep_t <- Sys.time()
           for (p in .garry_state$pool_pids) {
             a <- .garry_anon_mb_of(p)
-            if (is.finite(a)) log_line("rss", as.character(p), mb = round(a, 1))
+            if (is.finite(a)) {
+              log_line("rss", as.character(p), mb = round(a, 1), time = sweep_t)
+            }
           }
           log_line(
             "model",
             "-",
+            time = sweep_t,
             mb = round(mb_inflight, 1),
             store_mb = round(mb_store_resident, 1)
           )
@@ -2262,10 +2291,21 @@ execute_plan_mirai <- function(
       if (!harvest_writes()) Sys.sleep(0.002) else flush_drops()
     }
     wcl <- mirai::everywhere(
-      garry::.daemon_write_close(),
+      asNamespace("garry")$.daemon_write_close(),
       .compute = "garry_write"
     )
-    invisible(lapply(wcl, function(m) m[]))
+    failed <- unlist(Filter(is.character, lapply(wcl, function(m) m[])))
+    if (length(failed)) {
+      .garry_error(
+        paste0(
+          "closing output ",
+          names(failed)[[1L]],
+          " failed (the file is incomplete): ",
+          failed[[1L]]
+        ),
+        "garry_write_error"
+      )
+    }
     flush_drops(force = TRUE)
   }
   read_chunk <- chunk_of # fused-aware (see chunk_of above)
@@ -2280,7 +2320,7 @@ execute_plan_mirai <- function(
       sink_ds$close()
       sink_ds <- NULL
     }
-    return(invisible(path))
+    return(invisible(if (multi) .sink_paths(path, names(plan@sinks)) else path))
   }
 
   combine_vals <- new.env(parent = emptyenv())
@@ -2327,4 +2367,31 @@ execute_plan_mirai <- function(
     band_names = band_names,
     streamed_path = streamed_path
   )
+}
+
+# Would the scheduler's fetch stage serve this read? A GTI index with
+# garry's sidecar, a slice filter, and remote items in that slice (any
+# item under garry.fetch = "force"): its windows then download to local
+# files in parallel before the reads. Mirrors prepare_fetch() in
+# execute_plan_mirai(), so the read-only route can leave these reads to
+# the scheduler.
+.read_would_fetch <- function(rpath, roo) {
+  mode <- garry_opt("fetch")
+  if (mode == "direct" || length(rpath) != 1L || !startsWith(rpath, "GTI:")) {
+    return(FALSE)
+  }
+  meta_f <- paste0(sub("^GTI:", "", rpath), ".meta.rds")
+  if (!file.exists(meta_f)) {
+    return(FALSE)
+  }
+  ent <- readRDS(meta_f)$entries
+  if (!all(c("slice", "location") %in% names(ent))) {
+    return(FALSE)
+  }
+  sl <- .gti_slice_of(roo)
+  if (is.null(sl) || is.na(sl)) {
+    return(FALSE)
+  }
+  rows <- ent$slice == sl
+  any(rows & (mode == "force" | grepl("^/vsi", ent$location)))
 }

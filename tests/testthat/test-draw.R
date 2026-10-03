@@ -1,4 +1,4 @@
-# Terminal rendering: print() cards and draw() (the pre-execution pipeline
+# Terminal rendering: print() cards and plan_draw() (the pre-execution pipeline
 # visual). Output is ANSI-stripped before matching so the gates do not depend on
 # terminal colour; glyph/dash regexes tolerate the UTF-8 vs ASCII fallback.
 
@@ -22,11 +22,11 @@ test_that("print(LazyDataset) shows a compact card", {
   expect_match(out, "draw\\(x\\)")
 })
 
-test_that("draw(LazyDataset) draws the step pipeline with mask detail", {
+test_that("plan_draw(LazyDataset) draws the step pipeline with mask detail", {
   comp <- mk_ds() |>
-    mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
+    apply_mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
     reduce_over("median", over = "t")
-  out <- .strip(draw(comp))
+  out <- .strip(plan_draw(comp))
   expect_match(out, "source")
   expect_match(out, "mask")
   expect_match(out, "bits 0.3")             # en dash or hyphen
@@ -36,11 +36,11 @@ test_that("draw(LazyDataset) draws the step pipeline with mask detail", {
   expect_match(out, "3 slices")             # original count survives the reduce
 })
 
-test_that("draw(LazyRaster) collapses identical sibling branches to xN", {
+test_that("plan_draw(LazyRaster) collapses identical sibling branches to xN", {
   comp <- mk_ds() |>
-    mask(from = "Fmask", where = qa_bits(0:3)) |>
+    apply_mask(from = "Fmask", where = qa_bits(0:3)) |>
     reduce_over("median", over = "t")
-  out <- .strip(draw(comp[["B04"]]))
+  out <- .strip(plan_draw(comp[["B04"]]))
   expect_match(out, "median")
   expect_match(out, "stack")
   expect_match(out, "[x×]3")           # the three slices folded to one branch
@@ -51,18 +51,18 @@ test_that("a value-set mask renders a compact range", {
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
   ds <- as_dataset(list(V = list(s()), Q = list(s())), mask_asset = "Q") |>
-    mask(where = c(0, 1, 2, 3, 8, 9, 10, 11))
-  out <- .strip(draw(ds))
+    apply_mask(where = c(0, 1, 2, 3, 8, 9, 10, 11))
+  out <- .strip(plan_draw(ds))
   expect_match(out, "values 0.3, 8.11")
 })
 
-test_that("draw() returns its input invisibly", {
+test_that("plan_draw() returns its input invisibly", {
   ds <- mk_ds()
-  expect_false(withVisible(draw(ds))$visible)
-  expect_true(S7::S7_inherits(draw(ds), LazyDataset))
+  expect_false(withVisible(plan_draw(ds))$visible)
+  expect_true(S7::S7_inherits(plan_draw(ds), LazyDataset))
 })
 
-test_that("print(LazyRaster) headlines the op and hints draw()", {
+test_that("print(LazyRaster) headlines the op and hints plan_draw()", {
   lr <- reduce_over(lazy_stack(list(lazy_source(fixture_gradient_f32()),
                                     lazy_source(fixture_gradient_f32()))),
                     "median", "t")
@@ -70,4 +70,12 @@ test_that("print(LazyRaster) headlines the op and hints draw()", {
   expect_match(out, "LazyRaster")
   expect_match(out, "median")
   expect_match(out, "draw\\(x\\)")
+})
+
+test_that("plan_draw scales with the graph, not its unfolding", {
+  x <- lazy_source(fixture_gradient_f32())
+  for (i in 1:25) x <- x + x # 2^25 paths through 26 nodes
+  t <- system.time(out <- capture.output(plan_draw(x)))[["elapsed"]]
+  expect_lt(t, 5)
+  expect_lt(length(out), 60)
 })

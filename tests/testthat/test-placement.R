@@ -16,7 +16,7 @@ test_that("single-band source-fed chain fuses with a full spec", {
   # benchmark-mini shape (as test-compute-on-read): qa source -> mask
   # map+focal chain, consumed by two band medians.
   qa <- lazy_source(f)
-  mask <- focal(
+  mask <- focal_map(
     lazy_map(qa, dtype = "f32",
              fn = function(x) g_cast(x > 0.5, "f32")),
     radius = 1L, fn = function(sh) Reduce(`*`, sh))
@@ -168,4 +168,11 @@ test_that("a source that is itself a sink keeps its window (defect H1)", {
     expect_equal(got, single$raw, tolerance = 1e-6, label = m)
     options(old_m)
   }
+})
+
+test_that("an empty placement table has the same columns as a full one", {
+  p <- plan_lazy(lazy_source(fixture_gradient_f32()))
+  t0 <- garry_explain_placement(p)
+  expect_identical(nrow(t0), 0L)
+  expect_true("tiles" %in% names(t0))
 })

@@ -247,6 +247,12 @@ NULL
   interpolate = TRUE,
   na_col = NULL
 ) {
+  if (length(dim(arr)) > 3L) {
+    cli::cli_abort(c(
+      "{.fn preview} draws a (y, x) or (y, x, band) array; this one has {length(dim(arr))} dimensions.",
+      "i" = "Select or reduce the extra axis first, e.g. {.fn time_sel} or {.fn reduce_over}."
+    ))
+  }
   nb_avail <- if (length(dim(arr)) == 3L) dim(arr)[[3L]] else 1L
   if (is.null(bands)) {
     bands <- if (nb_avail >= 3L) 1:3 else 1L
@@ -375,9 +381,15 @@ NULL
   ny <- meta$grid@dims[["y"]]
   nb <- gdal_band_count(path)
   b <- bands %||% (if (nb >= 3L) 1:3 else 1L)
-  layers <- lapply(b, function(bi) gdal_read_window(path, bi, 0L, 0L, nx, ny))
+  # read at the device size: never the full-resolution raster
+  k <- max(1, max(nx, ny) / target)
+  ox <- max(1L, as.integer(round(nx / k)))
+  oy <- max(1L, as.integer(round(ny / k)))
+  layers <- lapply(b, function(bi) {
+    .gdal_read_resampled(path, bi, ox, oy, nodata = meta$nodata)
+  })
   arr <- if (length(b) == 1L) layers[[1L]] else simplify2array(layers)
-  list(arr = .pv_decimate(arr, target), grid = meta$grid, bands = seq_along(b))
+  list(arr = arr, grid = meta$grid, bands = seq_along(b))
 }
 
 # -- coarse re-plan ---------------------------------------------------------
@@ -431,10 +443,15 @@ NULL
       band = n@band,
       nodata = n@nodata,
       block_dim = n@block_dim,
-      open_options = .coarsen_open_options(n@open_options, cg)
+      open_options = .coarsen_open_options(n@open_options, cg),
+      resampling = n@resampling,
+      scale = n@scale,
+      offset = n@offset,
+      name = n@name,
+      role = n@role
     )
   } else if (S7::S7_inherits(n, MapNode)) {
-    graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn)
+    graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn, role = n@role)
   } else if (S7::S7_inherits(n, FocalNode)) {
     graph_add(
       ng,
@@ -562,9 +579,9 @@ NULL
 #' @param main,axes,xlab,ylab Plot title, axes toggle, and axis labels.
 #' @param na_col Colour for nodata pixels, or `NULL` (default) to leave
 #'   them transparent. Useful to make a mask's footprint explicit.
-#' @param ... Unused.
+#' @param ... Must be empty: a misspelt argument is an error.
 #' @return `x`, invisibly.
-#' @seealso [draw()], which plots the pipeline rather than the data;
+#' @seealso [plan_draw()], which plots the pipeline rather than the data;
 #'   [collect()] to execute at full resolution.
 #' @export
 preview <- function(
@@ -581,6 +598,7 @@ preview <- function(
   na_col = NULL,
   ...
 ) {
+  rlang::check_dots_empty() # a misspelt argument must not pass silently
   target <- .pv_target(max_px)
   orig <- x
   grid <- NULL
@@ -599,7 +617,7 @@ preview <- function(
     rd <- .pv_read_path(x, bands, target)
     arr <- rd$arr
     grid <- rd$grid
-    if (is.null(bands)) bands <- rd$bands
+    bands <- rd$bands # positions in the array read, which holds only `bands`
   } else if (is.array(x) || is.matrix(x)) {
     # A collect() result carries a `gis` attribute (extent/CRS); use it for
     # real-world axes. Capture it before decimation, which drops attributes.

@@ -2,7 +2,7 @@
 % Please edit documentation in R/lazy_raster.R
 \name{bilateral_focal}
 \alias{bilateral_focal}
-\title{A bilateral (edge-preserving) focal body for \code{\link[=focal]{focal()}}.}
+\title{A bilateral (edge-preserving) focal body for \code{\link[=focal_map]{focal_map()}}.}
 \usage{
 bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 }
@@ -13,10 +13,10 @@ bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 (default 1, matching the default 3x3 window).}
 
 \item{radius}{Window radius the body is built for; must match the
-\code{radius} passed to \code{\link[=focal]{focal()}} (default 1 = 3x3).}
+\code{radius} passed to \code{\link[=focal_map]{focal_map()}} (default 1 = 3x3).}
 }
 \value{
-A focal body \code{fn(shifts)} for \code{\link[=focal]{focal()}}.
+A focal body \code{fn(shifts)} for \code{\link[=focal_map]{focal_map()}}.
 }
 \description{
 Returns a focal \code{fn(shifts)} computing the classic bilateral filter:
@@ -24,7 +24,7 @@ each output pixel is the window mean weighted by a spatial Gaussian
 (distance from the centre, \code{sigma_d}) times a range Gaussian
 (difference from the centre VALUE, \code{sigma_r}), so smoothing stays
 within regions of similar value and stops at sharp transitions. Use
-as \code{focal(x, fn = bilateral_focal(sigma_r), radius = 1L)}.
+as \code{focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)}.
 }
 \details{
 A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads

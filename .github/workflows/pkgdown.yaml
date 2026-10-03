@@ -27,7 +27,11 @@ jobs:
 
       - uses: r-lib/actions/setup-pandoc@v2
 
+      # anvl's dependencies (pjrt, stablehlo, xlamisc) are only on the
+      # r-xla r-universe, and pak ignores Additional_repositories.
       - uses: r-lib/actions/setup-r@v2
+        with:
+          extra-repositories: https://r-xla.r-universe.dev
 
       - name: Recent GDAL (Ubuntu, ubuntugis-unstable PPA)
         run: |
@@ -73,12 +77,12 @@ jobs:
           extra-packages: any::pkgdown, local::., terra=?ignore, rstac=?ignore, rustyfilters=?ignore
           needs: website
 
-      # Force a source rebuild of dev gdalraster against the PPA GDAL
+      # Force a source rebuild of gdalraster against the PPA GDAL
       # above: pak's cache can serve a binary linked against a GDAL
       # soname the runner no longer has (observed: libgdal.so.37
       # missing at site build). Mirrors the R-CMD-check step.
-      - name: Rebuild dev gdalraster from source
-        run: Rscript -e "install.packages('remotes', repos = 'https://cloud.r-project.org'); remotes::install_github('firelab/gdalraster', force = TRUE)"
+      - name: Rebuild gdalraster from source
+        run: Rscript -e "install.packages('gdalraster', type = 'source', repos = 'https://cloud.r-project.org')"
 
       - name: Build site
         run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)

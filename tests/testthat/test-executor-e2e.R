@@ -17,7 +17,7 @@ test_that("source |> +1 |> focal mean |> global mean matches reference", {
 
   a <- lazy_source(f)
   r <- reduce_over(
-    focal(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L),
+    focal_map(a + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L),
     "mean", c("x", "y"), nan_rm = TRUE)
 
   old <- options(garry.chunk_target_px = 300)   # force multiple chunks

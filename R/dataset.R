@@ -23,15 +23,15 @@ NULL
 #' `LazyRaster`s on a shared grid and intermediate representation (IR) graph.
 #' Construct one with [lazy_dataset()] (from a STAC source table) or
 #' [as_dataset()] (from `LazyRaster`s you already have) rather than calling
-#' this class constructor directly. Apply [lazy_map()], [focal()],
-#' [reduce_over()] and [mask()] across all bands; index a single band with
+#' this class constructor directly. Apply [lazy_map()], [focal_map()],
+#' [reduce_over()] and [apply_mask()] across all bands; index a single band with
 #' `ds[["B04"]]` or a sub-dataset with `ds[c("B04", "B03")]`; [collect()] to
 #' materialise.
 #'
 #' @param graph The shared IR `Graph`.
 #' @param bands Named list; each element is a list of per-slice `LazyRaster`s.
 #' @param mask_asset Length-0 or length-1 name of the QA/mask band, if any.
-#' @param steps Internal display-only pipeline log, shown by `draw()`; does
+#' @param steps Internal display-only pipeline log, shown by `plan_draw()`; does
 #'   not affect execution.
 #' @return A `LazyDataset`.
 #' @export
@@ -65,7 +65,23 @@ LazyDataset <- S7::new_class(
 # Value bands are every band except the QA/mask band.
 .ds_value_bands <- function(x) setdiff(names(x@bands), x@mask_asset)
 
-# One display step for the pipeline log (see draw()); execution ignores it.
+# `bands` of a dataset verb: NULL, or names (or positions) of x's bands.
+.ds_check_bands <- function(x, bands, call = rlang::caller_env()) {
+  if (is.null(bands)) {
+    return(NULL)
+  }
+  nm <- if (is.numeric(bands)) names(x@bands)[bands] else bands
+  bad <- if (is.character(nm)) nm[is.na(nm) | !nm %in% names(x@bands)] else bands
+  if (!is.character(nm) || length(bad) || anyNA(nm)) {
+    cli::cli_abort(
+      "{.arg bands} must name bands of the dataset ({.val {names(x@bands)}}); got {.val {bands}}.",
+      call = call
+    )
+  }
+  nm
+}
+
+# One display step for the pipeline log (see plan_draw()); execution ignores it.
 .step <- function(kind, label, detail = NULL) {
   list(kind = kind, label = label, detail = detail)
 }
@@ -122,12 +138,12 @@ LazyDataset <- S7::new_class(
 #'   tasks through per-daemon handles: the measured fastest remote shape,
 #'   design/gdal-multiband-fanout.md). Bands are named by their file band
 #'   descriptions when present, else `b<index>`; `grid = NULL` stays on the
-#'   file's native grid, and a supplied `grid` inserts an [align()] warp per
+#'   file's native grid, and a supplied `grid` inserts an [align_to()] warp per
 #'   band. Value transforms (e.g. [dequantize_aef()]) go downstream as
 #'   [lazy_map()]s, which fuse onto the read at [collect()].
 #'
 #' All bands share one intermediate representation (IR) graph, so a mask
-#' defined once (see [mask()]) is computed once and dedup'd across bands, and
+#' defined once (see [apply_mask()]) is computed once and dedup'd across bands, and
 #' [collect()] plans the whole dataset in one pass.
 #'
 #' @param sources A STAC `doc_items` (from [stac_query()], optionally
@@ -142,7 +158,7 @@ LazyDataset <- S7::new_class(
 #' @param bands File form only: integer source band indices to select
 #'   (default: all). Mutually exclusive with `assets`.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
-#'   alongside the value assets and used as the default `from` in [mask()].
+#'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
 #' @param sort_field Index field ordering overlaps within a slice.
 #' @param nodata Nodata handling: `NULL` (per-asset file metadata), a scalar
@@ -157,7 +173,7 @@ LazyDataset <- S7::new_class(
 #'   back to `"near"`). `mask_asset` is always read `"near"` regardless, since
 #'   interpolating packed QA bits corrupts them. `"near"` (the default)
 #'   preserves exact source values; use `"bilinear"`, `"average"`, `"cubic"`,
-#'   ... to interpolate. Resample after the fact instead with [align()].
+#'   ... to interpolate. Resample after the fact instead with [align_to()].
 #' @param scale Apply each value band's scale/offset at read. `FALSE`
 #'   (default) reads raw digital numbers. `TRUE` discovers the affine from
 #'   the assets' file metadata (the GDAL band scale/offset QGIS applies;
@@ -174,6 +190,11 @@ LazyDataset <- S7::new_class(
 #'   logical.
 #' @return A `LazyDataset`.
 #' @seealso [group_by_time()], [collect()]
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' ds <- lazy_dataset(f)
+#' names(ds)
+#' ds$nir
 #' @export
 lazy_dataset <- function(
   sources,
@@ -232,22 +253,7 @@ lazy_dataset <- function(
     as.numeric(nodata) # scalar for every asset
   }
 
-  .valid_resampling <- c(
-    "near",
-    "bilinear",
-    "cubic",
-    "cubicspline",
-    "lanczos",
-    "average",
-    "rms",
-    "mode",
-    "max",
-    "min",
-    "med",
-    "q1",
-    "q3",
-    "sum"
-  )
+  .valid_resampling <- .resampling_methods
   if (!all(resampling %in% .valid_resampling)) {
     cli::cli_abort(c(
       "Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .valid_resampling)}}.",
@@ -364,7 +370,7 @@ lazy_dataset <- function(
 # slice. A vector of paths mosaics first (same-CRS north-up tiles,
 # gdalbuildvrt); tiles the mosaic cannot hold (south-up, or across a
 # projection boundary) stay a multi-path source node that the warper
-# reads together, band by band (gdal_warp_vrt()). ONE
+# reads together, band by band (gdal_warp_window()). ONE
 # metadata probe serves every band (.gdal_handle caches the dataset handle),
 # and the probed grid is DECLARED on each band source, so construction costs
 # one header fetch however many bands the file carries. Each band is its own
@@ -479,7 +485,7 @@ lazy_dataset <- function(
         name = nm
       )
       if (!is.null(grid)) {
-        x <- align(x, grid, resampling = resolve_rs(nm))
+        x <- align_to(x, grid, resampling = resolve_rs(nm))
       }
       x
     },
@@ -507,6 +513,20 @@ as_dataset <- function(bands, mask_asset = NULL) {
   norm <- lapply(bands, function(b) {
     if (S7::S7_inherits(b, LazyRaster)) list(b) else as.list(b)
   })
+  sp <- NULL
+  for (nm in names(norm)) {
+    for (lr in norm[[nm]]) {
+      if (!S7::S7_inherits(lr, LazyRaster)) {
+        cli::cli_abort("band {.val {nm}} must hold {.cls LazyRaster}s.")
+      }
+      sp <- sp %||% lr@grid
+      if (!.spatial_equal(sp, lr@grid)) {
+        cli::cli_abort(
+          "band {.val {nm}} is not on the first band's grid ({grid_diff(sp, lr@grid)}); {.fn align_to} it first."
+        )
+      }
+    }
+  }
   g <- norm[[1L]][[1L]]@graph
   bands2 <- lapply(norm, function(layers) lapply(layers, .ds_reimport, g = g))
   LazyDataset(
@@ -537,7 +557,7 @@ S7::method(`[[`, LazyDataset) <- function(x, i) {
 
 # A subset of bands -> a sub-dataset.
 S7::method(`[`, LazyDataset) <- function(x, i) {
-  sub <- x@bands[i]
+  sub <- x@bands[.ds_check_bands(x, i)]
   LazyDataset(
     graph = x@graph,
     bands = sub,
@@ -555,7 +575,81 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 # and R < 4.6's `checking replacement functions` calls get() on that entry
 # and halts.
 #' @rawNamespace S3method("[[<-", "garry::LazyDataset", .lazy_dataset_assign)
+# Split a (t, y, x) raster into its per-slice layers: a stack along t
+# gives its inputs back, and an elementwise map over t-stacks is rebuilt
+# once per slice over the matching slice of each input. Anything else
+# (a reduction, a scan, a focal over the stack) has no per-slice form.
+.split_t <- function(x) {
+  graph <- x@graph
+  memo <- new.env(parent = emptyenv())
+  slice_of <- function(id, k) {
+    key <- paste(id, k)
+    if (!is.null(memo[[key]])) {
+      return(memo[[key]])
+    }
+    n <- graph_get(graph, id)
+    if (!"t" %in% names(n@grid@dims)) {
+      return(id) # a 2-D input broadcasts across slices
+    }
+    out <- if (S7::S7_inherits(n, StackNode) && identical(n@along, "t")) {
+      n@parents[[k]]
+    } else if (S7::S7_inherits(n, MapNode)) {
+      g <- n@grid
+      keep <- names(g@dims) != "t"
+      # forced before graph_add(), which allocates this node's id first
+      parents <- vapply(n@parents, slice_of, integer(1), k = k)
+      graph_add(
+        graph,
+        MapNode,
+        parents = parents,
+        grid = GridSpec(
+          crs = g@crs,
+          transform = g@transform,
+          extent = g@extent,
+          dims = g@dims[keep],
+          dtype = g@dtype,
+          labels = g@labels[names(g@labels) != "t"]
+        ),
+        fn = n@fn,
+        role = n@role
+      )
+    } else {
+      NA_integer_
+    }
+    memo[[key]] <- out
+    out
+  }
+  n_t <- x@grid@dims[["t"]]
+  ids <- vapply(seq_len(n_t), function(k) slice_of(x@node_id, k), integer(1))
+  if (anyNA(ids)) {
+    return(NULL)
+  }
+  layers <- lapply(ids, function(id) {
+    LazyRaster(graph = graph, node_id = id, grid = graph_get(graph, id)@grid)
+  })
+  stats::setNames(layers, x@grid@labels[["t"]])
+}
+
 .lazy_dataset_assign <- function(x, i, value) {
+  if (S7::S7_inherits(value, LazyRaster) && "t" %in% names(value@grid@dims)) {
+    # ds[["ndvi"]] <- (ds$nir - ds$red) / (ds$nir + ds$red) on a multi-slice
+    # dataset: store per-slice layers like every other band.
+    split <- .split_t(value)
+    if (is.null(split)) {
+      cli::cli_abort(c(
+        "assigned band {.val {i}} has a {.val t} axis that cannot be split into slices.",
+        "i" = "Assign a list of per-slice {.cls LazyRaster}s instead."
+      ))
+    }
+    value <- split
+  } else if (
+    S7::S7_inherits(value, LazyRaster) &&
+      length(setdiff(names(value@grid@dims), c("x", "y")))
+  ) {
+    cli::cli_abort(
+      "assigned band {.val {i}} has a non-spatial axis; a band holds 2-D layers."
+    )
+  }
   layers <- if (S7::S7_inherits(value, LazyRaster)) {
     list(value)
   } else if (is.list(value)) {
@@ -583,7 +677,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   )
 }
 
-# print() cards and draw() live in draw.R.
+# print() cards and plan_draw() live in draw.R.
 
 # ---------------------------------------------------------------------------
 # Polymorphic-verb backends (dispatched from lazy_map/focal/reduce_over).
@@ -598,6 +692,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
       "i" = "Extract bands with {.code ds[[\"B04\"]]} for cross-band math."
     ))
   }
+  bands <- .ds_check_bands(x, bands)
   sel <- bands %||% .ds_value_bands(x)
   newbands <- x@bands
   for (a in sel) {
@@ -617,11 +712,12 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 }
 
 .ds_focal <- function(x, fn, radius, boundary, bands) {
+  bands <- .ds_check_bands(x, bands)
   sel <- bands %||% .ds_value_bands(x)
   newbands <- x@bands
   for (a in sel) {
     newbands[[a]] <- lapply(x@bands[[a]], function(lr) {
-      focal(lr, fn = fn, radius = radius, boundary = boundary)
+      focal_map(lr, fn = fn, radius = radius, boundary = boundary)
     })
   }
   LazyDataset(
@@ -643,9 +739,11 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
 }
 
 .ds_reduce <- function(x, op, over, nan_rm, bands) {
+  bands <- .ds_check_bands(x, bands)
   if (identical(over, "band")) {
+    # value bands by default: a QA band's codes are not reflectances
     return(reduce_over(
-      stack_bands(if (is.null(bands)) x else x[bands]),
+      stack_bands(x[bands %||% .ds_value_bands(x)]),
       op,
       "band",
       nan_rm = nan_rm
@@ -684,7 +782,8 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
       "i" = "Use {.fn stack_bands} + {.fn scan_over} for a band scan."
     ))
   }
-  sel <- bands %||% names(x@bands)
+  bands <- .ds_check_bands(x, bands)
+  sel <- bands %||% .ds_value_bands(x)
   newbands <- x@bands
   for (a in sel) {
     lr <- lazy_stack(x@bands[[a]], along = "t")
@@ -818,8 +917,8 @@ LazyDatasetGroups <- S7::new_class(
 #'   function mapping a slice name to a group label.
 #' @return A `LazyDatasetGroups` (a named list of per-group `LazyDataset`s).
 #'   Reduce it with [reduce_over()], then [collect()] returns a named list of
-#'   results (or writes one file per group when `path` carries a `{group}`
-#'   placeholder, e.g. `"ndvi_{group}.tif"`).
+#'   results, and [write_tif()] writes one file per group when its `path`
+#'   carries a `{group}` placeholder, e.g. `write_tif(x, "ndvi_{group}.tif")`.
 #' @export
 group_by_time <- function(x, by = "month") {
   # A bare labelled (t,y,x) cube groups too: rebuild the per-slice
@@ -881,11 +980,10 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"), over = "t") {
   if (S7::S7_inherits(x, LazyDataset)) {
     newbands <- x@bands
     for (a in setdiff(names(x@bands), x@mask_asset)) {
-      lr <- if (length(x@bands[[a]]) == 1L) {
-        x@bands[[a]][[1L]]
-      } else {
-        lazy_stack(x@bands[[a]], along = "t")
+      if (length(x@bands[[a]]) == 1L) {
+        next # a single slice has no gaps to fill along t
       }
+      lr <- lazy_stack(x@bands[[a]], along = "t")
       newbands[[a]] <- list(fill_gaps(lr, method, over))
     }
     return(LazyDataset(
@@ -1037,8 +1135,14 @@ stack_bands <- function(x) {
 #'   `"inner"` pairs on the shared slice names and reports what
 #'   dropped.
 #' @return A `LazyDataset` with masked value bands.
+#' @examples
+#' f <- system.file("extdata", "garry-example.tif", package = "garry")
+#' ds <- lazy_dataset(f)
+#' # QA values 2 and 8 flag bad pixels
+#' masked <- apply_mask(ds, from = "qa", where = c(2, 8))
+#' sum(is.nan(collect(masked$red)))
 #' @export
-mask <- function(
+apply_mask <- function(
   x,
   from = NULL,
   where,
@@ -1173,7 +1277,7 @@ mask <- function(
 
 #' Build a QA-bitmask predicate.
 #'
-#' Returns a predicate `\(f) ...` for [mask()]'s `where` argument that flags a
+#' Returns a predicate `\(f) ...` for [apply_mask()]'s `where` argument that flags a
 #' pixel bad when any of the given bits is set. Nodata pixels are treated as
 #' clear (matching the QA-fill convention). Use for packed-flag QA bands (HLS
 #' Fmask, Landsat QA_PIXEL) where a value list cannot express the test;
@@ -1181,11 +1285,16 @@ mask <- function(
 #'
 #' @param bits Integer bit positions (0-based) that mark a pixel as bad.
 #' @return A predicate function of one array, returning a 0/1 mask:
-#'   pass it as [mask()]'s `where`, or apply it directly with
+#'   pass it as [apply_mask()]'s `where`, or apply it directly with
 #'   [lazy_map()].
 #' @export
 qa_bits <- function(bits) {
-  m <- as.integer(sum(2^as.integer(bits)))
+  if (!is.numeric(bits) || !length(bits) || anyNA(bits) ||
+      any(bits != round(bits)) || any(bits < 0 | bits > 30)) {
+    cli::cli_abort("{.arg bits} must be whole numbers in 0..30, not {.val {bits}}.")
+  }
+  bits <- unique(as.integer(bits)) # a repeated bit must not carry into the next
+  m <- Reduce(bitwOr, bitwShiftL(1L, bits))
   fn <- function(f) {
     fc <- g_ifelse(g_is_nodata(f), 0, f)
     g_cast(g_bitand(g_cast(fc, "i32"), m) > 0, "f32")
@@ -1213,7 +1322,7 @@ qa_bits <- function(bits) {
 
 # Binary morphology on a 0/1 mask, disk structuring element. Erosion of a 0/1
 # mask is the product over the disk offsets; dilation is its dual. NaN (beyond-
-# edge halo pad) propagates and reads as clear in mask()'s final ifelse,
+# edge halo pad) propagates and reads as clear in apply_mask()'s final ifelse,
 # matching scipy's constant-0 border.
 .disk_sel <- function(r) {
   o <- expand.grid(dx = -r:r, dy = -r:r)
@@ -1221,11 +1330,11 @@ qa_bits <- function(bits) {
 }
 .erode <- function(x, r) {
   sel <- .disk_sel(r)
-  focal(x, radius = as.integer(r), fn = function(sh) Reduce(`*`, sh[sel]))
+  focal_map(x, radius = as.integer(r), fn = function(sh) Reduce(`*`, sh[sel]))
 }
 .dilate <- function(x, r) {
   sel <- .disk_sel(r)
-  focal(x, radius = as.integer(r), fn = function(sh) {
+  focal_map(x, radius = as.integer(r), fn = function(sh) {
     1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))
   })
 }

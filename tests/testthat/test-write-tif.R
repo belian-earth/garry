@@ -221,3 +221,74 @@ test_that("a composite-shaped quantized write routes to the scheduler, identical
   expect_identical(md$grid@dtype, "i16")
   expect_identical(md$scale, 0.5)
 })
+
+test_that("re-reading a rewritten file returns the new pixels", {
+  f <- fixture_gradient_f32()
+  path <- withr::local_tempfile(fileext = ".tif")
+  x <- lazy_source(f)
+  write_tif(x, path)
+  first <- collect(lazy_source(path))
+  write_tif(x * 2, path)
+  second <- collect(lazy_source(path))
+  expect_equal(second, 2 * first, ignore_attr = TRUE)
+})
+
+test_that("band_names reach the file and the collected result", {
+  f <- fixture_gradient_f32()
+  ds <- as_dataset(list(a = lazy_source(f), b = lazy_source(f) * 2))
+  path <- withr::local_tempfile(fileext = ".tif")
+  write_tif(ds, path, band_names = c("red", "nir"))
+  r <- methods::new(gdalraster::GDALRaster, path)
+  on.exit(r$close(), add = TRUE)
+  expect_identical(c(r$getDescription(1L), r$getDescription(2L)), c("red", "nir"))
+  # the default is the dataset's band names, and collect() carries them
+  expect_identical(attr(collect(ds), "gis")$band_names, c("a", "b"))
+  skip_if_not_installed("terra")
+  expect_identical(names(as_terra(collect(ds))), c("a", "b"))
+})
+
+test_that("write targets are checked before anything runs", {
+  f <- fixture_gradient_f32()
+  x <- list(a = lazy_source(f), b = lazy_source(f) * 2)
+  d <- withr::local_tempdir()
+  expect_error(write_tif(x, file.path(d, c("a.tif", "b.tif"))), "one path per sink")
+  expect_error(write_tif(x, file.path(d, "one.tif")), "existing directory")
+  expect_error(
+    write_tif(x, c(a = file.path(d, "a.tif"), z = file.path(d, "z.tif"))),
+    "named like"
+  )
+  expect_error(write_tif(lazy_source(f), file.path(d, c("a.tif", "b.tif"))), "single file path")
+  out <- write_tif(x, c(a = file.path(d, "a.tif"), b = file.path(d, "b.tif")))
+  expect_true(all(file.exists(file.path(d, c("a.tif", "b.tif")))))
+})
+
+test_that("a directory target returns the per-sink files", {
+  f <- fixture_gradient_f32()
+  x <- list(a = lazy_source(f), b = lazy_source(f) * 2)
+  d <- withr::local_tempdir()
+  out <- write_tif(x, d, distributed = FALSE)
+  expect_identical(out, c(a = file.path(d, "a.tif"), b = file.path(d, "b.tif")))
+  d2 <- withr::local_tempdir()
+  out2 <- write_tif(x, d2, cog = TRUE, distributed = FALSE)
+  expect_setequal(basename(unlist(out2)), c("a.tif", "b.tif"))
+  expect_setequal(list.files(d2), c("a.tif", "b.tif"))
+})
+
+test_that("quantized values saturating at a nodata limit stay valid", {
+  f <- fixture_gradient_f32()
+  path <- withr::local_tempfile(fileext = ".tif")
+  # everything far above u8's range, nodata at its top
+  write_tif(lazy_source(f) * 1000, path, dtype = "u8", scale = 1, offset = 0, nodata = 255)
+  v <- gdal_read_window(path, 1L, 0L, 0L, 60L, 40L)
+  expect_true(all(v == 254))
+})
+
+test_that("write_tif validates dtype, nodata and quantization up front", {
+  x <- lazy_source(fixture_gradient_f32())
+  p <- withr::local_tempfile(fileext = ".tif")
+  expect_error(write_tif(x, p, dtype = "f16"), "must be one of")
+  expect_error(write_tif(x, p, nodata = c(1, 2)), "single number")
+  expect_error(write_tif(x, p, nodata = "a"), "single number")
+  expect_error(write_tif(x, p, dtype = "i16", nodata = 1.5), "whole number")
+  expect_error(write_tif(x, p, dtype = "u32", scale = 0.1), "other than u32")
+})

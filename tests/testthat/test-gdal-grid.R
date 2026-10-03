@@ -9,11 +9,11 @@ test_that("gdal_grid_spec matches terra metadata (f32 fixture)", {
 
   g <- meta$grid
   e <- as.vector(terra::ext(r))   # terra order: xmin, xmax, ymin, ymax
-  expect_equal(unname(c(xmin(g), xmax(g), ymin(g), ymax(g))),
+  expect_equal(unname(grid_bbox(g)[c("xmin", "xmax", "ymin", "ymax")]),
                unname(e[c("xmin", "xmax", "ymin", "ymax")]))
   expect_equal(unname(g@dims[c("x", "y")]),
                c(terra::ncol(r), terra::nrow(r)))
-  expect_equal(res(g), terra::res(r))
+  expect_equal(unname(grid_res(g)), terra::res(r))
   expect_true(crs_equal(g@crs, terra::crs(r)))
   expect_identical(g@dtype, "f32")
   expect_length(meta$nodata, 0L)
@@ -29,9 +29,9 @@ test_that("gdal_grid_spec normalises a south-up geotransform to north-up", {
   d$close()
 
   g <- gdal_grid_spec(f)$grid
-  expect_equal(unname(c(xmin(g), ymin(g), xmax(g), ymax(g))),
+  expect_equal(unname(grid_bbox(g)),
                c(500000, 8525440, 500640, 8525760))   # ymin < ymax, valid
-  expect_equal(res(g), c(10, 10))                      # positive, north-up
+  expect_equal(unname(grid_res(g)), c(10, 10))                      # positive, north-up
   expect_equal(g@transform[6], -10)                    # transform flipped up
 })
 
