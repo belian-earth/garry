@@ -151,3 +151,15 @@ jobs:
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+
+      # rcmdcheck can miss an ERROR whose line a warning interrupts (a
+      # test run killed at the elapsed-time limit passed green on
+      # Windows, PR #31): fail on the check log's own status line.
+      - name: Fail on any ERROR in the check log
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          log=$(find check -name 00check.log | head -1)
+          [ -n "$log" ] || { echo "no 00check.log"; exit 1; }
+          grep -E "^Status:" "$log"
+          ! grep -qE "^Status:.*ERROR" "$log"

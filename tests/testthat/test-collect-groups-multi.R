@@ -120,7 +120,10 @@ test_that("write_tif(cog = TRUE) on groups writes what the plain route does", {
     plain_root <- withr::local_tempdir()
     plain <- write_tif(gr, sub(root, plain_root, path, fixed = TRUE))
     cog <- write_tif(gr, path, cog = TRUE)
-    rel <- function(p, r) substring(normalizePath(p), nchar(normalizePath(r)) + 2L)
+    # "/" on every OS, as list.files() returns
+    rel <- function(p, r) {
+      substring(normalizePath(p, "/"), nchar(normalizePath(r, "/")) + 2L)
+    }
     expect_setequal(rel(unlist(cog), root), rel(unlist(plain), plain_root))
     # nothing but the finals is left behind
     expect_setequal(

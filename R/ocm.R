@@ -23,7 +23,13 @@
   if (length(list.files(fetched, pattern = "safetensors$"))) {
     return(fetched)
   }
-  base <- path.expand("~/.local/share/omnicloudmask")
+  # $HOME, not "~": on Windows R resolves "~" from R_USER at startup
+  base <- file.path(
+    Sys.getenv("HOME", path.expand("~")),
+    ".local",
+    "share",
+    "omnicloudmask"
+  )
   if (!dir.exists(base)) {
     return(fetched)
   }
