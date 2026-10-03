@@ -3,12 +3,12 @@
 array; it runs fused with adjacent operations in one compiled
 kernel. Write it with plain arithmetic and the g_* vocabulary
 (g_ifelse(), g_bitand(), g_cast(), ...). Inputs must share a
-grid (align() first otherwise); rasters on different graphs merge
+grid (align_to() first otherwise); rasters on different graphs merge
 automatically."><meta property="og:description" content="fn receives one traced array per input raster and returns one
 array; it runs fused with adjacent operations in one compiled
 kernel. Write it with plain arithmetic and the g_* vocabulary
 (g_ifelse(), g_bitand(), g_cast(), ...). Inputs must share a
-grid (align() first otherwise); rasters on different graphs merge
+grid (align_to() first otherwise); rasters on different graphs merge
 automatically."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
@@ -17,7 +17,7 @@ automatically."><meta property="og:image" content="https://belian-earth.github.i
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -37,6 +37,7 @@ automatically."><meta property="og:image" content="https://belian-earth.github.i
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -57,7 +58,7 @@ automatically."><meta property="og:image" content="https://belian-earth.github.i
 array; it runs fused with adjacent operations in one compiled
 kernel. Write it with plain arithmetic and the <code>g_*</code> vocabulary
 (<code><a href="g_ifelse.html">g_ifelse()</a></code>, <code><a href="g-bitwise.html">g_bitand()</a></code>, <code><a href="g_cast.html">g_cast()</a></code>, ...). Inputs must share a
-grid (<code><a href="align.html">align()</a></code> first otherwise); rasters on different graphs merge
+grid (<code><a href="align_to.html">align_to()</a></code> first otherwise); rasters on different graphs merge
 automatically.</p>
     </div>
 
@@ -104,6 +105,19 @@ through unchanged.</p>
     <div class="dont-index"><p><code><a href="collect.html">collect()</a></code></p></div>
     </div>
 
+    <div class="section level2">
+    <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="va">f</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/system.file.html" class="external-link">system.file</a></span><span class="op">(</span><span class="st">"extdata"</span>, <span class="st">"garry-example.tif"</span>, package <span class="op">=</span> <span class="st">"garry"</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">red</span> <span class="op">&lt;-</span> <span class="fu"><a href="lazy_source.html">lazy_source</a></span><span class="op">(</span><span class="va">f</span>, band <span class="op">=</span> <span class="fl">1L</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">nir</span> <span class="op">&lt;-</span> <span class="fu"><a href="lazy_source.html">lazy_source</a></span><span class="op">(</span><span class="va">f</span>, band <span class="op">=</span> <span class="fl">3L</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">ndvi</span> <span class="op">&lt;-</span> <span class="fu">lazy_map</span><span class="op">(</span><span class="va">nir</span>, <span class="va">red</span>, fn <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="va">n</span>, <span class="va">r</span><span class="op">)</span> <span class="op">(</span><span class="va">n</span> <span class="op">-</span> <span class="va">r</span><span class="op">)</span> <span class="op">/</span> <span class="op">(</span><span class="va">n</span> <span class="op">+</span> <span class="va">r</span><span class="op">)</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="fu"><a href="https://rdrr.io/r/base/range.html" class="external-link">range</a></span><span class="op">(</span><span class="fu"><a href="collect.html">collect</a></span><span class="op">(</span><span class="va">ndvi</span><span class="op">)</span><span class="op">)</span></span></span>
+<span class="r-err co"><span class="r-pr">#&gt;</span> <span class="error">Error in confirm_plugin_install(platform, url):</span> The <span style="color: #0000BB;">"cpu"</span> PJRT plugin needs to be downloaded for <span style="color: #0000BB;">pjrt</span> to work.</span>
+<span class="r-err co"><span class="r-pr">#&gt;</span> <span style="color: #00BBBB;">ℹ</span> Automatic downloads are not performed in non-interactive sessions.</span>
+<span class="r-err co"><span class="r-pr">#&gt;</span> <span style="color: #00BBBB;">ℹ</span> Set `PJRT_INSTALL` to <span style="color: #0000BB;">"1"</span> to allow the download, or set</span>
+<span class="r-err co"><span class="r-pr">#&gt;</span>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.</span>
+</code></pre></div>
+    </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside></div>
 

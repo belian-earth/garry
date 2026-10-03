@@ -84,7 +84,7 @@ ds
 #>   grid   1514 x 1336 • f32
 #>   crs    Lambert Azimuthal Equal Area
 #>   graph  45 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
 ## What the two masks see
@@ -130,7 +130,7 @@ until something collects it.
 
 ``` r
 
-dates <- ds[["B04"]]@grid@labels$t       # slice dates rode through
+dates <- time_labels(ds$B04)       # slice dates rode through
 i <- match("2024-05-25", dates)          # cumulus towers + hard shadows
 
 slice <- function(band) time_sel(ds[[band]], i)
@@ -168,7 +168,7 @@ considers not-usable: nodata, defective, shadows, clouds, cirrus, snow).
 
 ``` r
 
-scl_masked <- mask(ds, where = c(0, 1, 2, 3, 8, 9, 10, 11))
+scl_masked <- apply_mask(ds, where = c(0, 1, 2, 3, 8, 9, 10, 11))
 ```
 
 Route two:

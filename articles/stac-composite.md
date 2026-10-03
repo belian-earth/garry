@@ -50,9 +50,9 @@ resolutions disappear at the data boundary.
 ``` r
 
 target <- grid_from_bbox(aoi, res = 10)
-target@dims
-#>   x   y 
-#> 888 667
+dim(target)
+#>   y   x 
+#> 667 888
 ```
 
 ## Describe
@@ -80,7 +80,7 @@ ds
 #>   grid   888 x 667 • f32
 #>   crs    Lambert Azimuthal Equal Area
 #>   graph  325 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
 ## Mask
@@ -95,7 +95,7 @@ band, and the QA band is consumed.
 
 ``` r
 
-ds <- mask(ds, where = c(3, 8, 9, 10), open = 2, dilate = 3)
+ds <- apply_mask(ds, where = c(3, 8, 9, 10), open = 2, dilate = 3)
 ds <- (ds * 0.0001) - 0.1     # STAC raster metadata: scale, then offset
 ds
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ ds
 #>   grid   888 x 667 • f32
 #>   crs    Lambert Azimuthal Equal Area
 #>   graph  1365 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
 The second line is the harmonisation step readers of the asset metadata
@@ -119,12 +119,12 @@ these Planetary Computer S2 files carry none, so the arithmetic stays
 explicit.)
 
 Everything so far is graph building.
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md) shows
-the pipeline behind any one band:
+[`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
+shows the pipeline behind any one band:
 
 ``` r
 
-draw(ds[["B04"]])
+plan_draw(ds[["B04"]])
 #> ── <LazyRaster> 888 x 667 • f32 ────────────────────────────────────────────────
 #> ⬚ stack  along t
 #> └─ ƒ map  ×65

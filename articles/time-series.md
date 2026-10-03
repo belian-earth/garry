@@ -17,9 +17,9 @@ days at 30 m. Query a year of it, sign the assets for Microsoft
 Planetary Computer, and describe the data as a
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md):
 red (B04), NIR (B08), and the Fmask QA band, warped on read onto an
-equal-area analysis grid. `mask(qa_bits(0:3))` drops cirrus, cloud,
-adjacent-cloud, and shadow pixels; masked values become NaN, garry’s
-nodata.
+equal-area analysis grid. `apply_mask(qa_bits(0:3))` drops cirrus,
+cloud, adjacent-cloud, and shadow pixels; masked values become NaN,
+garry’s nodata.
 
 ``` r
 
@@ -42,7 +42,7 @@ ds <- lazy_dataset(
   nodata = c(B04 = -9999, B08 = -9999, Fmask = 255),
   resampling = "bilinear"
 ) |>
-  mask(from = "Fmask", where = qa_bits(0:3))
+  apply_mask(from = "Fmask", where = qa_bits(0:3))
 ds
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
 #>   bands  B04 B08
@@ -50,7 +50,7 @@ ds
 #>   grid   780 x 464 • f32
 #>   crs    Lambert Azimuthal Equal Area
 #>   graph  522 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
 170 scenes collapse to 87 daily time slices: same-day acquisitions from
@@ -73,7 +73,7 @@ observations, so mask them to NaN rather than clamp:
 nir <- ds[["B08"]]; red <- ds[["B04"]]
 ndvi <- lazy_map((nir - red) / (nir + red), dtype = "f32",
                  fn = function(x) g_ifelse(x > 1 | x < -1, NaN, x))
-dates <- as.Date(ndvi@grid@labels$t)
+dates <- as.Date(time_labels(ndvi))
 range(dates)
 #> [1] "2023-12-16" "2024-12-27"
 ```

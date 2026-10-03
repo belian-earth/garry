@@ -3,15 +3,15 @@
 LazyRasters on a shared grid and intermediate representation (IR) graph.
 Construct one with lazy_dataset() (from a STAC source table) or
 as_dataset() (from LazyRasters you already have) rather than calling
-this class constructor directly. Apply lazy_map(), focal(),
-reduce_over() and mask() across all bands; index a single band with
+this class constructor directly. Apply lazy_map(), focal_map(),
+reduce_over() and apply_mask() across all bands; index a single band with
 ds[["B04"]] or a sub-dataset with ds[c("B04", "B03")]; collect() to
 materialise.'><meta property="og:description" content='The dataset holds one entry per band; each entry is a list of per-time-slice
 LazyRasters on a shared grid and intermediate representation (IR) graph.
 Construct one with lazy_dataset() (from a STAC source table) or
 as_dataset() (from LazyRasters you already have) rather than calling
-this class constructor directly. Apply lazy_map(), focal(),
-reduce_over() and mask() across all bands; index a single band with
+this class constructor directly. Apply lazy_map(), focal_map(),
+reduce_over() and apply_mask() across all bands; index a single band with
 ds[["B04"]] or a sub-dataset with ds[c("B04", "B03")]; collect() to
 materialise.'><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -21,7 +21,7 @@ materialise.'><meta property="og:image" content="https://belian-earth.github.io/
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -41,6 +41,7 @@ materialise.'><meta property="og:image" content="https://belian-earth.github.io/
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -61,8 +62,8 @@ materialise.'><meta property="og:image" content="https://belian-earth.github.io/
 <code>LazyRaster</code>s on a shared grid and intermediate representation (IR) graph.
 Construct one with <code><a href="lazy_dataset.html">lazy_dataset()</a></code> (from a STAC source table) or
 <code><a href="as_dataset.html">as_dataset()</a></code> (from <code>LazyRaster</code>s you already have) rather than calling
-this class constructor directly. Apply <code><a href="lazy_map.html">lazy_map()</a></code>, <code><a href="focal.html">focal()</a></code>,
-<code><a href="reduce_over.html">reduce_over()</a></code> and <code><a href="mask.html">mask()</a></code> across all bands; index a single band with
+this class constructor directly. Apply <code><a href="lazy_map.html">lazy_map()</a></code>, <code><a href="focal_map.html">focal_map()</a></code>,
+<code><a href="reduce_over.html">reduce_over()</a></code> and <code><a href="apply_mask.html">apply_mask()</a></code> across all bands; index a single band with
 <code>ds[["B04"]]</code> or a sub-dataset with <code>ds[c("B04", "B03")]</code>; <code><a href="collect.html">collect()</a></code> to
 materialise.</p>
     </div>
@@ -94,7 +95,7 @@ materialise.</p>
 
 
 <dt id="arg-steps">steps<a class="anchor" aria-label="anchor" href="#arg-steps"></a></dt>
-<dd><p>Internal display-only pipeline log, shown by <code><a href="draw.html">draw()</a></code>; does
+<dd><p>Internal display-only pipeline log, shown by <code><a href="plan_draw.html">plan_draw()</a></code>; does
 not affect execution.</p></dd>
 
 </dl></div>

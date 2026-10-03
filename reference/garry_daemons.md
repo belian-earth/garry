@@ -4,16 +4,17 @@ Two pools instead of one: `read` daemons execute source/warp read tasks
 (and any kernels the placement pass fuses onto them), while `compute`
 daemons run the materialised XLA stages. The resource model is: **pool
 width is slots, admission is concurrency**. Every daemon is pinned to a
-disjoint slice of the machine at creation
-(`garry_opt("pool_affinity")`), so an XLA client created anywhere is
-narrow rather than all-cores; the scheduler's live-RAM byte budgets
-decide how many tasks are actually in flight; excess daemons idle lean.
-Called with no arguments it sizes the pools to the machine: `read` = all
-logical cores (remote fetch is latency-bound, so a wide read pool keeps
-the network drain full) and `compute` = a third of the logical cores,
-capped at 8 with a floor of 2; on CUDA the compute pool is 2, since
-concurrent clients share one card. `collect(distributed = TRUE)` detects
-the pools automatically and pre-compiles stage kernels at run start
+bounded, interleaved CPU mask at creation (`garry_opt("pool_affinity")`;
+masks within a pool are mostly disjoint, while read and compute masks
+overlap), so an XLA client created anywhere is narrow rather than
+all-cores; the scheduler's live-RAM byte budgets decide how many tasks
+are actually in flight; excess daemons idle lean. Called with no
+arguments it sizes the pools to the machine: `read` = all logical cores
+(remote fetch is latency-bound, so a wide read pool keeps the network
+drain full) and `compute` = a third of the logical cores, capped at 8
+with a floor of 2; on CUDA the compute pool is 2, since concurrent
+clients share one card. `collect(distributed = TRUE)` detects the pools
+automatically and pre-compiles stage kernels at run start
 (`garry_opt("jit_warmup")`), scan kernels included, targeted at the
 `garry_opt("scan_profiles")` designated profiles only.
 
@@ -69,7 +70,7 @@ garry_daemons(
 
   Passed to
   [`mirai::daemons()`](https://mirai.r-lib.org/reference/daemons.html)
-  for both pools.
+  for every pool; `dispatcher` is garry's to set.
 
 ## Value
 

@@ -44,7 +44,7 @@ embeddings
 #>   grid   2732 x 2731 • f32
 #>   crs    EPSG:32736
 #>   graph  192 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
@@ -114,7 +114,7 @@ n   <- 1e5
 pts <- wk::xy(
   stats::runif(n, xmin(grid), xmax(grid)),
   stats::runif(n, ymin(grid), ymax(grid)),
-  crs = grid@crs
+  crs = grid_crs(grid)
 )
 
 px <- extract_points(cube, pts)              # (100000, 64)

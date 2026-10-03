@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -27,6 +27,7 @@
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -88,7 +89,7 @@ descriptions).</p></dd>
 
 <dt id="arg-mask-asset">mask_asset<a class="anchor" aria-label="anchor" href="#arg-mask-asset"></a></dt>
 <dd><p>Optional QA/mask asset (e.g. <code>"Fmask"</code>, <code>"SCL"</code>); loaded
-alongside the value assets and used as the default <code>from</code> in <code><a href="mask.html">mask()</a></code>.</p></dd>
+alongside the value assets and used as the default <code>from</code> in <code><a href="apply_mask.html">apply_mask()</a></code>.</p></dd>
 
 
 <dt id="arg-granularity">granularity<a class="anchor" aria-label="anchor" href="#arg-granularity"></a></dt>
@@ -118,7 +119,7 @@ different sentinels, so the named form is typical, e.g.
 back to <code>"near"</code>). <code>mask_asset</code> is always read <code>"near"</code> regardless, since
 interpolating packed QA bits corrupts them. <code>"near"</code> (the default)
 preserves exact source values; use <code>"bilinear"</code>, <code>"average"</code>, <code>"cubic"</code>,
-... to interpolate. Resample after the fact instead with <code><a href="align.html">align()</a></code>.</p></dd>
+... to interpolate. Resample after the fact instead with <code><a href="align_to.html">align_to()</a></code>.</p></dd>
 
 
 <dt id="arg-scale">scale<a class="anchor" aria-label="anchor" href="#arg-scale"></a></dt>
@@ -164,11 +165,11 @@ source, so reads fan out band-by-band across the reader pool (per-band
 tasks through per-daemon handles: the measured fastest remote shape,
 design/gdal-multiband-fanout.md). Bands are named by their file band
 descriptions when present, else <code>b&lt;index&gt;</code>; <code>grid = NULL</code> stays on the
-file's native grid, and a supplied <code>grid</code> inserts an <code><a href="align.html">align()</a></code> warp per
+file's native grid, and a supplied <code>grid</code> inserts an <code><a href="align_to.html">align_to()</a></code> warp per
 band. Value transforms (e.g. <code><a href="dequantize_aef.html">dequantize_aef()</a></code>) go downstream as
 <code><a href="lazy_map.html">lazy_map()</a></code>s, which fuse onto the read at <code><a href="collect.html">collect()</a></code>.</p></li>
 </ul><p>All bands share one intermediate representation (IR) graph, so a mask
-defined once (see <code><a href="mask.html">mask()</a></code>) is computed once and dedup'd across bands, and
+defined once (see <code><a href="apply_mask.html">apply_mask()</a></code>) is computed once and dedup'd across bands, and
 <code><a href="collect.html">collect()</a></code> plans the whole dataset in one pass.</p>
     </div>
     <div class="section level2">
@@ -176,6 +177,20 @@ defined once (see <code><a href="mask.html">mask()</a></code>) is computed once 
     <div class="dont-index"><p><code><a href="group_by_time.html">group_by_time()</a></code>, <code><a href="collect.html">collect()</a></code></p></div>
     </div>
 
+    <div class="section level2">
+    <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="va">f</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/system.file.html" class="external-link">system.file</a></span><span class="op">(</span><span class="st">"extdata"</span>, <span class="st">"garry-example.tif"</span>, package <span class="op">=</span> <span class="st">"garry"</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">ds</span> <span class="op">&lt;-</span> <span class="fu">lazy_dataset</span><span class="op">(</span><span class="va">f</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">ds</span><span class="op">)</span></span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "red"   "green" "nir"   "qa"   </span>
+<span class="r-in"><span><span class="va">ds</span><span class="op">$</span><span class="va">nir</span></span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> <span style="color: #B2B2B2;">──</span> &lt;LazyRaster&gt; <span style="color: #0000BB;">source  </span><span style="color: #555555;">60×40 f32</span> <span style="color: #B2B2B2;">──────────────────────────────────────────────</span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   <span style="font-weight: bold;">grid </span>  60 x 40 • f32</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   <span style="font-weight: bold;">crs  </span>  EPSG:32610</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   <span style="font-weight: bold;">graph</span>  4 nodes • lazy</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> <span style="color: #555555;">  ℹ plan_draw(x) to see the pipeline</span></span>
+</code></pre></div>
+    </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside></div>
 

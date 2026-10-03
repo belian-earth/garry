@@ -3,8 +3,8 @@
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 results carry a `gis` attribute (bbox, CRS, dims); this wraps the array
 as a `terra::SpatRaster` for hand-off to the terra ecosystem (plotting,
-zonal statistics, vector ops). Band names/descriptions are preserved
-when present.
+zonal statistics, vector ops). Layers are named after the dataset's
+bands, or a stack's labels, when the result has them (`gis$band_names`).
 
 ## Usage
 

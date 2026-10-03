@@ -26,7 +26,11 @@ stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
 
 - start_date, end_date:
 
-  Dates (any lubridate-parseable form).
+  Search bounds, both inclusive: `Date`s, `POSIXct`s, or strings
+  [`as.POSIXct()`](https://rdrr.io/r/base/as.POSIXlt.html) parses in UTC
+  (such as `"2023-06-01"` or `"2023-06-01 12:00:00"`). A date without a
+  time covers that whole day, so `end_date = "2023-12-31"` includes
+  acquisitions made on the 31st.
 
 - limit:
 
@@ -45,7 +49,6 @@ and
 as the usual next steps.
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),

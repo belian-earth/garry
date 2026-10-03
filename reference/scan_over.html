@@ -13,7 +13,7 @@ output grid is the input grid unchanged; only the dtype may differ."><meta prope
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -33,6 +33,7 @@ output grid is the input grid unchanged; only the dtype may differ."><meta prope
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -107,6 +108,23 @@ is supported over <code>"t"</code>/<code>"band"</code> only.</p>
 scanned independently (<code>bands</code> restricts which).</p>
     </div>
 
+    <div class="section level2">
+    <h2 id="ref-examples">Examples<a class="anchor" aria-label="anchor" href="#ref-examples"></a></h2>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="va">f</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/system.file.html" class="external-link">system.file</a></span><span class="op">(</span><span class="st">"extdata"</span>, <span class="st">"garry-example.tif"</span>, package <span class="op">=</span> <span class="st">"garry"</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">red</span> <span class="op">&lt;-</span> <span class="fu"><a href="lazy_source.html">lazy_source</a></span><span class="op">(</span><span class="va">f</span>, band <span class="op">=</span> <span class="fl">1L</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">stk</span> <span class="op">&lt;-</span> <span class="fu"><a href="lazy_stack.html">lazy_stack</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>a <span class="op">=</span> <span class="va">red</span>, b <span class="op">=</span> <span class="va">red</span>, c <span class="op">=</span> <span class="va">red</span><span class="op">)</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="co"># a running sum along t</span></span></span>
+<span class="r-in"><span><span class="va">cs</span> <span class="op">&lt;-</span> <span class="fu">scan_over</span><span class="op">(</span><span class="va">stk</span>, over <span class="op">=</span> <span class="st">"t"</span>, fn <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="va">xs</span>, <span class="va">margin</span><span class="op">)</span> <span class="op">{</span></span></span>
+<span class="r-in"><span>  <span class="fu"><a href="g_scan.html">g_scan</a></span><span class="op">(</span><span class="fl">0</span>, <span class="kw">function</span><span class="op">(</span><span class="va">carry</span>, <span class="va">v</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>carry <span class="op">=</span> <span class="va">carry</span> <span class="op">+</span> <span class="va">v</span>, out <span class="op">=</span> <span class="va">carry</span> <span class="op">+</span> <span class="va">v</span><span class="op">)</span>,</span></span>
+<span class="r-in"><span>         xs <span class="op">=</span> <span class="va">xs</span><span class="op">[[</span><span class="fl">1L</span><span class="op">]</span><span class="op">]</span><span class="op">)</span><span class="op">$</span><span class="va">out</span></span></span>
+<span class="r-in"><span><span class="op">}</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="fu"><a href="collect.html">collect</a></span><span class="op">(</span><span class="va">cs</span><span class="op">)</span><span class="op">)</span></span></span>
+<span class="r-err co"><span class="r-pr">#&gt;</span> <span class="error">Error in confirm_plugin_install(platform, url):</span> The <span style="color: #0000BB;">"cpu"</span> PJRT plugin needs to be downloaded for <span style="color: #0000BB;">pjrt</span> to work.</span>
+<span class="r-err co"><span class="r-pr">#&gt;</span> <span style="color: #00BBBB;">ℹ</span> Automatic downloads are not performed in non-interactive sessions.</span>
+<span class="r-err co"><span class="r-pr">#&gt;</span> <span style="color: #00BBBB;">ℹ</span> Set `PJRT_INSTALL` to <span style="color: #0000BB;">"1"</span> to allow the download, or set</span>
+<span class="r-err co"><span class="r-pr">#&gt;</span>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.</span>
+</code></pre></div>
+    </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside></div>
 

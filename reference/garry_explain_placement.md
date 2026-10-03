@@ -38,7 +38,9 @@ garry_explain_placement(
 ## Value
 
 A data.frame with columns `source`, `compute`, `bands`, `flops_px`,
-`move_mb`, `cost_fuse_s`, `cost_mat_s`, `decision`, `reason`.
+`move_mb`, `cost_fuse_s`, `cost_mat_s`, `decision`, `tiles` (row tiles a
+fused kernel runs in), and `reason`; zero rows when no read feeds a
+compute stage.
 
 ## See also
 

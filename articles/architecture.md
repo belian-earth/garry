@@ -21,7 +21,7 @@ zoom.
 Two things are worth reading directly off this graph. First, the
 lazy-verb layer
 ([`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md),
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md),
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md),
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md),
 and friends) reaches neither backend: building a pipeline touches no
 data and compiles nothing. Second, everything that does reach anvl or
@@ -61,7 +61,7 @@ The colour groups in both graphs correspond to the package’s subsystems:
 - **Models & kernels**: OmniCloudMask, the Kalman and Hampel smoothers,
   band projection, and dequantisers.
 - **Viz & UX**:
-  [`draw()`](https://belian-earth.github.io/garry/reference/draw.md),
+  [`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md),
   [`preview()`](https://belian-earth.github.io/garry/reference/preview.md),
   and task reports.
 

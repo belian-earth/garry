@@ -70,10 +70,10 @@ No empty-band padding or reordering is needed (unlike a VRT-based
 approach):
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 gives each band only the slices that carry it, and
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md) pairs
-a band’s slices with the matching Fmask by name. A Landsat-only thermal
-band and a Sentinel-only red-edge band each reduce over exactly their
-own observations.
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
+pairs a band’s slices with the matching Fmask by name. A Landsat-only
+thermal band and a Sentinel-only red-edge band each reduce over exactly
+their own observations.
 
 ## Cloud-masked median composite
 
@@ -97,7 +97,7 @@ comp <- lazy_dataset(
   nodata = c(stats::setNames(rep(-9999, length(bands)), bands), Fmask = 255),
   resampling = "bilinear"
 ) |>
-  mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
+  apply_mask(from = "Fmask", where = qa_bits(0:3), open = 2, dilate = 3) |>
   reduce_over("median", over = "t")
 ```
 

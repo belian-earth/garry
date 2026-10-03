@@ -1,7 +1,7 @@
 # Stack aligned rasters along a new outer dim (default time).
 
 All layers must share the spatial grid
-([`align()`](https://belian-earth.github.io/garry/reference/align.md)
+([`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
 first otherwise); dtypes promote to a common type. Chunks carry the
 stack as (t, y, x) arrays; temporal reductions
 (`reduce_over(x, "median", "t")`) then run chunk-locally.

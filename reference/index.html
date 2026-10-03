@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -27,6 +27,7 @@
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -136,13 +137,6 @@
 
         <dt>
 
-          <code><a href="lazy_stac_stack.html">lazy_stac_stack()</a></code>
-
-        </dt>
-        <dd>Lazy time-sliced stack of one STAC asset on a target grid.</dd>
-
-        <dt>
-
           <code><a href="lazy_source.html">lazy_source()</a></code>
 
         </dt>
@@ -210,7 +204,7 @@
 
       <dl><dt>
 
-          <code><a href="mask.html">mask()</a></code>
+          <code><a href="apply_mask.html">apply_mask()</a></code>
 
         </dt>
         <dd>Mask a dataset from a QA band.</dd>
@@ -363,7 +357,7 @@
 
         <dt>
 
-          <code><a href="focal.html">focal()</a></code>
+          <code><a href="focal_map.html">focal_map()</a></code>
 
         </dt>
         <dd>Focal (stencil) op.</dd>
@@ -380,7 +374,7 @@
           <code><a href="bilateral_focal.html">bilateral_focal()</a></code>
 
         </dt>
-        <dd>A bilateral (edge-preserving) focal body for <code><a href="../reference/focal.html">focal()</a></code>.</dd>
+        <dd>A bilateral (edge-preserving) focal body for <code><a href="../reference/focal_map.html">focal_map()</a></code>.</dd>
 
         <dt>
 
@@ -419,7 +413,7 @@
 
         <dt>
 
-          <code><a href="align.html">align()</a></code>
+          <code><a href="align_to.html">align_to()</a></code>
 
         </dt>
         <dd>Lazily resample/reproject onto a target grid.</dd>
@@ -528,7 +522,7 @@
 
         <dt>
 
-          <code><a href="draw.html">draw()</a></code>
+          <code><a href="plan_draw.html">plan_draw()</a></code>
 
         </dt>
         <dd>Draw the pipeline of a lazy object.</dd>
@@ -600,10 +594,31 @@
 
         <dt>
 
-          <code><a href="grid-accessors.html">xmin()</a></code> <code><a href="grid-accessors.html">ymin()</a></code> <code><a href="grid-accessors.html">xmax()</a></code> <code><a href="grid-accessors.html">ymax()</a></code> <code><a href="grid-accessors.html">res()</a></code>
+          <code><a href="grid-accessors.html">grid_bbox()</a></code> <code><a href="grid-accessors.html">grid_res()</a></code> <code><a href="grid-accessors.html">grid_crs()</a></code>
 
         </dt>
-        <dd>Grid extent and resolution accessors.</dd>
+        <dd>Grid extent, resolution and CRS</dd>
+
+        <dt>
+
+          <code><a href="time_labels.html">time_labels()</a></code>
+
+        </dt>
+        <dd>Time labels of a lazy object</dd>
+
+        <dt>
+
+          <code><a href="lazy-dim.html">lazy-dim</a></code>
+
+        </dt>
+        <dd>Dimensions of a lazy raster</dd>
+
+        <dt>
+
+          <code><a href="dataset-bands.html">dataset-bands</a></code>
+
+        </dt>
+        <dd>Bands of a lazy dataset</dd>
 
         <dt>
 
@@ -683,6 +698,20 @@
 
         </dt>
         <dd>Cast to a garry dtype.</dd>
+
+        <dt>
+
+          <code><a href="g_round.html">g_round()</a></code>
+
+        </dt>
+        <dd>Round to nearest integer value (half to even), elementwise.</dd>
+
+        <dt>
+
+          <code><a href="g_clamp.html">g_clamp()</a></code>
+
+        </dt>
+        <dd>Clamp values to a closed range, elementwise.</dd>
 
         <dt>
 
@@ -840,7 +869,7 @@
       </dl></div><div class="section level2">
       <h2 id="gdal-adapter-low-level-io-">GDAL adapter (low-level IO)<a class="anchor" aria-label="anchor" href="#gdal-adapter-low-level-io-"></a></h2>
 
-      <div class="section-desc"><p>Direct windowed read/write, warp, staging, and GTI index construction. Used by the cube layer; exposed for bespoke IO.</p></div>
+      <div class="section-desc"><p>Staging and GTI index construction for bespoke IO.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -848,34 +877,6 @@
 
 
       <dl><dt>
-
-          <code><a href="gdal_read_window.html">gdal_read_window()</a></code>
-
-        </dt>
-        <dd>Read a window from a GDAL source as a garry-oriented matrix.</dd>
-
-        <dt>
-
-          <code><a href="gdal_write_window.html">gdal_write_window()</a></code>
-
-        </dt>
-        <dd>Write a garry-oriented matrix into an open output dataset.</dd>
-
-        <dt>
-
-          <code><a href="gdal_create_output.html">gdal_create_output()</a></code>
-
-        </dt>
-        <dd>Create an output raster for a grid.</dd>
-
-        <dt>
-
-          <code><a href="gdal_warp_vrt.html">gdal_warp_vrt()</a></code>
-
-        </dt>
-        <dd>Build a warped VRT of a source onto an exact target grid.</dd>
-
-        <dt>
 
           <code><a href="stage_raw_cube.html">stage_raw_cube()</a></code>
 
@@ -973,7 +974,7 @@
           <code><a href="FocalNode.html">FocalNode()</a></code>
 
         </dt>
-        <dd>Focal (stencil) op. <code>radius</code> is the halo in pixels; <code>boundary</code> is one of "constant", "reflect", "nearest", "wrap", "none". Created by <code><a href="../reference/focal.html">focal()</a></code>.</dd>
+        <dd>Focal (stencil) op. <code>radius</code> is the halo in pixels; <code>boundary</code> is "nodata", the only policy: cells beyond the raster edge are NaN. Created by <code><a href="../reference/focal_map.html">focal_map()</a></code> and <code><a href="../reference/focal_kernel.html">focal_kernel()</a></code>.</dd>
 
         <dt>
 
@@ -994,7 +995,7 @@
           <code><a href="WarpNode.html">WarpNode()</a></code>
 
         </dt>
-        <dd>Lazy resample/reproject to a target grid. Created by <code><a href="../reference/align.html">align()</a></code>. Barrier. At execution time this materialises as a gdalraster VRT warp.</dd>
+        <dd>Lazy resample/reproject to a target grid. Created by <code><a href="../reference/align_to.html">align_to()</a></code>. Barrier. At execution time this materialises as a gdalraster VRT warp.</dd>
 
         <dt>
 

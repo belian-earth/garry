@@ -37,9 +37,10 @@ FusedNode(
 - role:
 
   Optional semantic role tag (e.g. "mask", set by
-  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)).
+  [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)).
   Pure metadata: never read by the planner or executors; surfaced by
-  [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) and
+  [`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
+  and
   [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md).
 
 - fn:

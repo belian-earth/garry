@@ -33,5 +33,7 @@ it with
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md),
 then
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
-returns a named list of results (or writes one file per group when
-`path` carries a `{group}` placeholder, e.g. `"ndvi_{group}.tif"`).
+returns a named list of results, and
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
+writes one file per group when its `path` carries a `{group}`
+placeholder, e.g. `write_tif(x, "ndvi_{group}.tif")`.

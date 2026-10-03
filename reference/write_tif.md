@@ -63,7 +63,8 @@ write_tif(
 - creation_options:
 
   GDAL creation options (`"KEY=VALUE"`). With `cog = FALSE` these
-  replace the default tiled-DEFLATE options of the streamed write; with
+  replace the default tiled-DEFLATE options of the streamed write
+  (compression stays multi-threaded unless they set `NUM_THREADS`); with
   `cog = TRUE` they go to the COG translate pass (the temporary streamed
   file keeps the defaults).
 
@@ -75,8 +76,9 @@ write_tif(
 
 - band_names:
 
-  As in
-  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md).
+  Band descriptions written to the file, one per output band. Defaults
+  to the dataset's band names, or the labels of a `band` stack; given,
+  it takes precedence over both.
 
 - distributed:
 
@@ -98,6 +100,11 @@ reflectance file is half the raw bytes of float32 and compresses far
 better. NaN demotes to `nodata`, which is stored in DN units and must
 sit outside the quantized data range.
 
+Integer outputs saturate: a value beyond the dtype's range is written as
+the nearest limit, without a warning. When `nodata` is one of those
+limits, quantized values saturate one step inside it, so they never read
+back as nodata; choose `scale` and `offset` so the data fits.
+
 `cog = TRUE` streams to a temporary tiled GeoTIFF beside `path`, then
 finalises with one `gdal_translate` pass to the COG driver (which is
 copy-only by design: overviews precede full-res data). The extra
@@ -111,3 +118,19 @@ COG.
 to return the result in the R session;
 [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
 to checkpoint to local cubes and stay lazy.
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+out <- tempfile(fileext = ".tif")
+write_tif((nir - red) / (nir + red), out)
+#> Error in confirm_plugin_install(platform, url): The "cpu" PJRT plugin needs to be downloaded for pjrt to work.
+#> ℹ Automatic downloads are not performed in non-interactive sessions.
+#> ℹ Set `PJRT_INSTALL` to "1" to allow the download, or set
+#>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.
+file.exists(out)
+#> [1] FALSE
+```

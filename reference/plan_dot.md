@@ -27,5 +27,5 @@ A single DOT string.
 
 [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
 for the interactive DAG,
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md) for
-the user-facing pipeline visualisation.
+[`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
+for the user-facing pipeline visualisation.

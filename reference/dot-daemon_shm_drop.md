@@ -1,6 +1,6 @@
 # Daemon task body: release named shared-memory regions.
 
-Internal (exported only so mirai daemons can address it via `::`).
+Internal; daemons reach it through `asNamespace("garry")`.
 
 ## Usage
 

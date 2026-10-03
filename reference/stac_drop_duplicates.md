@@ -24,7 +24,6 @@ The deduplicated `doc_items` / data frame.
 ## See also
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),
 [`stac_filter_coverage()`](https://belian-earth.github.io/garry/reference/stac_filter_coverage.md),

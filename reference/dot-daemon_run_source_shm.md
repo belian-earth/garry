@@ -5,8 +5,8 @@ The mori-store counterpart of `.daemon_run_source` and
 parts as elements of one shared list: consumers extract their element
 zero-copy. (Consumer-side RANGE subsetting of a mapped matrix would
 materialise the whole window per input, a large transient allocation, so
-the split happens producer-side here too.) Internal (exported only so
-mirai daemons can address it via `::`).
+the split happens producer-side here too.) Internal; daemons reach it
+through `asNamespace("garry")`.
 
 ## Usage
 
@@ -26,7 +26,8 @@ mirai daemons can address it via `::`).
   store_raw = FALSE,
   scale = numeric(0),
   offset = numeric(0),
-  decim = NULL
+  decim = NULL,
+  resampling = "near"
 )
 ```
 

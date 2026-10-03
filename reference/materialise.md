@@ -63,12 +63,15 @@ names, slice dates, and the `mask_asset` into the rebuilt dataset;
 ragged bands (a band missing some slices) survive. A `LazyRaster` writes
 one cube and reopens it. A computed raster cannot be warped directly, so
 materialise-then-rewarp is the supported route:
-`align(materialise(x, dir), grid)`.
+`align_to(materialise(x, dir), grid)`.
 
 Files land at `dir/name-<slice>.vrt` (dataset) or `dir/name.vrt`
-(raster). Existing files are refused unless `overwrite = TRUE`: the
-graph may have changed since they were written, and silently reusing
-stale pixels is the failure mode a checkpoint must not have.
+(raster); integer-typed data is written as `.tif` instead, since raw
+cubes hold floats only. A raster with a `t` or `band` axis comes back
+stacked along that axis with its labels. Existing files are refused
+unless `overwrite = TRUE`: the graph may have changed since they were
+written, and silently reusing stale pixels is the failure mode a
+checkpoint must not have.
 
 `dir` defaults to a fresh unique directory under the session's
 [`tempdir()`](https://rdrr.io/r/base/tempfile.html), announced by a

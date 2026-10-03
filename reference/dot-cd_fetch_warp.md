@@ -1,6 +1,6 @@
 # Daemon task body: warp one slice's remote items into an f32 buffer.
 
-Internal (exported only so mirai daemons can address it via `::`).
+Internal; daemons reach it through `asNamespace("garry")`.
 
 ## Usage
 
@@ -20,4 +20,4 @@ Internal (exported only so mirai daemons can address it via `::`).
 
 ## Value
 
-List with `err`, `tf`, `tw`.
+List with `err` and `tw` (warp seconds).

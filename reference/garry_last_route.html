@@ -13,7 +13,7 @@ The values are:"><meta property="og:image" content="https://belian-earth.github.
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -33,6 +33,7 @@ The values are:"><meta property="og:image" content="https://belian-earth.github.
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -62,8 +63,8 @@ The values are:</p>
 
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p><code>"composite_direct"</code>, <code>"gd_reduce"</code>, <code>"scheduler"</code> or
-<code>"single"</code>; <code>NULL</code> before any <code><a href="collect.html">collect()</a></code> in the session.</p>
+    <p><code>"composite_direct"</code>, <code>"gd_reduce"</code>, <code>"scheduler"</code>, <code>"single"</code>
+or <code>"read_only"</code>; <code>NULL</code> before any <code><a href="collect.html">collect()</a></code> in the session.</p>
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
@@ -72,7 +73,9 @@ The values are:</p>
 <li><p><code>"gd_reduce"</code>: the general reduce-decomposition executor;</p></li>
 <li><p><code>"scheduler"</code>: the general distributed scheduler;</p></li>
 <li><p><code>"single"</code>: the in-process single-threaded executor
-(<code>distributed = FALSE</code>).</p></li>
+(<code>distributed = FALSE</code>);</p></li>
+<li><p><code>"read_only"</code>: a plan that only reads and stacks rasters, copied
+from GDAL straight into the result in either mode.</p></li>
 </ul></div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

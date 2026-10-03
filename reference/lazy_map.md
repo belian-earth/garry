@@ -7,7 +7,7 @@ with plain arithmetic and the `g_*` vocabulary
 [`g_bitand()`](https://belian-earth.github.io/garry/reference/g-bitwise.md),
 [`g_cast()`](https://belian-earth.github.io/garry/reference/g_cast.md),
 ...). Inputs must share a grid
-([`align()`](https://belian-earth.github.io/garry/reference/align.md)
+([`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
 first otherwise); rasters on different graphs merge automatically.
 
 ## Usage
@@ -51,3 +51,17 @@ bands pass through unchanged.
 ## See also
 
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+ndvi <- lazy_map(nir, red, fn = function(n, r) (n - r) / (n + r))
+range(collect(ndvi))
+#> Error in confirm_plugin_install(platform, url): The "cpu" PJRT plugin needs to be downloaded for pjrt to work.
+#> ℹ Automatic downloads are not performed in non-interactive sessions.
+#> ℹ Set `PJRT_INSTALL` to "1" to allow the download, or set
+#>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.
+```

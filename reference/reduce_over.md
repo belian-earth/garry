@@ -19,11 +19,10 @@ reduce_over(x, op, over, nan_rm = TRUE, bands = NULL)
 
 - op:
 
-  Reduction name: one of `"sum"`, `"mean"`, `"min"`, `"max"`, `"prod"`,
-  `"median"`, `"quantile"`, `"sd"`, `"var"`, `"count"`, `"any"`,
-  `"all"`. Alternatively a custom reducer: a function `fn(x, dims)`
-  written in the `g_*` vocabulary that collapses the margins `dims`
-  (e.g. a per-pixel model fit over time).
+  Reduction name: one of `"sum"`, `"mean"`, `"min"`, `"max"`,
+  `"median"`, `"count"`. Alternatively a custom reducer: a function
+  `fn(x, dims)` written in the `g_*` vocabulary that collapses the
+  margins `dims` (e.g. a per-pixel model fit over time).
 
 - over:
 
@@ -62,3 +61,21 @@ for band-axis models;
 for calendar-grouped reduction;
 [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
 for order-preserving passes.
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+collect(reduce_over(red, "mean", c("x", "y")))
+#> Error in confirm_plugin_install(platform, url): The "cpu" PJRT plugin needs to be downloaded for pjrt to work.
+#> ℹ Automatic downloads are not performed in non-interactive sessions.
+#> ℹ Set `PJRT_INSTALL` to "1" to allow the download, or set
+#>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.
+stk <- lazy_stack(list(a = red, b = red * 2))
+dim(collect(reduce_over(stk, "median", "t")))
+#> Error in confirm_plugin_install(platform, url): The "cpu" PJRT plugin needs to be downloaded for pjrt to work.
+#> ℹ Automatic downloads are not performed in non-interactive sessions.
+#> ℹ Set `PJRT_INSTALL` to "1" to allow the download, or set
+#>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.
+```

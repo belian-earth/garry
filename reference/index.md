@@ -33,8 +33,6 @@ Turn a STAC search into grid-pinned lazy rasters. Entry point for remote
   : Group acquisitions into time slices.
 - [`stac_gti_index()`](https://belian-earth.github.io/garry/reference/stac_gti_index.md)
   : Write a source table as a GTI index for one asset.
-- [`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md)
-  : Lazy time-sliced stack of one STAC asset on a target grid.
 - [`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md)
   : Build a LazyRaster from a GDAL source.
 
@@ -63,8 +61,8 @@ Mask value bands from a QA band or from a pre-trained cloud model. The
 ocm\_\* functions run the OmniCloudMask segmentation model natively (no
 Python) to derive cloud/shadow masks from red, green, and NIR bands.
 
-- [`mask()`](https://belian-earth.github.io/garry/reference/mask.md) :
-  Mask a dataset from a QA band.
+- [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
+  : Mask a dataset from a QA band.
 - [`qa_bits()`](https://belian-earth.github.io/garry/reference/qa_bits.md)
   : Build a QA-bitmask predicate.
 - [`ocm_model()`](https://belian-earth.github.io/garry/reference/ocm.md)
@@ -133,8 +131,8 @@ collect().
 - [`lazy_stack()`](https://belian-earth.github.io/garry/reference/lazy_stack.md)
   : Stack aligned rasters along a new outer dim (default time).
 
-- [`focal()`](https://belian-earth.github.io/garry/reference/focal.md) :
-  Focal (stencil) op.
+- [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
+  : Focal (stencil) op.
 
 - [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md)
   : Linear focal op with an explicit kernel (differentiable).
@@ -143,7 +141,7 @@ collect().
   :
 
   A bilateral (edge-preserving) focal body for
-  [`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
+  [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md).
 
 - [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
   : Reduction over named dims.
@@ -162,8 +160,8 @@ collect().
 
   Whole-window model op (advanced): apply `fn` to the raw padded chunk.
 
-- [`align()`](https://belian-earth.github.io/garry/reference/align.md) :
-  Lazily resample/reproject onto a target grid.
+- [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
+  : Lazily resample/reproject onto a target grid.
 
 ## Execution
 
@@ -200,8 +198,8 @@ drawings, and run reports.
 - [`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
   : Preview a lazy object, a collected array, or a raster file.
 
-- [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) :
-  Draw the pipeline of a lazy object.
+- [`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
+  : Draw the pipeline of a lazy object.
 
 - [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
   : Interactive Plan viewer.
@@ -238,12 +236,19 @@ Define and interrogate the analysis grid; dtype rules.
 - [`gdal_grid_spec()`](https://belian-earth.github.io/garry/reference/gdal_grid_spec.md)
   : Inspect a GDAL source and build its GridSpec (plus read metadata).
 
-- [`xmin()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
-  [`ymin()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
-  [`xmax()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
-  [`ymax()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
-  [`res()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
-  : Grid extent and resolution accessors.
+- [`grid_bbox()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
+  [`grid_res()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
+  [`grid_crs()`](https://belian-earth.github.io/garry/reference/grid-accessors.md)
+  : Grid extent, resolution and CRS
+
+- [`time_labels()`](https://belian-earth.github.io/garry/reference/time_labels.md)
+  : Time labels of a lazy object
+
+- [`lazy-dim`](https://belian-earth.github.io/garry/reference/lazy-dim.md)
+  : Dimensions of a lazy raster
+
+- [`dataset-bands`](https://belian-earth.github.io/garry/reference/dataset-bands.md)
+  : Bands of a lazy dataset
 
 - [`grid_equal()`](https://belian-earth.github.io/garry/reference/grid_equal.md)
   : Structural equality of two grids (geometry only, not dtype).
@@ -284,6 +289,12 @@ implementation and PJRT.
 
 - [`g_cast()`](https://belian-earth.github.io/garry/reference/g_cast.md)
   : Cast to a garry dtype.
+
+- [`g_round()`](https://belian-earth.github.io/garry/reference/g_round.md)
+  : Round to nearest integer value (half to even), elementwise.
+
+- [`g_clamp()`](https://belian-earth.github.io/garry/reference/g_clamp.md)
+  : Clamp values to a closed range, elementwise.
 
 - [`g_fill()`](https://belian-earth.github.io/garry/reference/g_fill.md)
   : Construct a constant-filled AnvlArray on the device.
@@ -366,20 +377,7 @@ implementation and PJRT.
 
 ## GDAL adapter (low-level IO)
 
-Direct windowed read/write, warp, staging, and GTI index construction.
-Used by the cube layer; exposed for bespoke IO.
-
-- [`gdal_read_window()`](https://belian-earth.github.io/garry/reference/gdal_read_window.md)
-  : Read a window from a GDAL source as a garry-oriented matrix.
-
-- [`gdal_write_window()`](https://belian-earth.github.io/garry/reference/gdal_write_window.md)
-  : Write a garry-oriented matrix into an open output dataset.
-
-- [`gdal_create_output()`](https://belian-earth.github.io/garry/reference/gdal_create_output.md)
-  : Create an output raster for a grid.
-
-- [`gdal_warp_vrt()`](https://belian-earth.github.io/garry/reference/gdal_warp_vrt.md)
-  : Build a warped VRT of a source onto an exact target grid.
+Staging and GTI index construction for bespoke IO.
 
 - [`stage_raw_cube()`](https://belian-earth.github.io/garry/reference/stage_raw_cube.md)
   :
@@ -433,9 +431,12 @@ IR directly (custom nodes, alternate executors) – not for normal use.
 - [`FocalNode()`](https://belian-earth.github.io/garry/reference/FocalNode.md)
   :
 
-  Focal (stencil) op. `radius` is the halo in pixels; `boundary` is one
-  of "constant", "reflect", "nearest", "wrap", "none". Created by
-  [`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
+  Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
+  "nodata", the only policy: cells beyond the raster edge are NaN.
+  Created by
+  [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
+  and
+  [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md).
 
 - [`ReduceNode()`](https://belian-earth.github.io/garry/reference/ReduceNode.md)
   : Reduction over named dims. Barrier: forces materialisation of its
@@ -450,7 +451,7 @@ IR directly (custom nodes, alternate executors) – not for normal use.
   :
 
   Lazy resample/reproject to a target grid. Created by
-  [`align()`](https://belian-earth.github.io/garry/reference/align.md).
+  [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md).
   Barrier. At execution time this materialises as a gdalraster VRT warp.
 
 - [`StackNode()`](https://belian-earth.github.io/garry/reference/StackNode.md)

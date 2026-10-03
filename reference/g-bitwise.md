@@ -35,5 +35,6 @@ Integral array shaped like `a`.
 ## See also
 
 [`qa_bits()`](https://belian-earth.github.io/garry/reference/qa_bits.md)
-and [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)
+and
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
 for the QA-masking verbs built on these ops.

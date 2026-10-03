@@ -1,9 +1,10 @@
 # Build a warped VRT of a source onto an exact target grid.
 
 Delegates every pixel of cross-CRS math to the GDAL warper: `-te`/`-ts`
-pin the output grid exactly to `target_grid`. Float targets without a
-source nodata get `-dstnodata nan` so area outside the source footprint
-reads as NaN, not 0.
+pin the output grid exactly to `target_grid`. A source nodata goes to
+the warper as both `-srcnodata` and `-dstnodata`, so it never enters
+resampling and area outside the source footprint reads as nodata; float
+targets without one get `-dstnodata nan`.
 
 ## Usage
 
@@ -15,7 +16,9 @@ gdal_warp_vrt(src_path, band, target_grid, resampling, src_nodata = numeric(0))
 
 - src_path:
 
-  Source path/VSI URL.
+  Source path/VSI URL. One source: gdalwarp writes a VRT from a single
+  input only. A multi-path source node is read by `gdal_warp_window()`
+  instead.
 
 - band:
 

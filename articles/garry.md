@@ -2,7 +2,7 @@
 
 garry is a lazy raster engine. Verbs like
 [`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md),
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md),
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md),
 and
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
 do not compute anything; each one adds a node to an intermediate
@@ -35,7 +35,7 @@ el
 #>   grid   1013 x 799 • f32
 #>   crs    EPSG:26910
 #>   graph  1 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
 Opening reads only metadata: one HTTP request for the file header, zero
@@ -45,10 +45,12 @@ the file again:
 
 ``` r
 
-res(el)
-#> [1] 30 30
-c(xmin(el), ymin(el), xmax(el), ymax(el))
-#> [1]  587049.6 5013342.4  617439.6 5037312.4
+grid_res(el)
+#>  x  y 
+#> 30 30
+grid_bbox(el)
+#>      xmin      ymin      xmax      ymax 
+#>  587049.6 5013342.4  617439.6 5037312.4
 ```
 
 ``` r
@@ -77,10 +79,10 @@ el_km
 #>   grid   1013 x 799 • f32
 #>   crs    EPSG:26910
 #>   graph  2 nodes • lazy
-#>   ℹ draw(x) to see the pipeline
+#>   ℹ plan_draw(x) to see the pipeline
 ```
 
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md)
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
 applies a moving-window (stencil) operation. Its `fn` receives a list of
 the `(2r + 1)^2` shifted copies of the window, ordered row-major over
 `(dy, dx)` offsets, and processes the whole neighbourhood vectorised
@@ -88,7 +90,7 @@ across every pixel at once. A 3x3 mean is one line:
 
 ``` r
 
-sm <- focal(el, radius = 1L, fn = function(sh) Reduce(`+`, sh) / 9)
+sm <- focal_map(el, radius = 1L, fn = function(sh) Reduce(`+`, sh) / 9)
 ```
 
 The same convention supports real terrain analysis. For a radius-1
@@ -101,11 +103,11 @@ product with a sun vector is a hillshade:
 ``` r
 
 hillshade <- function(elev, azimuth = 315, altitude = 45) {
-  rs  <- res(elev)
+  rs  <- unname(grid_res(elev))
   az  <- (90 - azimuth) * pi / 180
   alt <- altitude * pi / 180
   sun <- c(cos(alt) * cos(az), cos(alt) * sin(az), sin(alt))
-  focal(elev, radius = 1L, fn = function(sh) {
+  focal_map(elev, radius = 1L, fn = function(sh) {
     dzdx <- (sh[[6]] - sh[[4]]) / (2 * rs[[1]])   # east - west
     dzdy <- (sh[[2]] - sh[[8]]) / (2 * rs[[2]])   # north - south
     v <- (-dzdx * sun[[1]] - dzdy * sun[[2]] + sun[[3]]) /
@@ -128,7 +130,7 @@ never choose; garry does.
 
 ``` r
 
-draw(hs)
+plan_draw(hs)
 #> ── <LazyRaster> 1013 x 799 • f32 ───────────────────────────────────────────────
 #> ◫ focal  r=1
 #> └─ ◈ source  1013×799 f32
@@ -143,14 +145,14 @@ compile its body once, and run it chunk by chunk.
 Every `LazyRaster` is pinned to its grid, and binary operations refuse
 operands whose grids differ; there is no silent resampling. Build a
 coarser 270 m grid and aggregate onto it with
-[`align()`](https://belian-earth.github.io/garry/reference/align.md):
+[`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md):
 
 ``` r
 
 coarse <- grid_spec(crs = "EPSG:26910",
-                    extent = c(xmin(el), ymin(el), xmax(el), ymax(el)),
+                    extent = unname(grid_bbox(el)),
                     res = 270)
-el_mean <- align(el, coarse, resampling = "average")
+el_mean <- align_to(el, coarse, resampling = "average")
 ```
 
 Mixing the two grids is an error, and the error is a feature: an
@@ -161,7 +163,7 @@ undisclosed resampling step.
 
 el - el_mean
 #> Error in `.lazy_binop()`:
-#> ! grids differ (resolution differs: 30 x 30 vs 270 x 270); use `align(a,
+#> ! grids differ (resolution differs: 30 x 30 vs 270 x 270); use `align_to(a,
 #>   b, to = ...)` first
 ```
 
@@ -172,7 +174,7 @@ elevation relative to the neighbourhood mean.
 
 ``` r
 
-el_pt  <- align(el, coarse, resampling = "bilinear")
+el_pt  <- align_to(el, coarse, resampling = "bilinear")
 relief <- el_pt - el_mean
 preview(relief, main = "Local relief (m)")
 ```
@@ -183,7 +185,7 @@ hood-relief](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes
 plot of chunk hood-relief
 
 One v1 rule to know:
-[`align()`](https://belian-earth.github.io/garry/reference/align.md)
+[`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
 applies to *sources*, not to computed results (warping a computed raster
 raises an error suggesting the alternatives). Align inputs onto the
 analysis grid first, then compute; or materialise a result with

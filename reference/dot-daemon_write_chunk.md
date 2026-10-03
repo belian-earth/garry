@@ -56,4 +56,4 @@ amortise the opens.
 
 ## Details
 
-Internal (exported only so mirai daemons can address it via `::`).
+Internal; daemons reach it through `asNamespace("garry")`.

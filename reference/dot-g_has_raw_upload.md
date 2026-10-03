@@ -1,6 +1,6 @@
 # Can uploads take the raw byte path?
 
-Internal capability probe (exported for daemon use via `::`).
+Internal capability check (exported for daemon use via `::`).
 
 ## Usage
 
@@ -10,6 +10,4 @@ Internal capability probe (exported for daemon use via `::`).
 
 ## Value
 
-`TRUE` if
-[`anvl::nv_array`](https://r-xla.github.io/anvl/reference/AnvlArray.html)
-accepts raw payloads.
+`TRUE` if anvl is installed.

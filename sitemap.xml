@@ -15,6 +15,7 @@
 <url><loc>https://belian-earth.github.io/garry/articles/time-series.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/authors.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/index.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/news/index.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/ChunkGrid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/FocalNode.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/FusedNode.html</loc></url>
@@ -33,7 +34,8 @@
 <url><loc>https://belian-earth.github.io/garry/reference/StackNode.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/Stage.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/WarpNode.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/align.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/align_to.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/apply_mask.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/as_dataset.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/as_terra.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/as_vaster_extent.html</loc></url>
@@ -45,6 +47,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/collect.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/cross_grid_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/crs_equal.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dataset-bands.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dequantize_aef.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dequantize_esd.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-cd_fetch_warp.html</loc></url>
@@ -52,6 +55,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_hygiene.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_jit_creates.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_jit_reset.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_read_for_write.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_run_compute_shm.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_run_source_shm.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_shm_clear.html</loc></url>
@@ -59,6 +63,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_warm_jit.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_write_chunk.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_write_close.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_write_shared.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-exec_jit_clear.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-g_has_nv_scan.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-g_has_raw_upload.html</loc></url>
@@ -68,15 +73,14 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_warm.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_warm_pipeline.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-rio_direct_spec.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/draw.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dtype_promote.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dtype_valid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/execute_plan.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/execute_plan_mirai.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/extract_points.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/fill_gaps.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/focal.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/focal_kernel.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/focal_map.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/fusable.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g-bitwise.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g-reductions.html</loc></url>
@@ -151,14 +155,13 @@
 <url><loc>https://belian-earth.github.io/garry/reference/is_barrier.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/kalman_llt.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/kalman_smooth.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/lazy-dim.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy_dataset.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy_map.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy_patch.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy_source.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/lazy_stac_stack.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy_stack.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy_value_and_grad.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/mask.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/materialise.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/medoid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/mlp_project.html</loc></url>
@@ -166,6 +169,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/ocm_weights.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/output_grid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/plan_dot.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/plan_draw.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/plan_lazy.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/plan_view.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/preview.html</loc></url>
@@ -191,6 +195,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/stac_time_slices.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/stack_bands.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/stage_raw_cube.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/time_labels.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/time_sel.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/write_tif.html</loc></url>
 </urlset>

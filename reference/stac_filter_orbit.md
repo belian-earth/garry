@@ -28,7 +28,6 @@ The filtered `doc_items`.
 ## See also
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),

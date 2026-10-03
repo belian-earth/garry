@@ -1,11 +1,11 @@
-# A bilateral (edge-preserving) focal body for [`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
+# A bilateral (edge-preserving) focal body for [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md).
 
 Returns a focal `fn(shifts)` computing the classic bilateral filter:
 each output pixel is the window mean weighted by a spatial Gaussian
 (distance from the centre, `sigma_d`) times a range Gaussian (difference
 from the centre VALUE, `sigma_r`), so smoothing stays within regions of
 similar value and stops at sharp transitions. Use as
-`focal(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
+`focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
 
 ## Usage
 
@@ -27,13 +27,13 @@ bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 - radius:
 
   Window radius the body is built for; must match the `radius` passed to
-  [`focal()`](https://belian-earth.github.io/garry/reference/focal.md)
+  [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
   (default 1 = 3x3).
 
 ## Value
 
 A focal body `fn(shifts)` for
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md).
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md).
 
 ## Details
 

@@ -52,3 +52,18 @@ carries a `gis` attribute in the style of
 self-describing and
 [`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
 can set real-world axes without the grid.
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+nir <- lazy_source(f, band = 3L)
+ndvi <- collect((nir - red) / (nir + red))
+#> Error in confirm_plugin_install(platform, url): The "cpu" PJRT plugin needs to be downloaded for pjrt to work.
+#> ℹ Automatic downloads are not performed in non-interactive sessions.
+#> ℹ Set `PJRT_INSTALL` to "1" to allow the download, or set
+#>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.
+dim(ndvi)
+#> Error: object 'ndvi' not found
+```

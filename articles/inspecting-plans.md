@@ -42,7 +42,8 @@ ds$write(1, 0, 0, 60, 40, as.numeric(seq_len(60 * 40)))
 ds$close()
 
 lr <- lazy_source(tif, name = "band")
-plan_view(reduce_over(focal(lr * 2, radius = 1L, fn = g_mean),
+mean9 <- function(sh) Reduce(`+`, sh) / length(sh) # the 3 x 3 window mean
+plan_view(reduce_over(focal_map(lr * 2, radius = 1L, fn = mean9),
                       "mean", c("x", "y")),
           height = "320px")
 ```
@@ -120,7 +121,7 @@ single stage: one compiled kernel per chunk.
 
 masked <- lazy_dataset(src, grid, assets = c("B04", "B08"),
                        mask_asset = "Fmask") |>
-  mask(where = qa_bits(0:1)) |>
+  apply_mask(where = qa_bits(0:1)) |>
   reduce_over("median", over = "t", nan_rm = TRUE)
 masked[["ndvi"]] <- (masked[["B08"]] - masked[["B04"]]) /
   (masked[["B08"]] + masked[["B04"]])
@@ -130,7 +131,7 @@ plan_view(masked, height = "420px")
 
 The stage label lists everything that fused into it, and every member
 keeps its meaning: the masks
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
 created are named as masks, the reducers carry their op, the derivation
 its band. This is the diagram earning its keep: the structure you reason
 about (bands, masks, a derived index) and the structure the machine
@@ -139,10 +140,11 @@ executes (one kernel) are both real, and
 shows which one you will pay for.
 
 One thing keeps the collapse in check: focal work. Morphological mask
-cleanup (`mask(open = , dilate = )`) is focal, and the planner keeps
-focal members in narrow stages of their own so halo reads stay cheap.
-Add it and the plan splits back apart, into per-slice mask stages and
-per-band composite stages; that is the shape the README example shows.
+cleanup (`apply_mask(open = , dilate = )`) is focal, and the planner
+keeps focal members in narrow stages of their own so halo reads stay
+cheap. Add it and the plan splits back apart, into per-slice mask stages
+and per-band composite stages; that is the shape the README example
+shows.
 
 ## Reading the graph
 
@@ -156,7 +158,7 @@ carries a heavy border.
 | green cylinder | IO | `source`: a windowed, halo-padded GDAL read |
 | teal box / ellipse | elementwise | `map` / `stack`: fused band algebra and axis stacking |
 | teal square | elementwise | `derive`: a named dataset band (`ds[["ndvi"]] <- ...`) |
-| crimson circle | elementwise | `mask`: the predicate and apply maps [`mask()`](https://belian-earth.github.io/garry/reference/mask.md) creates |
+| crimson circle | elementwise | `mask`: the predicate and apply maps [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md) creates |
 | crimson hexagon / star / diamond | spatial | `focal` / `patch` (model inference) / `warp` |
 | amber dot / triangle / inverted triangle | temporal and reductions | `scan` / `reduce partial` / `reduce combine` |
 | white box | output | the written product: dims, dtype, bands |
@@ -197,7 +199,7 @@ plan_view(composite, level_separation = 1000, node_spacing = 60)
 
 ## Related tools
 
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md)
+[`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
 renders the same pipeline as glyphs in the terminal, and
 [`print()`](https://rdrr.io/r/base/print.html) summarises a dataset’s
 steps.

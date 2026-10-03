@@ -2,7 +2,7 @@
 
 The kernel is a (2r+1) x (2r+1) matrix of weights; the op is the
 weighted sum over the window. Unlike
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md)
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
 with an arbitrary `fn`, a kernel focal is differentiable with respect to
 its weights: pass the returned LazyRaster as `wrt` to
 [`lazy_value_and_grad()`](https://belian-earth.github.io/garry/reference/lazy_value_and_grad.md).
@@ -29,4 +29,5 @@ focal_kernel(x, weights, boundary = "nodata")
 
 ## Value
 
-A `LazyRaster`.
+A `LazyRaster` (f32 for an integer `x`, which is read as f32 so cells
+beyond the raster edge can be NaN).

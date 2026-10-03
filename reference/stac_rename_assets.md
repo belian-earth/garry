@@ -42,15 +42,14 @@ concatenates the collections into one table. A band a collection lacks
 needs no placeholder:
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 gives each band only the slices that carry it, and
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md) pairs
-those slices with the QA band by name (a Landsat-only thermal band masks
-against the Landsat Fmask slices), so ragged bands reduce over exactly
-their own observations.
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
+pairs those slices with the QA band by name (a Landsat-only thermal band
+masks against the Landsat Fmask slices), so ragged bands reduce over
+exactly their own observations.
 
 ## See also
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),

@@ -25,7 +25,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -48,6 +48,7 @@
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul>
 </li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul>
 <ul class="navbar-nav">
 <li class="nav-item"><form class="form-inline" role="search">
@@ -93,7 +94,7 @@ triangle (anvl, the XLA compiler frontend) and the green square
 Click a node to highlight its one-hop neighbourhood, use the dropdowns
 to jump to a function or filter a subsystem, and scroll to zoom.</p>
 <p>Two things are worth reading directly off this graph. First, the
-lazy-verb layer (<code><a href="../reference/lazy_map.html">lazy_map()</a></code>, <code><a href="../reference/focal.html">focal()</a></code>,
+lazy-verb layer (<code><a href="../reference/lazy_map.html">lazy_map()</a></code>, <code><a href="../reference/focal_map.html">focal_map()</a></code>,
 <code><a href="../reference/reduce_over.html">reduce_over()</a></code>, and friends) reaches neither backend:
 building a pipeline touches no data and compiles nothing. Second,
 everything that does reach anvl or GDAL funnels through the execution
@@ -141,7 +142,7 @@ construction, and materialisation.</li>
 <strong>Models &amp; kernels</strong>: OmniCloudMask, the Kalman and
 Hampel smoothers, band projection, and dequantisers.</li>
 <li>
-<strong>Viz &amp; UX</strong>: <code><a href="../reference/draw.html">draw()</a></code>,
+<strong>Viz &amp; UX</strong>: <code><a href="../reference/plan_draw.html">plan_draw()</a></code>,
 <code><a href="../reference/preview.html">preview()</a></code>, and task reports.</li>
 </ul>
 </div>

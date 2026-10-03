@@ -3,7 +3,7 @@
 Created by
 [`lazy_patch()`](https://belian-earth.github.io/garry/reference/lazy_patch.md).
 The stencil shape for kernels whose spatial context is far beyond a
-shift-list focal (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
+shift-list focal_map (CNN inference, e.g. OmniCloudMask): `fn(xpad)`
 receives the parent's value carrying at least `radius` halo cells per
 side (a `(C, H, W)` cube, traced or plain) and returns a SIZE-PRESERVING
 result on the same spatial dims, deriving every size from the input
@@ -48,9 +48,10 @@ PatchNode(
 - role:
 
   Optional semantic role tag (e.g. "mask", set by
-  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)).
+  [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)).
   Pure metadata: never read by the planner or executors; surfaced by
-  [`draw()`](https://belian-earth.github.io/garry/reference/draw.md) and
+  [`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
+  and
   [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md).
 
 - fn:

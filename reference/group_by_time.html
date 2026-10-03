@@ -19,7 +19,7 @@ band with no slice in a group is simply absent from that group's composite."><me
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -39,6 +39,7 @@ band with no slice in a group is simply absent from that group's composite."><me
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -86,8 +87,8 @@ function mapping a slice name to a group label.</p></dd>
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>A <code>LazyDatasetGroups</code> (a named list of per-group <code>LazyDataset</code>s).
 Reduce it with <code><a href="reduce_over.html">reduce_over()</a></code>, then <code><a href="collect.html">collect()</a></code> returns a named list of
-results (or writes one file per group when <code>path</code> carries a <code>{group}</code>
-placeholder, e.g. <code>"ndvi_{group}.tif"</code>).</p>
+results, and <code><a href="write_tif.html">write_tif()</a></code> writes one file per group when its <code>path</code>
+carries a <code>{group}</code> placeholder, e.g. <code>write_tif(x, "ndvi_{group}.tif")</code>.</p>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

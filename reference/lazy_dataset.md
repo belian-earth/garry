@@ -49,7 +49,7 @@ lazy_dataset(
 
   Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded alongside the
   value assets and used as the default `from` in
-  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md).
+  [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md).
 
 - granularity:
 
@@ -81,7 +81,7 @@ lazy_dataset(
   since interpolating packed QA bits corrupts them. `"near"` (the
   default) preserves exact source values; use `"bilinear"`, `"average"`,
   `"cubic"`, ... to interpolate. Resample after the fact instead with
-  [`align()`](https://belian-earth.github.io/garry/reference/align.md).
+  [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md).
 
 - scale:
 
@@ -127,7 +127,7 @@ A `LazyDataset`.
   their file band descriptions when present, else `b<index>`;
   `grid = NULL` stays on the file's native grid, and a supplied `grid`
   inserts an
-  [`align()`](https://belian-earth.github.io/garry/reference/align.md)
+  [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
   warp per band. Value transforms (e.g.
   [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md))
   go downstream as
@@ -137,8 +137,8 @@ A `LazyDataset`.
 
 All bands share one intermediate representation (IR) graph, so a mask
 defined once (see
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)) is
-computed once and dedup'd across bands, and
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md))
+is computed once and dedup'd across bands, and
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 plans the whole dataset in one pass.
 
@@ -146,3 +146,18 @@ plans the whole dataset in one pass.
 
 [`group_by_time()`](https://belian-earth.github.io/garry/reference/group_by_time.md),
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+ds <- lazy_dataset(f)
+names(ds)
+#> [1] "red"   "green" "nir"   "qa"   
+ds$nir
+#> ── <LazyRaster> source  60×40 f32 ──────────────────────────────────────────────
+#>   grid   60 x 40 • f32
+#>   crs    EPSG:32610
+#>   graph  4 nodes • lazy
+#>   ℹ plan_draw(x) to see the pipeline
+```

@@ -57,3 +57,21 @@ supported over `"t"`/`"band"` only.
 
 Over a `LazyDataset`, each band's slices are stacked along `"t"` and
 scanned independently (`bands` restricts which).
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+stk <- lazy_stack(list(a = red, b = red, c = red))
+# a running sum along t
+cs <- scan_over(stk, over = "t", fn = function(xs, margin) {
+  g_scan(0, function(carry, v) list(carry = carry + v, out = carry + v),
+         xs = xs[[1L]])$out
+})
+dim(collect(cs))
+#> Error in confirm_plugin_install(platform, url): The "cpu" PJRT plugin needs to be downloaded for pjrt to work.
+#> ℹ Automatic downloads are not performed in non-interactive sessions.
+#> ℹ Set `PJRT_INSTALL` to "1" to allow the download, or set
+#>   `PJRT_PLUGIN_PATH_CPU` to a local plugin file.
+```

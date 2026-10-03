@@ -108,3 +108,19 @@ consulted (pass `nodata` explicitly if the source has a sentinel).
 
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
+
+## Examples
+
+``` r
+f <- system.file("extdata", "garry-example.tif", package = "garry")
+red <- lazy_source(f, band = 1L)
+red
+#> ── <LazyRaster> source  60×40 f32 ──────────────────────────────────────────────
+#>   grid   60 x 40 • f32
+#>   crs    EPSG:32610
+#>   graph  1 nodes • lazy
+#>   ℹ plan_draw(x) to see the pipeline
+dim(red)
+#>  y  x 
+#> 40 60 
+```

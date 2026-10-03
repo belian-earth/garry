@@ -34,7 +34,7 @@ The eroded object, same class and grid as `x`.
 ## Details
 
 Implemented as a
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md)
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
 kernel (centre plus zero times the window sum, which is NaN wherever any
 neighbour is NaN), so it plans and fuses like any stencil, and applies
 per band over a `LazyDataset`.

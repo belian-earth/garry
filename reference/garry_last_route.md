@@ -14,8 +14,8 @@ garry_last_route()
 
 ## Value
 
-`"composite_direct"`, `"gd_reduce"`, `"scheduler"` or `"single"`; `NULL`
-before any
+`"composite_direct"`, `"gd_reduce"`, `"scheduler"`, `"single"` or
+`"read_only"`; `NULL` before any
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 in the session.
 
@@ -28,4 +28,7 @@ in the session.
 - `"scheduler"`: the general distributed scheduler;
 
 - `"single"`: the in-process single-threaded executor
-  (`distributed = FALSE`).
+  (`distributed = FALSE`);
+
+- `"read_only"`: a plan that only reads and stacks rasters, copied from
+  GDAL straight into the result in either mode.

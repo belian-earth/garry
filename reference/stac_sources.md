@@ -3,9 +3,7 @@
 One row per item x asset. The result is a plain data frame: the
 `stac_filter_*` helpers operate on it in ordinary R, and
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
-/
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md)
-consume it to build lazy mosaics.
+consumes it to build lazy mosaics.
 
 ## Usage
 
@@ -34,7 +32,6 @@ the item bbox), sorted by datetime, item and asset.
 ## See also
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),

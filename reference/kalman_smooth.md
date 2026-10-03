@@ -17,8 +17,10 @@ kalman_smooth(
   sigma_slp,
   sigma_obs = 1,
   obs_var = NULL,
+  boundaries = NULL,
   outputs = c("mean", "sd"),
   dtype = "f32",
+  bands = NULL,
   ...
 )
 ```
@@ -40,13 +42,28 @@ kalman_smooth(
   Optional relative observation-variance stack on the same grid
   (`Var(v_t) = sigma_obs^2 * obs_var_t`).
 
+- boundaries:
+
+  Optional 0/1 stack on the same grid marking years that start a new
+  regime (see
+  [`kalman_llt()`](https://belian-earth.github.io/garry/reference/kalman_llt.md),
+  section "Regime boundaries"); needs `obs_var` (pass a stack of ones
+  for none).
+
 - outputs:
 
-  Which outputs to build (`"mean"`, `"sd"`).
+  Which outputs to build (`"mean"`, `"sd"`, the forward-filtered
+  `"fmean"`, `"fsd"`, and `"innov"`; see
+  [`kalman_llt()`](https://belian-earth.github.io/garry/reference/kalman_llt.md)).
 
 - dtype:
 
   Output dtype (default f32).
+
+- bands:
+
+  `LazyDataset` only: bands to smooth (default: all value bands). A
+  dataset takes no `obs_var` or `boundaries`.
 
 - ...:
 

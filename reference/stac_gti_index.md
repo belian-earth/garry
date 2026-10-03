@@ -5,11 +5,9 @@ A GTI index is a vector layer of raster footprints read by GDAL's GTI
 the indexed rasters on the fly. Footprints are stored in `crs`
 (transformed from the table's EPSG:4326 bboxes), so the index layer SRS
 matches the grid the GTI dataset will be pinned to and the culling
-geometry is exact. Most users reach this via
-[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
-or
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
-which build the index internally, and rarely call it directly.
+geometry is exact. Most users reach this through
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md),
+which builds the index internally.
 
 ## Usage
 
@@ -50,7 +48,6 @@ The index path, invisibly.
 ## See also
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),

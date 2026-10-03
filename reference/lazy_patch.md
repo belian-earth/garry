@@ -3,7 +3,7 @@
 The escape hatch behind model-inference verbs such as
 [`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md):
 where
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md)
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
 materialises a shift list (unusable beyond small radii), a patch op
 hands `fn` the raw window carrying `radius` halo cells per side and
 crops the contaminated ring off the result. `fn` must be size-preserving

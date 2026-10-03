@@ -1,6 +1,6 @@
 # Can scans take the traced path?
 
-Internal capability probe (exported for daemon use via `::`).
+Internal capability check (exported for daemon use via `::`).
 
 ## Usage
 
@@ -10,6 +10,4 @@ Internal capability probe (exported for daemon use via `::`).
 
 ## Value
 
-`TRUE` if
-[`anvl::nv_scan`](https://r-xla.github.io/anvl/reference/nv_scan.html)
-is available.
+`TRUE` if anvl is installed.

@@ -9,9 +9,10 @@ representation (IR) graph. Construct one with
 (from `LazyRaster`s you already have) rather than calling this class
 constructor directly. Apply
 [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md),
-[`focal()`](https://belian-earth.github.io/garry/reference/focal.md),
+[`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md),
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
-and [`mask()`](https://belian-earth.github.io/garry/reference/mask.md)
+and
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
 across all bands; index a single band with `ds[["B04"]]` or a
 sub-dataset with `ds[c("B04", "B03")]`;
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
@@ -45,7 +46,7 @@ LazyDataset(
 - steps:
 
   Internal display-only pipeline log, shown by
-  [`draw()`](https://belian-earth.github.io/garry/reference/draw.md);
+  [`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md);
   does not affect execution.
 
 ## Value

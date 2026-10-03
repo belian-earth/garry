@@ -13,7 +13,7 @@ time."><meta property="og:image" content="https://belian-earth.github.io/garry/l
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -33,6 +33,7 @@ time."><meta property="og:image" content="https://belian-earth.github.io/garry/l
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul></li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
 <li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
@@ -70,7 +71,8 @@ time.</p>
 <span>  resampling <span class="op">=</span> <span class="st">"near"</span>,</span>
 <span>  scale <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  name <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  name <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  collapsed <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -91,9 +93,9 @@ time.</p>
 
 
 <dt id="arg-role">role<a class="anchor" aria-label="anchor" href="#arg-role"></a></dt>
-<dd><p>Optional semantic role tag (e.g. "mask", set by <code><a href="mask.html">mask()</a></code>).
+<dd><p>Optional semantic role tag (e.g. "mask", set by <code><a href="apply_mask.html">apply_mask()</a></code>).
 Pure metadata: never read by the planner or executors; surfaced by
-<code><a href="draw.html">draw()</a></code> and <code><a href="plan_view.html">plan_view()</a></code>.</p></dd>
+<code><a href="plan_draw.html">plan_draw()</a></code> and <code><a href="plan_view.html">plan_view()</a></code>.</p></dd>
 
 
 <dt id="arg-path">path<a class="anchor" aria-label="anchor" href="#arg-path"></a></dt>
@@ -130,6 +132,12 @@ inside the read kernel after sentinel -&gt; NaN (see <code><a href="lazy_source.
 <dt id="arg-name">name<a class="anchor" aria-label="anchor" href="#arg-name"></a></dt>
 <dd><p>Optional display name (the asset or band name). Pure
 metadata, shown by <code><a href="plan_view.html">plan_view()</a></code>; set by <code><a href="lazy_dataset.html">lazy_dataset()</a></code>.</p></dd>
+
+
+<dt id="arg-collapsed">collapsed<a class="anchor" aria-label="anchor" href="#arg-collapsed"></a></dt>
+<dd><p>Node ids of the single-band sources a band-stack
+collapse folded into this multi-band read, in band order. Length 0
+for an ordinary source.</p></dd>
 
 </dl></div>
     <div class="section level2">

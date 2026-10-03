@@ -1,6 +1,6 @@
 # Daemon task body: close every output the writer holds open.
 
-Internal (exported only so mirai daemons can address it via `::`).
+Returns the close errors, named by output path (empty when all closed).
 
 ## Usage
 
@@ -11,3 +11,7 @@ Internal (exported only so mirai daemons can address it via `::`).
 ## Value
 
 `NULL`, invisibly.
+
+## Details
+
+Internal; daemons reach it through `asNamespace("garry")`.

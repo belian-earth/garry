@@ -25,7 +25,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-danger me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Unreleased version">0.0.0.9000</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -48,6 +48,7 @@
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
   </ul>
 </li>
+<li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul>
 <ul class="navbar-nav">
 <li class="nav-item"><form class="form-inline" role="search">
@@ -114,7 +115,7 @@ bands as a false-colour composite.</p>
 <span><span class="co">#&gt;   grid   2732 x 2731 • f32</span></span>
 <span><span class="co">#&gt;   crs    EPSG:32736</span></span>
 <span><span class="co">#&gt;   graph  192 nodes • lazy</span></span>
-<span><span class="co">#&gt;   ℹ draw(x) to see the pipeline</span></span></code></pre></div>
+<span><span class="co">#&gt;   ℹ plan_draw(x) to see the pipeline</span></span></code></pre></div>
 <p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> records a lazy 64-band dataset; nothing
 is fetched yet (the construction costs one metadata probe, however many
 bands the file carries). <code><a href="../reference/dequantize_aef.html">dequantize_aef()</a></code> is applied as a
@@ -167,9 +168,9 @@ converts points from sf, terra or a data frame).</p>
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">42</span><span class="op">)</span></span>
 <span><span class="va">n</span>   <span class="op">&lt;-</span> <span class="fl">1e5</span></span>
 <span><span class="va">pts</span> <span class="op">&lt;-</span> <span class="fu">wk</span><span class="fu">::</span><span class="fu"><a href="https://paleolimbot.github.io/wk/reference/xy.html" class="external-link">xy</a></span><span class="op">(</span></span>
-<span>  <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="fu"><a href="../reference/grid-accessors.html">xmin</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span>, <span class="fu"><a href="../reference/grid-accessors.html">xmax</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span><span class="op">)</span>,</span>
-<span>  <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="fu"><a href="../reference/grid-accessors.html">ymin</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span>, <span class="fu"><a href="../reference/grid-accessors.html">ymax</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span><span class="op">)</span>,</span>
-<span>  crs <span class="op">=</span> <span class="va">grid</span><span class="op">@</span><span class="va">crs</span></span>
+<span>  <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="fu">xmin</span><span class="op">(</span><span class="va">grid</span><span class="op">)</span>, <span class="fu">xmax</span><span class="op">(</span><span class="va">grid</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>  <span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/Uniform.html" class="external-link">runif</a></span><span class="op">(</span><span class="va">n</span>, <span class="fu">ymin</span><span class="op">(</span><span class="va">grid</span><span class="op">)</span>, <span class="fu">ymax</span><span class="op">(</span><span class="va">grid</span><span class="op">)</span><span class="op">)</span>,</span>
+<span>  crs <span class="op">=</span> <span class="fu"><a href="../reference/grid-accessors.html">grid_crs</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">px</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/extract_points.html">extract_points</a></span><span class="op">(</span><span class="va">cube</span>, <span class="va">pts</span><span class="op">)</span>              <span class="co"># (100000, 64)</span></span>

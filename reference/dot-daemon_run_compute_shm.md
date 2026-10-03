@@ -1,6 +1,6 @@
 # Daemon task body: run one jitted stage closure on shared-memory inputs.
 
-Internal (exported only so mirai daemons can address it via `::`).
+Internal; daemons reach it through `asNamespace("garry")`.
 
 ## Usage
 

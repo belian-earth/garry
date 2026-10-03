@@ -12,12 +12,12 @@ returns.
 ## Usage
 
 ``` r
-extract_points(raster, xy, bands = NULL, interp = NULL, ...)
+extract_points(x, xy, bands = NULL, interp = NULL, ...)
 ```
 
 ## Arguments
 
-- raster:
+- x:
 
   A `LazyRaster`, `LazyDataset`, raster path, or `GDALRaster` object.
 
@@ -30,7 +30,9 @@ extract_points(raster, xy, bands = NULL, interp = NULL, ...)
 
 - bands:
 
-  Bands to extract (default all).
+  Bands to extract (default all): band names or positions for a
+  `LazyDataset`, file band indices for a path or `GDALRaster`. Ignored
+  for a `LazyRaster`, which reads its own band.
 
 - interp:
 
@@ -47,7 +49,11 @@ extract_points(raster, xy, bands = NULL, interp = NULL, ...)
 
 As
 [`gdalraster::pixel_extract()`](https://firelab.github.io/gdalraster/reference/pixel_extract.html):
-a matrix, or a data frame with `as_data_frame = TRUE`.
+a matrix, or a data frame with `as_data_frame = TRUE`. For a garry
+object, one column per band, named by dataset band, with the band's
+nodata as `NaN` and its scale/offset applied, as
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+would return them.
 
 ## Details
 

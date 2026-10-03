@@ -65,7 +65,7 @@ ocm_mask(
 - open, dilate:
 
   Morphological cleanup, as in
-  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md).
+  [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md).
 
 ## Value
 
@@ -89,7 +89,7 @@ ocm_mask(
 - `ocm_mask()` is the one-step verb for a `LazyDataset`: it derives the
   class band from three of the dataset's bands for every time slice,
   then masks every value band with it via
-  [`mask()`](https://belian-earth.github.io/garry/reference/mask.md).
+  [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md).
   The derived class band is consumed by the masking, exactly like a QA
   `mask_asset`.
 
@@ -112,7 +112,8 @@ with garry; download them once with
 
 [`ocm_fetch_weights()`](https://belian-earth.github.io/garry/reference/ocm_weights.md)
 to download the weights;
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md) and
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
+and
 [`qa_bits()`](https://belian-earth.github.io/garry/reference/qa_bits.md)
 for masking from an existing QA band;
 [`vignette("omnicloudmask", package = "garry")`](https://belian-earth.github.io/garry/articles/omnicloudmask.md)
@@ -124,6 +125,6 @@ for a worked example.
 if (FALSE) { # \dontrun{
 ocm_fetch_weights()  # once per machine
 ds <- ds |> ocm_mask(red = "B04", green = "B03", nir = "B8A")
-composite <- ds |> reduce_over("time", "median") |> collect()
+composite <- ds |> reduce_over("median", over = "t") |> collect()
 } # }
 ```

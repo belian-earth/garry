@@ -66,7 +66,7 @@ preview(
 
 - ...:
 
-  Unused.
+  Must be empty: a misspelt argument is an error.
 
 ## Value
 
@@ -82,7 +82,7 @@ decimates).
 
 ## See also
 
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md),
+[`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md),
 which plots the pipeline rather than the data;
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 to execute at full resolution.

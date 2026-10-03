@@ -1,7 +1,7 @@
 # Build a QA-bitmask predicate.
 
 Returns a predicate `\(f) ...` for
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)'s
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)'s
 `where` argument that flags a pixel bad when any of the given bits is
 set. Nodata pixels are treated as clear (matching the QA-fill
 convention). Use for packed-flag QA bands (HLS Fmask, Landsat QA_PIXEL)
@@ -23,6 +23,6 @@ qa_bits(bits)
 ## Value
 
 A predicate function of one array, returning a 0/1 mask: pass it as
-[`mask()`](https://belian-earth.github.io/garry/reference/mask.md)'s
+[`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)'s
 `where`, or apply it directly with
 [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).

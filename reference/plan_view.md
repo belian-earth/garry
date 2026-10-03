@@ -6,8 +6,8 @@ execution order on explicit topological levels. Stages are labelled by
 what they compute, not just their scheduler kind: a compute stage is
 classified by the IR nodes fused into it (`focal`, `scan`, `patch`,
 `stack`, `map`, most informative first, the same vocabulary as
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md)), and
-reduce stages carry their reducer (`reduce\u00b7median`). When a
+[`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)),
+and reduce stages carry their reducer (`reduce\u00b7median`). When a
 `LazyDataset` is passed, derived bands (`ds[["ndvi"]] <- ...`) are
 recovered from the dataset's step record and the stage computing one is
 labelled with the band name (`derive\u00b7ndvi`); the derivation is
@@ -73,14 +73,14 @@ A `visNetwork` htmlwidget.
 
 [`plan_dot()`](https://belian-earth.github.io/garry/reference/plan_dot.md)
 for DOT text,
-[`draw()`](https://belian-earth.github.io/garry/reference/draw.md) for
-pixels.
+[`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
+for pixels.
 
 ## Examples
 
 ``` r
 if (FALSE) { # \dontrun{
 lr <- lazy_source("cube.tif")
-plan_view(focal(lr * 2, radius = 1L, fn = g_mean))
+plan_view(focal_map(lr * 2, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)))
 } # }
 ```

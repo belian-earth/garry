@@ -2,7 +2,7 @@
 
 Adds a `slice` column (the datetime truncated to `granularity`); tiles
 sharing a slice mosaic together in
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md).
+[`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md).
 
 ## Usage
 
@@ -48,7 +48,6 @@ everywhere except within ~an overpass of the UTC date line at `lon`.
 ## See also
 
 Other stac helpers:
-[`lazy_stac_stack()`](https://belian-earth.github.io/garry/reference/lazy_stac_stack.md),
 [`stac_drop_duplicates()`](https://belian-earth.github.io/garry/reference/stac_drop_duplicates.md),
 [`stac_filter_assets()`](https://belian-earth.github.io/garry/reference/stac_filter_assets.md),
 [`stac_filter_cloud()`](https://belian-earth.github.io/garry/reference/stac_filter_cloud.md),
