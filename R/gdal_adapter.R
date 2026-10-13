@@ -1894,12 +1894,13 @@ gdal_fetch_window <- function(
   # When the target grid is coarser than the source (a preview), decimate the
   # fetch to ~the target resolution: -outsize makes GDAL read the matching COG
   # overview, so only preview-resolution data crosses the network. Full-res
-  # reads have out_res ~ the native res (ratio ~ 1) and are untouched. The
-  # assemble warps this tile to the exact grid, so an approximate factor is safe
-  # (out_res and the source res are both assumed metric).
+  # reads have a ratio ~ 1 and are untouched. The assemble warps this tile to
+  # the exact grid, so an approximate factor is safe. The ratio is source
+  # pixels over target pixels across the window, so it holds when the two
+  # CRSs differ in units (a degree source onto a metre grid).
   osz <- character(0)
   if (!is.null(out_res)) {
-    k <- out_res / abs(gt[2L])
+    k <- w / ((ext[[3L]] - ext[[1L]]) / out_res)
     if (is.finite(k) && k > 1.5) {
       osz <- c(
         "-outsize",
