@@ -1099,7 +1099,10 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 #' `op` is a reduction name, not a function: the planner needs op
 #' identity for algebraic decomposition and dtype rules. `nan_rm = TRUE`
 #' (the default) skips nodata, matching R's `na.rm = TRUE` under the
-#' NaN nodata sentinel.
+#' NaN nodata sentinel. A pixel that is nodata in every input stays
+#' nodata (NaN) for `"mean"`, `"median"`, `"min"` and `"max"`; `"sum"`
+#' gives 0 and `"count"` gives 0. (The [g_min()] / [g_max()] primitives
+#' return their identity, `Inf` / `-Inf`, instead.)
 #'
 #' Over a `LazyDataset`, each band is reduced independently (over `"t"`: stack
 #' the band's slices and collapse time to a composite); `bands` restricts which
