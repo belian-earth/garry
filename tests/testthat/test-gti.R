@@ -251,3 +251,23 @@ test_that("GTI reads the matching overview when the pinned grid is
     expect_lt(read_mean(idxw, g("EPSG:3857", bb, 512)), 1.1)
   }
 })
+
+test_that("a GTI index over remote tiles counts as a remote open", {
+  # Opening a GTI opens its first tile, so an index over remote tiles must
+  # get the remote-open hygiene config (no sidecar-probe storm).
+  dir <- withr::local_tempdir("gq")
+  ent <- data.frame(location = "/vsicurl/https://example.com/a.tif",
+                    xmin = 0, ymin = 0, xmax = 1, ymax = 1)
+  remote <- file.path(dir, "remote.gti.fgb")
+  gti_index_create(ent, remote, crs = "EPSG:4326")
+  ent$location <- file.path(dir, "a.tif")
+  local <- file.path(dir, "local.gti.fgb")
+  gti_index_create(ent, local, crs = "EPSG:4326")
+  expect_true(.gdal_opens_remote(paste0("GTI:", remote)))
+  expect_false(.gdal_opens_remote(paste0("GTI:", local)))
+  expect_true(.gdal_opens_remote("https://example.com/a.tif"))
+  expect_false(.gdal_opens_remote(file.path(dir, "a.tif")))
+  # an index without the sidecar counts as local
+  unlink(paste0(remote, ".meta.rds"))
+  expect_false(.gdal_opens_remote(paste0("GTI:", remote)))
+})
