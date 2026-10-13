@@ -62,11 +62,12 @@ lazy_dataset(
 
 - nodata:
 
-  Nodata handling: `NULL` (per-asset file metadata), a scalar (applied
-  to every asset), or a named numeric keyed by asset (unnamed assets
-  fall back to file metadata). Reflectance and QA bands usually need
-  different sentinels, so the named form is typical, e.g.
-  `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
+  Nodata handling: `NULL` (per-band file metadata), a scalar (applied to
+  every asset), or a named numeric keyed by dataset band name or by
+  asset (a band name wins; unnamed bands fall back to file metadata). An
+  asset key covers every band of a multi-band asset. Reflectance and QA
+  bands usually need different sentinels, so the named form is typical,
+  e.g. `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
 
 - lon:
 
@@ -76,11 +77,12 @@ lazy_dataset(
 - resampling:
 
   GDAL resampling for the warp-on-read onto `grid`: a scalar (every
-  value band) or a named character keyed by asset (unnamed assets fall
-  back to `"near"`). `mask_asset` is always read `"near"` regardless,
-  since interpolating packed QA bits corrupts them. `"near"` (the
-  default) preserves exact source values; use `"bilinear"`, `"average"`,
-  `"cubic"`, ... to interpolate. Resample after the fact instead with
+  value band) or a named character keyed by dataset band name or by
+  asset, as for `nodata` (unnamed bands fall back to `"near"`).
+  `mask_asset` is always read `"near"` regardless, since interpolating
+  packed QA bits corrupts them. `"near"` (the default) preserves exact
+  source values; use `"bilinear"`, `"average"`, `"cubic"`, ... to
+  interpolate. Resample after the fact instead with
   [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md).
 
 - scale:
@@ -90,11 +92,12 @@ lazy_dataset(
   metadata (the GDAL band scale/offset QGIS applies; one asset per band
   is probed and the collection is assumed homogeneous) and every read
   returns `v * scale + offset`, applied after the nodata sentinel
-  becomes NaN. A scalar or named numeric (keyed by asset) supplies
-  scales explicitly. Discovery only consults the files themselves: STAC
-  metadata is never read, so collections whose files carry no scaling
-  metadata (e.g. Planetary Computer Sentinel-2 L2A) read raw and scale
-  explicitly instead. `mask_asset` is never scaled.
+  becomes NaN. A scalar or named numeric (keyed by band name or asset,
+  as for `nodata`) supplies scales explicitly. Discovery only consults
+  the files themselves: STAC metadata is never read, so collections
+  whose files carry no scaling metadata (e.g. Planetary Computer
+  Sentinel-2 L2A) read raw and scale explicitly instead. `mask_asset` is
+  never scaled.
 
 - offset:
 
@@ -103,8 +106,12 @@ lazy_dataset(
 
 - bands:
 
-  File form only: integer source band indices to select (default: all).
-  Mutually exclusive with `assets`.
+  Source bands to select (default: all). File form: an integer vector of
+  band indices, mutually exclusive with `assets`. Table form: a list
+  named by asset, each entry an integer vector of that asset's band
+  indices; names on the indices rename the dataset bands, e.g.
+  `list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))`. Assets left out
+  read every band; `mask_asset` always reads band 1.
 
 ## Value
 
@@ -114,8 +121,13 @@ A `LazyDataset`.
 
 - a STAC `doc_items` /
   [`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md)
-  table: one band per asset, each a time-sliced GTI mosaic pinned to
-  `grid` (mixed source CRS is fine; the GTI driver reprojects per tile).
+  table: one band per asset band, each a time-sliced GTI mosaic pinned
+  to `grid` (mixed source CRS is fine; the GTI driver reprojects per
+  tile). A single-band asset takes the asset's name. Every band of a
+  multi-band asset (e.g. a SAR product packing several polarisations
+  into one COG) becomes its own dataset band, named
+  `<asset>_<description>`, or `<asset>_b<index>` when the file carries
+  no band descriptions; `bands` selects and renames them.
 
 - a character path (or vector of same-CRS tile paths, mosaicked): one
   band per file band, one time slice. This is the multi-band raster

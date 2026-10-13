@@ -3,7 +3,13 @@
 `op` is a reduction name, not a function: the planner needs op identity
 for algebraic decomposition and dtype rules. `nan_rm = TRUE` (the
 default) skips nodata, matching R's `na.rm = TRUE` under the NaN nodata
-sentinel.
+sentinel. A pixel that is nodata in every input stays nodata (NaN) for
+`"mean"`, `"median"`, `"min"` and `"max"`; `"sum"` gives 0 and `"count"`
+gives 0. (The
+[`g_min()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
+/
+[`g_max()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
+primitives return their identity, `Inf` / `-Inf`, instead.)
 
 ## Usage
 

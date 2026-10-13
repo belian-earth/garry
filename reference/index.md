@@ -185,6 +185,8 @@ Plan, distribute across daemons, and write the result.
   : Reclaim daemon memory across the pools.
 - [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
   : Apply garry's default GDAL configuration for remote COG reads.
+- [`garry_http_auth()`](https://belian-earth.github.io/garry/reference/garry_http_auth.md)
+  : Authenticate remote reads under a URL prefix.
 - [`garry_opt()`](https://belian-earth.github.io/garry/reference/garry_opt.md)
   : Read a garry policy option.
 - [`garry_options()`](https://belian-earth.github.io/garry/reference/garry_options.md)

@@ -55,6 +55,7 @@ the garry_opt(&quot;scan_profiles&quot;) designated profiles only."><meta proper
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
     <li><a class="dropdown-item" href="../articles/architecture.html">Architecture: an interactive map of garry</a></li>
+    <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
@@ -142,9 +143,11 @@ GDAL block cache.</p></dd>
 
 
 <dt id="arg-gdal-config">gdal_config<a class="anchor" aria-label="anchor" href="#arg-gdal-config"></a></dt>
-<dd><p>Apply <code><a href="garry_gdal_config.html">garry_gdal_config()</a></code> on the host and read
-daemons (default <code>TRUE</code>). Set <code>FALSE</code> to leave session GDAL config
-untouched (e.g. when mixing local multi-file reads).</p></dd>
+<dd><p>Apply <code><a href="garry_gdal_config.html">garry_gdal_config()</a></code> on the read daemons
+(default <code>TRUE</code>). The host session's GDAL config is never changed;
+call <code><a href="garry_gdal_config.html">garry_gdal_config()</a></code> yourself for host-side discovery. Set
+<code>FALSE</code> to leave the daemons on GDAL's defaults too (e.g. when
+mixing local multi-file reads).</p></dd>
 
 
 <dt id="arg--">...<a class="anchor" aria-label="anchor" href="#arg--"></a></dt>
@@ -170,7 +173,8 @@ daemons spawn (read at exec, so children inherit them), and
 host's own GDAL config (that would hide local sidecars for the
 caller's reads); call <code><a href="garry_gdal_config.html">garry_gdal_config()</a></code> yourself to tune host-side
 discovery. <code>MALLOC_*</code> is only-if-unset, and <code>gdal_config = FALSE</code>
-skips the GDAL settings entirely.</p>
+skips the GDAL settings entirely. Headers registered with
+<code><a href="garry_http_auth.html">garry_http_auth()</a></code> are applied to the new pools.</p>
     </div>
     <div class="section level2">
     <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>

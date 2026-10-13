@@ -62,9 +62,11 @@ garry_daemons(
 
   Apply
   [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
-  on the host and read daemons (default `TRUE`). Set `FALSE` to leave
-  session GDAL config untouched (e.g. when mixing local multi-file
-  reads).
+  on the read daemons (default `TRUE`). The host session's GDAL config
+  is never changed; call
+  [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
+  yourself for host-side discovery. Set `FALSE` to leave the daemons on
+  GDAL's defaults too (e.g. when mixing local multi-file reads).
 
 - ...:
 
@@ -92,7 +94,10 @@ runs on every read daemon. Neither touches the host's own GDAL config
 (that would hide local sidecars for the caller's reads); call
 [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
 yourself to tune host-side discovery. `MALLOC_*` is only-if-unset, and
-`gdal_config = FALSE` skips the GDAL settings entirely.
+`gdal_config = FALSE` skips the GDAL settings entirely. Headers
+registered with
+[`garry_http_auth()`](https://belian-earth.github.io/garry/reference/garry_http_auth.md)
+are applied to the new pools.
 
 ## See also
 

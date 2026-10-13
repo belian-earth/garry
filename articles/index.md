@@ -6,6 +6,8 @@
   embeddings](https://belian-earth.github.io/garry/articles/aef-embeddings.md):
 - [Architecture: an interactive map of
   garry](https://belian-earth.github.io/garry/articles/architecture.md):
+- [ESA BIOMASS Level 2A
+  products](https://belian-earth.github.io/garry/articles/biomass-l2a.md):
 - [Getting started with
   garry](https://belian-earth.github.io/garry/articles/garry.md):
 - [Harmonized Landsat-Sentinel composite and

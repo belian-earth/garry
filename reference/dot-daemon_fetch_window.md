@@ -19,7 +19,8 @@ QA convention).
   crs,
   nodata = numeric(0),
   margin = 8L,
-  target_res = NULL
+  target_res = NULL,
+  nbands = 1L
 )
 ```
 
@@ -44,6 +45,10 @@ QA convention).
 - margin:
 
   Source-pixel margin around the window.
+
+- nbands:
+
+  Source band count, for the failure placeholder.
 
 ## Value
 

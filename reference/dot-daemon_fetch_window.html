@@ -35,6 +35,7 @@ declared, Byte 255 otherwise, the HLS QA convention).'><meta property="og:image"
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
     <li><a class="dropdown-item" href="../articles/architecture.html">Architecture: an interactive map of garry</a></li>
+    <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
@@ -77,7 +78,8 @@ declared, Byte 255 otherwise, the HLS QA convention).</p>
 <span>  <span class="va">crs</span>,</span>
 <span>  nodata <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  margin <span class="op">=</span> <span class="fl">8L</span>,</span>
-<span>  target_res <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  target_res <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  nbands <span class="op">=</span> <span class="fl">1L</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -103,6 +105,10 @@ declared, Byte 255 otherwise, the HLS QA convention).</p>
 
 <dt id="arg-margin">margin<a class="anchor" aria-label="anchor" href="#arg-margin"></a></dt>
 <dd><p>Source-pixel margin around the window.</p></dd>
+
+
+<dt id="arg-nbands">nbands<a class="anchor" aria-label="anchor" href="#arg-nbands"></a></dt>
+<dd><p>Source band count, for the failure placeholder.</p></dd>
 
 </dl></div>
     <div class="section level2">

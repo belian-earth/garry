@@ -21,6 +21,7 @@
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/aef-embeddings.html">Reading Alpha Earth embeddings</a></li>
     <li><a class="dropdown-item" href="../articles/architecture.html">Architecture: an interactive map of garry</a></li>
+    <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
@@ -101,9 +102,10 @@ alongside the value assets and used as the default <code>from</code> in <code><a
 
 
 <dt id="arg-nodata">nodata<a class="anchor" aria-label="anchor" href="#arg-nodata"></a></dt>
-<dd><p>Nodata handling: <code>NULL</code> (per-asset file metadata), a scalar
-(applied to every asset), or a named numeric keyed by asset (unnamed assets
-fall back to file metadata). Reflectance and QA bands usually need
+<dd><p>Nodata handling: <code>NULL</code> (per-band file metadata), a scalar
+(applied to every asset), or a named numeric keyed by dataset band name
+or by asset (a band name wins; unnamed bands fall back to file
+metadata). An asset key covers every band of a multi-band asset. Reflectance and QA bands usually need
 different sentinels, so the named form is typical, e.g.
 <code>c(B04 = -9999, B03 = -9999, Fmask = 255)</code>.</p></dd>
 
@@ -115,8 +117,8 @@ different sentinels, so the named form is typical, e.g.
 
 <dt id="arg-resampling">resampling<a class="anchor" aria-label="anchor" href="#arg-resampling"></a></dt>
 <dd><p>GDAL resampling for the warp-on-read onto <code>grid</code>: a scalar
-(every value band) or a named character keyed by asset (unnamed assets fall
-back to <code>"near"</code>). <code>mask_asset</code> is always read <code>"near"</code> regardless, since
+(every value band) or a named character keyed by dataset band name or
+by asset, as for <code>nodata</code> (unnamed bands fall back to <code>"near"</code>). <code>mask_asset</code> is always read <code>"near"</code> regardless, since
 interpolating packed QA bits corrupts them. <code>"near"</code> (the default)
 preserves exact source values; use <code>"bilinear"</code>, <code>"average"</code>, <code>"cubic"</code>,
 ... to interpolate. Resample after the fact instead with <code><a href="align_to.html">align_to()</a></code>.</p></dd>
@@ -129,8 +131,9 @@ the assets' file metadata (the GDAL band scale/offset QGIS applies;
 one asset per band is probed and the collection is assumed
 homogeneous) and every read returns <code>v * scale + offset</code>, applied
 after the nodata sentinel becomes NaN. A scalar or named numeric
-(keyed by asset) supplies scales explicitly. Discovery only consults
-the files themselves: STAC metadata is never read, so collections
+(keyed by band name or asset, as for <code>nodata</code>) supplies scales
+explicitly. Discovery only consults the files themselves: STAC
+metadata is never read, so collections
 whose files carry no scaling metadata (e.g. Planetary Computer
 Sentinel-2 L2A) read raw and scale explicitly instead.
 <code>mask_asset</code> is never scaled.</p></dd>
@@ -143,8 +146,12 @@ logical.</p></dd>
 
 
 <dt id="arg-bands">bands<a class="anchor" aria-label="anchor" href="#arg-bands"></a></dt>
-<dd><p>File form only: integer source band indices to select
-(default: all). Mutually exclusive with <code>assets</code>.</p></dd>
+<dd><p>Source bands to select (default: all). File form: an
+integer vector of band indices, mutually exclusive with <code>assets</code>.
+Table form: a list named by asset, each entry an integer vector of
+that asset's band indices; names on the indices rename the dataset
+bands, e.g. <code>list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))</code>.
+Assets left out read every band; <code>mask_asset</code> always reads band 1.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -154,9 +161,13 @@ logical.</p></dd>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
 
-<ul><li><p>a STAC <code>doc_items</code> / <code><a href="stac_sources.html">stac_sources()</a></code> table: one band per asset, each a
-time-sliced GTI mosaic pinned to <code>grid</code> (mixed source CRS is fine; the
-GTI driver reprojects per tile).</p></li>
+<ul><li><p>a STAC <code>doc_items</code> / <code><a href="stac_sources.html">stac_sources()</a></code> table: one band per asset band,
+each a time-sliced GTI mosaic pinned to <code>grid</code> (mixed source CRS is
+fine; the GTI driver reprojects per tile). A single-band asset takes
+the asset's name. Every band of a multi-band asset (e.g. a SAR product
+packing several polarisations into one COG) becomes its own dataset
+band, named <code>&lt;asset&gt;_&lt;description&gt;</code>, or <code>&lt;asset&gt;_b&lt;index&gt;</code> when the
+file carries no band descriptions; <code>bands</code> selects and renames them.</p></li>
 <li><p>a character path (or vector of same-CRS tile paths, mosaicked): one band
 per file band, one time slice. This is the multi-band raster entry –
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the

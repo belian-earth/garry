@@ -4,6 +4,7 @@
 <url><loc>https://belian-earth.github.io/garry/LICENSE.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/aef-embeddings.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/architecture.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/articles/biomass-l2a.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/garry-api-graph.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/garry-package-graph.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/garry.html</loc></url>
@@ -117,6 +118,7 @@
 <url><loc>https://belian-earth.github.io/garry/reference/garry_daemons_set.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/garry_explain_placement.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/garry_gdal_config.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/garry_http_auth.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/garry_last_route.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/garry_opt.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/garry_options.html</loc></url>

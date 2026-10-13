@@ -7,7 +7,7 @@ went missing instead of erroring.
 ## Usage
 
 ``` r
-gdal_nodata_window(out_file, ext, crs, nodata = numeric(0))
+gdal_nodata_window(out_file, ext, crs, nodata = numeric(0), nbands = 1L)
 ```
 
 ## Arguments
@@ -23,6 +23,12 @@ gdal_nodata_window(out_file, ext, crs, nodata = numeric(0))
 - nodata:
 
   Length-0 or length-1 sentinel.
+
+- nbands:
+
+  Band count: a multi-band mosaic reading band k from a placeholder with
+  fewer bands fails ("has not enough bands"), so the placeholder matches
+  the source's count.
 
 ## Value
 
