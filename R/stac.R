@@ -777,8 +777,13 @@ stac_merge <- function(...) {
 #' GTI (GDAL Tile Index) raster driver, available from GDAL 3.9, which
 #' mosaics the indexed rasters on the fly. Footprints are stored in
 #' `crs` (transformed from the table's EPSG:4326 bboxes), so the index
-#' layer SRS matches the grid the GTI dataset will be pinned to and the
-#' culling geometry is exact. Most users reach this through
+#' layer SRS matches the grid the GTI dataset will be pinned to. Each
+#' footprint is padded by 1% of its width and height on every side: GDAL's
+#' GTI driver (3.12.3 onwards) silently drops a reprojected tile whose
+#' warped extent falls outside its footprint, and both STAC bboxes and
+#' exactly transformed bounds can fall slightly short of that extent. The
+#' footprint only selects tiles, so the padding costs at most a tile open
+#' for windows just beyond a tile's edge. Most users reach this through
 #' [lazy_dataset()], which builds the index internally.
 #'
 #' @param sources A `stac_sources()` table with a `slice` column (see
@@ -831,6 +836,19 @@ stac_gti_index <- function(
     entries[, c("xmin", "ymin", "xmax", "ymax")] <-
       b[match(key, key[first]), , drop = FALSE]
   }
+  # GDAL >= 3.12.3 drops a reprojected tile (no warning, nodata out) when
+  # its GDALWarp extent is not inside the footprint but its 4-corner
+  # reprojection is: the `continue` that skips the out-of-sync warning in
+  # gdaltileindexdataset.cpp also skips adding the source. GDALWarp's
+  # suggested extent overshoots exact bounds by about a source pixel, and
+  # STAC bboxes can undershoot further (~400 m on ESA BIOMASS L2A), so
+  # pad every footprint to keep it a superset.
+  pad_x <- 0.01 * (entries$xmax - entries$xmin)
+  pad_y <- 0.01 * (entries$ymax - entries$ymin)
+  entries$xmin <- entries$xmin - pad_x
+  entries$xmax <- entries$xmax + pad_x
+  entries$ymin <- entries$ymin - pad_y
+  entries$ymax <- entries$ymax + pad_y
   gti_index_create(entries, path, crs = crs)
   invisible(path)
 }
