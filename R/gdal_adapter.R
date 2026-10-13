@@ -183,6 +183,19 @@ NULL
   h
 }
 
+# Path-specific GDAL config (VSISetPathSpecificOption): options that
+# apply only to files under `prefix`, e.g. credentials scoped to one
+# provider (garry_http_auth()).
+gdal_set_path_option <- function(prefix, key, value) {
+  gdalraster::vsi_set_path_option(prefix, key, value)
+  invisible(NULL)
+}
+
+gdal_clear_path_options <- function(prefix) {
+  gdalraster::vsi_clear_path_options(prefix)
+  invisible(NULL)
+}
+
 .gdal_handle_reset <- function() {
   for (h in .gdal_cache$handles) {
     try(h$close(), silent = TRUE)
