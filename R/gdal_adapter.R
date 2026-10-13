@@ -52,6 +52,24 @@ NULL
   grepl("^/vsi(curl|s3|gs|az|swift)|^https?://", path)
 }
 
+# Does opening `path` reach the network? A GTI index is a local file, but
+# opening it opens its first tile to infer band count, type and nodata,
+# so it is remote when its tiles are (read from the index sidecar; an
+# index without one counts as local).
+.gdal_opens_remote <- function(path) {
+  if (.gdal_is_remote(path)) {
+    return(TRUE)
+  }
+  if (!startsWith(path, "GTI:")) {
+    return(FALSE)
+  }
+  meta_f <- paste0(sub("^GTI:", "", path), ".meta.rds")
+  if (!file.exists(meta_f)) {
+    return(FALSE)
+  }
+  any(.gdal_is_remote(readRDS(meta_f)$entries$location))
+}
+
 # Scope the remote-open hygiene config around a block, for garry's OWN
 # host-side opens of REMOTE sources. Two savings, both measured on a
 # 64-band AEF COG (2026-08-12): EMPTY_DIR suppresses the sidecar-probe
@@ -149,7 +167,7 @@ NULL
   # Remote opens run under the scoped hygiene config (sidecar-probe
   # storm + serial IFD walk otherwise cost ~8 s each at typical RTT).
   open_ds <- function() {
-    if (.gdal_is_remote(path)) .gdal_quiet_remote(open_raw()) else open_raw()
+    if (.gdal_opens_remote(path)) .gdal_quiet_remote(open_raw()) else open_raw()
   }
   # A GTI mosaic pinned to the analysis grid reprojects mixed-UTM-zone tiles
   # (HLS spans several zones), so PROJ reports "several coordinate operations
@@ -1252,7 +1270,7 @@ gdal_warp_vrt <- function(
   }
   # warp opens the source internally (bypassing .gdal_handle), so it
   # needs the same remote-open hygiene scoping
-  ok <- if (.gdal_is_remote(src_path)) {
+  ok <- if (any(vapply(src_path, .gdal_opens_remote, logical(1)))) {
     .gdal_quiet_remote(do_warp())
   } else {
     do_warp()
