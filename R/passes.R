@@ -43,8 +43,8 @@ NULL
     op,
     sum = g_sum(x, dims = margins, nan_rm = nan_rm),
     mean = g_mean(x, dims = margins, nan_rm = nan_rm),
-    min = g_min(x, dims = margins, nan_rm = nan_rm),
-    max = g_max(x, dims = margins, nan_rm = nan_rm),
+    min = .nan_if_empty(g_min(x, dims = margins, nan_rm = nan_rm), x, margins, nan_rm),
+    max = .nan_if_empty(g_max(x, dims = margins, nan_rm = nan_rm), x, margins, nan_rm),
     median = g_median(x, dims = margins, nan_rm = nan_rm),
     count = g_count(x, dims = margins),
     .garry_error(
@@ -52,6 +52,23 @@ NULL
       "garry_reduce_unsupported_error"
     )
   )
+}
+
+# reduce_over() keeps an all-nodata pixel nodata for min/max, as mean and
+# median already do. The g_min/g_max primitives return the XLA identity
+# (+/-Inf) instead, which chunk partials combine through, so the remap
+# lives here and in the combine step. Integer results hold no NaN and pass
+# through.
+.nan_if_empty <- function(r, x, margins, nan_rm) {
+  float <- if (.g_traced(r)) {
+    .g_dtype(r) %in% c("f16", "bf16", "f32", "f64")
+  } else {
+    is.double(r)
+  }
+  if (!nan_rm || !float) {
+    return(r)
+  }
+  g_ifelse(g_count(x, dims = margins) > 0, r, NaN)
 }
 
 # Halo a node consumes from its (single) padded input: focal shifts and
@@ -381,8 +398,8 @@ NULL
       op,
       sum = list(sum = g_sum(x, margins, nan_rm)),
       count = list(count = g_count(x, margins)),
-      min = list(min = g_min(x, margins, nan_rm)),
-      max = list(max = g_max(x, margins, nan_rm)),
+      min = list(min = g_min(x, margins, nan_rm), count = g_count(x, margins)),
+      max = list(max = g_max(x, margins, nan_rm), count = g_count(x, margins)),
       mean = list(sum = g_sum(x, margins, nan_rm), count = g_count(x, margins))
     )
     stats::setNames(list(part), key)
@@ -403,6 +420,10 @@ NULL
       max = Reduce(pmax, get_all("max")),
       mean = Reduce(`+`, get_all("sum")) / Reduce(`+`, get_all("count"))
     )
+    # min/max over all-nodata stays nodata (see .nan_if_empty)
+    if (op %in% c("min", "max") && node@nan_rm && is.double(out)) {
+      out[Reduce(`+`, get_all("count")) == 0] <- NaN
+    }
     stats::setNames(list(out), key)
   }
 }
