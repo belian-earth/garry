@@ -1825,6 +1825,20 @@ gti_index_create <- function(entries, path, crs, layer = "index") {
   invisible(path)
 }
 
+# Record a GTI index's band count in its sidecar once a probe has seen it
+# (the GTI driver infers it from the first tile): the fetch split writes
+# failed-fetch placeholders with that many bands.
+.gti_meta_set_bands <- function(path, nbands) {
+  f <- paste0(path, ".meta.rds")
+  if (!file.exists(f)) {
+    return(invisible(path))
+  }
+  meta <- readRDS(f)
+  meta$band_count <- as.integer(nbands)
+  saveRDS(meta, f)
+  invisible(path)
+}
+
 #' Copy one source's target-window bytes to a local file.
 #'
 #' The fetch half of the fetch/assemble split: a plain
@@ -1914,16 +1928,26 @@ gdal_fetch_window <- function(
 #' @param out_file Destination GTiff.
 #' @param ext,crs Window extent and CRS.
 #' @param nodata Length-0 or length-1 sentinel.
+#' @param nbands Band count: a multi-band mosaic reading band k from a
+#'   placeholder with fewer bands fails ("has not enough bands"), so the
+#'   placeholder matches the source's count.
 #' @return `out_file`, invisibly.
 #' @keywords internal
-gdal_nodata_window <- function(out_file, ext, crs, nodata = numeric(0)) {
+gdal_nodata_window <- function(
+  out_file,
+  ext,
+  crs,
+  nodata = numeric(0),
+  nbands = 1L
+) {
   has_nd <- length(nodata) == 1L
+  nbands <- max(1L, as.integer(nbands))
   ds <- gdalraster::create(
     "GTiff",
     out_file,
     16,
     16,
-    1,
+    nbands,
     if (has_nd) "Int16" else "Byte",
     return_obj = TRUE
   )
@@ -1937,10 +1961,12 @@ gdal_nodata_window <- function(out_file, ext, crs, nodata = numeric(0)) {
   ))
   ds$setProjection(gdalraster::srs_to_wkt(crs))
   fill <- if (has_nd) as.numeric(nodata) else 255
-  if (has_nd) {
-    ds$setNoDataValue(1, fill)
+  for (b in seq_len(nbands)) {
+    if (has_nd) {
+      ds$setNoDataValue(b, fill)
+    }
+    ds$write(b, 0, 0, 16, 16, rep(fill, 256))
   }
-  ds$write(1, 0, 0, 16, 16, rep(fill, 256))
   ds$close()
   invisible(out_file)
 }

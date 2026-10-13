@@ -4,7 +4,7 @@
 \alias{gdal_nodata_window}
 \title{Write a small all-nodata window (failed-fetch placeholder).}
 \usage{
-gdal_nodata_window(out_file, ext, crs, nodata = numeric(0))
+gdal_nodata_window(out_file, ext, crs, nodata = numeric(0), nbands = 1L)
 }
 \arguments{
 \item{out_file}{Destination GTiff.}
@@ -12,6 +12,10 @@ gdal_nodata_window(out_file, ext, crs, nodata = numeric(0))
 \item{ext, crs}{Window extent and CRS.}
 
 \item{nodata}{Length-0 or length-1 sentinel.}
+
+\item{nbands}{Band count: a multi-band mosaic reading band k from a
+placeholder with fewer bands fails ("has not enough bands"), so the
+placeholder matches the source's count.}
 }
 \value{
 \code{out_file}, invisibly.

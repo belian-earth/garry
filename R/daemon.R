@@ -624,6 +624,7 @@ NULL
 #' @param ext,crs Target extent and CRS defining the window.
 #' @param nodata Optional sentinel for the failure placeholder.
 #' @param margin Source-pixel margin around the window.
+#' @param nbands Source band count, for the failure placeholder.
 #' @return `TRUE`.
 #' @keywords internal
 .daemon_fetch_window <- function(
@@ -633,7 +634,8 @@ NULL
   crs,
   nodata = numeric(0),
   margin = 8L,
-  target_res = NULL
+  target_res = NULL,
+  nbands = 1L
 ) {
   ok <- tryCatch(
     .gdal_with_retry(
@@ -659,7 +661,7 @@ NULL
       "fetch failed, writing nodata window: {location} ({conditionMessage(ok)})"
     )
     unlink(out_file)
-    gdal_nodata_window(out_file, ext, crs, nodata)
+    gdal_nodata_window(out_file, ext, crs, nodata, nbands = nbands)
   }
   .garry_malloc_trim()
   TRUE

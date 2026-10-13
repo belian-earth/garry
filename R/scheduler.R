@@ -454,7 +454,8 @@ execute_plan_mirai <- function(
         src = ent$location,
         dst = dst,
         do = do_fetch,
-        slice = ent$slice
+        slice = ent$slice,
+        nbands = meta$band_count %||% 1L
       )
       fetch_state[[ipath]] <- st
     }
@@ -477,6 +478,7 @@ execute_plan_mirai <- function(
         cr <- grid@crs
         nd <- rnodata
         tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
+        nb <- st$nbands
         add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
           mirai::mirai(
             asNamespace("garry")$.daemon_fetch_window(
@@ -485,7 +487,8 @@ execute_plan_mirai <- function(
               ex,
               cr,
               nodata = nd,
-              target_res = tr
+              target_res = tr,
+              nbands = nb
             ),
             # dispatch-time hook: a fetch launched deep into a long
             # drain re-signs a near-expiry MPC token (io R4)
@@ -495,6 +498,7 @@ execute_plan_mirai <- function(
             cr = cr,
             nd = nd,
             tr = tr,
+            nb = nb,
             .compute = prof
           )
         })
