@@ -46,6 +46,7 @@ Suggests:
     testthat (>= 3.0.0),
     vaster,
     visNetwork,
+    webfakes,
     withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
@@ -81,6 +82,7 @@ Collate:
     'extract_points.R'
     'gradient.R'
     'grid_from.R'
+    'http_auth.R'
     'materialise.R'
     'ocm.R'
     'ocm_blocks.R'

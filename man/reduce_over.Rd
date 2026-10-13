@@ -27,7 +27,10 @@ A \code{LazyRaster} on the reduced grid, or a \code{LazyDataset} when given one.
 \code{op} is a reduction name, not a function: the planner needs op
 identity for algebraic decomposition and dtype rules. \code{nan_rm = TRUE}
 (the default) skips nodata, matching R's \code{na.rm = TRUE} under the
-NaN nodata sentinel.
+NaN nodata sentinel. A pixel that is nodata in every input stays
+nodata (NaN) for \code{"mean"}, \code{"median"}, \code{"min"} and \code{"max"}; \code{"sum"}
+gives 0 and \code{"count"} gives 0. (The \code{\link[=g_min]{g_min()}} / \code{\link[=g_max]{g_max()}} primitives
+return their identity, \code{Inf} / \code{-Inf}, instead.)
 }
 \details{
 Over a \code{LazyDataset}, each band is reduced independently (over \code{"t"}: stack

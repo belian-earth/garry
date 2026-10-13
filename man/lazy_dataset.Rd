@@ -39,9 +39,10 @@ alongside the value assets and used as the default \code{from} in \code{\link[=a
 
 \item{sort_field}{Index field ordering overlaps within a slice.}
 
-\item{nodata}{Nodata handling: \code{NULL} (per-asset file metadata), a scalar
-(applied to every asset), or a named numeric keyed by asset (unnamed assets
-fall back to file metadata). Reflectance and QA bands usually need
+\item{nodata}{Nodata handling: \code{NULL} (per-band file metadata), a scalar
+(applied to every asset), or a named numeric keyed by dataset band name
+or by asset (a band name wins; unnamed bands fall back to file
+metadata). An asset key covers every band of a multi-band asset. Reflectance and QA bands usually need
 different sentinels, so the named form is typical, e.g.
 \code{c(B04 = -9999, B03 = -9999, Fmask = 255)}.}
 
@@ -49,8 +50,8 @@ different sentinels, so the named form is typical, e.g.
 \code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
 \item{resampling}{GDAL resampling for the warp-on-read onto \code{grid}: a scalar
-(every value band) or a named character keyed by asset (unnamed assets fall
-back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardless, since
+(every value band) or a named character keyed by dataset band name or
+by asset, as for \code{nodata} (unnamed bands fall back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardless, since
 interpolating packed QA bits corrupts them. \code{"near"} (the default)
 preserves exact source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"},
 ... to interpolate. Resample after the fact instead with \code{\link[=align_to]{align_to()}}.}
@@ -61,8 +62,9 @@ the assets' file metadata (the GDAL band scale/offset QGIS applies;
 one asset per band is probed and the collection is assumed
 homogeneous) and every read returns \code{v * scale + offset}, applied
 after the nodata sentinel becomes NaN. A scalar or named numeric
-(keyed by asset) supplies scales explicitly. Discovery only consults
-the files themselves: STAC metadata is never read, so collections
+(keyed by band name or asset, as for \code{nodata}) supplies scales
+explicitly. Discovery only consults the files themselves: STAC
+metadata is never read, so collections
 whose files carry no scaling metadata (e.g. Planetary Computer
 Sentinel-2 L2A) read raw and scale explicitly instead.
 \code{mask_asset} is never scaled.}
@@ -71,8 +73,12 @@ Sentinel-2 L2A) read raw and scale explicitly instead.
 used when \code{scale} is numeric; defaults to 0. Ignored when \code{scale} is
 logical.}
 
-\item{bands}{File form only: integer source band indices to select
-(default: all). Mutually exclusive with \code{assets}.}
+\item{bands}{Source bands to select (default: all). File form: an
+integer vector of band indices, mutually exclusive with \code{assets}.
+Table form: a list named by asset, each entry an integer vector of
+that asset's band indices; names on the indices rename the dataset
+bands, e.g. \code{list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))}.
+Assets left out read every band; \code{mask_asset} always reads band 1.}
 }
 \value{
 A \code{LazyDataset}.
@@ -82,9 +88,13 @@ The one way into any source. Two input forms:
 }
 \details{
 \itemize{
-\item a STAC \code{doc_items} / \code{stac_sources()} table: one band per asset, each a
-time-sliced GTI mosaic pinned to \code{grid} (mixed source CRS is fine; the
-GTI driver reprojects per tile).
+\item a STAC \code{doc_items} / \code{stac_sources()} table: one band per asset band,
+each a time-sliced GTI mosaic pinned to \code{grid} (mixed source CRS is
+fine; the GTI driver reprojects per tile). A single-band asset takes
+the asset's name. Every band of a multi-band asset (e.g. a SAR product
+packing several polarisations into one COG) becomes its own dataset
+band, named \verb{<asset>_<description>}, or \verb{<asset>_b<index>} when the
+file carries no band descriptions; \code{bands} selects and renames them.
 \item a character path (or vector of same-CRS tile paths, mosaicked): one band
 per file band, one time slice. This is the multi-band raster entry --
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the

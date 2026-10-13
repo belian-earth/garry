@@ -106,6 +106,7 @@ reference:
   - garry_daemons_set
   - garry_pool_hygiene
   - garry_gdal_config
+  - garry_http_auth
   - garry_opt
   - garry_options
 - title: Diagnostics & visualisation

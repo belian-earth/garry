@@ -35,9 +35,11 @@ local multi-band files across many windows want a depth covering
 the interleaved file count, since closing a dataset discards its
 GDAL block cache.}
 
-\item{gdal_config}{Apply \code{\link[=garry_gdal_config]{garry_gdal_config()}} on the host and read
-daemons (default \code{TRUE}). Set \code{FALSE} to leave session GDAL config
-untouched (e.g. when mixing local multi-file reads).}
+\item{gdal_config}{Apply \code{\link[=garry_gdal_config]{garry_gdal_config()}} on the read daemons
+(default \code{TRUE}). The host session's GDAL config is never changed;
+call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself for host-side discovery. Set
+\code{FALSE} to leave the daemons on GDAL's defaults too (e.g. when
+mixing local multi-file reads).}
 
 \item{...}{Passed to \code{mirai::daemons()} for every pool; \code{dispatcher} is
 garry's to set.}
@@ -79,7 +81,8 @@ daemons spawn (read at exec, so children inherit them), and
 host's own GDAL config (that would hide local sidecars for the
 caller's reads); call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself to tune host-side
 discovery. \verb{MALLOC_*} is only-if-unset, and \code{gdal_config = FALSE}
-skips the GDAL settings entirely.
+skips the GDAL settings entirely. Headers registered with
+\code{\link[=garry_http_auth]{garry_http_auth()}} are applied to the new pools.
 }
 \seealso{
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, \code{\link[=garry_pool_hygiene]{garry_pool_hygiene()}}, \code{\link[=collect]{collect()}}

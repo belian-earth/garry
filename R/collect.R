@@ -55,6 +55,9 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   if (!is.null(path)) {
     .check_write_path(x, path)
   }
+  if (!plan_only) {
+    .http_auth_sync()
+  }
   # A grouped dataset materialises one result per time group (see
   # group_by_time()): a named list, or one file per group when `path` carries a
   # `{group}` placeholder.

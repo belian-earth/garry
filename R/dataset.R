@@ -127,9 +127,13 @@ LazyDataset <- S7::new_class(
 #'
 #' The one way into any source. Two input forms:
 #'
-#' * a STAC `doc_items` / `stac_sources()` table: one band per asset, each a
-#'   time-sliced GTI mosaic pinned to `grid` (mixed source CRS is fine; the
-#'   GTI driver reprojects per tile).
+#' * a STAC `doc_items` / `stac_sources()` table: one band per asset band,
+#'   each a time-sliced GTI mosaic pinned to `grid` (mixed source CRS is
+#'   fine; the GTI driver reprojects per tile). A single-band asset takes
+#'   the asset's name. Every band of a multi-band asset (e.g. a SAR product
+#'   packing several polarisations into one COG) becomes its own dataset
+#'   band, named `<asset>_<description>`, or `<asset>_b<index>` when the
+#'   file carries no band descriptions; `bands` selects and renames them.
 #' * a character path (or vector of same-CRS tile paths, mosaicked): one band
 #'   per file band, one time slice. This is the multi-band raster entry --
 #'   geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
@@ -155,22 +159,27 @@ LazyDataset <- S7::new_class(
 #' @param assets Character vector of value assets to load (table form), or of
 #'   band names to select (file form, when the file carries band
 #'   descriptions).
-#' @param bands File form only: integer source band indices to select
-#'   (default: all). Mutually exclusive with `assets`.
+#' @param bands Source bands to select (default: all). File form: an
+#'   integer vector of band indices, mutually exclusive with `assets`.
+#'   Table form: a list named by asset, each entry an integer vector of
+#'   that asset's band indices; names on the indices rename the dataset
+#'   bands, e.g. `list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))`.
+#'   Assets left out read every band; `mask_asset` always reads band 1.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
 #' @param sort_field Index field ordering overlaps within a slice.
-#' @param nodata Nodata handling: `NULL` (per-asset file metadata), a scalar
-#'   (applied to every asset), or a named numeric keyed by asset (unnamed assets
-#'   fall back to file metadata). Reflectance and QA bands usually need
+#' @param nodata Nodata handling: `NULL` (per-band file metadata), a scalar
+#'   (applied to every asset), or a named numeric keyed by dataset band name
+#'   or by asset (a band name wins; unnamed bands fall back to file
+#'   metadata). An asset key covers every band of a multi-band asset. Reflectance and QA bands usually need
 #'   different sentinels, so the named form is typical, e.g.
 #'   `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
 #' @param lon Longitude for `granularity = "solar_day"` (see
 #'   [stac_time_slices()]).
 #' @param resampling GDAL resampling for the warp-on-read onto `grid`: a scalar
-#'   (every value band) or a named character keyed by asset (unnamed assets fall
-#'   back to `"near"`). `mask_asset` is always read `"near"` regardless, since
+#'   (every value band) or a named character keyed by dataset band name or
+#'   by asset, as for `nodata` (unnamed bands fall back to `"near"`). `mask_asset` is always read `"near"` regardless, since
 #'   interpolating packed QA bits corrupts them. `"near"` (the default)
 #'   preserves exact source values; use `"bilinear"`, `"average"`, `"cubic"`,
 #'   ... to interpolate. Resample after the fact instead with [align_to()].
@@ -180,8 +189,9 @@ LazyDataset <- S7::new_class(
 #'   one asset per band is probed and the collection is assumed
 #'   homogeneous) and every read returns `v * scale + offset`, applied
 #'   after the nodata sentinel becomes NaN. A scalar or named numeric
-#'   (keyed by asset) supplies scales explicitly. Discovery only consults
-#'   the files themselves: STAC metadata is never read, so collections
+#'   (keyed by band name or asset, as for `nodata`) supplies scales
+#'   explicitly. Discovery only consults the files themselves: STAC
+#'   metadata is never read, so collections
 #'   whose files carry no scaling metadata (e.g. Planetary Computer
 #'   Sentinel-2 L2A) read raw and scale explicitly instead.
 #'   `mask_asset` is never scaled.
@@ -223,16 +233,26 @@ lazy_dataset <- function(
       offset
     ))
   }
-  if (!is.null(bands)) {
-    cli::cli_abort(
-      "{.arg bands} applies to the file form only; use {.arg assets} to select from a source table."
-    )
-  }
   .assert_class(grid, GridSpec, "GridSpec")
   if (length(assets) < 1L) {
     cli::cli_abort("{.arg assets} must name at least one asset.")
   }
   all_assets <- unique(c(assets, mask_asset))
+  if (!is.null(bands)) {
+    if (!is.list(bands) || is.null(names(bands)) || !all(nzchar(names(bands)))) {
+      cli::cli_abort(c(
+        "In the table form, {.arg bands} is a list named by asset.",
+        "i" = "For example {.code bands = list(visual = c(red = 1, green = 2))}."
+      ))
+    }
+    bad <- setdiff(names(bands), setdiff(assets, mask_asset))
+    if (length(bad)) {
+      cli::cli_abort(c(
+        "{.arg bands} names {?an asset/assets} not among the value {.arg assets}: {.val {bad}}.",
+        "i" = "{.arg mask_asset} always reads band 1."
+      ))
+    }
+  }
   # Accept a STAC `doc_items` directly (the discovery/filter object), converting
   # it to the sources table internally -- so the STAC pipeline stays on the rstac
   # object end to end. A plain data.frame (non-STAC / manual sources) passes
@@ -242,13 +262,20 @@ lazy_dataset <- function(
   }
   sources <- stac_time_slices(sources, granularity, lon = lon)
 
-  resolve_nodata <- function(a, meta_nodata) {
+  # Named per-band arguments resolve by output band name first, then by
+  # asset: `c(enclosure_tiff = -9999)` covers every band of a multi-band
+  # asset and `c(hh = -9999)` overrides one of them.
+  key_of <- function(x, nm, a) {
+    if (nm %in% names(x)) nm else if (a %in% names(x)) a else NULL
+  }
+  resolve_nodata <- function(nm, a, meta_nodata) {
     file_nd <- if (length(meta_nodata) == 1L) meta_nodata else NULL
     if (is.null(nodata)) {
       return(file_nd)
     }
     if (!is.null(names(nodata))) {
-      return(if (a %in% names(nodata)) unname(nodata[[a]]) else file_nd)
+      k <- key_of(nodata, nm, a)
+      return(if (is.null(k)) file_nd else unname(nodata[[k]]))
     }
     as.numeric(nodata) # scalar for every asset
   }
@@ -260,14 +287,15 @@ lazy_dataset <- function(
       "i" = "One of {.val {.valid_resampling}}."
     ))
   }
-  resolve_resampling <- function(a) {
+  resolve_resampling <- function(nm, a) {
     if (!is.null(mask_asset) && a %in% mask_asset) {
       return("near")
     } # QA never interpolates
     if (is.null(names(resampling))) {
       return(unname(resampling[[1L]]))
     } # scalar for all
-    if (a %in% names(resampling)) unname(resampling[[a]]) else "near"
+    k <- key_of(resampling, nm, a)
+    if (is.null(k)) "near" else unname(resampling[[k]])
   }
 
   # Per-asset read affine (TIFF metadata only). Discovery probes the GTI
@@ -275,7 +303,7 @@ lazy_dataset <- function(
   # back to the asset's first item when GTI does not propagate the band
   # scale/offset. One asset per band; the collection is assumed
   # homogeneous (documented caveat, e.g. the S2 baseline-04 cutover).
-  resolve_affine <- function(a, meta) {
+  resolve_affine <- function(nm, a, b, meta) {
     if (!is.null(mask_asset) && a %in% mask_asset) {
       return(list(scale = numeric(0), offset = numeric(0)))
     }
@@ -284,7 +312,8 @@ lazy_dataset <- function(
         return(default)
       }
       if (!is.null(names(x))) {
-        return(if (a %in% names(x)) unname(x[[a]]) else default)
+        k <- key_of(x, nm, a)
+        return(if (is.null(k)) default else unname(x[[k]]))
       }
       unname(x[[1L]])
     }
@@ -295,12 +324,15 @@ lazy_dataset <- function(
       if (length(meta$scale) == 1L) {
         return(list(scale = meta$scale, offset = meta$offset))
       }
-      probe <- gdal_grid_spec(sources$location[sources$asset == a][[1L]])
+      probe <- gdal_grid_spec(
+        sources$location[sources$asset == a][[1L]],
+        band = b
+      )
       if (length(probe$scale) == 1L) {
         return(list(scale = probe$scale, offset = probe$offset))
       }
       cli::cli_inform(c(
-        "i" = "{.arg scale}: no scale/offset metadata on asset {.val {a}}; reading raw values."
+        "i" = "{.arg scale}: no scale/offset metadata on {.val {nm}}; reading raw values."
       ))
       return(list(scale = numeric(0), offset = numeric(0)))
     }
@@ -321,49 +353,128 @@ lazy_dataset <- function(
   }
 
   graph <- graph_new()
-  bands <- list()
+  out <- list()
   for (a in all_assets) {
     idx <- stac_gti_index(sources, a, crs = grid@crs)
-    meta <- gdal_grid_spec(
-      paste0("GTI:", idx),
-      open_options = gti_open_options(grid)
-    )
-    nd <- resolve_nodata(a, meta$nodata)
-    aff <- resolve_affine(a, meta)
-    slices <- sort(unique(sources$slice[sources$asset == a]))
-    rs <- resolve_resampling(a)
-    layers <- lapply(slices, function(sl) {
-      lazy_source(
-        paste0("GTI:", idx),
-        graph = graph,
-        nodata = nd,
-        open_options = gti_open_options(
-          grid,
-          filter = .glue("slice = '{sl}'"),
-          sort_field = sort_field
-        ),
-        grid = meta$grid,
-        block_dim = meta$block_dim,
-        resampling = rs,
-        scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
-        offset = if (length(aff$offset) == 1L) aff$offset else NULL,
-        name = a
+    gti <- paste0("GTI:", idx)
+    # The GTI driver infers band count, dtype and nodata per band from the
+    # first tile, so one index serves every band of a multi-band asset.
+    nb <- .gdal_handle(gti, gti_open_options(grid))$getRasterCount()
+    .gti_meta_set_bands(idx, nb)
+    sel <- if (!is.null(mask_asset) && a %in% mask_asset) {
+      stats::setNames(1L, a)
+    } else {
+      .ds_asset_bands(
+        a,
+        nb,
+        sources$location[sources$asset == a][[1L]],
+        bands[[a]]
       )
-    })
-    names(layers) <- slices
-    bands[[a]] <- layers
+    }
+    slices <- sort(unique(sources$slice[sources$asset == a]))
+    for (k in seq_along(sel)) {
+      b <- sel[[k]]
+      nm <- names(sel)[[k]]
+      meta <- gdal_grid_spec(
+        gti,
+        band = b,
+        open_options = gti_open_options(grid)
+      )
+      nd <- resolve_nodata(nm, a, meta$nodata)
+      aff <- resolve_affine(nm, a, b, meta)
+      rs <- resolve_resampling(nm, a)
+      layers <- lapply(slices, function(sl) {
+        lazy_source(
+          gti,
+          band = b,
+          graph = graph,
+          nodata = nd,
+          open_options = gti_open_options(
+            grid,
+            filter = .glue("slice = '{sl}'"),
+            sort_field = sort_field
+          ),
+          grid = meta$grid,
+          block_dim = meta$block_dim,
+          resampling = rs,
+          scale = if (length(aff$scale) == 1L) aff$scale else FALSE,
+          offset = if (length(aff$offset) == 1L) aff$offset else NULL,
+          name = nm
+        )
+      })
+      names(layers) <- slices
+      if (!is.null(out[[nm]])) {
+        cli::cli_abort(c(
+          "Two dataset bands are both named {.val {nm}}.",
+          "i" = "Rename one through {.arg bands}."
+        ))
+      }
+      out[[nm]] <- layers
+    }
   }
-  bands <- bands[all_assets] # preserve requested order
   LazyDataset(
     graph = graph,
-    bands = bands,
+    bands = out,
     mask_asset = if (is.null(mask_asset)) {
       character(0)
     } else {
       as.character(mask_asset)
     },
-    steps = list(.step("source", "source", detail = max(lengths(bands))))
+    steps = list(.step("source", "source", detail = max(lengths(out))))
   )
+}
+
+# Source bands of one table-form asset -> named integer band indices.
+# Every band by default; a single-band asset keeps the asset's name, a
+# multi-band asset names each band `<asset>_<description>` (or
+# `<asset>_b<i>` when descriptions are missing or repeat). `spec` (one
+# entry of `bands`) selects indices; its names, where given, replace the
+# defaults. Descriptions come from the asset's first item: the GTI
+# mosaic does not carry them.
+.ds_asset_bands <- function(
+  a,
+  nb,
+  first_item,
+  spec,
+  call = rlang::caller_env()
+) {
+  if (is.null(spec)) {
+    if (nb == 1L) {
+      return(stats::setNames(1L, a))
+    }
+    idx <- seq_len(nb)
+  } else {
+    idx <- suppressWarnings(as.integer(spec))
+    if (!length(idx) || anyNA(idx) || any(idx < 1L | idx > nb)) {
+      cli::cli_abort(
+        "{.arg bands} for asset {.val {a}} must index 1..{nb} (it has {nb} band{?s}).",
+        call = call
+      )
+    }
+  }
+  given <- names(spec) %||% rep("", length(idx))
+  nms <- given
+  if (!all(nzchar(given))) {
+    if (nb == 1L) {
+      dflt <- a
+    } else {
+      ds <- .gdal_handle(first_item)
+      d <- vapply(idx, function(b) ds$getDescription(b), "")
+      dflt <- ifelse(nzchar(d), d, paste0("b", idx))
+      if (anyDuplicated(dflt)) {
+        dflt <- paste0("b", idx)
+      }
+      dflt <- paste0(a, "_", dflt)
+    }
+    nms <- ifelse(nzchar(given), given, dflt)
+  }
+  if (anyDuplicated(nms)) {
+    cli::cli_abort(
+      "{.arg bands} for asset {.val {a}} repeats a band name: {.val {nms[duplicated(nms)]}}.",
+      call = call
+    )
+  }
+  stats::setNames(idx, nms)
 }
 
 # File form of lazy_dataset(): one band per (selected) file band, one time

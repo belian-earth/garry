@@ -12,7 +12,8 @@ local file.}
   crs,
   nodata = numeric(0),
   margin = 8L,
-  target_res = NULL
+  target_res = NULL,
+  nbands = 1L
 )
 }
 \arguments{
@@ -25,6 +26,8 @@ local file.}
 \item{nodata}{Optional sentinel for the failure placeholder.}
 
 \item{margin}{Source-pixel margin around the window.}
+
+\item{nbands}{Source band count, for the failure placeholder.}
 }
 \value{
 \code{TRUE}.

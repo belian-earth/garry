@@ -508,7 +508,8 @@ NULL
 #' host's own GDAL config (that would hide local sidecars for the
 #' caller's reads); call [garry_gdal_config()] yourself to tune host-side
 #' discovery. `MALLOC_*` is only-if-unset, and `gdal_config = FALSE`
-#' skips the GDAL settings entirely.
+#' skips the GDAL settings entirely. Headers registered with
+#' [garry_http_auth()] are applied to the new pools.
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses all
 #'   logical cores. `0` tears the pool down.
@@ -529,9 +530,11 @@ NULL
 #'   local multi-band files across many windows want a depth covering
 #'   the interleaved file count, since closing a dataset discards its
 #'   GDAL block cache.
-#' @param gdal_config Apply [garry_gdal_config()] on the host and read
-#'   daemons (default `TRUE`). Set `FALSE` to leave session GDAL config
-#'   untouched (e.g. when mixing local multi-file reads).
+#' @param gdal_config Apply [garry_gdal_config()] on the read daemons
+#'   (default `TRUE`). The host session's GDAL config is never changed;
+#'   call [garry_gdal_config()] yourself for host-side discovery. Set
+#'   `FALSE` to leave the daemons on GDAL's defaults too (e.g. when
+#'   mixing local multi-file reads).
 #' @param ... Passed to `mirai::daemons()` for every pool; `dispatcher` is
 #'   garry's to set.
 #' @return Invisibly, `list(read =, compute =)`.
@@ -643,7 +646,8 @@ garry_daemons <- function(
   )
   if (read > 0L) {
     # Read daemons: set the handle-cache depth, and (once) the GDAL config so it
-    # is live from pool creation (the pipeline also re-applies it per run).
+    # is live from pool creation (the composite fast path also re-applies it
+    # per run).
     w <- mirai::everywhere(
       {
         options(garry.handle_cache_max = hc, garry.gdal_cachemax_mb = cm)
@@ -688,6 +692,10 @@ garry_daemons <- function(
     .pool_affinity_apply(NULL, compute, pids = .garry_state$comp_pids)
   }
   .garry_state$comp_mixed <- FALSE
+  # Credentials registered with garry_http_auth() reach new pools too.
+  if (length(.garry_state$http_auth) && (read > 0L || compute > 0L)) {
+    .http_auth_push()
+  }
   invisible(list(read = read, compute = compute))
 }
 
