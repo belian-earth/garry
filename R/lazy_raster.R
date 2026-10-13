@@ -901,30 +901,102 @@ focal_map <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
 #' Shrink the valid-data footprint by a pixel margin.
 #'
 #' Sets to NaN every pixel within `radius` pixels of nodata, eroding
-#' each nodata boundary (scene footprint edges, cloud-mask holes, the
-#' raster border) by that margin. The standard cure for corrupt scene
-#' edges: satellite granules commonly carry one or two pixels of bad
-#' radiometry just inside their data footprint that QA masks miss, and
-#' on a `(t, y, x)` stack each slice's footprint erodes independently.
+#' each nodata boundary (scene footprint edges, cloud-mask holes) by that
+#' margin. The standard cure for corrupt scene edges: satellite granules
+#' commonly carry one or two pixels of bad radiometry just inside their
+#' data footprint that QA masks miss, and on a `(t, y, x)` stack each
+#' slice's footprint erodes independently.
 #'
-#' Implemented as a [focal_map()] kernel (centre plus zero times the window
-#' sum, which is NaN wherever any neighbour is NaN), so it plans and
-#' fuses like any stencil, and applies per band over a `LazyDataset`.
+#' It is morphology on the nodata mask: the footprint erodes by `radius`
+#' exactly as [apply_mask()]'s `dilate` grows a mask by `radius`.
+#'
+#' `boundary` sets what lies beyond the edge of the grid. `"nodata"` (the
+#' default) treats it as nodata, so the grid's own border erodes too.
+#' `"keep"` treats it as valid, so only real nodata edges erode and the
+#' result keeps its full extent; use it when the data continues past the
+#' analysis grid. `"keep"` applies to 2-D rasters (`(y, x)`); over a
+#' `LazyDataset` it applies slice by slice.
+#'
+#' Implemented with focal stencils, so it plans and fuses like any
+#' [focal_map()], and applies per band over a `LazyDataset`.
 #'
 #' @param x A `LazyRaster`, or a `LazyDataset`.
 #' @param radius Margin to remove, in pixels.
 #' @param bands `LazyDataset` only: bands to apply to (default: all
 #'   value bands).
+#' @param boundary What lies beyond the grid edge: `"nodata"` or `"keep"`.
 #' @return The eroded object, same class and grid as `x`.
 #' @export
-shrink_footprint <- function(x, radius = 1L, bands = NULL) {
+shrink_footprint <- function(
+  x,
+  radius = 1L,
+  bands = NULL,
+  boundary = c("nodata", "keep")
+) {
   radius <- as.integer(radius)
   if (length(radius) != 1L || is.na(radius) || radius < 1L) {
     cli::cli_abort("{.arg radius} must be a positive integer")
   }
-  focal_map(x, radius = radius, bands = bands, fn = function(sh) {
-    sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh)
+  boundary <- rlang::arg_match(boundary)
+  if (boundary == "nodata") {
+    return(focal_map(x, radius = radius, bands = bands, fn = function(sh) {
+      sh[[(length(sh) + 1L) %/% 2L]] + 0 * Reduce(`+`, sh)
+    }))
+  }
+  if (S7::S7_inherits(x, LazyDataset)) {
+    bands <- .ds_check_bands(x, bands)
+    sel <- bands %||% .ds_value_bands(x)
+    newbands <- x@bands
+    for (a in sel) {
+      newbands[[a]] <- lapply(x@bands[[a]], .shrink_keep, radius = radius)
+    }
+    return(LazyDataset(
+      graph = x@graph,
+      bands = newbands,
+      mask_asset = x@mask_asset,
+      steps = c(
+        x@steps,
+        list(.step(
+          "focal",
+          "focal",
+          detail = .glue(
+            "shrink r={radius} keep {cli::symbol$bullet %||% '-'} ",
+            "{paste(sel, collapse = ' ')}"
+          )
+        ))
+      )
+    ))
+  }
+  .assert_class(x, LazyRaster, "LazyRaster")
+  .shrink_keep(x, radius)
+}
+
+# shrink_footprint(boundary = "keep"). Inside a fused kernel a halo cell
+# beyond the grid and a nodata pixel are both NaN, so an in-grid
+# indicator separates them: a sourceless VRT on the grid reads 0 inside
+# and NaN in the halo. z marks real nodata (1) against valid data and
+# beyond-grid cells (0); any marked cell within `radius` drops the pixel.
+.shrink_keep <- function(x, radius) {
+  if (!setequal(names(x@grid@dims), c("x", "y"))) {
+    cli::cli_abort(c(
+      "{.code boundary = \"keep\"} needs a 2-D (y, x) raster.",
+      "i" = "Apply it before stacking, or to a {.cls LazyDataset} (per slice)."
+    ))
+  }
+  inside <- lazy_source(
+    gdal_blank_vrt(x@grid),
+    graph = x@graph,
+    grid = .grid_retype(x@grid, "f32"),
+    name = "grid"
+  )
+  z <- lazy_map(x, inside, fn = function(v, g) {
+    g_ifelse(g_is_nodata(g), 0, g_ifelse(g_is_nodata(v), 1, 0))
   })
+  # a stage boundary re-presents beyond-grid cells as NaN: still not nodata
+  near <- focal_map(z, radius = radius, fn = function(sh) {
+    Reduce(`+`, lapply(sh, function(s) g_ifelse(g_is_nodata(s), 0, s)))
+  })
+  lazy_map(x, near, fn = function(v, n) g_ifelse(n > 0.5, NaN, v))
 }
 
 #' Whole-window model op (advanced): apply `fn` to the raw padded chunk.

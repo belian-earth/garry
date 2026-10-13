@@ -196,6 +196,34 @@ gdal_clear_path_options <- function(prefix) {
   invisible(NULL)
 }
 
+# A sourceless VRT on `grid`: GDAL reads every pixel inside it as 0, and
+# garry's halo reads beyond it stay NaN, so it marks which cells of a
+# padded chunk lie inside the grid at no read cost. Float32 so the halo
+# can hold NaN. One file per grid per session.
+.gdal_cache$blank <- list()
+gdal_blank_vrt <- function(grid) {
+  key <- paste(c(grid@crs, grid@transform, grid@dims), collapse = "\x1f")
+  hit <- .gdal_cache$blank[[key]]
+  if (!is.null(hit) && file.exists(hit)) {
+    return(hit)
+  }
+  path <- tempfile("garry-grid-", fileext = ".vrt")
+  ds <- gdalraster::create(
+    "VRT",
+    path,
+    grid@dims[["x"]],
+    grid@dims[["y"]],
+    1L,
+    "Float32",
+    return_obj = TRUE
+  )
+  ds$setGeoTransform(grid@transform)
+  ds$setProjection(grid@crs)
+  ds$close()
+  .gdal_cache$blank[[key]] <- path
+  path
+}
+
 .gdal_handle_reset <- function() {
   for (h in .gdal_cache$handles) {
     try(h$close(), silent = TRUE)
