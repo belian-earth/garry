@@ -91,6 +91,14 @@ NULL
   out
 }
 
+# Evaluate `code` with GDAL's error messages silenced (gdalraster's quiet
+# handler); errors still reach R as conditions.
+.gdal_quiet_errors <- function(code) {
+  gdalraster::push_error_handler("quiet")
+  on.exit(gdalraster::pop_error_handler(), add = TRUE)
+  force(code)
+}
+
 # Is a path a Zarr array (by connection string or store suffix)?
 .gdal_is_zarr <- function(path) {
   grepl('^ZARR:|\\.zarr/?$', path, ignore.case = TRUE)
@@ -247,11 +255,25 @@ NULL
   # Remote opens run under the scoped hygiene config (sidecar-probe
   # storm + serial IFD walk otherwise cost ~8 s each at typical RTT).
   open_ds <- function() {
-    if (.gdal_opens_remote(path)) {
-      .gdal_quiet_remote(open_raw(), zarr = .gdal_is_zarr(path))
-    } else {
-      open_raw()
+    if (!.gdal_opens_remote(path)) {
+      return(open_raw())
     }
+    zarr <- .gdal_is_zarr(path)
+    if (zarr) {
+      # The Zarr driver's coordinate-array lookup walks above the store
+      # (malformed /vsicurl URLs such as https://band/zarr.json) and
+      # reports each miss as a GDAL warning or failure on an open that
+      # succeeds. Open quietly; on failure open again so GDAL's own
+      # messages say why.
+      h <- tryCatch(
+        .gdal_quiet_remote(.gdal_quiet_errors(open_raw()), zarr = TRUE),
+        error = function(e) NULL
+      )
+      if (!is.null(h)) {
+        return(h)
+      }
+    }
+    .gdal_quiet_remote(open_raw(), zarr = zarr)
   }
   # A GTI mosaic pinned to the analysis grid reprojects mixed-UTM-zone tiles
   # (HLS spans several zones), so PROJ reports "several coordinate operations
