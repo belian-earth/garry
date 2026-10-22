@@ -1777,7 +1777,8 @@ gdal_warp_window <- function(
 #' timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 #' defaults to 5% of RAM *per process*, which many daemons would
 #' multiply), single-range COG-header ingest, a skipped directory scan
-#' and a raster-extension vsicurl allowlist for fast remote opens, and
+#' and a vsicurl allowlist for fast remote opens (raster extensions,
+#' plus `.json` and extensionless keys so Zarr v3 stores read), and
 #' permission to open MEM-driver datasets, which garry's internal warp
 #' readers require. `garry_daemons()` calls this
 #' on every read daemon automatically; call it yourself for host-side
@@ -1799,13 +1800,22 @@ garry_gdal_config <- function() {
   sc("GDAL_HTTP_VERSION", "2")
   sc("GDAL_HTTP_MAX_RETRY", "10")
   sc("GDAL_HTTP_RETRY_DELAY", "0.5")
-  sc("GDAL_HTTP_RETRY_CODES", "429,500,502,503,504")
+  # GDAL_HTTP_RETRY_CODES stays unset: GDAL's default set is 429, 500 and
+  # 502-504 plus curl timeouts and resets. GDAL matches an explicit list
+  # by substring (GDAL 3.13), so "500" admits code 0 and every curl
+  # failure, DNS included, retries with backoff for minutes.
   sc("GDAL_HTTP_TIMEOUT", "60")
   sc("GDAL_HTTP_CONNECTTIMEOUT", "10")
   sc("GDAL_CACHEMAX", as.character(as.integer(garry_opt("gdal_cachemax_mb"))))
   sc("GDAL_INGESTED_BYTES_AT_OPEN", "32768") # one range grabs the COG header
   sc("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-  sc("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.tiff,.TIF,.TIFF,.vrt,.jp2")
+  # Zarr v3 needs zarr.json and its extensionless chunk keys ({noext});
+  # the list still refuses the sidecar probes (.aux.xml, .ovr, .msk, ...)
+  # GDAL issues on every remote open.
+  sc(
+    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS",
+    ".tif,.tiff,.TIF,.TIFF,.vrt,.jp2,.json,{noext}"
+  )
   sc("GDAL_MEM_ENABLE_OPEN", "YES") # >=3.10 gate for the direct warp
   invisible(NULL)
 }
