@@ -798,21 +798,38 @@ NULL
 .bands_share_blocks <- function(path, open_options = character(0)) {
   # a multi-path source (e.g. one Zarr array per UTM zone): every path
   if (length(path) > 1L) {
-    return(all(vapply(path, .bands_share_blocks, logical(1), open_options)))
+    for (p in path) {
+      if (!.bands_share_blocks(p, open_options)) {
+        return(FALSE)
+      }
+    }
+    return(TRUE)
+  }
+  # Memoised per (path, open options, local file stamp): plans ask once per
+  # band stack, and a remote store would otherwise reopen whenever the
+  # handle cache has evicted it.
+  key <- paste(c(path, open_options, .gdal_local_stamp(path)), collapse = "\x1f")
+  hit <- .shares_memo[[key]]
+  if (!is.null(hit)) {
+    return(hit)
   }
   ds <- tryCatch(.gdal_handle(path, open_options), error = function(e) NULL)
   if (is.null(ds)) {
     return(FALSE)
   }
-  if (identical(ds$getDriverShortName(), "Zarr")) {
-    return(TRUE)
+  out <- if (identical(ds$getDriverShortName(), "Zarr")) {
+    TRUE
+  } else {
+    il <- tryCatch(
+      ds$getMetadataItem(0L, "INTERLEAVE", "IMAGE_STRUCTURE"),
+      error = function(e) ""
+    )
+    identical(toupper(il), "PIXEL")
   }
-  il <- tryCatch(
-    ds$getMetadataItem(0L, "INTERLEAVE", "IMAGE_STRUCTURE"),
-    error = function(e) ""
-  )
-  identical(toupper(il), "PIXEL")
+  .shares_memo[[key]] <- out
+  out
 }
+.shares_memo <- new.env(parent = emptyenv())
 
 # Do these single-band SourceNodes address one file (or one set of files,
 # a multi-path source) the same way: same path(s), open options, nodata,

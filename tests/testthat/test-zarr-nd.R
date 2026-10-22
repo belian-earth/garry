@@ -278,3 +278,29 @@ test_that("Zarr sources with different time coordinates are refused", {
   g <- grid_spec("EPSG:32632", c(500000, 4599800, 500600, 4600000), res = 10)
   expect_error(lazy_dataset(c(a$path, b$path), g), "dimension coordinates")
 })
+
+test_that("a Zarr handle's byte count goes with the handle on eviction", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  withr::local_options(garry.handle_cache_max = 1L)
+  .gdal_handle_drop(fx$path)
+  key <- .gdal_href(fx$path)
+  invisible(gdal_read_window(fx$path, 1L, 0L, 0L, 20L, 20L))
+  expect_identical(.gdal_cache$zarr_bytes[[key]], 400)
+  .gdal_handle(fixture_multiband()$path) # evicts the Zarr handle
+  expect_null(.gdal_cache$zarr_bytes[[key]])
+})
+
+test_that("a multi-band window warp returns the same cube in either form", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  g <- grid_spec("EPSG:32632", c(500005, 4599815, 500275, 4599995), res = 15)
+  args <- list(fx$path, 9:12, g, 0L, 0L, g@dims[["x"]], g@dims[["y"]],
+               nodata = -128)
+  m <- do.call(gdal_warp_window, args)
+  r <- do.call(gdal_warp_window, c(args, out = "raw_f32"))
+  expect_identical(attr(r, "gdim"), c(4L, g@dims[["y"]], g@dims[["x"]]))
+  expect_equal(.sv_materialise(r), m, tolerance = 1e-6)
+  rs <- do.call(gdal_warp_window, c(args, out = "raw_f32", scale = 2, offset = 1))
+  expect_equal(.sv_materialise(rs), m * 2 + 1, tolerance = 1e-5)
+})

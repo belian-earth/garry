@@ -261,6 +261,7 @@ NULL
     try(h$close(), silent = TRUE) # the file changed under the handle
     .gdal_cache$handles[[key]] <- NULL
     .gdal_cache$stamps[[key]] <- NULL
+    .gdal_cache$zarr_bytes[[key]] <- NULL
     h <- NULL
   }
   if (!is.null(h)) {
@@ -324,6 +325,7 @@ NULL
     try(.gdal_cache$handles[[1L]]$close(), silent = TRUE)
     .gdal_cache$handles[[1L]] <- NULL
     .gdal_cache$stamps[[k1]] <- NULL
+    .gdal_cache$zarr_bytes[[k1]] <- NULL
   }
   .gdal_cache$handles[[key]] <- h
   .gdal_cache$stamps[[key]] <- stamp
@@ -1954,12 +1956,26 @@ gdal_warp_window <- function(
   } else {
     warp()
   }
+  if (nb > 1L && out == "raw_f32" && length(scale) == 0L) {
+    # the warped buffer is already the band-sequential f32 payload, nodata
+    # NaN (-dstnodata nan): hand it over as is
+    return(structure(buf, gdim = as.integer(c(nb, y_size, x_size)), gdt = "f32"))
+  }
   v <- readBin(buf, "numeric", n = n_px * nb, size = 4L)
   if (nb == 1L) {
     return(.gdal_finish_vec(v, y_size, x_size, numeric(0), scale, offset, out))
   }
-  planes <- lapply(seq_len(nb), function(k) {
-    .gdal_finish_vec(
+  if (out == "raw_f32") {
+    # finish every plane in one pass; the planes are already in order
+    return(structure(
+      as.vector(.gdal_finish_vec(v, nb * y_size, x_size, numeric(0), scale, offset, out)),
+      gdim = as.integer(c(nb, y_size, x_size)),
+      gdt = "f32"
+    ))
+  }
+  cube <- array(NA_real_, c(nb, y_size, x_size))
+  for (k in seq_len(nb)) {
+    cube[k, , ] <- .gdal_finish_vec(
       v[(k - 1) * n_px + seq_len(n_px)],
       y_size,
       x_size,
@@ -1968,17 +1984,6 @@ gdal_warp_window <- function(
       offset,
       out
     )
-  })
-  if (out == "raw_f32") {
-    return(structure(
-      do.call(c, lapply(planes, as.vector)),
-      gdim = as.integer(c(nb, y_size, x_size)),
-      gdt = "f32"
-    ))
-  }
-  cube <- array(NA_real_, c(nb, y_size, x_size))
-  for (k in seq_len(nb)) {
-    cube[k, , ] <- planes[[k]]
   }
   cube
 }
