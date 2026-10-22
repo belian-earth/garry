@@ -494,7 +494,9 @@ lazy_dataset <- function(
 # slice. A vector of paths mosaics first (same-CRS north-up tiles,
 # gdalbuildvrt); tiles the mosaic cannot hold (south-up, or across a
 # projection boundary) stay a multi-path source node that the warper
-# reads together, band by band (gdal_warp_window()). ONE
+# reads together (gdal_warp_window()): band by band, or every band of a
+# window at once when the files' bands share storage (one Zarr array per
+# UTM zone). ONE
 # metadata probe serves every band (.gdal_handle caches the dataset handle),
 # and the probed grid is DECLARED on each band source, so construction costs
 # one header fetch however many bands the file carries. Each band is its own
@@ -539,6 +541,17 @@ lazy_dataset <- function(
   if (is.null(meta)) meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path[[1L]])
   nb <- ds$getRasterCount()
+  # Several sources warp together band by band (one Zarr array per UTM
+  # zone, say), so they must agree on their bands.
+  if (length(path) > 1L) {
+    nbs <- vapply(path, function(p) .gdal_handle(p)$getRasterCount(), integer(1))
+    if (any(nbs != nb)) {
+      cli::cli_abort(c(
+        "The sources differ in band count ({.val {unique(nbs)}}).",
+        "i" = "Read them separately and combine on a common grid."
+      ))
+    }
+  }
   # An N-D array (time, band, y, x) read through GDAL's classic view: its
   # bands index the band dimension and its slices the time dimension.
   nd <- .nd_layout(.gdal_band_dims(ds))

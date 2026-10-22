@@ -727,9 +727,13 @@ NULL
 .collapsed_read <- function(graph, id, grid, ps, shared_only = FALSE) {
   if (all(vapply(ps, function(n) S7::S7_inherits(n, SourceNode), logical(1)))) {
     p1 <- ps[[1L]]
+    # A multi-path source collapses only over shared storage: its files are
+    # read by one warp per window, which per-band tasks over a
+    # band-interleaved tile set (AEF across tile corners) outrun.
     if (
       !.same_file_bands(ps) ||
-        (shared_only && !.bands_share_blocks(p1@path, p1@open_options))
+        ((shared_only || length(p1@path) > 1L) &&
+          !.bands_share_blocks(p1@path, p1@open_options))
     ) {
       return(NULL)
     }
@@ -794,6 +798,10 @@ NULL
 # pixel-interleaved file; false for a band-interleaved one, or when the
 # file cannot be opened.
 .bands_share_blocks <- function(path, open_options = character(0)) {
+  # a multi-path source (e.g. one Zarr array per UTM zone): every path
+  if (length(path) > 1L) {
+    return(all(vapply(path, .bands_share_blocks, logical(1), open_options)))
+  }
   ds <- tryCatch(.gdal_handle(path, open_options), error = function(e) NULL)
   if (is.null(ds)) {
     return(FALSE)
@@ -808,9 +816,9 @@ NULL
   identical(toupper(il), "PIXEL")
 }
 
-# Do these single-band SourceNodes address one file the same way: same
-# path, open options, nodata, resampling, scale, offset and dtype, on
-# spatially identical 2-D grids?
+# Do these single-band SourceNodes address one file (or one set of files,
+# a multi-path source) the same way: same path(s), open options, nodata,
+# resampling, scale, offset and dtype, on spatially identical 2-D grids?
 .same_file_bands <- function(ps) {
   if (!all(vapply(ps, function(n) length(n@band) == 1L, logical(1)))) {
     return(FALSE)
@@ -830,8 +838,7 @@ NULL
   all(vapply(
     ps[-1L],
     function(n) {
-      length(n@path) == 1L && length(p1@path) == 1L &&
-        identical(n@path, p1@path) &&
+      identical(n@path, p1@path) &&
         identical(n@open_options, p1@open_options) &&
         identical(n@nodata, p1@nodata) &&
         identical(n@resampling, p1@resampling) &&

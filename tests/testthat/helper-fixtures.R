@@ -104,11 +104,16 @@ fixture_multiband <- function() {
 # conventions (GDAL >= 3.13) and x/y coordinate arrays plus a _CRS
 # attribute (older GDAL). Returns the store, its ZARR: connection string
 # and the values as an R array [t, b, y, x].
-fixture_zarr_nd <- function() {
-  if (!is.null(.fixture_env$zarr)) return(.fixture_env$zarr)
-  store <- file.path(tempdir(), "garry-fixture-nd.zarr")
+#
+# `epsg`, `x0`, `y1` and `shift` (added to every value) place a second
+# store elsewhere, e.g. in the next UTM zone for cross-zone reads.
+fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
+                            shift = 0L) {
+  key <- paste("zarr", epsg, x0, y1, shift)
+  if (!is.null(.fixture_env[[key]])) return(.fixture_env[[key]])
+  store <- file.path(tempdir(), sprintf("garry-fixture-nd-%d-%d.zarr", epsg, shift))
   nt <- 3L; nb <- 4L; ny <- 20L; nx <- 30L; chunk <- c(1L, 2L, 10L, 15L)
-  x0 <- 500000; y1 <- 4600000; res <- 10
+  res <- 10
   js <- function(x, path) {
     dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
     writeLines(jsonlite::toJSON(x, auto_unbox = TRUE, digits = NA), path)
@@ -122,7 +127,7 @@ fixture_zarr_nd <- function() {
         list(name = "spatial", uuid = "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"),
         list(name = "proj", uuid = "f17cb550-5864-4468-aeb7-f3180cfb622f")
       ),
-      `proj:code` = "EPSG:32632",
+      `proj:code` = paste0("EPSG:", epsg),
       `spatial:dimensions` = c("y", "x"),
       `spatial:transform` = c(res, 0, x0, 0, -res, y1),
       `spatial:shape` = c(ny, nx),
@@ -152,12 +157,12 @@ fixture_zarr_nd <- function() {
     chunk_key_encoding = key_enc, fill_value = -128L,
     codecs = list(list(name = "bytes")),
     dimension_names = c("time", "band", "y", "x"),
-    attributes = list(`_CRS` = list(url = "http://www.opengis.net/def/crs/EPSG/0/32632"))
+    attributes = list(`_CRS` = list(url = paste0("http://www.opengis.net/def/crs/EPSG/0/", epsg)))
   ), file.path(store, "data", "zarr.json"))
   vals <- array(0L, c(nt, nb, ny, nx))
   for (t in seq_len(nt)) for (b in seq_len(nb)) {
     vals[t, b, , ] <- outer(seq_len(ny), seq_len(nx),
-                            function(y, x) (t * 40L + b * 10L + y + x) %% 250L - 125L)
+                            function(y, x) (t * 40L + b * 10L + y + x + shift) %% 250L - 125L)
   }
   vals[, , 1, 1] <- -128L
   nc <- c(nt, nb, ny, nx) %/% chunk
@@ -171,10 +176,10 @@ fixture_zarr_nd <- function() {
       # C order: the last dim varies fastest
       writeBin(as.vector(aperm(blk, 4:1)), f, size = 1L)
     }
-  .fixture_env$zarr <- list(
+  .fixture_env[[key]] <- list(
     store = store,
     path = sprintf('ZARR:"%s":/data', store),
     vals = vals
   )
-  .fixture_env$zarr
+  .fixture_env[[key]]
 }

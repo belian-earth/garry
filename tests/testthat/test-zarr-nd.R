@@ -131,3 +131,79 @@ test_that("a Zarr handle is closed once its reads pass garry.zarr_handle_mb", {
   expect_equal(a, .nd_ref(fx, 1, 1)[1:20, 1:20])
   expect_equal(b, .nd_ref(fx, 1, 2)[1:20, 1:20])
 })
+
+# Two Zarr stores in neighbouring UTM zones (32 and 33), the second placed
+# against the first's east edge, read onto one grid: a multi-path source
+# the warper mosaics, every band of a year in one warp per window.
+.zone_pair <- function() {
+  a <- fixture_zarr_nd()
+  xy <- gdalraster::transform_xy(cbind(500300, 4600000), "EPSG:32632", "EPSG:32633")
+  b <- fixture_zarr_nd(32633L, round(xy[1, 1], -1), round(xy[1, 2], -1), shift = 7L)
+  list(a = a, b = b,
+       grid = grid_spec("EPSG:32632", c(500000, 4599800, 500600, 4600000), res = 10))
+}
+
+test_that("a dataset across two UTM-zone Zarr stores reads both zones", {
+  skip_if_not_installed("jsonlite")
+  zp <- .zone_pair()
+  build <- function(coalesce) {
+    old <- options(garry.read_coalesce = coalesce)
+    on.exit(options(old), add = TRUE)
+    ds <- lazy_dataset(c(zp$a$path, zp$b$path), zp$grid)
+    yr <- lazy_map(time_sel(ds, "2022"), fn = dequantize_olmoearth, dtype = "f32")
+    p <- plan_lazy(stack_bands(yr))
+    list(plan = p, value = collect(yr, distributed = FALSE))
+  }
+  on <- build(TRUE)
+  kinds <- vapply(on$plan@stages, function(s) s@kind, character(1))
+  w <- graph_get(on$plan@graph, on$plan@stages[[which(kinds == "warp")]]@members[[1L]])
+  expect_identical(sum(kinds == "warp"), 1L)
+  expect_identical(w@bands, 5:8)
+  expect_equal(on$value, build(FALSE)$value, tolerance = 0)
+  # west half straight from zone 32; east half filled from zone 33
+  ref <- .nd_ref(zp$a, 2, 3)
+  expect_equal(unname(on$value[, 1:30, 3]),
+               sign(ref) * (abs(ref) / 127.5)^2, tolerance = 1e-6)
+  expect_gt(mean(!is.na(on$value[, 32:60, 3])), 0.5)
+})
+
+test_that("pooled cross-zone reads match the single-process read", {
+  skip_on_cran()
+  skip_if_not_installed("jsonlite")
+  zp <- .zone_pair()
+  local_pools(2, 1, gdal_config = TRUE)
+  yr <- time_sel(lazy_dataset(c(zp$a$path, zp$b$path), zp$grid), "2021")
+  expect_equal(collect(yr, distributed = TRUE),
+               collect(yr, distributed = FALSE), tolerance = 0)
+})
+
+test_that("sources that differ in band count are refused", {
+  skip_if_not_installed("jsonlite")
+  zp <- .zone_pair()
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 10, 10, 1, "Int8", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 4600000, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+  ds$close()
+  expect_error(lazy_dataset(c(zp$a$path, f), zp$grid), "differ in band count")
+})
+
+test_that("a Zarr store warps window by window, matching GDAL's warped VRT", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  # half-pixel shift and 15 m: neither a window nor a decimation
+  g <- grid_spec("EPSG:32632", c(500005, 4599815, 500275, 4599995), res = 15)
+  ds <- time_sel(lazy_dataset(fx$path, g), "2023")
+  p <- plan_lazy(stack_bands(ds))
+  kinds <- vapply(p@stages, function(s) s@kind, character(1))
+  w <- graph_get(p@graph, p@stages[[which(kinds == "warp")]]@members[[1L]])
+  rp <- .warp_read_plan(w, graph_get(p@graph, w@parents[[1L]]))
+  expect_true(isTRUE(rp$decim$warp))
+  got <- collect(ds, distributed = FALSE)
+  for (b in c(1L, 4L)) {
+    vrt <- gdal_warp_vrt(fx$path, 8L + b, g, "near", src_nodata = -128)
+    ref <- gdal_read_window(vrt, 1L, 0L, 0L, g@dims[["x"]], g@dims[["y"]],
+                            nodata = -128)
+    expect_equal(unname(got[, , b]), ref, ignore_attr = TRUE)
+  }
+})

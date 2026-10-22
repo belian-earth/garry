@@ -175,7 +175,16 @@ NULL
 # GDAL_NUM_THREADS is read when a GTiff is opened, so `paths`' cached
 # handles are dropped on entry (they reopen threaded) and on exit (later
 # reads reopen as configured). Only the calling host process is affected.
+#
+# Not for a read that touches a Zarr store. The threaded warper and Zarr
+# shard reader report from GDAL worker threads (a missing shard comes back
+# as "shard file too small"), and gdalraster's message handler then calls
+# into R off the main thread, which aborts the session (seen 2026-10-22).
+# Remote Zarr reads are bandwidth-bound, so the threads buy nothing.
 .with_gdal_threads <- function(paths, envir = parent.frame()) {
+  if (any(vapply(paths, .gdal_is_zarr, logical(1)))) {
+    return(invisible(NULL))
+  }
   prev <- gdalraster::get_config_option("GDAL_NUM_THREADS")
   gdalraster::set_config_option("GDAL_NUM_THREADS", "ALL_CPUS")
   for (p in paths) .gdal_handle_drop(p)
@@ -1832,8 +1841,10 @@ gdal_warp_to_buffer <- function(
   # explicit DATATYPE=Float32 MEM DSN. get_data_ptr() is exported from
   # gdalraster 2.7.0, hence the version floor.
   ptr <- gdalraster::get_data_ptr(buf)
+  # several bands fill band-sequential planes (the MEM default BANDOFFSET)
+  nb <- max(1L, length(band))
   dsn <- .glue(
-    "MEM:::DATAPOINTER={ptr},PIXELS={nx},LINES={ny},BANDS=1,",
+    "MEM:::DATAPOINTER={ptr},PIXELS={nx},LINES={ny},BANDS={nb},",
     "DATATYPE=Float32,GEOTRANSFORM={gtstr}"
   )
   o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
@@ -1844,6 +1855,10 @@ gdal_warp_to_buffer <- function(
   }
   if (length(band) == 1L) {
     cl <- c(cl, "-srcband", as.character(as.integer(band))) # GDAL >= 3.7
+  } else if (length(band) > 1L) {
+    cl <- c(cl, as.vector(rbind(
+      "-srcband", as.integer(band), "-dstband", seq_along(band)
+    )))
   }
   gdalraster::warp(srcs, o, "", cl_arg = cl)
   o$close()
@@ -1859,6 +1874,12 @@ gdal_warp_to_buffer <- function(
 # whenever one band is read, which a per-band fan-out multiplies by the
 # band count). The window is in `grid` pixels (a chunk with its halo);
 # cells outside every source come back NaN.
+#
+# Several bands (a collapsed band stack, e.g. one year of a Zarr array
+# across UTM zones) warp together into a (band, y, x) cube. The sources
+# go to the warper as cached handles, not names: a name reopens the
+# source on every call, and a Zarr store's open costs seconds and drops
+# the decoded chunks the next band would reuse.
 gdal_warp_window <- function(
   paths,
   band,
@@ -1874,20 +1895,62 @@ gdal_warp_window <- function(
   offset = numeric(0)
 ) {
   out <- rlang::arg_match(out)
-  if (length(band) != 1L) {
-    cli::cli_abort("a multi-path source reads one band at a time.")
-  }
+  nb <- length(band)
   gt <- grid@transform
   win <- c(gt[[1L]] + x_off * gt[[2L]], gt[[2L]], 0, gt[[4L]] + y_off * gt[[6L]], 0, gt[[6L]])
   gtstr <- paste(formatC(win, format = "g", digits = 17, width = 1), collapse = "/")
-  buf <- rep(writeBin(NaN, raw(), size = 4L), as.numeric(x_size) * y_size)
-  buf <- gdal_warp_to_buffer(
-    buf, x_size, y_size, gtstr, grid@crs,
-    vapply(paths, .gdal_href, "", USE.NAMES = FALSE),
-    srcnodata = nodata, resampling = resampling, band = band
+  n_px <- as.numeric(x_size) * y_size
+  for (p in paths[vapply(paths, .gdal_is_zarr, logical(1))]) {
+    .gdal_zarr_budget(p, character(0), band, n_px)
+  }
+  # every source must stay open through the warp: read daemons cache one
+  # handle by default, so lift the cap to the source count meanwhile
+  old <- options(
+    garry.handle_cache_max = max(garry_opt("handle_cache_max"), length(paths))
   )
-  v <- readBin(buf, "numeric", n = as.numeric(x_size) * y_size, size = 4L)
-  .gdal_finish_vec(v, y_size, x_size, numeric(0), scale, offset, out)
+  on.exit(options(old), add = TRUE)
+  srcs <- lapply(paths, .gdal_handle)
+  buf <- rep(writeBin(NaN, raw(), size = 4L), n_px * nb)
+  warp <- function() {
+    gdal_warp_to_buffer(
+      buf, x_size, y_size, gtstr, grid@crs, srcs,
+      srcnodata = nodata, resampling = resampling, band = band
+    )
+  }
+  # the warper reloads a Zarr band's dimension metadata, repeating the
+  # open's coordinate probes and their noise (see .gdal_handle())
+  buf <- if (any(vapply(paths, .gdal_is_zarr, logical(1)))) {
+    .gdal_quiet_errors(warp())
+  } else {
+    warp()
+  }
+  v <- readBin(buf, "numeric", n = n_px * nb, size = 4L)
+  if (nb == 1L) {
+    return(.gdal_finish_vec(v, y_size, x_size, numeric(0), scale, offset, out))
+  }
+  planes <- lapply(seq_len(nb), function(k) {
+    .gdal_finish_vec(
+      v[(k - 1) * n_px + seq_len(n_px)],
+      y_size,
+      x_size,
+      numeric(0),
+      scale,
+      offset,
+      out
+    )
+  })
+  if (out == "raw_f32") {
+    return(structure(
+      do.call(c, lapply(planes, as.vector)),
+      gdim = as.integer(c(nb, y_size, x_size)),
+      gdt = "f32"
+    ))
+  }
+  cube <- array(NA_real_, c(nb, y_size, x_size))
+  for (k in seq_len(nb)) {
+    cube[k, , ] <- planes[[k]]
+  }
+  cube
 }
 
 # Run an idempotent read/fetch/warp thunk with task-scoped retries.
