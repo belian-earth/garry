@@ -78,12 +78,14 @@ NULL
 # else builds the warped VRT as before. Shared by execute_plan() and the
 # mirai scheduler so the two cannot disagree about which read they do.
 .warp_read_plan <- function(wnode, snode) {
+  # a collapsed band stack of warps reads its own bands of the source
+  band <- if (length(wnode@bands)) wnode@bands else snode@band
   if (length(snode@path) > 1L) {
     # a multi-path source (tiles no mosaic can hold): every source
     # warped straight into each target window (gdal_warp_window)
     return(list(
       path = snode@path,
-      band = snode@band,
+      band = band,
       nodata = snode@nodata,
       open_options = character(0),
       scale = snode@scale,
@@ -97,13 +99,13 @@ NULL
     wnode@target_grid,
     wnode@resampling,
     snode@open_options,
-    band = snode@band,
+    band = band,
     nodata = snode@nodata
   )
   if (!is.null(spec)) {
     return(list(
       path = snode@path,
-      band = snode@band,
+      band = band,
       nodata = snode@nodata,
       open_options = snode@open_options,
       scale = snode@scale,
@@ -114,12 +116,12 @@ NULL
   list(
     path = gdal_warp_vrt(
       snode@path,
-      snode@band,
+      band,
       wnode@target_grid,
       wnode@resampling,
       src_nodata = snode@nodata
     ),
-    band = 1L,
+    band = seq_along(band),
     nodata = snode@nodata,
     open_options = character(0),
     scale = snode@scale,

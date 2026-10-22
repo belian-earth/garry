@@ -23,9 +23,8 @@
 \item{open_options}{Source open options; any at all keep the warper
 (GTI and other option-driven sources are left alone in v1).}
 
-\item{band}{1-based band index the read will use; must be a single
-band (the decimating read is single-band). Its data type drives the
-integer gate above.}
+\item{band}{1-based band index (or indices) the read will use. Their
+data types drive the integer gate above.}
 
 \item{nodata}{The source node's sentinel (length 0 or 1). Averaging
 declines unless the file declares the same value.}

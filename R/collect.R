@@ -470,7 +470,8 @@ garry_last_route <- function() .garry_state$route
   leaves <- if (S7::S7_inherits(top, StackNode)) top@parents else top@id
   read_stage <- lapply(leaves, function(id) {
     n <- graph_get(graph, id)
-    multi <- S7::S7_inherits(n, SourceNode) && length(n@band) > 1L
+    multi <- (S7::S7_inherits(n, SourceNode) && length(n@band) > 1L) ||
+      (S7::S7_inherits(n, WarpNode) && length(n@bands) > 1L)
     dims <- if (multi) c("x", "y", "band") else c("x", "y")
     if (!S7::S7_inherits(n, SourceNode) && !S7::S7_inherits(n, WarpNode)) {
       return(NULL)

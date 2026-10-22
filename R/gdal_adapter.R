@@ -365,9 +365,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' @param resampling Requested resampling name.
 #' @param open_options Source open options; any at all keep the warper
 #'   (GTI and other option-driven sources are left alone in v1).
-#' @param band 1-based band index the read will use; must be a single
-#'   band (the decimating read is single-band). Its data type drives the
-#'   integer gate above.
+#' @param band 1-based band index (or indices) the read will use. Their
+#'   data types drive the integer gate above.
 #' @param nodata The source node's sentinel (length 0 or 1). Averaging
 #'   declines unless the file declares the same value.
 #' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
@@ -380,7 +379,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   band = 1L,
   nodata = numeric(0)
 ) {
-  if (length(src_path) != 1L || length(open_options) > 0L || length(band) != 1L) {
+  if (length(src_path) != 1L || length(open_options) > 0L || !length(band)) {
     return(NULL)
   }
   resamp <- unname(.rio_resamp_names[resampling])
@@ -393,16 +392,18 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
   if (resamp != "NEAREST") {
-    dtn <- tryCatch(ds$getDataTypeName(band), error = function(e) NULL)
-    if (is.null(dtn) || !startsWith(dtn, "Float")) {
-      return(NULL)
-    }
-    # RasterIO averaging skips only the file's own nodata; a sentinel the
-    # node declares otherwise would be blended in, so leave it to the warper.
-    if (length(nodata) == 1L) {
-      file_nd <- tryCatch(ds$getNoDataValue(band), error = function(e) NA)
-      if (!isTRUE(identical(as.numeric(file_nd), as.numeric(nodata)))) {
+    for (b in band) {
+      dtn <- tryCatch(ds$getDataTypeName(b), error = function(e) NULL)
+      if (is.null(dtn) || !startsWith(dtn, "Float")) {
         return(NULL)
+      }
+      # RasterIO averaging skips only the file's own nodata; a sentinel the
+      # node declares otherwise would be blended in, so leave it to the warper.
+      if (length(nodata) == 1L) {
+        file_nd <- tryCatch(ds$getNoDataValue(b), error = function(e) NA)
+        if (!isTRUE(identical(as.numeric(file_nd), as.numeric(nodata)))) {
+          return(NULL)
+        }
       }
     }
   }
@@ -576,9 +577,6 @@ gdal_read_window <- function(
   # in the same pass as the read. Takes precedence over the raw-BSQ path
   # below, which cannot decimate.
   if (!is.null(decim)) {
-    if (length(band) != 1L) {
-      cli::cli_abort("{.arg decim} supports a single band read.")
-    }
     ds <- .gdal_handle(path, open_options)
     sx <- decim$x_off + x_off * decim$fx
     sy <- decim$y_off + y_off * decim$fy
@@ -591,6 +589,21 @@ gdal_read_window <- function(
         gdalraster::set_config_option("GDAL_RASTERIO_RESAMPLING", prev),
         add = TRUE
       )
+    }
+    if (length(band) > 1L) {
+      return(.gdal_read_window_bands(
+        ds,
+        band,
+        x_off,
+        y_off,
+        x_size,
+        y_size,
+        nodata,
+        out,
+        scale,
+        offset,
+        decim = decim
+      ))
     }
     return(.gdal_finish_vec(
       ds$read(band, sx, sy, sw, sh, x_size, y_size),
@@ -687,6 +700,11 @@ gdal_read_window <- function(
   by <- max(1L, bs[[2L]])
   slab <- max(by, as.integer(floor(cache_b * 0.5 / row_b) %/% by) * by)
   slab <- min(slab, y_size)
+  # A decimating read (see .rio_direct_spec()) maps target rows to source
+  # rows by a factor, so each band reads its whole window in one call.
+  if (!is.null(decim)) {
+    slab <- y_size
+  }
 
   n_px <- as.numeric(y_size) * x_size
   res <- if (out == "raw_f32") {
@@ -698,7 +716,19 @@ gdal_read_window <- function(
   while (r0 < y_size) {
     rows <- min(slab, y_size - r0)
     for (k in seq_len(nb)) {
-      v <- .gdal_read_rows(ds, band[[k]], x_off, y_off + r0, x_size, rows)
+      v <- if (is.null(decim)) {
+        .gdal_read_rows(ds, band[[k]], x_off, y_off + r0, x_size, rows)
+      } else {
+        ds$read(
+          band[[k]],
+          decim$x_off + x_off * decim$fx,
+          decim$y_off + y_off * decim$fy,
+          x_size * decim$fx,
+          y_size * decim$fy,
+          x_size,
+          y_size
+        )
+      }
       if (out == "raw_f32") {
         # Finish straight into the plane's slot of the private buffer
         # (one C pass; no numeric copy, no raw index assignment).
@@ -767,7 +797,8 @@ gdal_open_update <- function(path) {
   nodata = numeric(0),
   band_names = NULL,
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 ) {
   if (!grid@dtype %in% c("f32", "f64")) {
     cli::cli_abort(paste0(
@@ -1287,8 +1318,7 @@ gdal_warp_vrt <- function(
     target_grid@dims[["y"]],
     "-r",
     resampling,
-    "-b",
-    band,
+    as.vector(rbind("-b", band)),
     "-et",
     "0"
   ) # exact transformer: correctness over warp speed

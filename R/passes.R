@@ -563,6 +563,22 @@ NULL
 # bands), where the coalesced plan reads the same bytes in one task
 # and one store region.
 #
+# A stack of WarpNodes over such sources (the shape lazy_dataset()
+# builds for a multi-band file on a target grid) collapses the same
+# way, when every warp has the same target grid and resampling and the
+# file's bands share storage (.bands_share_blocks()): the stack becomes
+# one WarpNode, at the stack's id, over the FIRST band's source, with
+# every band in its `bands`. Reusing an existing source as the parent
+# keeps parents ahead of children in id order (staging walks ids
+# ascending) and leaves the per-band sources as they were for any other
+# consumer. A Zarr array is where this matters most: its chunks hold
+# many bands, so per-band reads spread over a pool fetch and decode
+# every chunk once per band (11x the bytes on a 128-band OlmoEarth
+# window, 2026-10-22), while one task reads them once. A band-interleaved
+# file keeps its per-band warps: each band is its own range of bytes, and
+# per-band tasks over the pool are the measured fastest remote read
+# (design/gdal-multiband-fanout.md).
+#
 # Skips: stacks consumed by a
 # WarpNode (the warp path takes scalar bands — warping a stack was an
 # error before this pass and stays one); parents with outer dims or
@@ -591,51 +607,6 @@ NULL
     if (length(parents) < 2L) {
       next
     }
-    ps <- lapply(parents, function(p) graph_get(graph, p))
-    if (
-      !all(vapply(
-        ps,
-        function(n) {
-          S7::S7_inherits(n, SourceNode)
-        },
-        logical(1)
-      ))
-    ) {
-      next
-    }
-    if (!all(vapply(ps, function(n) length(n@band) == 1L, logical(1)))) {
-      next
-    }
-    if (
-      any(vapply(
-        ps,
-        function(n) {
-          length(setdiff(names(.node_grid(n)@dims), c("x", "y"))) > 0L
-        },
-        logical(1)
-      ))
-    ) {
-      next
-    }
-    p1 <- ps[[1L]]
-    same <- vapply(
-      ps[-1L],
-      function(n) {
-        length(n@path) == 1L && length(p1@path) == 1L &&
-          identical(n@path, p1@path) &&
-          identical(n@open_options, p1@open_options) &&
-          identical(n@nodata, p1@nodata) &&
-          identical(n@resampling, p1@resampling) &&
-          identical(n@scale, p1@scale) &&
-          identical(n@offset, p1@offset) &&
-          identical(.node_grid(n)@dtype, .node_grid(p1)@dtype) &&
-          grid_equal(.node_grid(n), .node_grid(p1))
-      },
-      logical(1)
-    )
-    if (!all(same)) {
-      next
-    }
     if (
       any(vapply(
         consumers[[.key(id)]],
@@ -647,26 +618,129 @@ NULL
     ) {
       next
     }
-    graph_replace(
-      graph,
-      id,
-      SourceNode(
-        id = st@id,
-        parents = integer(0),
-        grid = .node_grid(st),
-        path = p1@path,
-        band = vapply(ps, function(n) n@band, integer(1)),
-        collapsed = as.integer(parents),
-        nodata = p1@nodata,
-        block_dim = p1@block_dim,
-        open_options = p1@open_options,
-        resampling = p1@resampling,
-        scale = p1@scale,
-        offset = p1@offset
+    ps <- lapply(parents, function(p) graph_get(graph, p))
+    if (all(vapply(ps, function(n) S7::S7_inherits(n, SourceNode), logical(1)))) {
+      if (!.same_file_bands(ps)) {
+        next
+      }
+      p1 <- ps[[1L]]
+      graph_replace(
+        graph,
+        id,
+        SourceNode(
+          id = st@id,
+          parents = integer(0),
+          grid = .node_grid(st),
+          path = p1@path,
+          band = vapply(ps, function(n) n@band, integer(1)),
+          collapsed = as.integer(parents),
+          nodata = p1@nodata,
+          block_dim = p1@block_dim,
+          open_options = p1@open_options,
+          resampling = p1@resampling,
+          scale = p1@scale,
+          offset = p1@offset
+        )
       )
-    )
+    } else if (all(vapply(ps, .single_band_warp, logical(1), graph = graph))) {
+      w1 <- ps[[1L]]
+      srcs <- lapply(ps, function(w) graph_get(graph, w@parents[[1L]]))
+      same_warp <- vapply(
+        ps[-1L],
+        function(w) {
+          identical(w@resampling, w1@resampling) &&
+            grid_equal(w@target_grid, w1@target_grid)
+        },
+        logical(1)
+      )
+      if (
+        !all(same_warp) || !.same_file_bands(srcs) ||
+          !.bands_share_blocks(srcs[[1L]]@path, srcs[[1L]]@open_options)
+      ) {
+        next
+      }
+      graph_replace(
+        graph,
+        id,
+        WarpNode(
+          id = st@id,
+          parents = srcs[[1L]]@id,
+          grid = .node_grid(st),
+          target_grid = .node_grid(st),
+          resampling = w1@resampling,
+          bands = vapply(srcs, function(n) n@band, integer(1))
+        )
+      )
+    }
   }
   invisible(graph)
+}
+
+# A WarpNode reading one band of a plain single-file source (not itself
+# a collapsed warp).
+.single_band_warp <- function(n, graph) {
+  if (!S7::S7_inherits(n, WarpNode) || length(n@bands) > 0L) {
+    return(FALSE)
+  }
+  src <- graph_get(graph, n@parents[[1L]])
+  S7::S7_inherits(src, SourceNode) && length(src@band) == 1L &&
+    length(src@collapsed) == 0L
+}
+
+# Do a file's bands share storage blocks, so that reading one band of a
+# window decodes the others' bytes too? True for a Zarr array (its chunks
+# may span bands; GDAL caches the decoded chunk per handle) and a
+# pixel-interleaved file; false for a band-interleaved one, or when the
+# file cannot be opened.
+.bands_share_blocks <- function(path, open_options = character(0)) {
+  ds <- tryCatch(.gdal_handle(path, open_options), error = function(e) NULL)
+  if (is.null(ds)) {
+    return(FALSE)
+  }
+  if (identical(ds$getDriverShortName(), "Zarr")) {
+    return(TRUE)
+  }
+  il <- tryCatch(
+    ds$getMetadataItem(0L, "INTERLEAVE", "IMAGE_STRUCTURE"),
+    error = function(e) ""
+  )
+  identical(toupper(il), "PIXEL")
+}
+
+# Do these single-band SourceNodes address one file the same way: same
+# path, open options, nodata, resampling, scale, offset and dtype, on
+# spatially identical 2-D grids?
+.same_file_bands <- function(ps) {
+  if (!all(vapply(ps, function(n) length(n@band) == 1L, logical(1)))) {
+    return(FALSE)
+  }
+  if (
+    any(vapply(
+      ps,
+      function(n) {
+        length(setdiff(names(.node_grid(n)@dims), c("x", "y"))) > 0L
+      },
+      logical(1)
+    ))
+  ) {
+    return(FALSE)
+  }
+  p1 <- ps[[1L]]
+  all(vapply(
+    ps[-1L],
+    function(n) {
+      length(n@path) == 1L && length(p1@path) == 1L &&
+        identical(n@path, p1@path) &&
+        identical(n@open_options, p1@open_options) &&
+        identical(n@nodata, p1@nodata) &&
+        identical(n@resampling, p1@resampling) &&
+        identical(n@scale, p1@scale) &&
+        identical(n@offset, p1@offset) &&
+        identical(.node_grid(n)@dtype, .node_grid(p1)@dtype) &&
+        grid_equal(.node_grid(n), .node_grid(p1))
+    },
+    logical(1)
+  ))
 }
 
 # -- Warp dedup (shared warp-on-read) ------------------------------------------
@@ -713,7 +787,12 @@ NULL
   # never rewired away from under the caller.
   for (id in c(intersect(warp_ids, protected), setdiff(warp_ids, protected))) {
     n <- graph_get(graph, id)
-    key <- paste(.node_parents(n)[[1L]], n@resampling, sep = "\x1f")
+    key <- paste(
+      .node_parents(n)[[1L]],
+      n@resampling,
+      paste(n@bands, collapse = ","),
+      sep = "\x1f"
+    )
     hit <- NULL
     for (ci in canon[[key]]) {
       if (grid_equal(graph_get(graph, ci)@target_grid, n@target_grid)) {

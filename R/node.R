@@ -325,6 +325,10 @@ ScanNode <- S7::new_class(
 #'   [plan_draw()] and [plan_view()].
 #' @param target_grid `GridSpec` to warp onto.
 #' @param resampling Resampling method ("nearest", "bilinear", "cubic", ...).
+#' @param bands Source bands this warp reads, overriding its parent
+#'   source's band. Length 0 (the default) reads the parent's band; the
+#'   planner sets it when it collapses a band stack of warps over one file
+#'   into a single multi-band warp.
 #' @return A `WarpNode`.
 #' @export
 WarpNode <- S7::new_class(
@@ -332,7 +336,8 @@ WarpNode <- S7::new_class(
   parent = Node,
   properties = list(
     target_grid = GridSpec,
-    resampling = S7::class_character # "nearest", "bilinear", "cubic", ...
+    resampling = S7::class_character, # "nearest", "bilinear", "cubic", ...
+    bands = S7::new_property(S7::class_integer, default = quote(integer(0)))
   )
 )
 
