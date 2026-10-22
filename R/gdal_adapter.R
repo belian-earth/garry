@@ -38,18 +38,62 @@ NULL
 .gdal_cache <- new.env(parent = emptyenv())
 .gdal_cache$handles <- list() # named, insertion-ordered = LRU order
 .gdal_cache$stamps <- list() # key -> .gdal_local_stamp() at open
+.gdal_cache$zarr_bytes <- list() # key -> bytes read through a Zarr handle
 
 # http(s) URLs need the /vsicurl prefix so GDAL reads via HTTP range requests --
 # metadata (header/IFD) and windowed pixel reads only -- instead of downloading
-# the whole file. Idempotent: already-/vsicurl, /vsi*, GTI: and local paths pass
-# through unchanged.
+# the whole file. A Zarr connection string (ZARR:"<store>":/array) gets the
+# same treatment on its store. Idempotent: already-/vsicurl, /vsi*, GTI: and
+# local paths pass through unchanged.
 .gdal_href <- function(href) {
-  if (grepl("^https?://", href)) paste0("/vsicurl/", href) else href
+  if (grepl("^https?://", href)) {
+    return(paste0("/vsicurl/", href))
+  }
+  sub('^ZARR:"(https?://)', 'ZARR:"/vsicurl/\\1', href)
 }
 
-# Is a path a remote (network-backed) GDAL source?
+# Is a path a remote (network-backed) GDAL source? Covers driver
+# connection strings that wrap a remote store, e.g. ZARR:"/vsicurl/...".
 .gdal_is_remote <- function(path) {
-  grepl("^/vsi(curl|s3|gs|az|swift)|^https?://", path)
+  grepl('^/vsi(curl|s3|gs|az|swift)|^https?://|^[A-Za-z0-9_]+:"/vsi(curl|s3|gs|az|swift)', path)
+}
+
+# The extra (non-spatial) dimensions of a multidimensional array read
+# through its classic view. GDAL exposes an N-D array (Zarr, and other
+# multidim drivers) as one band per combination of its extra dims and
+# tags each band DIM_<dim>_INDEX (0-based) plus DIM_<dim>_VALUE when the
+# dim has a coordinate array. A data.frame with one row per file band
+# (`band`) and `<dim>_index` / `<dim>_value` columns, its dim names in
+# attr "dims"; NULL for an ordinary multi-band file.
+.gdal_band_dims <- function(ds) {
+  nb <- ds$getRasterCount()
+  kv <- lapply(seq_len(nb), function(b) {
+    m <- ds$getMetadata(b, "")
+    m <- m[grepl("^DIM_.+_(INDEX|VALUE)=", m)]
+    stats::setNames(sub("^[^=]*=", "", m), sub("=.*$", "", m))
+  })
+  keys <- unique(unlist(lapply(kv, names)))
+  dims <- sub("^DIM_(.+)_INDEX$", "\\1", grep("_INDEX$", keys, value = TRUE))
+  if (!length(dims)) {
+    return(NULL)
+  }
+  out <- data.frame(band = seq_len(nb))
+  for (d in dims) {
+    ik <- paste0("DIM_", d, "_INDEX")
+    vk <- paste0("DIM_", d, "_VALUE")
+    out[[paste0(d, "_index")]] <- vapply(kv, function(x) as.integer(x[ik]), integer(1))
+    out[[paste0(d, "_value")]] <- vapply(kv, function(x) unname(x[vk]), character(1))
+  }
+  if (anyNA(out[paste0(dims, "_index")])) {
+    return(NULL)
+  }
+  attr(out, "dims") <- dims
+  out
+}
+
+# Is a path a Zarr array (by connection string or store suffix)?
+.gdal_is_zarr <- function(path) {
+  grepl('^ZARR:|\\.zarr/?$', path, ignore.case = TRUE)
 }
 
 # Does opening `path` reach the network? A GTI index is a local file, but
@@ -82,15 +126,25 @@ NULL
 # so user-level local reads keep sidecar semantics (the reason
 # garry_daemons() never configures the host). Daemons already run
 # EMPTY_DIR globally (garry_gdal_config); re-scoping there is a no-op.
-.gdal_quiet_remote <- function(code) {
+#
+# A Zarr store also scopes the vsicurl allowlist: the Zarr driver probes
+# PAM sidecars (.aux.xml, .aux, .ovr) by name whatever EMPTY_DIR says,
+# seven serial 404s (~5 s) per open measured on OlmoEarth 2026-10-22.
+# Admitting only .json and extensionless keys refuses them.
+.gdal_quiet_remote <- function(code, zarr = FALSE) {
   prev_rd <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
   prev_ib <- gdalraster::get_config_option("GDAL_INGESTED_BYTES_AT_OPEN")
+  prev_ext <- gdalraster::get_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS")
   gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", "4194304")
+  if (zarr && !nzchar(prev_ext)) {
+    gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".json,{noext}")
+  }
   on.exit(
     {
       gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", prev_rd)
       gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", prev_ib)
+      gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", prev_ext)
     },
     add = TRUE
   )
@@ -137,7 +191,33 @@ NULL
     try(.gdal_cache$handles[[k]]$close(), silent = TRUE)
     .gdal_cache$handles[[k]] <- NULL
     .gdal_cache$stamps[[k]] <- NULL
+    .gdal_cache$zarr_bytes[[k]] <- NULL
   }
+  invisible(NULL)
+}
+
+# GDAL's Zarr driver keeps every chunk a sharded array decodes for the
+# life of the dataset handle (GDAL 3.13: the batched shard read fills a
+# per-array cache nothing evicts), so a cached handle that reads window
+# after window grows by the decoded bytes: ~100 MB per 1024^2 x 64-band
+# Int8 window, measured on OlmoEarth 2026-10-22. Count what each Zarr
+# handle reads and close it once the count passes garry.zarr_handle_mb;
+# the next read reopens it (under a second, the store's metadata is
+# cached by then).
+.gdal_zarr_budget <- function(path, open_options, band, src_px) {
+  key <- paste(c(.gdal_href(path), open_options), collapse = "\x1f")
+  h <- .gdal_cache$handles[[key]]
+  el <- if (is.null(h)) {
+    1L
+  } else {
+    tryCatch(.gdal_dtype_bytes(h$getDataTypeName(band[[1L]])), error = function(e) 1L)
+  }
+  used <- (.gdal_cache$zarr_bytes[[key]] %||% 0) + src_px * length(band) * el
+  if (used > garry_opt("zarr_handle_mb") * 2^20 && !is.null(h)) {
+    .gdal_handle_drop(path)
+    used <- src_px * length(band) * el
+  }
+  .gdal_cache$zarr_bytes[[key]] <- used
   invisible(NULL)
 }
 
@@ -167,7 +247,11 @@ NULL
   # Remote opens run under the scoped hygiene config (sidecar-probe
   # storm + serial IFD walk otherwise cost ~8 s each at typical RTT).
   open_ds <- function() {
-    if (.gdal_opens_remote(path)) .gdal_quiet_remote(open_raw()) else open_raw()
+    if (.gdal_opens_remote(path)) {
+      .gdal_quiet_remote(open_raw(), zarr = .gdal_is_zarr(path))
+    } else {
+      open_raw()
+    }
   }
   # A GTI mosaic pinned to the analysis grid reprojects mixed-UTM-zone tiles
   # (HLS spans several zones), so PROJ reports "several coordinate operations
@@ -248,6 +332,7 @@ gdal_blank_vrt <- function(grid) {
   }
   .gdal_cache$handles <- list()
   .gdal_cache$stamps <- list()
+  .gdal_cache$zarr_bytes <- list()
 }
 
 #' Inspect a GDAL source and build its GridSpec (plus read metadata).
@@ -572,6 +657,14 @@ gdal_read_window <- function(
   if (length(scale) == 1L && length(offset) == 0L) {
     offset <- 0
   }
+  if (.gdal_is_zarr(path)) {
+    .gdal_zarr_budget(
+      path,
+      open_options,
+      band,
+      as.numeric(x_size) * y_size * (decim$fx %||% 1L) * (decim$fy %||% 1L)
+    )
+  }
   # Warper bypass (see .rio_direct_spec()): the window arrives in TARGET
   # pixels; translate it to the source window and let RasterIO resample
   # in the same pass as the read. Takes precedence over the raw-BSQ path
@@ -684,7 +777,8 @@ gdal_read_window <- function(
   nodata,
   out,
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  decim = NULL
 ) {
   nb <- length(band)
   bs <- as.integer(ds$getBlockSize(band[[1L]])) # (x, y)
@@ -797,8 +891,7 @@ gdal_open_update <- function(path) {
   nodata = numeric(0),
   band_names = NULL,
   scale = numeric(0),
-  offset = numeric(0),
-  decim = NULL
+  offset = numeric(0)
 ) {
   if (!grid@dtype %in% c("f32", "f64")) {
     cli::cli_abort(paste0(

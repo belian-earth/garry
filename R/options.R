@@ -143,6 +143,12 @@
     desc = "GDAL block cache (MB per process) on read daemons",
     check = .opt_num(min = 1)
   ),
+  zarr_handle_mb = list(
+    default = 512,
+    tier = "tuning",
+    desc = "MB read through one Zarr handle before it is closed (GDAL keeps every decoded chunk)",
+    check = .opt_num(min = 1)
+  ),
   # Pixels a single source/warp read task aims for. Reads are coarser
   # than compute chunks (windowed reads of warped mosaics decompress
   # the same source blocks regardless of window size, so small read

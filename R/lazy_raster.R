@@ -388,28 +388,7 @@ lazy_stack <- function(xs, along = "t") {
       "along {.val {axis}} (got {.cls {class(node)[[1L]]}})"
     ))
   }
-  if (anyNA(sel)) {
-    cli::cli_abort("{.arg sel} must not contain NA.")
-  }
-  keep <- if (is.character(sel)) {
-    # each selector on its own: an exact label, else a prefix ("2023-06")
-    hits <- lapply(sel, function(s) {
-      ex <- which(labs == s)
-      if (length(ex)) ex else which(startsWith(labs, s))
-    })
-    none <- sel[lengths(hits) == 0L]
-    if (length(none)) {
-      cli::cli_abort("no {.val {axis}} slices match {.val {none}}")
-    }
-    sort(unique(unlist(hits)))
-  } else if (is.logical(sel)) {
-    which(rep_len(sel, length(labs)))
-  } else {
-    as.integer(sel)
-  }
-  if (!length(keep) || any(keep < 1L) || any(keep > length(labs))) {
-    cli::cli_abort("no {.val {axis}} slices match {.val {sel}}")
-  }
+  keep <- .label_keep(labs, sel, axis)
   if (length(keep) == 1L) {
     pid <- node@parents[[keep]]
     return(LazyRaster(
@@ -428,21 +407,77 @@ lazy_stack <- function(xs, along = "t") {
   lazy_stack(stats::setNames(layers, labs[keep]), along = axis)
 }
 
-#' Select time slices of a stacked raster by label.
+# Positions of `labs` that `sel` selects: each character selector its
+# exact label, else every label it prefixes ("2023-06"); logical or
+# integer positions as given. Errors when a selector matches nothing.
+.label_keep <- function(labs, sel, axis) {
+  if (anyNA(sel)) {
+    cli::cli_abort("{.arg sel} must not contain NA.")
+  }
+  keep <- if (is.character(sel)) {
+    hits <- lapply(sel, function(s) {
+      ex <- which(labs == s)
+      if (length(ex)) ex else which(startsWith(labs, s))
+    })
+    none <- sel[lengths(hits) == 0L]
+    if (length(none)) {
+      cli::cli_abort("no {.val {axis}} slices match {.val {none}}")
+    }
+    sort(unique(unlist(hits)))
+  } else if (is.logical(sel)) {
+    which(rep_len(sel, length(labs)))
+  } else {
+    as.integer(sel)
+  }
+  if (!length(keep) || any(keep < 1L) || any(keep > length(labs))) {
+    cli::cli_abort("no {.val {axis}} slices match {.val {sel}}")
+  }
+  keep
+}
+
+#' Select time slices of a stacked raster or a dataset by label.
 #'
 #' Label selection on the `t` axis (the `.sel(time = ...)` analog):
 #' each selector matches its exact label, or failing that every label it
 #' prefixes (`"2023-06"` selects every June slice); the matches are
 #' combined. Integer/logical positions work too. A selector that matches
 #' nothing is an error.
-#' The raster must be a `lazy_stack` along `t` whose layers were named
-#' (slice dates); a single match returns the bare layer.
+#' A raster must be a `lazy_stack` along `t` whose layers were named
+#' (slice dates); a single match returns the bare layer. A dataset keeps
+#' the matching slices of every band (each band's slices are labelled by
+#' date, or by the time coordinate of an N-D source such as a Zarr array).
 #'
-#' @param x A `LazyRaster` stacked along `t` with labels.
+#' @param x A `LazyRaster` stacked along `t` with labels, or a
+#'   `LazyDataset`.
 #' @param sel Character labels/prefixes, or integer/logical positions.
-#' @return A `LazyRaster` (the sub-stack, or the single matching layer).
+#' @return A `LazyRaster` (the sub-stack, or the single matching layer),
+#'   or a `LazyDataset` holding the matching slices.
 #' @export
-time_sel <- function(x, sel) .axis_sel(x, "t", sel)
+time_sel <- function(x, sel) {
+  if (S7::S7_inherits(x, LazyDataset)) {
+    return(.ds_time_sel(x, sel))
+  }
+  .axis_sel(x, "t", sel)
+}
+
+.ds_time_sel <- function(x, sel) {
+  bands <- lapply(x@bands, function(slices) {
+    labs <- names(slices)
+    if (is.null(labs)) {
+      cli::cli_abort(c(
+        "no {.val t} labels on this dataset.",
+        "i" = "a dataset's slices are labelled by their dates (or time coordinate)"
+      ))
+    }
+    slices[.label_keep(labs, sel, "t")]
+  })
+  LazyDataset(
+    graph = x@graph,
+    bands = bands,
+    mask_asset = x@mask_asset,
+    steps = x@steps
+  )
+}
 
 #' Select bands of a stacked raster by label.
 #'
