@@ -6,10 +6,13 @@
   array (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using
   the dimension tags GDAL puts on each band; `bands` indexes the band
   dimension. A bare `ZARR:"https://..."` store is read over `/vsicurl/`.
-* `lazy_dataset()` over several Zarr arrays in different CRSs (one per UTM
-  zone, as OlmoEarth stores them) mosaics them onto the target grid: each
-  window warps every zone and every band of a slice in one pass, the later
-  source winning where zones overlap.
+* `lazy_dataset()` over several Zarr arrays (one per UTM zone, as
+  OlmoEarth stores them) mosaics them onto the target grid: each window
+  warps every zone and every band of a slice in one pass, the later source
+  winning where zones overlap. The arrays must agree on their bands and
+  dimension coordinates.
+* `band_sel()`, `time_sel()` and per-slice operations work on a stack after
+  it has been collected (the planner rewrites collected stacks in place).
 * `time_sel()` takes a dataset and keeps the matching slices of every band.
 * `dequantize_signed_power()` decodes signed-power Int8 embeddings, and
   `dequantize_olmoearth()` decodes the OlmoEarth v1.3 embeddings (the
@@ -35,8 +38,8 @@
 
 ## Bug fixes
 
-* Read daemons can open Zarr v3 stores: the vsicurl allowlist admits
-  `zarr.json` and extensionless chunk keys.
+* Read daemons can open Zarr stores: the vsicurl allowlist admits Zarr v3
+  and v2 metadata and chunk keys.
 * Reads that touch a Zarr store no longer turn on GDAL's worker threads.
   GDAL reports from those threads, and gdalraster's message handler then
   calls into R off the main thread, which aborted the R session.
