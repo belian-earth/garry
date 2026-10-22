@@ -106,12 +106,16 @@ fixture_multiband <- function() {
 # and the values as an R array [t, b, y, x].
 #
 # `epsg`, `x0`, `y1` and `shift` (added to every value) place a second
-# store elsewhere, e.g. in the next UTM zone for cross-zone reads.
+# store elsewhere, e.g. in the next UTM zone for cross-zone reads;
+# `year0` is the first year of the time coordinate.
 fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
-                            shift = 0L) {
-  key <- paste("zarr", epsg, x0, y1, shift)
+                            shift = 0L, year0 = 2021L) {
+  key <- paste("zarr", epsg, x0, y1, shift, year0)
   if (!is.null(.fixture_env[[key]])) return(.fixture_env[[key]])
-  store <- file.path(tempdir(), sprintf("garry-fixture-nd-%d-%d.zarr", epsg, shift))
+  store <- file.path(
+    tempdir(),
+    sprintf("garry-fixture-nd-%d-%d-%d-%d.zarr", epsg, round(x0), shift, year0)
+  )
   nt <- 3L; nb <- 4L; ny <- 20L; nx <- 30L; chunk <- c(1L, 2L, 10L, 15L)
   res <- 10
   js <- function(x, path) {
@@ -147,7 +151,7 @@ fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
     dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
     writeBin(vals, f, size = size, endian = "little")
   }
-  coord("time", 2021L:(2020L + nt), "int32", 4L)
+  coord("time", year0 + seq_len(nt) - 1L, "int32", 4L)
   coord("y", y1 - res * (seq_len(ny) - 0.5), "float64", 8L)
   coord("x", x0 + res * (seq_len(nx) - 0.5), "float64", 8L)
   js(list(

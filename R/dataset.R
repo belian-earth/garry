@@ -528,7 +528,32 @@ lazy_dataset <- function(
   meta <- NULL
   path <- if (length(paths) > 1L) {
     probes <- .source_probes(paths)
-    if (.mosaicable(probes)) {
+    # Several sources warp together band by band (one Zarr array per UTM
+    # zone, say), so they must agree on their bands and, for N-D arrays,
+    # on what each band is.
+    nbs <- vapply(probes, `[[`, integer(1), "nb")
+    if (any(nbs != nbs[[1L]])) {
+      cli::cli_abort(c(
+        "The sources differ in band count ({.val {unique(nbs)}}).",
+        "i" = "Read them separately and combine on a common grid."
+      ))
+    }
+    same_dims <- vapply(
+      probes[-1L],
+      function(p) identical(p$dims, probes[[1L]]$dims),
+      logical(1)
+    )
+    if (!all(same_dims)) {
+      cli::cli_abort(c(
+        "The sources' bands carry different dimension coordinates (e.g. years).",
+        "i" = "Read them separately and combine on a common grid."
+      ))
+    }
+    # A Zarr store stays a multi-path source even in one CRS: a mosaic VRT
+    # hides the store from every Zarr-specific read path (dimension
+    # layout, chunk-sharing collapse, handle budget, single-threaded reads).
+    zarr <- any(vapply(paths, .gdal_is_zarr, logical(1)))
+    if (!zarr && .mosaicable(probes)) {
       gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
     } else {
       meta <- .multi_source_meta(paths, probes)
@@ -541,17 +566,6 @@ lazy_dataset <- function(
   if (is.null(meta)) meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path[[1L]])
   nb <- ds$getRasterCount()
-  # Several sources warp together band by band (one Zarr array per UTM
-  # zone, say), so they must agree on their bands.
-  if (length(path) > 1L) {
-    nbs <- vapply(path, function(p) .gdal_handle(p)$getRasterCount(), integer(1))
-    if (any(nbs != nb)) {
-      cli::cli_abort(c(
-        "The sources differ in band count ({.val {unique(nbs)}}).",
-        "i" = "Read them separately and combine on a common grid."
-      ))
-    }
-  }
   # An N-D array (time, band, y, x) read through GDAL's classic view: its
   # bands index the band dimension and its slices the time dimension.
   nd <- .nd_layout(.gdal_band_dims(ds))

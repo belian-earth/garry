@@ -1607,7 +1607,8 @@ gdal_mosaic_vrt <- function(
   lapply(files, function(f) {
     ds <- .gdal_handle(f)
     list(gt = ds$getGeoTransform(), srs = ds$getProjection(),
-         nx = ds$getRasterXSize(), ny = ds$getRasterYSize())
+         nx = ds$getRasterXSize(), ny = ds$getRasterYSize(),
+         nb = ds$getRasterCount(), dims = .gdal_band_dims(ds))
   })
 }
 

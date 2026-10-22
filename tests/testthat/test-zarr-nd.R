@@ -250,3 +250,31 @@ test_that("a coarsened preview keeps a collapsed warp's bands", {
   id <- .coarsen_node(ng, graph_get(g, w), 1L, gr)
   expect_identical(graph_get(ng, id)@bands, 1:3)
 })
+
+test_that("same-CRS Zarr stores stay a multi-path source, not a mosaic VRT", {
+  skip_if_not_installed("jsonlite")
+  a <- fixture_zarr_nd()
+  b <- fixture_zarr_nd(x0 = 500300, shift = 7L)
+  g <- grid_spec("EPSG:32632", c(500000, 4599800, 500600, 4600000), res = 10)
+  ds <- lazy_dataset(c(a$path, b$path), g)
+  expect_identical(time_labels(ds), c("2021", "2022", "2023"))
+  yr <- time_sel(ds, "2022")
+  # the grid is the sources' own union grid, so no warp: one multi-path
+  # read carries the year's four bands
+  p <- plan_lazy(stack_bands(yr))
+  expect_length(p@stages, 1L)
+  src <- graph_get(p@graph, p@stages[[1L]]@members[[1L]])
+  expect_identical(src@band, 5:8)
+  expect_length(src@path, 2L)
+  got <- collect(yr, distributed = FALSE)
+  expect_equal(unname(got[, 1:30, 2]), .nd_ref(a, 2, 2))
+  expect_equal(unname(got[, 31:60, 2]), .nd_ref(b, 2, 2))
+})
+
+test_that("Zarr sources with different time coordinates are refused", {
+  skip_if_not_installed("jsonlite")
+  a <- fixture_zarr_nd()
+  b <- fixture_zarr_nd(x0 = 500300, year0 = 2022L)
+  g <- grid_spec("EPSG:32632", c(500000, 4599800, 500600, 4600000), res = 10)
+  expect_error(lazy_dataset(c(a$path, b$path), g), "dimension coordinates")
+})
