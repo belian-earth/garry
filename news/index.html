@@ -44,6 +44,14 @@
     </div>
 
     <div class="section level2">
+<h2 class="pkg-version" data-toc-text="development version" id="garry-development-version">garry (development version)<a class="anchor" aria-label="anchor" href="#garry-development-version"></a></h2>
+<div class="section level3">
+<h3 id="bug-fixes-development-version">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-development-version"></a></h3>
+<ul><li>
+<code><a href="../reference/g-reductions.html">g_mean()</a></code> averages integer input at f32, in custom reducers and <code><a href="../reference/lazy_map.html">lazy_map()</a></code> functions alike. anvl 0.5.1 summed an integer input in its own dtype, so a mean of Int8 or Int16 values wrapped (100 and 120 gave -4.5).</li>
+</ul></div>
+</div>
+    <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.1.0" id="garry-010">garry 0.1.0<a class="anchor" aria-label="anchor" href="#garry-010"></a></h2>
 <p>The first stable-track release. The API below is the one garry intends to keep; it remains marked experimental while it settles.</p>
 <div class="section level3">
