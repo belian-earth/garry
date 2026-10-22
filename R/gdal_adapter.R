@@ -55,7 +55,10 @@ NULL
 # Is a path a remote (network-backed) GDAL source? Covers driver
 # connection strings that wrap a remote store, e.g. ZARR:"/vsicurl/...".
 .gdal_is_remote <- function(path) {
-  grepl('^/vsi(curl|s3|gs|az|swift)|^https?://|^[A-Za-z0-9_]+:"/vsi(curl|s3|gs|az|swift)', path)
+  grepl(
+    '^/vsi(curl|s3|gs|az|swift)|^https?://|^[A-Za-z0-9_]+:"(/vsi(curl|s3|gs|az|swift)|https?://)',
+    path
+  )
 }
 
 # The extra (non-spatial) dimensions of a multidimensional array read
@@ -99,6 +102,14 @@ NULL
   force(code)
 }
 
+# vsicurl allowlist entries (matched as filename suffixes) a Zarr store
+# needs: v3 zarr.json and its extensionless chunk keys ({noext}), v2
+# metadata keys, and v2 chunk keys such as 0.0.0 (ending in a digit). No
+# GDAL sidecar probe (.aux.xml, .ovr, .msk, ...) ends in any of them.
+.zarr_allowed_ext <- c(
+  ".json", ".zarray", ".zgroup", ".zattrs", ".zmetadata", 0:9, "{noext}"
+)
+
 # Is a path a Zarr array (by connection string or store suffix)?
 .gdal_is_zarr <- function(path) {
   grepl('^ZARR:|\\.zarr/?$', path, ignore.case = TRUE)
@@ -138,7 +149,7 @@ NULL
 # A Zarr store also scopes the vsicurl allowlist: the Zarr driver probes
 # PAM sidecars (.aux.xml, .aux, .ovr) by name whatever EMPTY_DIR says,
 # seven serial 404s (~5 s) per open measured on OlmoEarth 2026-10-22.
-# Admitting only .json and extensionless keys refuses them.
+# Admitting only Zarr's own keys (.zarr_allowed_ext) refuses them.
 .gdal_quiet_remote <- function(code, zarr = FALSE) {
   prev_rd <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
   prev_ib <- gdalraster::get_config_option("GDAL_INGESTED_BYTES_AT_OPEN")
@@ -146,7 +157,10 @@ NULL
   gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", "4194304")
   if (zarr && !nzchar(prev_ext)) {
-    gdalraster::set_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".json,{noext}")
+    gdalraster::set_config_option(
+      "CPL_VSIL_CURL_ALLOWED_EXTENSIONS",
+      paste(.zarr_allowed_ext, collapse = ",")
+    )
   }
   on.exit(
     {
@@ -2001,7 +2015,7 @@ gdal_warp_window <- function(
 #' defaults to 5% of RAM *per process*, which many daemons would
 #' multiply), single-range COG-header ingest, a skipped directory scan
 #' and a vsicurl allowlist for fast remote opens (raster extensions,
-#' plus `.json` and extensionless keys so Zarr v3 stores read), and
+#' plus the metadata and chunk keys of Zarr stores), and
 #' permission to open MEM-driver datasets, which garry's internal warp
 #' readers require. `garry_daemons()` calls this
 #' on every read daemon automatically; call it yourself for host-side
@@ -2032,12 +2046,12 @@ garry_gdal_config <- function() {
   sc("GDAL_CACHEMAX", as.character(as.integer(garry_opt("gdal_cachemax_mb"))))
   sc("GDAL_INGESTED_BYTES_AT_OPEN", "32768") # one range grabs the COG header
   sc("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-  # Zarr v3 needs zarr.json and its extensionless chunk keys ({noext});
-  # the list still refuses the sidecar probes (.aux.xml, .ovr, .msk, ...)
-  # GDAL issues on every remote open.
+  # Zarr's own keys (.zarr_allowed_ext); the list still refuses the
+  # sidecar probes (.aux.xml, .ovr, .msk, ...) GDAL issues on every
+  # remote open.
   sc(
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS",
-    ".tif,.tiff,.TIF,.TIFF,.vrt,.jp2,.json,{noext}"
+    paste(c(".tif,.tiff,.TIF,.TIFF,.vrt,.jp2", .zarr_allowed_ext), collapse = ",")
   )
   sc("GDAL_MEM_ENABLE_OPEN", "YES") # >=3.10 gate for the direct warp
   invisible(NULL)

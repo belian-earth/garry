@@ -17,7 +17,7 @@ timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 defaults to 5\% of RAM \emph{per process}, which many daemons would
 multiply), single-range COG-header ingest, a skipped directory scan
 and a vsicurl allowlist for fast remote opens (raster extensions,
-plus \code{.json} and extensionless keys so Zarr v3 stores read), and
+plus the metadata and chunk keys of Zarr stores), and
 permission to open MEM-driver datasets, which garry's internal warp
 readers require. \code{garry_daemons()} calls this
 on every read daemon automatically; call it yourself for host-side

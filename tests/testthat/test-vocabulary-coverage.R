@@ -73,14 +73,14 @@ test_that("garry_gdal_config sets the network options it documents", {
   expect_identical(gdalraster::get_config_option("GDAL_HTTP_MAX_RETRY"), "10")
 })
 
-test_that("garry_gdal_config admits Zarr v3 keys and keeps GDAL's retry codes", {
+test_that("garry_gdal_config admits Zarr keys and keeps GDAL's retry codes", {
   opts <- c("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", "GDAL_HTTP_RETRY_CODES")
   old <- vapply(opts, gdalraster::get_config_option, "")
   on.exit(for (o in opts) gdalraster::set_config_option(o, old[[o]]), add = TRUE)
   gdalraster::set_config_option("GDAL_HTTP_RETRY_CODES", "")
   garry_gdal_config()
   ext <- strsplit(gdalraster::get_config_option(opts[[1]]), ",")[[1]]
-  expect_true(all(c(".tif", ".json", "{noext}") %in% ext))
+  expect_true(all(c(".tif", ".json", "{noext}", ".zarray", ".zmetadata", "0") %in% ext))
   expect_false(".xml" %in% ext)
   expect_identical(gdalraster::get_config_option("GDAL_HTTP_RETRY_CODES"), "")
 })
