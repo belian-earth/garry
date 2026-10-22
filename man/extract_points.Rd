@@ -14,8 +14,9 @@ extract_points(x, xy, bands = NULL, interp = NULL, ...)
 two-column matrix/data frame as gdalraster expects.}
 
 \item{bands}{Bands to extract (default all): band names or positions
-for a \code{LazyDataset}, file band indices for a path or \code{GDALRaster}.
-Ignored for a \code{LazyRaster}, which reads its own band.}
+for a \code{LazyDataset} or a materialised \verb{(band, y, x)} cube, file band
+indices for a path or \code{GDALRaster}. Ignored for a single-band
+\code{LazyRaster}, which reads its own band.}
 
 \item{interp}{Interpolation: \code{NULL}/\code{"nearest"} (default), \code{"bilinear"},
 \code{"cubic"}, \code{"cubicspline"}.}

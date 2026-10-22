@@ -129,3 +129,19 @@ test_that("garry sources extract their own band, nodata and affine", {
   expect_identical(colnames(extract_points(ds, xy, bands = "s")), "s")
   expect_error(extract_points(ds, xy, bands = "nope"), "must name bands")
 })
+
+test_that("a materialised band cube extracts one column per band", {
+  fx <- fixture_multiband()
+  cube <- materialise(stack_bands(lazy_dataset(fx$path)))
+  pts <- wk::xy(c(500005, 500305), c(4599995, 4599805), crs = "EPSG:32632")
+  # rows 1 and 20, columns 1 and 31 of the fixture
+  want <- vapply(fx$vals, function(m) c(m[1, 1], m[20, 31]), numeric(2))
+  got <- extract_points(cube, pts)
+  expect_identical(dim(got), c(2L, fx$nb))
+  expect_equal(unname(got), unname(want), tolerance = 1e-6)
+  expect_equal(unname(extract_points(cube, pts, bands = 3L)[, 1]), want[, 3],
+               tolerance = 1e-6)
+  # a plan collapses the stack into one multi-band source in place
+  invisible(collect(cube, distributed = FALSE))
+  expect_equal(unname(extract_points(cube, pts)), unname(want), tolerance = 1e-6)
+})
