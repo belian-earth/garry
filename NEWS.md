@@ -1,7 +1,39 @@
 # garry (development version)
 
+## New features
+
+* `lazy_dataset()` reads N-D arrays such as a `(time, band, y, x)` Zarr
+  array (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using
+  the dimension tags GDAL puts on each band; `bands` indexes the band
+  dimension. A bare `ZARR:"https://..."` store is read over `/vsicurl/`.
+* `time_sel()` takes a dataset and keeps the matching slices of every band.
+* `dequantize_signed_power()` decodes signed-power Int8 embeddings, and
+  `dequantize_olmoearth()` decodes the OlmoEarth v1.3 embeddings (the
+  same scheme as `dequantize_aef()`).
+* `extract_points()` reads a materialised `(band, y, x)` cube, one column
+  per band.
+* New vignette: OlmoEarth embeddings from Zarr.
+
+## Performance
+
+* The bands of one file collapse into a single read per window when the
+  file's bands share storage (a Zarr array, a pixel-interleaved file),
+  also through a warp onto a target grid and through `lazy_map()` applied
+  per band. A pooled read of a 128-band OlmoEarth window fetched 11 times
+  its bytes before (102 s for 1024 x 1024 pixels) and fetches them once
+  now (14 s). Band-interleaved files keep their per-band reads.
+* A Zarr dataset handle is closed once it has read `garry.zarr_handle_mb`
+  (512 MB), since GDAL keeps every chunk it decodes for the life of the
+  handle.
+
 ## Bug fixes
 
+* Read daemons can open Zarr v3 stores: the vsicurl allowlist admits
+  `zarr.json` and extensionless chunk keys.
+* `garry_gdal_config()` no longer sets `GDAL_HTTP_RETRY_CODES`. GDAL
+  matches that list by substring, so `"500"` made every curl failure
+  (DNS included) retry with backoff for minutes; GDAL's default set is the
+  same codes plus timeouts and resets.
 * `g_mean()` averages integer input at f32, in custom reducers and
   `lazy_map()` functions alike. anvl 0.5.1 summed an integer input in its
   own dtype, so a mean of Int8 or Int16 values wrapped (100 and 120 gave
