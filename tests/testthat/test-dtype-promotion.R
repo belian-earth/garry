@@ -37,6 +37,19 @@ test_that("an 8-bit sum over many slices does not wrap", {
   expect_true(all(collect(s) == 600))
 })
 
+test_that("an 8-bit mean over many slices does not wrap", {
+  x <- lazy_source(.int_source("Byte", rep(200, 600)))
+  m <- reduce_over(lazy_stack(rep(list(x), 3)), "mean", "t")
+  expect_identical(m@grid@dtype, "f32")
+  expect_true(all(collect(m) == 200))
+})
+
+test_that("g_mean of traced integers averages at f32", {
+  f <- anvl::jit(function(x) g_mean(x, dims = 1L))
+  x <- anvl::nv_array(array(c(100L, 120L, -128L, 127L), c(2, 2)), dtype = "i8")
+  expect_equal(as.vector(anvl::as_array(f(x))), c(110, -0.5))
+})
+
 test_that("Math on an integer dataset declares f32 per band", {
   x <- lazy_source(.int_source())
   ds <- as_dataset(list(a = x, b = x * 0.5))
