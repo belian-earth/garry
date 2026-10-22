@@ -6,6 +6,10 @@
   array (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using
   the dimension tags GDAL puts on each band; `bands` indexes the band
   dimension. A bare `ZARR:"https://..."` store is read over `/vsicurl/`.
+* `lazy_dataset()` over several Zarr arrays in different CRSs (one per UTM
+  zone, as OlmoEarth stores them) mosaics them onto the target grid: each
+  window warps every zone and every band of a slice in one pass, the later
+  source winning where zones overlap.
 * `time_sel()` takes a dataset and keeps the matching slices of every band.
 * `dequantize_signed_power()` decodes signed-power Int8 embeddings, and
   `dequantize_olmoearth()` decodes the OlmoEarth v1.3 embeddings (the
@@ -23,13 +27,19 @@
   its bytes before (102 s for 1024 x 1024 pixels) and fetches them once
   now (14 s). Band-interleaved files keep their per-band reads.
 * A Zarr dataset handle is closed once it has read `garry.zarr_handle_mb`
-  (512 MB), since GDAL keeps every chunk it decodes for the life of the
-  handle.
+  (256 MB), and daemons close their Zarr handles between runs, since GDAL
+  keeps every chunk it decodes for the life of the handle.
+* A Zarr store on a reprojected grid warps window by window from its
+  cached handle rather than through a warped VRT, which reopened the store
+  inside GDAL for every read.
 
 ## Bug fixes
 
 * Read daemons can open Zarr v3 stores: the vsicurl allowlist admits
   `zarr.json` and extensionless chunk keys.
+* Reads that touch a Zarr store no longer turn on GDAL's worker threads.
+  GDAL reports from those threads, and gdalraster's message handler then
+  calls into R off the main thread, which aborted the R session.
 * `garry_gdal_config()` no longer sets `GDAL_HTTP_RETRY_CODES`. GDAL
   matches that list by substring, so `"500"` made every curl failure
   (DNS included) retry with backoff for minutes; GDAL's default set is the

@@ -106,7 +106,7 @@ garry_daemons()
 t0 <- Sys.time()
 cubes <- materialise(list(y2023 = year("2023"), y2025 = year("2025")))
 Sys.time() - t0
-#> Time difference of 1.750567 mins
+#> Time difference of 1.33462 mins
 ```
 
 ## False colour
@@ -117,36 +117,38 @@ years with `band_project()` so the colours mean the same thing in each.
 
 
 ``` r
-set.seed(1)
-n <- 2e4
-bb <- grid_bbox(grid)
-pts <- wk::xy(
-  stats::runif(n, bb[["xmin"]], bb[["xmax"]]),
-  stats::runif(n, bb[["ymin"]], bb[["ymax"]]),
-  crs = grid_crs(grid)
-)
-px <- extract_points(cubes$y2025, pts)
-px <- px[stats::complete.cases(px), ]
-pca <- prcomp(px)
-summary(pca)$importance[, 1:3]
-#>                              PC1      PC2       PC3
-#> Standard deviation     0.9810468 0.562912 0.4375965
-#> Proportion of Variance 0.4393300 0.144640 0.0874100
-#> Cumulative Proportion  0.4393300 0.583970 0.6713800
+fit_pca <- function(cube, grid, n = 2e4) {
+  bb <- grid_bbox(grid)
+  pts <- wk::xy(
+    stats::runif(n, bb[["xmin"]], bb[["xmax"]]),
+    stats::runif(n, bb[["ymin"]], bb[["ymax"]]),
+    crs = grid_crs(grid)
+  )
+  px <- extract_points(cube, pts)
+  prcomp(px[stats::complete.cases(px), ])
+}
 
-false_colour <- function(cube) {
+false_colour <- function(cube, pca) {
   lazy_stack(lapply(1:3, function(k) {
     reduce_over(cube, band_project(pca$rotation[, k], center = pca$center),
                 over = "band")
   }), along = "band")
 }
+
+set.seed(1)
+pca <- fit_pca(cubes$y2025, grid)
+summary(pca)$importance[, 1:3]
+#>                              PC1      PC2       PC3
+#> Standard deviation     0.9810468 0.562912 0.4375965
+#> Proportion of Variance 0.4393300 0.144640 0.0874100
+#> Cumulative Proportion  0.4393300 0.583970 0.6713800
 ```
 
 
 ``` r
 op <- par(mfrow = c(1, 2))
-preview(false_colour(cubes$y2023), main = "2023")
-preview(false_colour(cubes$y2025), main = "2025")
+preview(false_colour(cubes$y2023, pca), main = "2023")
+preview(false_colour(cubes$y2025, pca), main = "2025")
 ```
 
 ![plot of chunk false-colour](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/false-colour-1.png)
@@ -202,13 +204,75 @@ the distribution.
 moved <- sum(change > 0.1, na.rm = TRUE) * 100 / 1e4 # 10 m pixels to ha
 round(moved)
 #> [1] 25446
+```
+
+## Across zones
+
+Each zone is a separate array in its own CRS, so an area across a zone
+boundary reads from both. Give `lazy_dataset()` every zone's array and a
+grid in any CRS: the warper reprojects each zone into every window and
+mosaics them, still reading all of a year's bands in one task.
+Greenwich, on the meridian between zones 30 and 31, on the British National
+Grid:
+
+
+``` r
+zones <- paste0('ZARR:"', store, "/utm", c(30, 31), '":/embeddings')
+london <- grid_spec("EPSG:27700", c(528900, 172400, 548900, 182400), res = 10)
+
+greenwich <- lazy_dataset(zones, london, bands = 1:64) |>
+  time_sel("2025") |>
+  lazy_map(fn = dequantize_olmoearth, dtype = "f32") |>
+  stack_bands() |>
+  materialise()
+
+set.seed(1)
+pca_london <- fit_pca(greenwich, london)
+```
+
+
+``` r
+preview(false_colour(greenwich, pca_london), main = "Greenwich, 2025")
+lines(gdalraster::transform_xy(cbind(0, seq(51.4, 51.6, by = 0.01)),
+                               "EPSG:4326", "EPSG:27700"),
+      col = "white", lty = 2)
+```
+
+![plot of chunk zones-map](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/zones-map-1.png)
+
+The dashed line is the meridian. Each zone carries embeddings a little past
+its own meridian, so near the boundary both zones hold a vector for the same
+pixel, and the later zone in `zones` wins. How far apart are the two? Read
+each zone alone and take the cosine distance where both have data:
+
+
+``` r
+zone <- function(z) {
+  lazy_dataset(z, london, bands = 1:64) |>
+    time_sel("2025") |>
+    lazy_map(fn = dequantize_olmoearth, dtype = "f32") |>
+    stack_bands()
+}
+z30 <- zone(zones[1])
+z31 <- zone(zones[2])
+gap <- collect(1 - reduce_over(z30 * z31, "sum", "band") /
+  sqrt(reduce_over(z30 * z30, "sum", "band") *
+       reduce_over(z31 * z31, "sum", "band")))
+mean(!is.na(gap))         # share of the area both zones cover
+#> [1] 0.672939
+median(gap, na.rm = TRUE) # their median cosine distance there
+#> [1] 0.02144197
 garry_daemons(0, 0)
 ```
 
+Both zones cover 67% of this area, and there
+their vectors sit a median cosine distance of
+0.021 apart: they were computed in
+different projections, but the difference is the size of the year-to-year
+change in unburned ground at Jasper, and the join does not show.
+
 ## Notes
 
-* **Zones.** An area across a zone boundary needs one read per zone, each
-  warped onto a common grid with `align_to()`.
 * **Southern zones** use the northern CRS, so their northings are
   negative. GDAL and garry handle this as any other coordinate.
 * **Dimensions.** Use 64 or 128 dimensions throughout an analysis, never a
