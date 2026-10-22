@@ -600,11 +600,7 @@ NULL
   }
   for (id in ids) {
     st <- graph_get(graph, id)
-    if (!S7::S7_inherits(st, StackNode)) {
-      next
-    }
-    parents <- .node_parents(st)
-    if (length(parents) < 2L) {
+    if (!S7::S7_inherits(st, StackNode) || length(.node_parents(st)) < 2L) {
       next
     }
     if (
@@ -618,62 +614,167 @@ NULL
     ) {
       next
     }
-    ps <- lapply(parents, function(p) graph_get(graph, p))
-    if (all(vapply(ps, function(n) S7::S7_inherits(n, SourceNode), logical(1)))) {
-      if (!.same_file_bands(ps)) {
-        next
-      }
-      p1 <- ps[[1L]]
-      graph_replace(
-        graph,
-        id,
-        SourceNode(
-          id = st@id,
-          parents = integer(0),
-          grid = .node_grid(st),
-          path = p1@path,
-          band = vapply(ps, function(n) n@band, integer(1)),
-          collapsed = as.integer(parents),
-          nodata = p1@nodata,
-          block_dim = p1@block_dim,
-          open_options = p1@open_options,
-          resampling = p1@resampling,
-          scale = p1@scale,
-          offset = p1@offset
-        )
-      )
-    } else if (all(vapply(ps, .single_band_warp, logical(1), graph = graph))) {
-      w1 <- ps[[1L]]
-      srcs <- lapply(ps, function(w) graph_get(graph, w@parents[[1L]]))
-      same_warp <- vapply(
-        ps[-1L],
-        function(w) {
-          identical(w@resampling, w1@resampling) &&
-            grid_equal(w@target_grid, w1@target_grid)
-        },
-        logical(1)
-      )
-      if (
-        !all(same_warp) || !.same_file_bands(srcs) ||
-          !.bands_share_blocks(srcs[[1L]]@path, srcs[[1L]]@open_options)
-      ) {
-        next
-      }
-      graph_replace(
-        graph,
-        id,
-        WarpNode(
-          id = st@id,
-          parents = srcs[[1L]]@id,
-          grid = .node_grid(st),
-          target_grid = .node_grid(st),
-          resampling = w1@resampling,
-          bands = vapply(srcs, function(n) n@band, integer(1))
-        )
-      )
-    }
+    .collapse_stack(graph, st)
   }
   invisible(graph)
+}
+
+# Rewrite one band stack in place. A stack of reads of one file becomes
+# the collapsed read (.collapsed_read()). A stack of one elementwise map
+# applied per band (what lazy_map() over a dataset builds), possibly a
+# chain of them, becomes ONE map over the collapsed read of the maps'
+# inputs: lazy_map()'s fn is elementwise, so stack(f(x1), ..., f(xn)) is
+# f(stack(x1, ..., xn)). The chain composes into a single MapNode at the
+# stack's id, which is how a fused stage evaluates the chain anyway (no
+# casts between members). The hoist fires only when the chain ends at a
+# read whose bands share storage, so plans elsewhere are unchanged. The
+# read is the one node added; it is a leaf (or a warp over an existing
+# source) with an id above the map's, which staging and graph_import()
+# order through .topo_order().
+.collapse_stack <- function(graph, st) {
+  ps <- lapply(.node_parents(st), function(p) graph_get(graph, p))
+  read <- .collapsed_read(graph, st@id, .node_grid(st), ps)
+  if (!is.null(read)) {
+    graph_replace(graph, st@id, read)
+    return(invisible(TRUE))
+  }
+  chain <- .map_chain(graph, st, ps)
+  if (is.null(chain)) {
+    return(invisible(FALSE))
+  }
+  rid <- graph@nodes$.next_id
+  read <- chain$read
+  read@id <- rid
+  graph@nodes[[.key(rid)]] <- read
+  graph@nodes$.next_id <- rid + 1L
+  if (S7::S7_inherits(read, SourceNode)) {
+    .source_index_add(.source_index(graph), read)
+  }
+  graph_replace(
+    graph,
+    st@id,
+    MapNode(
+      id = st@id,
+      parents = rid,
+      grid = .node_grid(st),
+      role = ps[[1L]]@role,
+      fn = .compose_maps(chain$fns)
+    )
+  )
+  invisible(TRUE)
+}
+
+# Follow identical per-band maps down from a band stack's parents to a
+# read that collapses with shared storage. The maps' fns, outermost
+# first, and the collapsed read (id 0, for the caller to place); NULL
+# when the chain stops anywhere else.
+.map_chain <- function(graph, st, ps) {
+  fns <- list()
+  cur <- ps
+  while (.same_band_maps(cur)) {
+    fns <- c(fns, list(cur[[1L]]@fn))
+    cur <- lapply(cur, function(m) graph_get(graph, m@parents[[1L]]))
+    grid <- .grid_retype(.node_grid(st), .node_grid(cur[[1L]])@dtype)
+    read <- .collapsed_read(graph, 0L, grid, cur, shared_only = TRUE)
+    if (!is.null(read)) {
+      return(list(fns = fns, read = read))
+    }
+  }
+  NULL
+}
+
+# One map from a chain of elementwise fns given outermost first.
+.compose_maps <- function(fns) {
+  if (length(fns) == 1L) {
+    return(fns[[1L]])
+  }
+  fns <- rev(lapply(fns, .slim_fn))
+  function(x) {
+    for (f in fns) {
+      x <- f(x)
+    }
+    x
+  }
+}
+
+# One elementwise map applied per band: single-input MapNodes on 2-D
+# grids with the same fn, dtype and role.
+.same_band_maps <- function(ps) {
+  if (!all(vapply(ps, function(n) S7::S7_inherits(n, MapNode), logical(1)))) {
+    return(FALSE)
+  }
+  m1 <- ps[[1L]]
+  all(vapply(
+    ps,
+    function(m) {
+      length(m@parents) == 1L &&
+        length(setdiff(names(m@grid@dims), c("x", "y"))) == 0L &&
+        identical(m@grid@dtype, m1@grid@dtype) &&
+        identical(m@role, m1@role) &&
+        (identical(m@fn, m1@fn) ||
+          identical(.fn_identity(m@fn), .fn_identity(m1@fn)))
+    },
+    logical(1)
+  ))
+}
+
+# The single read that replaces a band stack of reads of one file, as a
+# node with the given id and grid, or NULL. Single-band sources collapse
+# into a multi-band source (only when their bands share storage if
+# `shared_only`); single-band warps onto one target grid with one
+# resampling collapse into a multi-band warp over the first band's source
+# when the bands share storage.
+.collapsed_read <- function(graph, id, grid, ps, shared_only = FALSE) {
+  if (all(vapply(ps, function(n) S7::S7_inherits(n, SourceNode), logical(1)))) {
+    p1 <- ps[[1L]]
+    if (
+      !.same_file_bands(ps) ||
+        (shared_only && !.bands_share_blocks(p1@path, p1@open_options))
+    ) {
+      return(NULL)
+    }
+    return(SourceNode(
+      id = id,
+      parents = integer(0),
+      grid = grid,
+      path = p1@path,
+      band = vapply(ps, function(n) n@band, integer(1)),
+      collapsed = vapply(ps, function(n) n@id, integer(1)),
+      nodata = p1@nodata,
+      block_dim = p1@block_dim,
+      open_options = p1@open_options,
+      resampling = p1@resampling,
+      scale = p1@scale,
+      offset = p1@offset
+    ))
+  }
+  if (!all(vapply(ps, .single_band_warp, logical(1), graph = graph))) {
+    return(NULL)
+  }
+  w1 <- ps[[1L]]
+  srcs <- lapply(ps, function(w) graph_get(graph, w@parents[[1L]]))
+  same_warp <- vapply(
+    ps[-1L],
+    function(w) {
+      identical(w@resampling, w1@resampling) &&
+        grid_equal(w@target_grid, w1@target_grid)
+    },
+    logical(1)
+  )
+  if (
+    !all(same_warp) || !.same_file_bands(srcs) ||
+      !.bands_share_blocks(srcs[[1L]]@path, srcs[[1L]]@open_options)
+  ) {
+    return(NULL)
+  }
+  WarpNode(
+    id = id,
+    parents = srcs[[1L]]@id,
+    grid = grid,
+    target_grid = grid,
+    resampling = w1@resampling,
+    bands = vapply(srcs, function(n) n@band, integer(1))
+  )
 }
 
 # A WarpNode reading one band of a plain single-file source (not itself
@@ -998,7 +1099,7 @@ plan_lazy <- function(x) {
     id
   }
 
-  for (id in ids) {
+  for (id in .topo_order(graph, ids)) {
     node <- graph_get(graph, id)
 
     if (S7::S7_inherits(node, SourceNode)) {
