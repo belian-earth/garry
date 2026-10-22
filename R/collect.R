@@ -577,6 +577,7 @@ garry_last_route <- function() .garry_state$route
     quote({
       suppressMessages(library(garry))
       options(garry.read_fail = rf, garry.read_retry = rr)
+      asNamespace("garry")$.gdal_zarr_release()
     }),
     profiles = prof,
     rf = garry_opt("read_fail"),

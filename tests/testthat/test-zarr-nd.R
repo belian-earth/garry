@@ -207,3 +207,15 @@ test_that("a Zarr store warps window by window, matching GDAL's warped VRT", {
     expect_equal(unname(got[, , b]), ref, ignore_attr = TRUE)
   }
 })
+
+test_that("daemon hygiene closes cached Zarr handles and keeps the rest", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  tif <- fixture_multiband()$path
+  .gdal_handle(fx$path)
+  .gdal_handle(tif)
+  .daemon_hygiene()
+  keys <- names(.gdal_cache$handles)
+  expect_false(.gdal_href(fx$path) %in% keys)
+  expect_true(tif %in% keys)
+})

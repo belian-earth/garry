@@ -357,6 +357,21 @@ gdal_blank_vrt <- function(grid) {
   path
 }
 
+# Close every cached Zarr handle, freeing the decoded chunks GDAL holds
+# for it. Daemons run this between runs: the chunks sit in GDAL's heap,
+# which neither gc() nor malloc_trim returns, and garry's memory model
+# does not count them.
+.gdal_zarr_release <- function() {
+  keys <- names(.gdal_cache$handles) %||% character(0)
+  for (k in keys[.gdal_is_zarr(sub("\x1f.*$", "", keys))]) {
+    try(.gdal_cache$handles[[k]]$close(), silent = TRUE)
+    .gdal_cache$handles[[k]] <- NULL
+    .gdal_cache$stamps[[k]] <- NULL
+    .gdal_cache$zarr_bytes[[k]] <- NULL
+  }
+  invisible(NULL)
+}
+
 .gdal_handle_reset <- function() {
   for (h in .gdal_cache$handles) {
     try(h$close(), silent = TRUE)

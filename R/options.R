@@ -144,7 +144,7 @@
     check = .opt_num(min = 1)
   ),
   zarr_handle_mb = list(
-    default = 512,
+    default = 256,
     tier = "tuning",
     desc = "MB read through one Zarr handle before it is closed (GDAL keeps every decoded chunk)",
     check = .opt_num(min = 1)
