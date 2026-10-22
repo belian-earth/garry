@@ -1,3 +1,12 @@
+# garry (development version)
+
+## Bug fixes
+
+* `g_mean()` averages integer input at f32, in custom reducers and
+  `lazy_map()` functions alike. anvl 0.5.1 summed an integer input in its
+  own dtype, so a mean of Int8 or Int16 values wrapped (100 and 120 gave
+  -4.5).
+
 # garry 0.1.0
 
 The first stable-track release. The API below is the one garry intends to

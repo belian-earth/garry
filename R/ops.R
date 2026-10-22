@@ -862,7 +862,8 @@ g_expand <- function(x, axis, n) {
 #' Reductions over array margins.
 #'
 #' `g_sum` accumulates 8- and 16-bit integers in i32 (32-bit unsigned in
-#' i64), so a sum does not wrap at the input type's range.
+#' i64), so a sum does not wrap at the input type's range. `g_mean` averages
+#' integers in f32.
 #'
 #' With `nan_rm = TRUE`, a slice that is entirely NaN reduces to the
 #' reduction's identity value: `g_sum` gives 0, `g_min` gives `Inf`,
@@ -935,6 +936,12 @@ g_broadcast_arrays <- function(...) {
 #' @export
 g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
+    # anvl 0.5.1 sums an integer input in its own dtype before dividing, so
+    # the mean wraps (two i8 codes of 100 and 120 average to -4.5). Average
+    # at f32, the dtype .reduce_dtype() promises.
+    if (isTRUE(.dtype_family(.g_dtype(x)) %in% c("int", "uint"))) {
+      x <- anvl::nv_convert(x, "f32")
+    }
     return(anvl::nv_mean(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) mean(.nan_filter(v, nan_rm)))
