@@ -794,7 +794,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
     if (!is.null(memo[[key]])) {
       return(memo[[key]])
     }
-    n <- graph_get(graph, id)
+    n <- .stack_node(graph, id)
     if (!"t" %in% names(n@grid@dims)) {
       return(id) # a 2-D input broadcasts across slices
     }
@@ -1049,7 +1049,7 @@ LazyDatasetGroups <- S7::new_class(
 # (group_by_time) onto bare cubes.
 .lr_as_dataset <- function(x) {
   labs <- x@grid@labels[["t"]]
-  node <- graph_get(x@graph, x@node_id)
+  node <- .stack_node(x@graph, x@node_id)
   if (
     is.null(labs) ||
       !S7::S7_inherits(node, StackNode) ||

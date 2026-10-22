@@ -381,7 +381,7 @@ lazy_stack <- function(xs, along = "t") {
       )
     ))
   }
-  node <- graph_get(x@graph, x@node_id)
+  node <- .stack_node(x@graph, x@node_id)
   if (!S7::S7_inherits(node, StackNode) || !identical(node@along, axis)) {
     cli::cli_abort(paste0(
       "label selection needs the raster to be a {.fn lazy_stack} ",

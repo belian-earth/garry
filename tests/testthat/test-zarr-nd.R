@@ -220,3 +220,33 @@ test_that("daemon hygiene closes cached Zarr handles and keeps the rest", {
   expect_false(.gdal_href(fx$path) %in% keys)
   expect_true(tif %in% keys)
 })
+
+test_that("band_sel() still selects from a stack the planner collapsed", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
+  yr <- time_sel(lazy_dataset(fx$path, g), "2023")
+  warps <- stack_bands(yr)
+  maps <- stack_bands(lazy_map(yr, fn = function(v) v * 2, dtype = "f32"))
+  invisible(collect(warps, distributed = FALSE))
+  invisible(collect(maps, distributed = FALSE))
+  expect_s7_class(graph_get(warps@graph, warps@node_id), WarpNode)
+  expect_s7_class(graph_get(maps@graph, maps@node_id), MapNode)
+  expect_equal(collect(band_sel(warps, "b3"), distributed = FALSE),
+               .nd_ref(fx, 3, 3)[6:15, 6:25], ignore_attr = TRUE)
+  expect_equal(collect(band_sel(maps, "b2"), distributed = FALSE),
+               .nd_ref(fx, 3, 2)[6:15, 6:25] * 2, ignore_attr = TRUE)
+})
+
+test_that("a coarsened preview keeps a collapsed warp's bands", {
+  g <- graph_new()
+  gr <- grid_spec("EPSG:32632", c(0, 0, 100, 100), res = 10)
+  s <- graph_add(g, SourceNode, parents = integer(0), grid = gr, path = "x.tif",
+                 band = 1L, nodata = numeric(0), block_dim = c(10L, 10L),
+                 open_options = character(0))
+  w <- graph_add(g, WarpNode, parents = s, grid = gr, target_grid = gr,
+                 resampling = "near", bands = 1:3)
+  ng <- graph_new()
+  id <- .coarsen_node(ng, graph_get(g, w), 1L, gr)
+  expect_identical(graph_get(ng, id)@bands, 1:3)
+})

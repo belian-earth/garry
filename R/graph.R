@@ -75,6 +75,25 @@ graph_new <- function() {
 .node_parents <- function(node) attr(node, "parents", exact = TRUE)
 .node_grid <- function(node) attr(node, "grid", exact = TRUE)
 
+# The stack a node id was built as. The planner's band-stack collapse
+# rewrites a StackNode in place into the read (or map over a read) that
+# serves it, and records the original here, so verbs that select from a
+# stack by its parents (band_sel(), time_sel(), per-slice splits) still
+# work on a raster that has been collected.
+.stack_node <- function(graph, id) {
+  graph@nodes$.stacks[[.key(id)]] %||% graph_get(graph, id)
+}
+
+.record_stack <- function(graph, st) {
+  if (is.null(graph@nodes$.stacks)) {
+    graph@nodes$.stacks <- new.env(parent = emptyenv())
+  }
+  if (is.null(graph@nodes$.stacks[[.key(st@id)]])) {
+    graph@nodes$.stacks[[.key(st@id)]] <- st
+  }
+  invisible(NULL)
+}
+
 # Parent-first order of a parent-closed set of node ids. Ids grow with
 # graph_add(), so ascending order is topological for any graph built
 # node by node, and that is what comes back then. The planner's

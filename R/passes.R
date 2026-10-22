@@ -635,6 +635,7 @@ NULL
   ps <- lapply(.node_parents(st), function(p) graph_get(graph, p))
   read <- .collapsed_read(graph, st@id, .node_grid(st), ps)
   if (!is.null(read)) {
+    .record_stack(graph, st)
     graph_replace(graph, st@id, read)
     return(invisible(TRUE))
   }
@@ -642,14 +643,11 @@ NULL
   if (is.null(chain)) {
     return(invisible(FALSE))
   }
-  rid <- graph@nodes$.next_id
-  read <- chain$read
-  read@id <- rid
-  graph@nodes[[.key(rid)]] <- read
-  graph@nodes$.next_id <- rid + 1L
-  if (S7::S7_inherits(read, SourceNode)) {
-    .source_index_add(.source_index(graph), read)
-  }
+  rid <- graph_add(graph, function(id) {
+    chain$read@id <- id
+    chain$read
+  })
+  .record_stack(graph, st)
   graph_replace(
     graph,
     st@id,
