@@ -17,5 +17,8 @@ The AEF Int8 decode \code{((x / 127.5)^2) * sign(x)}: per-value, nonlinear, sign
 preserving, mapping the code range \verb{[-127, 127]} to ~\verb{[-1, 1]}. Written in
 the \verb{g_*} vocabulary, so applying it with \code{\link[=lazy_map]{lazy_map()}} after \code{\link[=lazy_dataset]{lazy_dataset()}}
 fuses the decode onto the read, on the device rather than as a separate
-decode pass.
+decode pass. This is \code{\link[=dequantize_signed_power]{dequantize_signed_power()}} with its defaults.
+}
+\seealso{
+\code{\link[=dequantize_signed_power]{dequantize_signed_power()}}
 }
