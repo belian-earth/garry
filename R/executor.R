@@ -538,6 +538,10 @@ NULL
   }
   d <- dim(v)
   n <- length(d)
+  if (n < 2L) {
+    # not a plane (a reduced value broadcast into the stage)
+    return(v)
+  }
   out <- array(v[NA_integer_][[1L]], c(d[seq_len(n - 2L)], d[n - 1:0] + grow))
   idx <- c(
     rep(list(quote(expr = )), n - 2L),

@@ -421,6 +421,10 @@ NULL
     decim = decim,
     resampling = resampling
   )
+  # a fused read's window (and its device copy, counted through it) dies
+  # with the task however small the export (a 145-band predict window is
+  # ~150 MB for a ~1 MB export)
+  win_bytes <- .payload_bytes(m)
   if (!is.null(fuse)) {
     m <- .apply_fuse(m, fuse, store_raw)
     if ((fuse$out_pad %||% 0L) > 0L) {
@@ -460,6 +464,9 @@ NULL
   # pages nothing else returns to the OS (the 11.1 drain plateau).
   # Deferred by transient size (.daemon_gc_after).
   bytes <- .payload_bytes(m) + .payload_bytes(val)
+  if (!is.null(fuse)) {
+    bytes <- bytes + win_bytes
+  }
   rm(m, val)
   .daemon_gc_after(bytes)
   sh

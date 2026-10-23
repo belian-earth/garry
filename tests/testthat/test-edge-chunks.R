@@ -39,6 +39,9 @@ test_that(".sv_grow and .sv_crop pad with nodata and invert", {
   expect_true(all(is.na(gm[6, ])) && all(is.na(gm[, 4:5])))
   expect_identical(garry:::.sv_crop(gm, c(1L, 2L)), m)
   expect_identical(garry:::.sv_crop(list(a = gm), c(1L, 2L)), list(a = m))
+  # values that are not planes pass through
+  expect_identical(garry:::.sv_grow(3.5, c(1L, 2L)), 3.5)
+  expect_identical(garry:::.sv_grow(1:4, c(1L, 2L)), 1:4)
 })
 
 test_that("grown edge chunks equal edge chunks run at their own shape", {
