@@ -305,6 +305,9 @@ S7::method(print, LazyDataset) <- function(x, ...) {
   g <- .ds_grid(x)
   nl <- lengths(x@bands)
   val <- .ds_value_bands(x)
+  if (length(val) > 12L) {
+    val <- c(val[1:8], cli::col_grey(glue::glue("... (+{length(val) - 8L})")))
+  }
   bands_txt <- paste(val, collapse = " ")
   if (length(x@mask_asset)) {
     bands_txt <- paste0(

@@ -74,16 +74,20 @@ NULL
 
 # Resolve a "warp" stage to the read that actually serves it. An aligned
 # same-CRS target needs no warping (see .rio_direct_spec()): read the
-# source directly and let RasterIO resample in the same pass. Anything
-# else builds the warped VRT as before. Shared by execute_plan() and the
+# source directly and let RasterIO resample in the same pass. A Zarr
+# store, or several sources, warp straight into each window
+# (gdal_warp_window()); anything else builds the warped VRT. Shared by
+# execute_plan() and the
 # mirai scheduler so the two cannot disagree about which read they do.
 .warp_read_plan <- function(wnode, snode) {
+  # a collapsed band stack of warps reads its own bands of the source
+  band <- if (length(wnode@bands)) wnode@bands else snode@band
   if (length(snode@path) > 1L) {
     # a multi-path source (tiles no mosaic can hold): every source
     # warped straight into each target window (gdal_warp_window)
     return(list(
       path = snode@path,
-      band = snode@band,
+      band = band,
       nodata = snode@nodata,
       open_options = character(0),
       scale = snode@scale,
@@ -97,13 +101,13 @@ NULL
     wnode@target_grid,
     wnode@resampling,
     snode@open_options,
-    band = snode@band,
+    band = band,
     nodata = snode@nodata
   )
   if (!is.null(spec)) {
     return(list(
       path = snode@path,
-      band = snode@band,
+      band = band,
       nodata = snode@nodata,
       open_options = snode@open_options,
       scale = snode@scale,
@@ -111,15 +115,31 @@ NULL
       decim = spec
     ))
   }
+  if (.gdal_is_zarr(snode@path)) {
+    # A Zarr store warps straight into each window from its cached handle
+    # (gdal_warp_window(), flagged through `decim`), never through a
+    # warped VRT: the VRT reopens the store inside GDAL, losing its
+    # decoded chunks between bands and repeating its open's probes.
+    return(list(
+      path = snode@path,
+      band = band,
+      nodata = snode@nodata,
+      open_options = character(0),
+      scale = snode@scale,
+      offset = snode@offset,
+      decim = list(warp = TRUE),
+      resampling = wnode@resampling
+    ))
+  }
   list(
     path = gdal_warp_vrt(
       snode@path,
-      snode@band,
+      band,
       wnode@target_grid,
       wnode@resampling,
       src_nodata = snode@nodata
     ),
-    band = 1L,
+    band = seq_along(band),
     nodata = snode@nodata,
     open_options = character(0),
     scale = snode@scale,
@@ -192,7 +212,7 @@ NULL
     core$y_size
   )
   read_one <- function() {
-    if (length(path) > 1L) {
+    if (length(path) > 1L || isTRUE(decim$warp)) {
       return(gdal_warp_window(
         path,
         band,

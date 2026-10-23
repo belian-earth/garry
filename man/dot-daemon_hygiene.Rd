@@ -17,7 +17,8 @@ jit cache.}
 \code{deep = TRUE} additionally clears the jit cache (forces recompiles:
 ~1 s for map kernels, ~20 s for scans) — reserve it for memory
 pressure; the default trim-only pass costs microseconds and gives
-back what glibc is hoarding.
+back what glibc is hoarding. Every pass also closes cached Zarr
+handles, whose decoded chunks no trim can return.
 }
 \details{
 Internal; daemons reach it through \code{asNamespace("garry")}.

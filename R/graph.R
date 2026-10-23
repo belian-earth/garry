@@ -75,6 +75,75 @@ graph_new <- function() {
 .node_parents <- function(node) attr(node, "parents", exact = TRUE)
 .node_grid <- function(node) attr(node, "grid", exact = TRUE)
 
+# The stack a node id was built as. The planner's band-stack collapse
+# rewrites a StackNode in place into the read (or map over a read) that
+# serves it, and records the original here, so verbs that select from a
+# stack by its parents (band_sel(), time_sel(), per-slice splits) still
+# work on a raster that has been collected.
+.stack_node <- function(graph, id) {
+  graph@nodes$.stacks[[.key(id)]] %||% graph_get(graph, id)
+}
+
+.record_stack <- function(graph, st) {
+  if (is.null(graph@nodes$.stacks)) {
+    graph@nodes$.stacks <- new.env(parent = emptyenv())
+  }
+  if (is.null(graph@nodes$.stacks[[.key(st@id)]])) {
+    graph@nodes$.stacks[[.key(st@id)]] <- st
+  }
+  invisible(NULL)
+}
+
+# Parent-first order of a parent-closed set of node ids. Ids grow with
+# graph_add(), so ascending order is topological for any graph built
+# node by node, and that is what comes back then. The planner's
+# band-stack collapse rewrites a node in place over a parent it adds
+# (.collapse_stack()), the one way a parent carries the larger id; such
+# a parent is placed before its first child.
+.topo_order <- function(graph, ids) {
+  ids <- sort(as.integer(ids))
+  late <- FALSE
+  for (i in ids) {
+    if (any(.node_parents(graph_get(graph, i)) > i)) {
+      late <- TRUE
+      break
+    }
+  }
+  if (!late) {
+    return(ids)
+  }
+  inset <- new.env(parent = emptyenv(), hash = TRUE)
+  for (i in ids) {
+    inset[[.key(i)]] <- TRUE
+  }
+  done <- new.env(parent = emptyenv(), hash = TRUE)
+  out <- integer(length(ids))
+  n <- 0L
+  for (i in ids) {
+    stack <- i
+    while (length(stack)) {
+      top <- stack[[length(stack)]]
+      if (isTRUE(done[[.key(top)]])) {
+        stack <- stack[-length(stack)]
+        next
+      }
+      pend <- Filter(
+        function(p) isTRUE(inset[[.key(p)]]) && !isTRUE(done[[.key(p)]]),
+        .node_parents(graph_get(graph, top))
+      )
+      if (length(pend)) {
+        stack <- c(stack, rev(sort(pend)))
+        next
+      }
+      done[[.key(top)]] <- TRUE
+      n <- n + 1L
+      out[[n]] <- top
+      stack <- stack[-length(stack)]
+    }
+  }
+  out
+}
+
 #' Add a node. `ctor` is an S7 node constructor; `...` are its properties
 #' (the `id` property is assigned here and passed automatically).
 #'
@@ -216,7 +285,7 @@ graph_import <- function(dst, src, root_id) {
     seen <- c(seen, id)
     stack <- c(stack, graph_get(src, id)@parents)
   }
-  seen <- sort(seen)
+  seen <- .topo_order(src, seen)
 
   idx <- .source_index(dst)
   # Import memo: (source graph identity, source id) -> id in dst. A

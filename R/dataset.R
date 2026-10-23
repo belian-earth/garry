@@ -138,13 +138,25 @@ LazyDataset <- S7::new_class(
 #'   per file band, one time slice. This is the multi-band raster entry --
 #'   geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 #'   GDAL driver, any multi-band file GDAL reads. Each band is its own
-#'   source, so reads fan out band-by-band across the reader pool (per-band
-#'   tasks through per-daemon handles: the measured fastest remote shape,
-#'   design/gdal-multiband-fanout.md). Bands are named by their file band
-#'   descriptions when present, else `b<index>`; `grid = NULL` stays on the
-#'   file's native grid, and a supplied `grid` inserts an [align_to()] warp per
-#'   band. Value transforms (e.g. [dequantize_aef()]) go downstream as
-#'   [lazy_map()]s, which fuse onto the read at [collect()].
+#'   source, so reads of a band-interleaved file fan out band-by-band
+#'   across the reader pool (per-band tasks through per-daemon handles:
+#'   the measured fastest remote shape, design/gdal-multiband-fanout.md).
+#'   When the bands share storage (a pixel-interleaved file, a Zarr chunk
+#'   spanning bands), [collect()] reads a window's bands in one task
+#'   instead, so the shared bytes are fetched once. Bands are named by
+#'   their file band descriptions when present, else `b<index>`;
+#'   `grid = NULL` stays on the file's native grid, and a supplied `grid`
+#'   inserts an [align_to()] warp per band. Value transforms (e.g.
+#'   [dequantize_aef()]) go downstream as [lazy_map()]s, which fuse onto
+#'   the read at [collect()].
+#'
+#'   An N-D array with a time dimension, such as a `(time, band, y, x)`
+#'   Zarr array (`ZARR:"<store>":/<array>`), becomes bands x time slices:
+#'   GDAL's classic view flattens it to one band per (time, band) pair, and
+#'   garry reads the dimension tags GDAL puts on each band to rebuild the
+#'   axes. Bands take the band dimension's coordinate values as names
+#'   (else `b<index>`) and slices take the time coordinate's (e.g. years);
+#'   pick slices with [time_sel()].
 #'
 #' All bands share one intermediate representation (IR) graph, so a mask
 #' defined once (see [apply_mask()]) is computed once and dedup'd across bands, and
@@ -160,7 +172,8 @@ LazyDataset <- S7::new_class(
 #'   band names to select (file form, when the file carries band
 #'   descriptions).
 #' @param bands Source bands to select (default: all). File form: an
-#'   integer vector of band indices, mutually exclusive with `assets`.
+#'   integer vector of band indices (positions along the band dimension
+#'   for an N-D array), mutually exclusive with `assets`.
 #'   Table form: a list named by asset, each entry an integer vector of
 #'   that asset's band indices; names on the indices rename the dataset
 #'   bands, e.g. `list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))`.
@@ -481,7 +494,9 @@ lazy_dataset <- function(
 # slice. A vector of paths mosaics first (same-CRS north-up tiles,
 # gdalbuildvrt); tiles the mosaic cannot hold (south-up, or across a
 # projection boundary) stay a multi-path source node that the warper
-# reads together, band by band (gdal_warp_window()). ONE
+# reads together (gdal_warp_window()): band by band, or every band of a
+# window at once when the files' bands share storage (one Zarr array per
+# UTM zone). ONE
 # metadata probe serves every band (.gdal_handle caches the dataset handle),
 # and the probed grid is DECLARED on each band source, so construction costs
 # one header fetch however many bands the file carries. Each band is its own
@@ -513,7 +528,32 @@ lazy_dataset <- function(
   meta <- NULL
   path <- if (length(paths) > 1L) {
     probes <- .source_probes(paths)
-    if (.mosaicable(probes)) {
+    # Several sources warp together band by band (one Zarr array per UTM
+    # zone, say), so they must agree on their bands and, for N-D arrays,
+    # on what each band is.
+    nbs <- vapply(probes, `[[`, integer(1), "nb")
+    if (any(nbs != nbs[[1L]])) {
+      cli::cli_abort(c(
+        "The sources differ in band count ({.val {unique(nbs)}}).",
+        "i" = "Read them separately and combine on a common grid."
+      ))
+    }
+    same_dims <- vapply(
+      probes[-1L],
+      function(p) identical(p$dims, probes[[1L]]$dims),
+      logical(1)
+    )
+    if (!all(same_dims)) {
+      cli::cli_abort(c(
+        "The sources' bands carry different dimension coordinates (e.g. years).",
+        "i" = "Read them separately and combine on a common grid."
+      ))
+    }
+    # A Zarr store stays a multi-path source even in one CRS: a mosaic VRT
+    # hides the store from every Zarr-specific read path (dimension
+    # layout, chunk-sharing collapse, handle budget, single-threaded reads).
+    zarr <- any(vapply(paths, .gdal_is_zarr, logical(1)))
+    if (!zarr && .mosaicable(probes)) {
       gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
     } else {
       meta <- .multi_source_meta(paths, probes)
@@ -526,16 +566,28 @@ lazy_dataset <- function(
   if (is.null(meta)) meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path[[1L]])
   nb <- ds$getRasterCount()
-  descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), "")
-
-  idx <- if (is.null(bands)) seq_len(nb) else as.integer(bands)
-  if (any(idx < 1L | idx > nb)) {
-    cli::cli_abort("{.arg bands} must index 1..{nb} (file has {nb} band{?s}).")
+  # An N-D array (time, band, y, x) read through GDAL's classic view: its
+  # bands index the band dimension and its slices the time dimension.
+  nd <- .nd_layout(.gdal_band_dims(ds))
+  if (is.null(nd)) {
+    descs <- vapply(seq_len(nb), function(b) ds$getDescription(b), "")
+    all_nms <- ifelse(nzchar(descs), descs, paste0("b", seq_len(nb)))
+    if (anyDuplicated(all_nms)) {
+      all_nms <- paste0("b", seq_len(nb))
+    } # degenerate descriptions: index names
+    file_bands <- matrix(seq_len(nb))
+  } else {
+    all_nms <- nd$band_names
+    file_bands <- nd$file_bands
   }
-  nms <- ifelse(nzchar(descs[idx]), descs[idx], paste0("b", idx))
-  if (anyDuplicated(nms)) {
-    nms <- paste0("b", idx)
-  } # degenerate descriptions: index names
+  n_axis <- length(all_nms)
+
+  idx <- if (is.null(bands)) seq_len(n_axis) else as.integer(bands)
+  if (any(idx < 1L | idx > n_axis)) {
+    what <- if (is.null(nd)) "file has" else "band dimension has"
+    cli::cli_abort("{.arg bands} must index 1..{n_axis} ({what} {n_axis} band{?s}).")
+  }
+  nms <- all_nms[idx]
   if (!is.null(assets)) {
     want <- unique(c(assets, mask_asset))
     miss <- setdiff(want, nms)
@@ -578,32 +630,90 @@ lazy_dataset <- function(
     .assert_class(grid, GridSpec, "GridSpec")
   }
   g <- graph_new()
+  read_band <- function(b, nm) {
+    x <- lazy_source(
+      path,
+      band = b,
+      graph = g,
+      grid = meta$grid,
+      block_dim = meta$block_dim,
+      nodata = resolve_nd(nm, b),
+      scale = if (is.null(mask_asset) || !nm %in% mask_asset) {
+        scale
+      } else {
+        FALSE
+      },
+      offset = offset,
+      name = nm
+    )
+    if (!is.null(grid)) {
+      x <- align_to(x, grid, resampling = resolve_rs(nm))
+    }
+    x
+  }
   layers <- Map(
-    function(b, nm) {
-      x <- lazy_source(
-        path,
-        band = b,
-        graph = g,
-        grid = meta$grid,
-        block_dim = meta$block_dim,
-        nodata = resolve_nd(nm, b),
-        scale = if (is.null(mask_asset) || !nm %in% mask_asset) {
-          scale
-        } else {
-          FALSE
-        },
-        offset = offset,
-        name = nm
-      )
-      if (!is.null(grid)) {
-        x <- align_to(x, grid, resampling = resolve_rs(nm))
+    function(j, nm) {
+      fb <- file_bands[j, ]
+      if (is.null(nd)) {
+        return(read_band(fb[[1L]], nm))
       }
-      x
+      stats::setNames(lapply(fb, read_band, nm = nm), nd$time_labels)
     },
     idx,
     nms
   )
   as_dataset(stats::setNames(layers, nms), mask_asset = mask_asset)
+}
+
+# The dataset layout of an N-D array's classic view (see .gdal_band_dims()):
+# with one time-like dimension and at most one other, a list holding the
+# band-axis names (dim values, else b<index>), the time labels (dim
+# values, else indices) and `file_bands`, the file band of each
+# (band, time) pair. NULL for any other shape, which reads as an ordinary
+# multi-band file.
+.nd_layout <- function(bd) {
+  if (is.null(bd)) {
+    return(NULL)
+  }
+  dims <- attr(bd, "dims")
+  is_time <- grepl("^(time|t|date|datetime|year)$", dims, ignore.case = TRUE)
+  if (sum(is_time) != 1L || sum(!is_time) > 1L) {
+    return(NULL)
+  }
+  td <- dims[is_time]
+  bdim <- dims[!is_time]
+  ti <- bd[[paste0(td, "_index")]]
+  bi <- if (length(bdim)) bd[[paste0(bdim, "_index")]] else integer(nrow(bd))
+  t_lev <- sort(unique(ti))
+  b_lev <- sort(unique(bi))
+  file_bands <- matrix(NA_integer_, length(b_lev), length(t_lev))
+  file_bands[cbind(match(bi, b_lev), match(ti, t_lev))] <- bd$band
+  if (anyNA(file_bands)) {
+    return(NULL)
+  }
+  level_names <- function(idx, values, levels, fallback) {
+    v <- values[match(levels, idx)]
+    if (anyNA(v) || anyDuplicated(v)) fallback else v
+  }
+  list(
+    band_names = if (length(bdim)) {
+      level_names(
+        bi,
+        bd[[paste0(bdim, "_value")]],
+        b_lev,
+        paste0("b", b_lev + 1L)
+      )
+    } else {
+      "b1"
+    },
+    time_labels = level_names(
+      ti,
+      bd[[paste0(td, "_value")]],
+      t_lev,
+      as.character(t_lev + 1L)
+    ),
+    file_bands = file_bands
+  )
 }
 
 #' Assemble a lazy dataset from existing rasters.
@@ -698,7 +808,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
     if (!is.null(memo[[key]])) {
       return(memo[[key]])
     }
-    n <- graph_get(graph, id)
+    n <- .stack_node(graph, id)
     if (!"t" %in% names(n@grid@dims)) {
       return(id) # a 2-D input broadcasts across slices
     }
@@ -953,7 +1063,7 @@ LazyDatasetGroups <- S7::new_class(
 # (group_by_time) onto bare cubes.
 .lr_as_dataset <- function(x) {
   labs <- x@grid@labels[["t"]]
-  node <- graph_get(x@graph, x@node_id)
+  node <- .stack_node(x@graph, x@node_id)
   if (
     is.null(labs) ||
       !S7::S7_inherits(node, StackNode) ||

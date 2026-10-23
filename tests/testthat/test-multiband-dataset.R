@@ -8,6 +8,17 @@ test_that("dequantize_aef matches the reference decode on plain numerics", {
   expect_equal(dequantize_aef(x), ((x / 127.5)^2) * sign(x), tolerance = 1e-6)
 })
 
+test_that("dequantize_signed_power matches the reference decode", {
+  x <- c(-127, -100, -50, -1, 0, 1, 50, 100, 127, NaN)
+  ref <- function(x, p, s) sign(x) * (abs(x) / s)^p
+  expect_equal(dequantize_signed_power(x), ref(x, 2, 127.5))
+  expect_equal(dequantize_signed_power(x, power = 3, scale = 100), ref(x, 3, 100))
+  expect_identical(dequantize_olmoearth(x), dequantize_aef(x))
+  expect_true(is.nan(dequantize_olmoearth(NaN)))
+  expect_error(dequantize_signed_power(x, power = 0), "positive")
+  expect_error(dequantize_signed_power(x, scale = c(1, 2)), "single")
+})
+
 test_that("dequantize_esd matches the reference FSQ decode over the full code range", {
   levels <- c(8L, 8L, 8L, 5L, 5L, 5L)
   basis <- cumprod(c(1, levels[-length(levels)]))

@@ -219,3 +219,168 @@ test_that("distributed execution matches memory on a coalesced plan", {
   d$close()
   expect_equal(got, unclass(mem), tolerance = 1e-6, ignore_attr = TRUE)
 })
+
+# A band stack of warps over one file (lazy_dataset() on a target grid)
+# collapses into one multi-band warp. Three target grids cover the three
+# read plans a warp can take: a pixel-aligned crop and a 2x decimation
+# (both served by a direct RasterIO read) and a half-pixel shift (the
+# warped VRT).
+.mb_targets <- function(fx) {
+  crs <- "EPSG:32632"
+  list(
+    crop = grid_spec(crs, c(500100, 4599700, 500450, 4599950), res = 10),
+    decim = grid_spec(crs, c(500000, 4599600, 500600, 4600000), res = 20),
+    shift = grid_spec(crs, c(500005, 4599705, 500455, 4599955), res = 10)
+  )
+}
+
+.mb_warped <- function(fx, grid, resampling = "near", coalesce = TRUE) {
+  old <- options(garry.read_coalesce = coalesce)
+  on.exit(options(old), add = TRUE)
+  ds <- lazy_dataset(fx$path, grid, resampling = resampling)
+  p <- plan_lazy(stack_bands(ds))
+  list(plan = p, value = execute_plan(p))
+}
+
+test_that("a band stack of same-file warps collapses to one multi-band warp", {
+  fx <- fixture_multiband()
+  for (nm in names(.mb_targets(fx))) {
+    r <- .mb_warped(fx, .mb_targets(fx)[[nm]])
+    kinds <- vapply(r$plan@stages, function(s) s@kind, character(1))
+    # the warp's source keeps a (warp-only, never read) source stage
+    expect_identical(sort(kinds), c("source_read", "warp"), label = nm)
+    w <- graph_get(r$plan@graph, r$plan@stages[[which(kinds == "warp")]]@members[[1L]])
+    expect_s7_class(w, WarpNode)
+    expect_identical(w@bands, seq_len(fx$nb))
+  }
+})
+
+test_that("collapsed warps read the same values as per-band warps", {
+  fx <- fixture_multiband()
+  for (nm in names(.mb_targets(fx))) {
+    g <- .mb_targets(fx)[[nm]]
+    rs <- if (nm == "decim") "average" else "near"
+    on <- .mb_warped(fx, g, rs, coalesce = TRUE)$value
+    off <- .mb_warped(fx, g, rs, coalesce = FALSE)$value
+    expect_identical(dim(on), c(fx$nb, g@dims[["y"]], g@dims[["x"]]))
+    expect_equal(on, off, tolerance = 0, label = nm)
+  }
+  # the crop is a plain window of each band
+  crop <- .mb_warped(fx, .mb_targets(fx)$crop)$value
+  for (b in seq_len(fx$nb)) {
+    expect_equal(crop[b, , ], unclass(fx$vals[[b]])[6:30, 11:45],
+                 tolerance = 1e-6, ignore_attr = TRUE)
+  }
+})
+
+test_that("warps that differ in grid or resampling stay per band", {
+  fx <- fixture_multiband()
+  tg <- .mb_targets(fx)
+  g <- graph_new()
+  w1 <- align_to(lazy_source(fx$path, band = 1L, graph = g), tg$crop)
+  w2 <- align_to(lazy_source(fx$path, band = 2L, graph = g), tg$crop,
+                 resampling = "bilinear")
+  p <- plan_lazy(lazy_stack(list(w1, w2), along = "band"))
+  kinds <- vapply(p@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds == "warp"), 2L)
+})
+
+test_that("distributed execution matches memory on collapsed warps", {
+  skip_on_cran()
+  fx <- fixture_multiband()
+  local_pools(2, 1, gdal_config = TRUE)
+  old <- options(garry.chunk_target_px = 200)
+  on.exit(options(old), add = TRUE)
+  for (nm in c("crop", "shift")) {
+    ds <- lazy_dataset(fx$path, .mb_targets(fx)[[nm]])
+    lr <- reduce_over(stack_bands(ds), function(x, dims)
+      g_sum(x * 0.25, dims = dims, nan_rm = FALSE), over = "band")
+    p <- plan_lazy(lr)
+    expect_equal(execute_plan_mirai(p), execute_plan(p), tolerance = 1e-6,
+                 label = nm)
+    expect_equal(collect(stack_bands(ds), distributed = TRUE),
+                 collect(stack_bands(ds), distributed = FALSE),
+                 tolerance = 0, ignore_attr = TRUE, label = nm)
+  }
+})
+
+test_that("a band-interleaved file keeps its per-band warps", {
+  # each band is its own run of bytes, so per-band tasks over the pool
+  # stay the read shape (design/gdal-multiband-fanout.md)
+  fx <- fixture_multiband()
+  f <- withr::local_tempfile(fileext = ".tif")
+  gdalraster::translate(fx$path, f, cl_arg = c("-co", "INTERLEAVE=BAND"),
+                        quiet = TRUE)
+  expect_false(.bands_share_blocks(f))
+  expect_true(.bands_share_blocks(fx$path))
+  ds <- lazy_dataset(f, .mb_targets(fx)$crop)
+  p <- plan_lazy(stack_bands(ds))
+  kinds <- vapply(p@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds == "warp"), fx$nb)
+})
+
+# lazy_map() over a dataset applies one elementwise fn per band, so the
+# band stack's parents are maps, not reads. The collapse composes the
+# (chain of) identical maps into one map over the collapsed read.
+test_that("a per-band map chain over one file collapses into one read", {
+  fx <- fixture_multiband()
+  tg <- .mb_targets(fx)$crop
+  build <- function(coalesce) {
+    old <- options(garry.read_coalesce = coalesce)
+    on.exit(options(old), add = TRUE)
+    ds <- lazy_map(lazy_dataset(fx$path, tg), fn = function(x) x * 2 + 1)
+    ds <- lazy_map(ds, fn = function(x) sqrt(x), dtype = "f32")
+    p <- plan_lazy(stack_bands(ds))
+    list(plan = p, value = execute_plan(p))
+  }
+  on <- build(TRUE)
+  kinds <- vapply(on$plan@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds == "warp"), 1L)
+  w <- graph_get(on$plan@graph, on$plan@stages[[which(kinds == "warp")]]@members[[1L]])
+  expect_identical(w@bands, seq_len(fx$nb))
+  expect_equal(on$value, build(FALSE)$value, tolerance = 0)
+  expect_equal(on$value[3, , ], sqrt(unclass(fx$vals[[3]])[6:30, 11:45] * 2 + 1),
+               tolerance = 1e-6, ignore_attr = TRUE)
+})
+
+test_that("maps that differ per band, or a band-interleaved file, stay per band", {
+  fx <- fixture_multiband()
+  tg <- .mb_targets(fx)$crop
+  ds <- lazy_dataset(fx$path, tg)
+  part <- lazy_map(ds, fn = function(x) x + 1, bands = c("b1", "b2"))
+  p <- plan_lazy(stack_bands(part))
+  kinds <- vapply(p@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds == "warp"), fx$nb)
+  f <- withr::local_tempfile(fileext = ".tif")
+  gdalraster::translate(fx$path, f, cl_arg = c("-co", "INTERLEAVE=BAND"),
+                        quiet = TRUE)
+  p2 <- plan_lazy(stack_bands(lazy_map(lazy_dataset(f, tg), fn = function(x) x + 1)))
+  kinds2 <- vapply(p2@stages, function(s) s@kind, character(1))
+  expect_identical(sum(kinds2 == "warp"), fx$nb)
+})
+
+test_that("a graph rewritten by a hoist still imports into another graph", {
+  fx <- fixture_multiband()
+  tg <- .mb_targets(fx)$crop
+  x <- stack_bands(lazy_map(lazy_dataset(fx$path, tg), fn = function(v) v * 2))
+  first <- collect(x, distributed = FALSE) # rewrites x's graph in place
+  y <- stack_bands(lazy_dataset(fx$path, tg)) # another graph, same grid
+  z <- y + x # imports x's rewritten subgraph into y's graph
+  expect_equal(collect(z, distributed = FALSE), first * 1.5, tolerance = 1e-6)
+})
+
+test_that(".topo_order keeps ascending ids and puts late parents first", {
+  g <- graph_new()
+  a <- graph_add(g, SourceNode, parents = integer(0),
+                 grid = grid_spec("EPSG:32632", c(0, 0, 10, 10), res = 1),
+                 path = "x.tif", band = 1L, nodata = numeric(0),
+                 block_dim = c(10L, 10L), open_options = character(0))
+  ga <- graph_get(g, a)@grid
+  b <- graph_add(g, MapNode, parents = a, grid = ga, fn = identity)
+  c2 <- graph_add(g, MapNode, parents = b, grid = ga, fn = identity)
+  expect_identical(.topo_order(g, c(c2, a, b)), c(a, b, c2))
+  # rewrite b in place over a new parent d (larger id)
+  d <- graph_add(g, MapNode, parents = a, grid = ga, fn = identity)
+  graph_replace(g, b, MapNode(id = b, parents = d, grid = ga, fn = identity))
+  expect_identical(.topo_order(g, c(a, b, c2, d)), c(a, d, b, c2))
+})

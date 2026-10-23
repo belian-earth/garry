@@ -95,3 +95,95 @@ fixture_multiband <- function() {
   .fixture_env$mb <- list(path = f, nx = nx, ny = ny, nb = nb, vals = vals)
   .fixture_env$mb
 }
+
+# A (time, band, y, x) Int8 Zarr v3 array, the OlmoEarth layout in
+# miniature: 3 years x 4 bands of 20 x 30 px at 10 m in EPSG:32632, chunks
+# spanning 2 bands, fill value -128 (nodata) at the top-left pixel of
+# every plane. Written by hand (uncompressed `bytes` codec) so no Zarr
+# writer is needed. Georeferenced twice over: the spatial/proj Zarr
+# conventions (GDAL >= 3.13) and x/y coordinate arrays plus a _CRS
+# attribute (older GDAL). Returns the store, its ZARR: connection string
+# and the values as an R array [t, b, y, x].
+#
+# `epsg`, `x0`, `y1` and `shift` (added to every value) place a second
+# store elsewhere, e.g. in the next UTM zone for cross-zone reads;
+# `year0` is the first year of the time coordinate.
+fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
+                            shift = 0L, year0 = 2021L) {
+  key <- paste("zarr", epsg, x0, y1, shift, year0)
+  if (!is.null(.fixture_env[[key]])) return(.fixture_env[[key]])
+  store <- file.path(
+    tempdir(),
+    sprintf("garry-fixture-nd-%d-%d-%d-%d.zarr", epsg, round(x0), shift, year0)
+  )
+  nt <- 3L; nb <- 4L; ny <- 20L; nx <- 30L; chunk <- c(1L, 2L, 10L, 15L)
+  res <- 10
+  js <- function(x, path) {
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    writeLines(jsonlite::toJSON(x, auto_unbox = TRUE, digits = NA), path)
+  }
+  raw_codec <- list(list(name = "bytes", configuration = list(endian = "little")))
+  key_enc <- list(name = "default", configuration = list(separator = "/"))
+  js(list(
+    zarr_format = 3L, node_type = "group",
+    attributes = list(
+      zarr_conventions = list(
+        list(name = "spatial", uuid = "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"),
+        list(name = "proj", uuid = "f17cb550-5864-4468-aeb7-f3180cfb622f")
+      ),
+      `proj:code` = paste0("EPSG:", epsg),
+      `spatial:dimensions` = c("y", "x"),
+      `spatial:transform` = c(res, 0, x0, 0, -res, y1),
+      `spatial:shape` = c(ny, nx),
+      `spatial:registration` = "pixel"
+    )
+  ), file.path(store, "zarr.json"))
+  coord <- function(name, vals, dtype, size) {
+    js(list(
+      zarr_format = 3L, node_type = "array", shape = I(length(vals)),
+      data_type = dtype,
+      chunk_grid = list(name = "regular",
+                        configuration = list(chunk_shape = I(length(vals)))),
+      chunk_key_encoding = key_enc, fill_value = 0, codecs = raw_codec,
+      dimension_names = I(name), attributes = structure(list(), names = character(0))
+    ), file.path(store, name, "zarr.json"))
+    f <- file.path(store, name, "c", "0")
+    dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+    writeBin(vals, f, size = size, endian = "little")
+  }
+  coord("time", year0 + seq_len(nt) - 1L, "int32", 4L)
+  coord("y", y1 - res * (seq_len(ny) - 0.5), "float64", 8L)
+  coord("x", x0 + res * (seq_len(nx) - 0.5), "float64", 8L)
+  js(list(
+    zarr_format = 3L, node_type = "array", shape = c(nt, nb, ny, nx),
+    data_type = "int8",
+    chunk_grid = list(name = "regular", configuration = list(chunk_shape = chunk)),
+    chunk_key_encoding = key_enc, fill_value = -128L,
+    codecs = list(list(name = "bytes")),
+    dimension_names = c("time", "band", "y", "x"),
+    attributes = list(`_CRS` = list(url = paste0("http://www.opengis.net/def/crs/EPSG/0/", epsg)))
+  ), file.path(store, "data", "zarr.json"))
+  vals <- array(0L, c(nt, nb, ny, nx))
+  for (t in seq_len(nt)) for (b in seq_len(nb)) {
+    vals[t, b, , ] <- outer(seq_len(ny), seq_len(nx),
+                            function(y, x) (t * 40L + b * 10L + y + x + shift) %% 250L - 125L)
+  }
+  vals[, , 1, 1] <- -128L
+  nc <- c(nt, nb, ny, nx) %/% chunk
+  for (ct in seq_len(nc[1]) - 1L) for (cb in seq_len(nc[2]) - 1L)
+    for (cy in seq_len(nc[3]) - 1L) for (cx in seq_len(nc[4]) - 1L) {
+      blk <- vals[ct * chunk[1] + seq_len(chunk[1]), cb * chunk[2] + seq_len(chunk[2]),
+                  cy * chunk[3] + seq_len(chunk[3]), cx * chunk[4] + seq_len(chunk[4]),
+                  drop = FALSE]
+      f <- file.path(store, "data", "c", ct, cb, cy, cx)
+      dir.create(dirname(f), recursive = TRUE, showWarnings = FALSE)
+      # C order: the last dim varies fastest
+      writeBin(as.vector(aperm(blk, 4:1)), f, size = 1L)
+    }
+  .fixture_env[[key]] <- list(
+    store = store,
+    path = sprintf('ZARR:"%s":/data', store),
+    vals = vals
+  )
+  .fixture_env[[key]]
+}

@@ -11,7 +11,8 @@ WarpNode(
   grid = GridSpec(),
   role = character(0),
   target_grid = GridSpec(),
-  resampling = character(0)
+  resampling = character(0),
+  bands = integer(0)
 )
 }
 \arguments{
@@ -28,6 +29,11 @@ Pure metadata: never read by the planner or executors; surfaced by
 \item{target_grid}{\code{GridSpec} to warp onto.}
 
 \item{resampling}{Resampling method ("nearest", "bilinear", "cubic", ...).}
+
+\item{bands}{Source bands this warp reads, overriding its parent
+source's band. Length 0 (the default) reads the parent's band; the
+planner sets it when it collapses a band stack of warps over one file
+into a single multi-band warp.}
 }
 \value{
 A \code{WarpNode}.

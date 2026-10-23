@@ -2,17 +2,19 @@
 % Please edit documentation in R/lazy_raster.R
 \name{time_sel}
 \alias{time_sel}
-\title{Select time slices of a stacked raster by label.}
+\title{Select time slices of a stacked raster or a dataset by label.}
 \usage{
 time_sel(x, sel)
 }
 \arguments{
-\item{x}{A \code{LazyRaster} stacked along \code{t} with labels.}
+\item{x}{A \code{LazyRaster} stacked along \code{t} with labels, or a
+\code{LazyDataset}.}
 
 \item{sel}{Character labels/prefixes, or integer/logical positions.}
 }
 \value{
-A \code{LazyRaster} (the sub-stack, or the single matching layer).
+A \code{LazyRaster} (the sub-stack, or the single matching layer),
+or a \code{LazyDataset} holding the matching slices.
 }
 \description{
 Label selection on the \code{t} axis (the \code{.sel(time = ...)} analog):
@@ -20,6 +22,8 @@ each selector matches its exact label, or failing that every label it
 prefixes (\code{"2023-06"} selects every June slice); the matches are
 combined. Integer/logical positions work too. A selector that matches
 nothing is an error.
-The raster must be a \code{lazy_stack} along \code{t} whose layers were named
-(slice dates); a single match returns the bare layer.
+A raster must be a \code{lazy_stack} along \code{t} whose layers were named
+(slice dates); a single match returns the bare layer. A dataset keeps
+the matching slices of every band (each band's slices are labelled by
+date, or by the time coordinate of an N-D source such as a Zarr array).
 }

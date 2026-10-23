@@ -494,7 +494,8 @@ NULL
       parents = parents,
       grid = cg,
       target_grid = cg,
-      resampling = n@resampling
+      resampling = n@resampling,
+      bands = n@bands
     )
   } else {
     NULL
@@ -510,7 +511,9 @@ NULL
     return(lr)
   }
   g <- lr@graph
-  nodes <- lapply(.reachable(g, lr@node_id), function(i) graph_get(g, i))
+  nodes <- lapply(.topo_order(g, .reachable(g, lr@node_id)), function(i) {
+    graph_get(g, i)
+  })
   srcs <- Filter(function(n) S7::S7_inherits(n, SourceNode), nodes)
   if (
     !length(srcs) ||

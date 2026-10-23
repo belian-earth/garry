@@ -74,7 +74,8 @@ used when \code{scale} is numeric; defaults to 0. Ignored when \code{scale} is
 logical.}
 
 \item{bands}{Source bands to select (default: all). File form: an
-integer vector of band indices, mutually exclusive with \code{assets}.
+integer vector of band indices (positions along the band dimension
+for an N-D array), mutually exclusive with \code{assets}.
 Table form: a list named by asset, each entry an integer vector of
 that asset's band indices; names on the indices rename the dataset
 bands, e.g. \code{list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))}.
@@ -99,13 +100,25 @@ file carries no band descriptions; \code{bands} selects and renames them.
 per file band, one time slice. This is the multi-band raster entry --
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 GDAL driver, any multi-band file GDAL reads. Each band is its own
-source, so reads fan out band-by-band across the reader pool (per-band
-tasks through per-daemon handles: the measured fastest remote shape,
-design/gdal-multiband-fanout.md). Bands are named by their file band
-descriptions when present, else \verb{b<index>}; \code{grid = NULL} stays on the
-file's native grid, and a supplied \code{grid} inserts an \code{\link[=align_to]{align_to()}} warp per
-band. Value transforms (e.g. \code{\link[=dequantize_aef]{dequantize_aef()}}) go downstream as
-\code{\link[=lazy_map]{lazy_map()}}s, which fuse onto the read at \code{\link[=collect]{collect()}}.
+source, so reads of a band-interleaved file fan out band-by-band
+across the reader pool (per-band tasks through per-daemon handles:
+the measured fastest remote shape, design/gdal-multiband-fanout.md).
+When the bands share storage (a pixel-interleaved file, a Zarr chunk
+spanning bands), \code{\link[=collect]{collect()}} reads a window's bands in one task
+instead, so the shared bytes are fetched once. Bands are named by
+their file band descriptions when present, else \verb{b<index>};
+\code{grid = NULL} stays on the file's native grid, and a supplied \code{grid}
+inserts an \code{\link[=align_to]{align_to()}} warp per band. Value transforms (e.g.
+\code{\link[=dequantize_aef]{dequantize_aef()}}) go downstream as \code{\link[=lazy_map]{lazy_map()}}s, which fuse onto
+the read at \code{\link[=collect]{collect()}}.
+
+An N-D array with a time dimension, such as a \verb{(time, band, y, x)}
+Zarr array (\verb{ZARR:"<store>":/<array>}), becomes bands x time slices:
+GDAL's classic view flattens it to one band per (time, band) pair, and
+garry reads the dimension tags GDAL puts on each band to rebuild the
+axes. Bands take the band dimension's coordinate values as names
+(else \verb{b<index>}) and slices take the time coordinate's (e.g. years);
+pick slices with \code{\link[=time_sel]{time_sel()}}.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask

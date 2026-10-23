@@ -47,8 +47,9 @@ NULL
 #' @param xy Points: a [wk::xy()] vector (its CRS supplies `xy_srs`), or a
 #'   two-column matrix/data frame as gdalraster expects.
 #' @param bands Bands to extract (default all): band names or positions
-#'   for a `LazyDataset`, file band indices for a path or `GDALRaster`.
-#'   Ignored for a `LazyRaster`, which reads its own band.
+#'   for a `LazyDataset` or a materialised `(band, y, x)` cube, file band
+#'   indices for a path or `GDALRaster`. Ignored for a single-band
+#'   `LazyRaster`, which reads its own band.
 #' @param interp Interpolation: `NULL`/`"nearest"` (default), `"bilinear"`,
 #'   `"cubic"`, `"cubicspline"`.
 #' @param ... Passed to [gdalraster::pixel_extract()] (`krnl_dim`,
@@ -91,7 +92,7 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
       "i" = "Extraction reads only the blocks holding points, so it needs the cube on disk -- and you almost always want to keep it."
     ))
   }
-  if (S7::S7_inherits(x, LazyDataset) && !is.null(bands)) {
+  if ((S7::S7_inherits(x, LazyDataset) || length(src) > 1L) && !is.null(bands)) {
     keep <- if (is.character(bands)) bands else names(src)[bands]
     unknown <- setdiff(keep, names(src))
     if (length(unknown) || anyNA(keep)) {
@@ -115,7 +116,7 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
     }
   }
   out <- do.call(cbind, cols[names(src)])
-  if (S7::S7_inherits(x, LazyRaster)) {
+  if (S7::S7_inherits(x, LazyRaster) && identical(names(src), "value")) {
     colnames(out) <- tools::file_path_sans_ext(basename(src[[1L]]$path))
   }
   if (as_df) as.data.frame(out) else out
@@ -159,6 +160,12 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
 # is exactly what materialise() hands back, so sampling its output costs
 # nothing but the read.
 .px_local_sources <- function(x) {
+  if (S7::S7_inherits(x, LazyRaster)) {
+    cube <- .px_cube_sources(x)
+    if (!is.null(cube)) {
+      return(cube)
+    }
+  }
   bands <- if (S7::S7_inherits(x, LazyDataset)) {
     lapply(x@bands, function(b) if (length(b) == 1L) b[[1L]] else NULL)
   } else {
@@ -192,4 +199,46 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
     )
   }
   out
+}
+
+# A (band, y, x) cube on disk, as materialise() returns one: a band stack
+# of single-band sources over local files, or the multi-band source a
+# plan collapses that stack into (in place). One source per band, named
+# by the band labels; NULL for anything else.
+.px_cube_sources <- function(x) {
+  n <- graph_get(x@graph, x@node_id)
+  nodes <- if (S7::S7_inherits(n, StackNode) && identical(n@along, "band")) {
+    lapply(n@parents, function(p) graph_get(x@graph, p))
+  } else if (S7::S7_inherits(n, SourceNode) && length(n@band) > 1L) {
+    lapply(n@band, function(b) {
+      n@band <- b
+      n
+    })
+  } else {
+    return(NULL)
+  }
+  ok <- vapply(
+    nodes,
+    function(s) {
+      S7::S7_inherits(s, SourceNode) && length(s@path) == 1L &&
+        length(s@band) == 1L && !.gdal_is_remote(s@path)
+    },
+    logical(1)
+  )
+  if (!all(ok)) {
+    return(NULL)
+  }
+  labs <- x@grid@labels$band %||% paste0("b", seq_along(nodes))
+  stats::setNames(
+    lapply(nodes, function(s) {
+      list(
+        path = s@path,
+        band = as.integer(s@band),
+        nodata = s@nodata,
+        scale = s@scale,
+        offset = s@offset
+      )
+    }),
+    labs
+  )
 }
