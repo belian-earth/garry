@@ -769,6 +769,13 @@ execute_plan_mirai <- function(
           },
           "f32"
         )
+      # A fused kernel runs at read granularity: edge read windows grow
+      # to the modal window like edge compute chunks (.apply_fuse).
+      fuse_grows <- !is.null(fspec) &&
+        .stage_grows_edges(
+          graph,
+          Filter(function(st) st@id == fspec$cid, plan@stages)[[1L]]
+        )
       fetch_deps <- character(0)
       read_pool <- "read"
       # A FUSED read's kernel working set rides the in-flight compute
@@ -851,6 +858,9 @@ execute_plan_mirai <- function(
             k2 <- skey
             oo <- roo
             fs <- fspec
+            if (fuse_grows) {
+              fs$grow <- .chunk_grow(cg, core)
+            }
             oid2 <- oid
             rr <- raw_in
             sr <- use_raw
@@ -941,6 +951,9 @@ execute_plan_mirai <- function(
             k2 <- skey
             oo <- roo
             fs <- fspec
+            if (fuse_grows) {
+              fs$grow <- .chunk_grow(cg, core)
+            }
             oid2 <- oid
             rr <- raw_in
             sr <- use_raw
@@ -1059,16 +1072,8 @@ execute_plan_mirai <- function(
       # Edge chunks run the stage's modal kernel, warm from the
       # pre-drain compile, on inputs grown to the modal shape
       # (.sv_grow), instead of every daemon compiling a kernel for each
-      # edge shape (a robust Kalman stage: ~2.5 s a shape). Compute
-      # stages only: a spatial reduction's partials would count the
-      # padding. A patch (model) member is left to its own edge handling.
-      pad_edges <- isTRUE(garry_opt("pad_edge_chunks")) &&
-        s@kind == "compute" &&
-        !any(vapply(
-          s@members,
-          function(id) S7::S7_inherits(graph_get(graph, id), PatchNode),
-          logical(1)
-        ))
+      # edge shape (a robust Kalman stage: ~2.5 s a shape).
+      pad_edges <- .stage_grows_edges(graph, s)
       # Scan kernels pre-warm too: the broadcast is TARGETED at the
       # K designated scan profiles only (the validated <= 2 concurrent
       # pre-drain compiles, daemon-exact at any pool width).
@@ -1170,13 +1175,7 @@ execute_plan_mirai <- function(
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- .glue("s{sid}_c{jj}")
           sr <- use_raw
-          grow <- if (pad_edges) {
-            g <- as.integer(c(
-              cd_eff[[2L]] - it$y_size[[jj]],
-              cd_eff[[1L]] - it$x_size[[jj]]
-            ))
-            if (any(g > 0L)) g
-          }
+          grow <- if (pad_edges) .chunk_grow(s@chunks, it[jj, ])
           wqs <- if (
             !is.null(wq) &&
               length(wq_keys_of[[.key(s@id)]] %||% character(0))

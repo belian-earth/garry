@@ -135,3 +135,49 @@ test_that("spatial reductions are not grown at edge chunks", {
     )
   }
 })
+
+test_that("fused read windows grow to the modal window", {
+  skip_on_os("mac") # fused-on-reader hang on macOS ARM (test-compute-on-read)
+  local_pools(2, 1)
+  # rules placement fuses the mask chain onto its reads; small read
+  # windows give the source stage a bottom edge window
+  withr::local_options(
+    garry.chunk_target_px = 375,
+    garry.read_target_px = 1000,
+    garry.placement = "rules"
+  )
+  f <- fixture_gradient_f32()
+  qa <- lazy_source(f)
+  mask <- focal_map(
+    lazy_map(qa, dtype = "f32", fn = function(x) g_cast(x > 0.5, "f32")),
+    radius = 1L,
+    fn = function(sh) Reduce(`*`, sh)
+  )
+  b <- lazy_source(f, graph = qa@graph)
+  masked <- lazy_map(b, mask, dtype = "f32", fn = function(x, m) {
+    g_ifelse(m > 0.5, NaN, x)
+  })
+  out <- reduce_over(
+    lazy_stack(list(masked, masked * 2)),
+    "median",
+    "t",
+    nan_rm = TRUE
+  )
+  p <- plan_lazy(out)
+  src_shapes <- unlist(lapply(p@stages, function(s) {
+    if (s@kind == "source_read") chunk_iter(s@chunks)$shape_id
+  }))
+  expect_true("bottom" %in% src_shapes)
+  run <- function(pad) {
+    withr::local_options(garry.pad_edge_chunks = pad)
+    collect(out, distributed = TRUE)
+  }
+  grown <- run(TRUE)
+  expect_identical(grown, run(FALSE))
+  expect_equal(
+    grown,
+    collect(out, distributed = FALSE),
+    tolerance = 1e-6,
+    ignore_attr = TRUE
+  )
+})

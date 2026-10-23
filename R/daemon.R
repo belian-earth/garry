@@ -279,6 +279,10 @@ NULL
 # 4 tiles hold ~0.5 GB), so a reader fleet fits the in-flight byte
 # budget several times over instead of serialising on it. At most two
 # distinct tile heights occur, so the jit cache compiles twice.
+#
+# `fuse$grow` = c(rows, cols) grows an edge read window to the stage's
+# modal window shape and crops the export back (.sv_grow), so every
+# window runs the one kernel.
 .apply_fuse <- function(m, fuse, store_raw = FALSE) {
   if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
@@ -287,6 +291,9 @@ NULL
   if (is.null(jf)) {
     jf <- g_jit(fuse$fn)
     .daemon_cache[[fuse$ck]] <- jf
+  }
+  if (!is.null(fuse$grow)) {
+    m <- .sv_grow(m, fuse$grow)
   }
   up <- if (.sv_is(m)) {
     g_upload_raw(m, "f32", .sv_dim(m))
@@ -325,8 +332,12 @@ NULL
   } else {
     g_download(out_dev)
   }
+  if (!is.null(fuse$grow)) {
+    out <- .sv_crop(out, fuse$grow)
+  }
+  # the caller's deferred pass (.daemon_gc_after) collects the device
+  # buffers; a full gc here ran after every fused window
   rm(res, out_dev, up)
-  gc(FALSE)
   out
 }
 
