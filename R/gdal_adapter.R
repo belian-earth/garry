@@ -2012,6 +2012,15 @@ gdal_warp_window <- function(
   thunk()
 }
 
+# Cap this process's GDAL block cache at `mb` MB. set_cache_max()
+# applies whether or not GDAL has initialised its cache, unlike the
+# GDAL_CACHEMAX config option, which is read once at first use.
+# garry_daemons() broadcasts it to every pool.
+.gdal_cache_cap <- function(mb) {
+  gdalraster::set_cache_max(mb * 2^20)
+  invisible(NULL)
+}
+
 #' Apply garry's default GDAL configuration for remote COG reads.
 #'
 #' Sets the GDAL config options garry's internal warp readers and

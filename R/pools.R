@@ -599,7 +599,9 @@ NULL
 #'   (default `TRUE`). The host session's GDAL config is never changed;
 #'   call [garry_gdal_config()] yourself for host-side discovery. Set
 #'   `FALSE` to leave the daemons on GDAL's defaults too (e.g. when
-#'   mixing local multi-file reads).
+#'   mixing local multi-file reads). Either way every daemon's GDAL
+#'   block cache is capped at `garry_opt("gdal_cachemax_mb")`: GDAL's
+#'   own default is 5% of RAM per process.
 #' @param ... Passed to `mirai::daemons()` for every pool; `dispatcher` is
 #'   garry's to set.
 #' @return Invisibly, `list(read =, compute =)`.
@@ -756,6 +758,20 @@ garry_daemons <- function(
       c(length(p_read), length(.garry_state$comp_pids), length(p_write))
     ),
     .garry_state$pool_pids
+  )
+  # GDAL's block cache defaults to 5% of RAM PER PROCESS: ~12 GB on a
+  # 240 GB worker for each compute daemon and the writer, which read and
+  # write through GDAL but never ran garry_gdal_config(). Cap every pool
+  # at garry.gdal_cachemax_mb (.gdal_cache_cap applies it immediately).
+  .pool_broadcast(
+    quote(asNamespace("garry")$.gdal_cache_cap(mb)),
+    profiles = c(
+      if (read > 0L) "garry_read",
+      .comp_profiles(),
+      if (read > 0L || compute > 0L) "garry_write"
+    ),
+    mb = as.numeric(garry_opt("gdal_cachemax_mb")),
+    quiet = TRUE
   )
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L) {

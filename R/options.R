@@ -140,7 +140,7 @@
   gdal_cachemax_mb = list(
     default = 256,
     tier = "tuning",
-    desc = "GDAL block cache (MB per process) on read daemons",
+    desc = "GDAL block cache (MB per process) on every garry daemon",
     check = .opt_num(min = 1)
   ),
   zarr_handle_mb = list(

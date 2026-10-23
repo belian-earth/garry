@@ -39,7 +39,9 @@ GDAL block cache.}
 (default \code{TRUE}). The host session's GDAL config is never changed;
 call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself for host-side discovery. Set
 \code{FALSE} to leave the daemons on GDAL's defaults too (e.g. when
-mixing local multi-file reads).}
+mixing local multi-file reads). Either way every daemon's GDAL
+block cache is capped at \code{garry_opt("gdal_cachemax_mb")}: GDAL's
+own default is 5\% of RAM per process.}
 
 \item{...}{Passed to \code{mirai::daemons()} for every pool; \code{dispatcher} is
 garry's to set.}

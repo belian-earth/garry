@@ -54,6 +54,10 @@
 * Memory budgets respect a container's limit. Inside a container with its
   own cgroup namespace (Docker's default on cgroup v2) and on cgroup v1,
   garry found no limit and budgeted against the host's RAM.
+* `garry_daemons()` caps the GDAL block cache of every daemon at
+  `garry_opt("gdal_cachemax_mb")`, not only the read daemons'. The compute
+  daemons and the writer were on GDAL's default of 5% of RAM each, about
+  12 GB apiece on a 240 GB machine.
 
 ## Observability
 

@@ -104,9 +104,19 @@ test_that("garry_task_report summarises role, host, cgroup, shm and budget rows"
   expect_equal(r$min_comp_budget_mb, 576)
 })
 
-test_that("pools record each daemon's role", {
+test_that("pools record daemon roles and cap every daemon's GDAL cache", {
+  withr::local_options(garry.gdal_cachemax_mb = 200)
   local_pools(1, 1)
   st <- garry:::.garry_state
   expect_setequal(names(st$pid_role), as.character(st$pool_pids))
   expect_setequal(unname(st$pid_role), c("read", "comp", "write"))
+  cache_mb <- function(p) {
+    mirai::mirai(
+      as.numeric(format(gdalraster::get_cache_max("MB"))) / 1.048576,
+      .compute = p
+    )[]
+  }
+  for (p in c("garry_read", garry:::.comp_profiles(), "garry_write")) {
+    expect_equal(cache_mb(p), 200, tolerance = 0.01)
+  }
 })
