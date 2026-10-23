@@ -748,7 +748,7 @@ garry_daemons <- function(
   # 240 GB worker for each compute daemon and the writer, which read and
   # write through GDAL but never ran garry_gdal_config(). Cap every pool
   # at garry.gdal_cachemax_mb (.gdal_cache_cap applies it immediately).
-  .pool_broadcast(
+  capped <- .pool_broadcast(
     quote(asNamespace("garry")$.gdal_cache_cap(mb)),
     profiles = c(
       if (read > 0L) "garry_read",
@@ -758,6 +758,16 @@ garry_daemons <- function(
     mb = as.numeric(garry_opt("gdal_cachemax_mb")),
     quiet = TRUE
   )
+  failed <- Filter(
+    function(r) inherits(r, c("miraiError", "errorValue")),
+    capped
+  )
+  if (length(failed)) {
+    cli::cli_warn(c(
+      "Could not cap the GDAL block cache on {length(failed)} daemon{?s}.",
+      "i" = "They keep GDAL's default of 5% of RAM each: {as.character(failed[[1L]])}"
+    ))
+  }
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L) {
     .pool_affinity_apply("garry_read", read)
