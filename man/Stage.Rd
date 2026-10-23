@@ -17,7 +17,8 @@ Stage(
   input_nodes = integer(0),
   exports = integer(0),
   out_pad = 0L,
-  export_pads = integer(0)
+  export_pads = integer(0),
+  strip_rows = 0L
 )
 }
 \arguments{
@@ -60,6 +61,10 @@ materialise first. Inputs arrive padded to \code{halo + out_pad}.}
 \item{export_pads}{Integer vector parallel to \code{exports}: the padding
 each export value carries (post-focal exports carry less than
 pre-focal ones). Empty means all zero.}
+
+\item{strip_rows}{Rows per strip when \code{fn} runs a compute stage's
+members over row strips of each chunk (see \code{garry.scan_strip_px});
+0 runs the whole chunk at once.}
 }
 \value{
 A \code{Stage}.

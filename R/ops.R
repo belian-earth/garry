@@ -719,6 +719,59 @@ g_slice_t <- function(x, from, to) {
   do.call(anvl::nv_concatenate, c(xs, list(axis = as.integer(axis))))
 }
 
+# Apply `f` (a list of traced (outer.., y, x) arrays -> a list of the
+# same) over row strips of `rows` rows inside one program: the inputs
+# are cut into strips along a new leading axis (the last strip padded
+# with zero rows) and a scan applies `f` to one strip per step; the
+# padded rows are cut from the outputs. Exact for an `f` that is
+# pointwise in y and x (.strip_stage_fn). Inputs that disagree on their
+# y and x extents, or no taller than a strip, run whole.
+.g_map_row_strips <- function(f, inputs, rows) {
+  yx <- lapply(inputs, function(v) utils::tail(.g_shape(v), 2L))
+  ny <- yx[[1L]][[1L]]
+  nx <- yx[[1L]][[2L]]
+  if (ny <= rows || length(unique(yx)) != 1L) {
+    return(f(inputs))
+  }
+  ns <- as.integer(ceiling(ny / rows))
+  pad <- ns * rows - ny
+  # (outer.., ny, nx) -> (ns, outer.., rows, nx)
+  to_strips <- function(v) {
+    n <- length(.g_shape(v))
+    if (pad > 0L) {
+      v <- anvl::nv_pad(
+        v,
+        .g_scalar_like(v, 0),
+        low = rep(0L, n),
+        high = c(rep(0L, n - 2L), pad, 0L)
+      )
+    }
+    outer <- .g_shape(v)[seq_len(n - 2L)]
+    v <- .g_reshape_rm(v, c(outer, ns, rows, nx))
+    if (n == 2L) {
+      v
+    } else {
+      anvl::nv_transpose(v, c(n - 1L, seq_len(n - 2L), n, n + 1L))
+    }
+  }
+  # (ns, outer.., rows, nx) -> (outer.., ny, nx)
+  from_strips <- function(v) {
+    m <- length(.g_shape(v))
+    if (m > 3L) {
+      v <- anvl::nv_transpose(v, c(2:(m - 2L), 1L, m - 1L, m))
+    }
+    outer <- .g_shape(v)[seq_len(m - 3L)]
+    v <- .g_reshape_rm(v, c(outer, ns * rows, nx))
+    if (pad > 0L) .g_slice_axis(v, m - 2L, 1L, ny) else v
+  }
+  res <- anvl::nv_scan(
+    init = anvl::nv_fill(0, shape = integer(), dtype = "f32"),
+    xs = lapply(inputs, to_strips),
+    body = function(carry, s) list(carry = carry, out = f(unname(s)))
+  )
+  lapply(res$out, from_strips)
+}
+
 #' Concatenate along dim 1 (the scanned axis).
 #'
 #' Matrices are treated as single (1, y, x) slices, so a scan's stacked

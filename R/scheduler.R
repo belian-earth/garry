@@ -89,7 +89,8 @@ NULL
     out_pad = s@out_pad,
     parts = parts,
     n_inputs = length(s@input_nodes),
-    exports = unname(local[as.character(s@exports)])
+    exports = unname(local[as.character(s@exports)]),
+    strip_rows = s@strip_rows
   )
   # In-memory hash: the previous tempfile + tools::md5sum round-trip
   # cost a file write/read/unlink per call, and the fuse-eligibility

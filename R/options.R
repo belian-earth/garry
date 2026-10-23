@@ -412,6 +412,19 @@
     desc = "tighten the compute budget on measured fleet-RSS growth",
     check = .opt_flag()
   ),
+  # Cells per row strip a scan stage's kernel runs over (.strip_stage_fn).
+  # XLA runs a scan step as a sequence of whole-plane passes, so on a
+  # full chunk every pass streams its f64 planes from memory and the
+  # kernel is bandwidth-bound (on 6 cores it ran 2.1x faster than on 1);
+  # a strip of ~4k cells keeps each step's planes in cache. hutan's SI
+  # smoother stage took 0.28 s a 480 x 480 chunk in 8-row strips on one
+  # core, against 0.71 s whole on one core and 0.34 s on six.
+  scan_strip_px = list(
+    default = 4096,
+    tier = "tuning",
+    desc = "cells per row strip of a scan stage's kernel (0 = whole chunk)",
+    check = .opt_num(min = 0)
+  ),
   # How many compute profiles are DESIGNATED for scan tasks per
   # scan-bearing plan (clamped to the pool width).
   # Scan live/retained memory is confined to this many working sets by
