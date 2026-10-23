@@ -1071,9 +1071,9 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
 # network is a fixed sequence of elementwise min/max over the axis's
 # planes, which XLA fuses into one vectorised pass with no transpose
 # (14 ms there), and the median reads the sorted planes at each pixel's
-# valid count. The values are anvl's and stats::median()'s: the same
-# order statistics, and the even-count average (lo + hi) * 0.5 is exact
-# in binary floating point, as is anvl's lo * 0.5 + hi * 0.5.
+# valid count. The values are anvl's: the same order statistics, and
+# the even-count average in anvl's form, lo * 0.5 + hi * 0.5, which
+# does not overflow where (lo + hi) * 0.5 would near the dtype's limit.
 .g_median_net <- function(x, axis, nan_rm) {
   if (!.g_dtype(x) %in% c("f16", "bf16", "f32", "f64")) {
     # as anvl: a median can fall between two integers
@@ -1094,11 +1094,15 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
     s[[cp[[2L]]]] <- anvl::nv_pmax(s[[cp[[1L]]]], s[[cp[[2L]]]])
     s[[cp[[1L]]]] <- lo
   }
+  # anvl's even-count weight, a run-time 0.5: with a literal 0.5 XLA's
+  # simplifier refactors lo * 0.5 + hi * 0.5 into (lo + hi) * 0.5, which
+  # overflows near the dtype's limit
+  w <- g_cast(cnt, .g_dtype(x)) * 0 + 0.5
   mid <- function(k) {
     if (k %% 2L) {
       s[[(k + 1L) %/% 2L]]
     } else {
-      (s[[k %/% 2L]] + s[[k %/% 2L + 1L]]) * 0.5
+      s[[k %/% 2L]] * (1 - w) + s[[k %/% 2L + 1L]] * w
     }
   }
   if (!nan_rm) {

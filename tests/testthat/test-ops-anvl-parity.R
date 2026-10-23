@@ -120,6 +120,16 @@ test_that("g_median's sorting network matches anvl's median exactly", {
   got <- g_download(jf(list(g_upload(q, "i16"))))
   expect_identical(got$net, got$anvl)
   expect_identical(garry:::.sort_pairs(2L), list(c(1L, 2L)))
+  # two middle values near the f32 limit: the average stays finite
+  jf <- g_jit(function(inputs) {
+    list(
+      net = g_median(inputs[[1L]], dims = 1L),
+      anvl = anvl::nv_median(inputs[[1L]], axes = 1L)
+    )
+  })
+  got <- g_download(jf(list(g_upload(array(c(1, 3e38, 3.1e38, 3.2e38), c(4L, 1L, 1L)), "f32"))))
+  expect_true(is.finite(got$net))
+  expect_identical(got$net, got$anvl)
 })
 
 test_that("bitwise family matches under tracing", {
