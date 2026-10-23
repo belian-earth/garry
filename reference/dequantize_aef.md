@@ -7,7 +7,9 @@ Written in the `g_*` vocabulary, so applying it with
 after
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 fuses the decode onto the read, on the device rather than as a separate
-decode pass.
+decode pass. This is
+[`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
+with its defaults.
 
 ## Usage
 
@@ -24,3 +26,7 @@ dequantize_aef(x)
 ## Value
 
 The dequantized values, same shape as `x`.
+
+## See also
+
+[`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)

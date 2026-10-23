@@ -5,7 +5,8 @@ automatic retries with backoff on transient HTTP errors plus request
 timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 defaults to 5% of RAM per process, which many daemons would
 multiply), single-range COG-header ingest, a skipped directory scan
-and a raster-extension vsicurl allowlist for fast remote opens, and
+and a vsicurl allowlist for fast remote opens (raster extensions,
+plus the metadata and chunk keys of Zarr stores), and
 permission to open MEM-driver datasets, which garry's internal warp
 readers require. garry_daemons() calls this
 on every read daemon automatically; call it yourself for host-side
@@ -17,7 +18,8 @@ automatic retries with backoff on transient HTTP errors plus request
 timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 defaults to 5% of RAM per process, which many daemons would
 multiply), single-range COG-header ingest, a skipped directory scan
-and a raster-extension vsicurl allowlist for fast remote opens, and
+and a vsicurl allowlist for fast remote opens (raster extensions,
+plus the metadata and chunk keys of Zarr stores), and
 permission to open MEM-driver datasets, which garry's internal warp
 readers require. garry_daemons() calls this
 on every read daemon automatically; call it yourself for host-side
@@ -48,6 +50,7 @@ wins."><meta property="og:image" content="https://belian-earth.github.io/garry/l
     <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
+    <li><a class="dropdown-item" href="../articles/olmoearth-embeddings.html">OlmoEarth embeddings from Zarr</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -75,7 +78,8 @@ automatic retries with backoff on transient HTTP errors plus request
 timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 defaults to 5% of RAM <em>per process</em>, which many daemons would
 multiply), single-range COG-header ingest, a skipped directory scan
-and a raster-extension vsicurl allowlist for fast remote opens, and
+and a vsicurl allowlist for fast remote opens (raster extensions,
+plus the metadata and chunk keys of Zarr stores), and
 permission to open MEM-driver datasets, which garry's internal warp
 readers require. <code><a href="garry_daemons.html">garry_daemons()</a></code> calls this
 on every read daemon automatically; call it yourself for host-side

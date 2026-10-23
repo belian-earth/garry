@@ -107,9 +107,10 @@ lazy_dataset(
 - bands:
 
   Source bands to select (default: all). File form: an integer vector of
-  band indices, mutually exclusive with `assets`. Table form: a list
-  named by asset, each entry an integer vector of that asset's band
-  indices; names on the indices rename the dataset bands, e.g.
+  band indices (positions along the band dimension for an N-D array),
+  mutually exclusive with `assets`. Table form: a list named by asset,
+  each entry an integer vector of that asset's band indices; names on
+  the indices rename the dataset bands, e.g.
   `list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))`. Assets left out
   read every band; `mask_asset` always reads band 1.
 
@@ -133,12 +134,16 @@ A `LazyDataset`.
   band per file band, one time slice. This is the multi-band raster
   entry – geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr
   via the GDAL driver, any multi-band file GDAL reads. Each band is its
-  own source, so reads fan out band-by-band across the reader pool
-  (per-band tasks through per-daemon handles: the measured fastest
-  remote shape, design/gdal-multiband-fanout.md). Bands are named by
-  their file band descriptions when present, else `b<index>`;
-  `grid = NULL` stays on the file's native grid, and a supplied `grid`
-  inserts an
+  own source, so reads of a band-interleaved file fan out band-by-band
+  across the reader pool (per-band tasks through per-daemon handles: the
+  measured fastest remote shape, design/gdal-multiband-fanout.md). When
+  the bands share storage (a pixel-interleaved file, a Zarr chunk
+  spanning bands),
+  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+  reads a window's bands in one task instead, so the shared bytes are
+  fetched once. Bands are named by their file band descriptions when
+  present, else `b<index>`; `grid = NULL` stays on the file's native
+  grid, and a supplied `grid` inserts an
   [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
   warp per band. Value transforms (e.g.
   [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md))
@@ -146,6 +151,15 @@ A `LazyDataset`.
   [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)s,
   which fuse onto the read at
   [`collect()`](https://belian-earth.github.io/garry/reference/collect.md).
+
+  An N-D array with a time dimension, such as a `(time, band, y, x)`
+  Zarr array (`ZARR:"<store>":/<array>`), becomes bands x time slices:
+  GDAL's classic view flattens it to one band per (time, band) pair, and
+  garry reads the dimension tags GDAL puts on each band to rebuild the
+  axes. Bands take the band dimension's coordinate values as names (else
+  `b<index>`) and slices take the time coordinate's (e.g. years); pick
+  slices with
+  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md).
 
 All bands share one intermediate representation (IR) graph, so a mask
 defined once (see

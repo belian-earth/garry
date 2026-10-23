@@ -53,7 +53,7 @@ collapse.
 - [`band_sel()`](https://belian-earth.github.io/garry/reference/band_sel.md)
   : Select bands of a stacked raster by label.
 - [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
-  : Select time slices of a stacked raster by label.
+  : Select time slices of a stacked raster or a dataset by label.
 
 ## Masking & cloud removal
 
@@ -110,8 +110,12 @@ Special operations for published geo-embedding products: the quantiser
 decodes (fused onto multi-band reads via lazy_map) and safetensors
 weight IO.
 
+- [`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
+  : Dequantize signed-power embedding codes.
 - [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
   : Dequantize Alpha Earth (AEF) embedding codes.
+- [`dequantize_olmoearth()`](https://belian-earth.github.io/garry/reference/dequantize_olmoearth.md)
+  : Dequantize OlmoEarth embedding codes.
 - [`dequantize_esd()`](https://belian-earth.github.io/garry/reference/dequantize_esd.md)
   : Dequantize Embedded Seamless Data (ESD) FSQ codes.
 - [`safetensors_read()`](https://belian-earth.github.io/garry/reference/safetensors_read.md)

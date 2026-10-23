@@ -5,10 +5,10 @@ cloud-optimised remote reads want: HTTP multiplexing over HTTP/2,
 automatic retries with backoff on transient HTTP errors plus request
 timeouts (the cadence odc-stac uses), a capped block cache (GDAL
 defaults to 5% of RAM *per process*, which many daemons would multiply),
-single-range COG-header ingest, a skipped directory scan and a
-raster-extension vsicurl allowlist for fast remote opens, and permission
-to open MEM-driver datasets, which garry's internal warp readers
-require.
+single-range COG-header ingest, a skipped directory scan and a vsicurl
+allowlist for fast remote opens (raster extensions, plus the metadata
+and chunk keys of Zarr stores), and permission to open MEM-driver
+datasets, which garry's internal warp readers require.
 [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
 calls this on every read daemon automatically; call it yourself for
 host-side discovery reads or when you drive

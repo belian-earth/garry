@@ -11,6 +11,7 @@
 <url><loc>https://belian-earth.github.io/garry/articles/hls-harmonized-pca.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/index.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/inspecting-plans.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/articles/olmoearth-embeddings.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/omnicloudmask.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/stac-composite.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/articles/time-series.html</loc></url>
@@ -51,6 +52,8 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dataset-bands.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dequantize_aef.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dequantize_esd.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dequantize_olmoearth.html</loc></url>
+<url><loc>https://belian-earth.github.io/garry/reference/dequantize_signed_power.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-cd_fetch_warp.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_fetch_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_hygiene.html</loc></url>

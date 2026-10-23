@@ -2,8 +2,64 @@
 
 ## garry (development version)
 
+### New features
+
+- [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
+  reads N-D arrays such as a `(time, band, y, x)` Zarr array
+  (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using the
+  dimension tags GDAL puts on each band; `bands` indexes the band
+  dimension. A bare `ZARR:"https://..."` store is read over `/vsicurl/`.
+- [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
+  over several Zarr arrays (one per UTM zone, as OlmoEarth stores them)
+  mosaics them onto the target grid: each window warps every zone and
+  every band of a slice in one pass, the later source winning where
+  zones overlap. The arrays must agree on their bands and dimension
+  coordinates.
+- [`band_sel()`](https://belian-earth.github.io/garry/reference/band_sel.md),
+  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
+  and per-slice operations work on a stack after it has been collected
+  (the planner rewrites collected stacks in place).
+- [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
+  takes a dataset and keeps the matching slices of every band.
+- [`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
+  decodes signed-power Int8 embeddings, and
+  [`dequantize_olmoearth()`](https://belian-earth.github.io/garry/reference/dequantize_olmoearth.md)
+  decodes the OlmoEarth v1.3 embeddings (the same scheme as
+  [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)).
+- [`extract_points()`](https://belian-earth.github.io/garry/reference/extract_points.md)
+  reads a materialised `(band, y, x)` cube, one column per band.
+- New vignette: OlmoEarth embeddings from Zarr.
+
+### Performance
+
+- The bands of one file collapse into a single read per window when the
+  file’s bands share storage (a Zarr array, a pixel-interleaved file),
+  also through a warp onto a target grid and through
+  [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
+  applied per band. A pooled read of a 128-band OlmoEarth window fetched
+  11 times its bytes before (102 s for 1024 x 1024 pixels) and fetches
+  them once now (14 s). Band-interleaved files keep their per-band
+  reads.
+- A Zarr dataset handle is closed once it has read
+  `garry.zarr_handle_mb` (256 MB), and daemons close their Zarr handles
+  between runs, since GDAL keeps every chunk it decodes for the life of
+  the handle.
+- A Zarr store on a reprojected grid warps window by window from its
+  cached handle rather than through a warped VRT, which reopened the
+  store inside GDAL for every read.
+
 ### Bug fixes
 
+- Read daemons can open Zarr stores: the vsicurl allowlist admits Zarr
+  v3 and v2 metadata and chunk keys.
+- Reads that touch a Zarr store no longer turn on GDAL’s worker threads.
+  GDAL reports from those threads, and gdalraster’s message handler then
+  calls into R off the main thread, which aborted the R session.
+- [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
+  no longer sets `GDAL_HTTP_RETRY_CODES`. GDAL matches that list by
+  substring, so `"500"` made every curl failure (DNS included) retry
+  with backoff for minutes; GDAL’s default set is the same codes plus
+  timeouts and resets.
 - [`g_mean()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
   averages integer input at f32, in custom reducers and
   [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)

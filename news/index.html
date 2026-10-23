@@ -24,6 +24,7 @@
     <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
+    <li><a class="dropdown-item" href="../articles/olmoearth-embeddings.html">OlmoEarth embeddings from Zarr</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -46,8 +47,34 @@
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="development version" id="garry-development-version">garry (development version)<a class="anchor" aria-label="anchor" href="#garry-development-version"></a></h2>
 <div class="section level3">
-<h3 id="bug-fixes-development-version">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-development-version"></a></h3>
+<h3 id="new-features-development-version">New features<a class="anchor" aria-label="anchor" href="#new-features-development-version"></a></h3>
 <ul><li>
+<code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> reads N-D arrays such as a <code>(time, band, y, x)</code> Zarr array (<code>ZARR:"&lt;store&gt;":/&lt;array&gt;</code>) as dataset bands by time slice, using the dimension tags GDAL puts on each band; <code>bands</code> indexes the band dimension. A bare <code>ZARR:"https://..."</code> store is read over <code>/vsicurl/</code>.</li>
+<li>
+<code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> over several Zarr arrays (one per UTM zone, as OlmoEarth stores them) mosaics them onto the target grid: each window warps every zone and every band of a slice in one pass, the later source winning where zones overlap. The arrays must agree on their bands and dimension coordinates.</li>
+<li>
+<code><a href="../reference/band_sel.html">band_sel()</a></code>, <code><a href="../reference/time_sel.html">time_sel()</a></code> and per-slice operations work on a stack after it has been collected (the planner rewrites collected stacks in place).</li>
+<li>
+<code><a href="../reference/time_sel.html">time_sel()</a></code> takes a dataset and keeps the matching slices of every band.</li>
+<li>
+<code><a href="../reference/dequantize_signed_power.html">dequantize_signed_power()</a></code> decodes signed-power Int8 embeddings, and <code><a href="../reference/dequantize_olmoearth.html">dequantize_olmoearth()</a></code> decodes the OlmoEarth v1.3 embeddings (the same scheme as <code><a href="../reference/dequantize_aef.html">dequantize_aef()</a></code>).</li>
+<li>
+<code><a href="../reference/extract_points.html">extract_points()</a></code> reads a materialised <code>(band, y, x)</code> cube, one column per band.</li>
+<li>New vignette: OlmoEarth embeddings from Zarr.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="performance-development-version">Performance<a class="anchor" aria-label="anchor" href="#performance-development-version"></a></h3>
+<ul><li>The bands of one file collapse into a single read per window when the file’s bands share storage (a Zarr array, a pixel-interleaved file), also through a warp onto a target grid and through <code><a href="../reference/lazy_map.html">lazy_map()</a></code> applied per band. A pooled read of a 128-band OlmoEarth window fetched 11 times its bytes before (102 s for 1024 x 1024 pixels) and fetches them once now (14 s). Band-interleaved files keep their per-band reads.</li>
+<li>A Zarr dataset handle is closed once it has read <code>garry.zarr_handle_mb</code> (256 MB), and daemons close their Zarr handles between runs, since GDAL keeps every chunk it decodes for the life of the handle.</li>
+<li>A Zarr store on a reprojected grid warps window by window from its cached handle rather than through a warped VRT, which reopened the store inside GDAL for every read.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="bug-fixes-development-version">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-development-version"></a></h3>
+<ul><li>Read daemons can open Zarr stores: the vsicurl allowlist admits Zarr v3 and v2 metadata and chunk keys.</li>
+<li>Reads that touch a Zarr store no longer turn on GDAL’s worker threads. GDAL reports from those threads, and gdalraster’s message handler then calls into R off the main thread, which aborted the R session.</li>
+<li>
+<code><a href="../reference/garry_gdal_config.html">garry_gdal_config()</a></code> no longer sets <code>GDAL_HTTP_RETRY_CODES</code>. GDAL matches that list by substring, so <code>"500"</code> made every curl failure (DNS included) retry with backoff for minutes; GDAL’s default set is the same codes plus timeouts and resets.</li>
+<li>
 <code><a href="../reference/g-reductions.html">g_mean()</a></code> averages integer input at f32, in custom reducers and <code><a href="../reference/lazy_map.html">lazy_map()</a></code> functions alike. anvl 0.5.1 summed an integer input in its own dtype, so a mean of Int8 or Int16 values wrapped (100 and 120 gave -4.5).</li>
 </ul></div>
 </div>

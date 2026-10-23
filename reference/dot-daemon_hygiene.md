@@ -3,7 +3,8 @@
 `deep = TRUE` additionally clears the jit cache (forces recompiles: ~1 s
 for map kernels, ~20 s for scans) — reserve it for memory pressure; the
 default trim-only pass costs microseconds and gives back what glibc is
-hoarding.
+hoarding. Every pass also closes cached Zarr handles, whose decoded
+chunks no trim can return.
 
 ## Usage
 

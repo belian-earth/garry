@@ -38,6 +38,7 @@ both paths hand the same request to the same GDAL resampler."><meta property="og
     <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
+    <li><a class="dropdown-item" href="../articles/olmoearth-embeddings.html">OlmoEarth embeddings from Zarr</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -103,9 +104,8 @@ both paths hand the same request to the same GDAL resampler.</p>
 
 
 <dt id="arg-band">band<a class="anchor" aria-label="anchor" href="#arg-band"></a></dt>
-<dd><p>1-based band index the read will use; must be a single
-band (the decimating read is single-band). Its data type drives the
-integer gate above.</p></dd>
+<dd><p>1-based band index (or indices) the read will use. Their
+data types drive the integer gate above.</p></dd>
 
 
 <dt id="arg-nodata">nodata<a class="anchor" aria-label="anchor" href="#arg-nodata"></a></dt>

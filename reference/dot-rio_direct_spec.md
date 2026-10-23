@@ -44,9 +44,8 @@ paths hand the same request to the same GDAL resampler.
 
 - band:
 
-  1-based band index the read will use; must be a single band (the
-  decimating read is single-band). Its data type drives the integer gate
-  above.
+  1-based band index (or indices) the read will use. Their data types
+  drive the integer gate above.
 
 - nodata:
 

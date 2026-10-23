@@ -13,7 +13,8 @@ WarpNode(
   grid = GridSpec(),
   role = character(0),
   target_grid = GridSpec(),
-  resampling = character(0)
+  resampling = character(0),
+  bands = integer(0)
 )
 ```
 
@@ -48,6 +49,13 @@ WarpNode(
 - resampling:
 
   Resampling method ("nearest", "bilinear", "cubic", ...).
+
+- bands:
+
+  Source bands this warp reads, overriding its parent source's band.
+  Length 0 (the default) reads the parent's band; the planner sets it
+  when it collapses a band stack of warps over one file into a single
+  multi-band warp.
 
 ## Value
 

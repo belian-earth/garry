@@ -3,11 +3,11 @@
 preserving, mapping the code range [-127, 127] to ~[-1, 1]. Written in
 the g_* vocabulary, so applying it with lazy_map() after lazy_dataset()
 fuses the decode onto the read, on the device rather than as a separate
-decode pass."><meta property="og:description" content="The AEF Int8 decode ((x / 127.5)^2) * sign(x): per-value, nonlinear, sign-
+decode pass. This is dequantize_signed_power() with its defaults."><meta property="og:description" content="The AEF Int8 decode ((x / 127.5)^2) * sign(x): per-value, nonlinear, sign-
 preserving, mapping the code range [-127, 127] to ~[-1, 1]. Written in
 the g_* vocabulary, so applying it with lazy_map() after lazy_dataset()
 fuses the decode onto the read, on the device rather than as a separate
-decode pass."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
+decode pass. This is dequantize_signed_power() with its defaults."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
 
@@ -32,6 +32,7 @@ decode pass."><meta property="og:image" content="https://belian-earth.github.io/
     <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
+    <li><a class="dropdown-item" href="../articles/olmoearth-embeddings.html">OlmoEarth embeddings from Zarr</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -57,7 +58,7 @@ decode pass."><meta property="og:image" content="https://belian-earth.github.io/
 preserving, mapping the code range <code>[-127, 127]</code> to ~<code>[-1, 1]</code>. Written in
 the <code>g_*</code> vocabulary, so applying it with <code><a href="lazy_map.html">lazy_map()</a></code> after <code><a href="lazy_dataset.html">lazy_dataset()</a></code>
 fuses the decode onto the read, on the device rather than as a separate
-decode pass.</p>
+decode pass. This is <code><a href="dequantize_signed_power.html">dequantize_signed_power()</a></code> with its defaults.</p>
     </div>
 
     <div class="section level2">
@@ -76,6 +77,10 @@ decode pass.</p>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>The dequantized values, same shape as <code>x</code>.</p>
+    </div>
+    <div class="section level2">
+    <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>
+    <div class="dont-index"><p><code><a href="dequantize_signed_power.html">dequantize_signed_power()</a></code></p></div>
     </div>
 
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

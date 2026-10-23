@@ -31,8 +31,9 @@ extract_points(x, xy, bands = NULL, interp = NULL, ...)
 - bands:
 
   Bands to extract (default all): band names or positions for a
-  `LazyDataset`, file band indices for a path or `GDALRaster`. Ignored
-  for a `LazyRaster`, which reads its own band.
+  `LazyDataset` or a materialised `(band, y, x)` cube, file band indices
+  for a path or `GDALRaster`. Ignored for a single-band `LazyRaster`,
+  which reads its own band.
 
 - interp:
 

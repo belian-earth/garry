@@ -34,6 +34,7 @@ returns."><meta property="og:image" content="https://belian-earth.github.io/garr
     <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
+    <li><a class="dropdown-item" href="../articles/olmoearth-embeddings.html">OlmoEarth embeddings from Zarr</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -84,8 +85,9 @@ two-column matrix/data frame as gdalraster expects.</p></dd>
 
 <dt id="arg-bands">bands<a class="anchor" aria-label="anchor" href="#arg-bands"></a></dt>
 <dd><p>Bands to extract (default all): band names or positions
-for a <code>LazyDataset</code>, file band indices for a path or <code>GDALRaster</code>.
-Ignored for a <code>LazyRaster</code>, which reads its own band.</p></dd>
+for a <code>LazyDataset</code> or a materialised <code>(band, y, x)</code> cube, file band
+indices for a path or <code>GDALRaster</code>. Ignored for a single-band
+<code>LazyRaster</code>, which reads its own band.</p></dd>
 
 
 <dt id="arg-interp">interp<a class="anchor" aria-label="anchor" href="#arg-interp"></a></dt>

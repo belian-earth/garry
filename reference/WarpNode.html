@@ -26,6 +26,7 @@ Barrier. At execution time this materialises as a gdalraster VRT warp."><meta pr
     <li><a class="dropdown-item" href="../articles/biomass-l2a.html">ESA BIOMASS Level 2A products</a></li>
     <li><a class="dropdown-item" href="../articles/hls-harmonized-pca.html">Harmonized Landsat-Sentinel composite and PCA</a></li>
     <li><a class="dropdown-item" href="../articles/inspecting-plans.html">Inspecting plans with plan_view()</a></li>
+    <li><a class="dropdown-item" href="../articles/olmoearth-embeddings.html">OlmoEarth embeddings from Zarr</a></li>
     <li><a class="dropdown-item" href="../articles/omnicloudmask.html">Cloud masking with native OmniCloudMask</a></li>
     <li><a class="dropdown-item" href="../articles/stac-composite.html">From STAC to an analysis-ready composite</a></li>
     <li><a class="dropdown-item" href="../articles/time-series.html">NDVI time series: gap-filling and smoothing</a></li>
@@ -59,7 +60,8 @@ Barrier. At execution time this materialises as a gdalraster VRT warp.</p>
 <span>  grid <span class="op">=</span> <span class="fu"><a href="GridSpec.html">GridSpec</a></span><span class="op">(</span><span class="op">)</span>,</span>
 <span>  role <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  target_grid <span class="op">=</span> <span class="fu"><a href="GridSpec.html">GridSpec</a></span><span class="op">(</span><span class="op">)</span>,</span>
-<span>  resampling <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  resampling <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  bands <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -91,6 +93,13 @@ Pure metadata: never read by the planner or executors; surfaced by
 
 <dt id="arg-resampling">resampling<a class="anchor" aria-label="anchor" href="#arg-resampling"></a></dt>
 <dd><p>Resampling method ("nearest", "bilinear", "cubic", ...).</p></dd>
+
+
+<dt id="arg-bands">bands<a class="anchor" aria-label="anchor" href="#arg-bands"></a></dt>
+<dd><p>Source bands this warp reads, overriding its parent
+source's band. Length 0 (the default) reads the parent's band; the
+planner sets it when it collapses a band stack of warps over one file
+into a single multi-band warp.</p></dd>
 
 </dl></div>
     <div class="section level2">
