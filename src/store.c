@@ -251,6 +251,37 @@ SEXP garry_sv_window(SEXP v, SEXP dims, SEXP es_, SEXP r0_, SEXP c0_,
   return out;
 }
 
+/* Grow a rank-2 or rank-3 row-major payload to ny2 x nx2 planes, its
+ * cells at the top left and the new rows and columns filled with the
+ * element `fill` (es bytes: NaN for floats, zeros for integers). Edge
+ * chunks run a stage's modal kernel this way. */
+SEXP garry_sv_pad(SEXP v, SEXP dims, SEXP es_, SEXP fill, SEXP ny2_, SEXP nx2_) {
+  if (TYPEOF(v) != RAWSXP || TYPEOF(fill) != RAWSXP) error("payload and fill must be raw");
+  const int nd = LENGTH(dims);
+  const int *d = INTEGER(dims);
+  const int es = asInteger(es_);
+  const R_xlen_t nb = nd == 3 ? d[0] : 1;
+  const R_xlen_t ny = d[nd - 2], nx = d[nd - 1];
+  const R_xlen_t ny2 = asInteger(ny2_), nx2 = asInteger(nx2_);
+  if (XLENGTH(fill) != es) error("fill must be one element");
+  if (ny2 < ny || nx2 < nx) error("padded planes must not be smaller");
+  if (nb * ny * nx * es != XLENGTH(v)) error("payload size does not match its dims");
+  const R_xlen_t n = nb * ny2 * nx2;
+  SEXP out = PROTECT(allocVector(RAWSXP, n * es));
+  unsigned char *dst = RAW(out);
+  const unsigned char *f = RAW(fill);
+  for (R_xlen_t i = 0; i < n; i++) memcpy(dst + (size_t) i * es, f, es);
+  const unsigned char *src = RAW(v);
+  const size_t row_in = (size_t) nx * es, row_out = (size_t) nx2 * es;
+  for (R_xlen_t b = 0; b < nb; b++) {
+    for (R_xlen_t r = 0; r < ny; r++) {
+      memcpy(dst + ((size_t) b * ny2 + r) * row_out, src + ((size_t) b * ny + r) * row_in, row_in);
+    }
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 /* Copy a row-major f32 store payload -- one [h, w] plane or a [nb, h, w]
  * stack -- into a column-major double array of dims (NY, NX, NK) at
  * (y0, x0, k0): out[(y0 + y) + (x0 + x) * NY + (k0 + b) * NY * NX] =
@@ -306,6 +337,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"garry_finish_f32", (DL_FUNC) &garry_finish_f32, 4},
   {"garry_finish_f32_into", (DL_FUNC) &garry_finish_f32_into, 6},
   {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},
+  {"garry_sv_pad", (DL_FUNC) &garry_sv_pad, 6},
   {"garry_f32_into_colmajor", (DL_FUNC) &garry_f32_into_colmajor, 4},
   {"garry_alloc_double", (DL_FUNC) &garry_alloc_double, 1},
   {"garry_finish_matrix", (DL_FUNC) &garry_finish_matrix, 6},

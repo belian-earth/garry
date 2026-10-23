@@ -464,18 +464,97 @@ NULL
 }
 
 # Upload a store value (raw or matrix) after trimming `k`.
-.sv_upload <- function(v, k, dtype, dev) {
+# `grow` = c(rows, cols) also pads the trimmed planes (.sv_grow).
+.sv_upload <- function(v, k, dtype, dev, grow = NULL) {
   # A negative trim on the raw path would silently read out-of-range
   # raw bytes as 00 (raw OOB subsetting zero-fills) and produce
   # corrupt f32 planes; the matrix path errors naturally. Planner
   # invariants keep k >= 0 today; fail loudly if one breaks.
   stopifnot(k >= 0L)
+  v <- .exec_trim(v, k)
+  if (!is.null(grow)) {
+    v <- .sv_grow(v, grow)
+  }
   if (.sv_is(v)) {
-    v <- .exec_trim(v, k)
     g_upload_raw(v, attr(v, "gdt"), .sv_dim(v), device = dev)
   } else {
-    g_upload(.exec_trim(v, k), dtype, device = dev)
+    g_upload(v, dtype, device = dev)
   }
+}
+
+# Pad a value's planes by `grow` = c(rows, cols) at the bottom and right:
+# an edge chunk grown to its stage's modal chunk shape runs the kernel
+# already compiled for that shape (.daemon_run_compute_shm). The new
+# cells are nodata, as the halo beyond a raster's edge already is: NaN
+# for floats, NA for R values, which g_upload makes 0 in an integer
+# buffer.
+.sv_grow <- function(v, grow) {
+  if (.sv_is(v)) {
+    d <- as.integer(.sv_dim(v))
+    n <- length(d)
+    to <- d[n - 1:0] + as.integer(grow)
+    fill <- if (attr(v, "gdt") %in% c("f32", "f64")) {
+      writeBin(NaN, raw(), size = .sv_es(v))
+    } else {
+      raw(.sv_es(v))
+    }
+    out <- .Call(
+      "garry_sv_pad",
+      v,
+      d,
+      .sv_es(v),
+      fill,
+      to[[1L]],
+      to[[2L]],
+      PACKAGE = "garry"
+    )
+    d[n - 1:0] <- to
+    return(structure(out, gdim = d, gdt = attr(v, "gdt")))
+  }
+  d <- dim(v)
+  n <- length(d)
+  out <- array(v[NA_integer_][[1L]], c(d[seq_len(n - 2L)], d[n - 1:0] + grow))
+  idx <- c(
+    rep(list(quote(expr = )), n - 2L),
+    list(seq_len(d[[n - 1L]]), seq_len(d[[n]]))
+  )
+  do.call(`[<-`, c(list(out), idx, list(value = v)))
+}
+
+# Cut `grow` = c(rows, cols) from the bottom and right of each value's
+# planes: the inverse of .sv_grow on a kernel's outputs. Lists recurse.
+.sv_crop <- function(v, grow) {
+  if (is.list(v)) {
+    return(lapply(v, .sv_crop, grow))
+  }
+  if (.sv_is(v)) {
+    d <- as.integer(.sv_dim(v))
+    n <- length(d)
+    keep <- d[n - 1:0] - as.integer(grow)
+    out <- .Call(
+      "garry_sv_window",
+      v,
+      d,
+      .sv_es(v),
+      0L,
+      0L,
+      keep[[1L]],
+      keep[[2L]],
+      PACKAGE = "garry"
+    )
+    d[n - 1:0] <- keep
+    return(structure(out, gdim = d, gdt = attr(v, "gdt")))
+  }
+  d <- dim(v)
+  n <- length(d)
+  if (n < 2L) {
+    return(v)
+  }
+  idx <- c(
+    rep(list(quote(expr = )), n - 2L),
+    list(seq_len(d[[n - 1L]] - grow[[1L]]), seq_len(d[[n]] - grow[[2L]]))
+  )
+  do.call(`[`, c(list(v), idx, list(drop = FALSE)))
 }
 
 # Download a stage's exports as store values: f32/f64 exports of rank

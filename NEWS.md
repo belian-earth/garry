@@ -42,6 +42,16 @@
     one core and 0.34 s on six.
   * `kalman_llt()`'s backward pass recomputes the predicted state from the
     filtered one rather than storing five more f64 cubes.
+* Edge chunks run their stage's modal kernel. A grid that is not a
+  multiple of the chunk size has right, bottom and corner chunks of three
+  more shapes, and every compute daemon compiled each stage for each edge
+  shape it met: about 2.5 s a shape for the robust Kalman smoother, and
+  half the compute time of hutan's SI tail at 5.76 M cells. A daemon now
+  grows an edge chunk's inputs to the modal shape with nodata, as beyond
+  the raster's edge, runs the kernel the warm-up compiled for that shape
+  and crops the outputs (`garry.pad_edge_chunks`). The tail's drain went
+  from 40 s to 30 s with two compute daemons and from 31 s to 23 s with
+  six, with identical products.
 * Compute daemons clean up after a task with a minor garbage collection,
   and a full one once four `garry.daemon_gc_mb` budgets of task data
   (512 MB) have passed since the last. A full collection walks every

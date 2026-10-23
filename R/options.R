@@ -425,6 +425,19 @@
     desc = "cells per row strip of a scan stage's kernel (0 = whole chunk)",
     check = .opt_num(min = 0)
   ),
+  # Grow a compute stage's edge chunks to its modal chunk shape at
+  # execution, so they run the kernel the warm-up compiled for that
+  # shape. A 2400-cell grid in 512-cell chunks has four chunk shapes;
+  # without this every daemon compiled each stage for every edge shape
+  # it met, about half the compute time of hutan's SI tail. The padding
+  # is nodata, as beyond the raster's edge, and is cropped from the
+  # outputs.
+  pad_edge_chunks = list(
+    default = TRUE,
+    tier = "tuning",
+    desc = "run edge chunks on their stage's modal kernel, grown and cropped",
+    check = .opt_flag()
+  ),
   # How many compute profiles are DESIGNATED for scan tasks per
   # scan-bearing plan (clamped to the pool width).
   # Scan live/retained memory is confined to this many working sets by

@@ -694,6 +694,8 @@ NULL
 #'   describe the inputs (`in_keys` name the element to extract from
 #'   each shared value: the node key, or a part name for coarse
 #'   reads); `reg_key` the daemon registry slot for the result.
+#'   `grow` = c(rows, cols) pads an edge chunk's inputs to the stage's
+#'   modal chunk shape and crops the outputs back (see `.sv_grow()`).
 #' @return The shared result (serialises as its region name).
 #' @keywords internal
 .daemon_run_compute_shm <- function(
@@ -708,7 +710,8 @@ NULL
   device = "cpu",
   store_raw = FALSE,
   edge = NULL,
-  wq = NULL
+  wq = NULL,
+  grow = NULL
 ) {
   if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
@@ -728,7 +731,7 @@ NULL
   }
   inputs <- Map(
     function(v, k, tr, dt) {
-      .sv_upload(v[[k]], tr, dt, dev)
+      .sv_upload(v[[k]], tr, dt, dev, grow = grow)
     },
     in_vals,
     in_keys,
@@ -754,6 +757,9 @@ NULL
     }
   }
   res <- .sv_download_exports(dev_res, store_raw)
+  if (!is.null(grow)) {
+    res <- .sv_crop(res, grow)
+  }
   # Content-addressed cache keys share one jitted wrapper across
   # structurally identical stages; the wrapper's export NAMES belong
   # to whichever stage compiled it, so rename positionally (exports

@@ -1056,6 +1056,17 @@ execute_plan_mirai <- function(
       if (!has_scan) {
         task_mb <- task_mb / 2
       }
+      # Edge chunks run the stage's modal kernel, warm from the
+      # pre-drain compile, on inputs grown to the modal shape
+      # (.sv_grow), instead of every daemon compiling a kernel for each
+      # edge shape (a robust Kalman stage: ~2.5 s a shape). A patch
+      # (model) member is left to its own edge handling.
+      pad_edges <- isTRUE(garry_opt("pad_edge_chunks")) &&
+        !any(vapply(
+          s@members,
+          function(id) S7::S7_inherits(graph_get(graph, id), PatchNode),
+          logical(1)
+        ))
       # Scan kernels pre-warm too: the broadcast is TARGETED at the
       # K designated scan profiles only (the validated <= 2 concurrent
       # pre-drain compiles, daemon-exact at any pool width).
@@ -1157,6 +1168,13 @@ execute_plan_mirai <- function(
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- .glue("s{sid}_c{jj}")
           sr <- use_raw
+          grow <- if (pad_edges) {
+            g <- as.integer(c(
+              cd_eff[[2L]] - it$y_size[[jj]],
+              cd_eff[[1L]] - it$x_size[[jj]]
+            ))
+            if (any(g > 0L)) g
+          }
           wqs <- if (
             !is.null(wq) &&
               length(wq_keys_of[[.key(s@id)]] %||% character(0))
@@ -1196,7 +1214,8 @@ execute_plan_mirai <- function(
                     device = dv,
                     store_raw = sr,
                     edge = eg,
-                    wq = wqt
+                    wq = wqt,
+                    grow = gr
                   )
                 ),
                 ck = ck,
@@ -1211,6 +1230,7 @@ execute_plan_mirai <- function(
                 sr = sr,
                 eg = edge,
                 wqt = wqs,
+                gr = grow,
                 .compute = prof,
                 .timed = task_timed
               )
