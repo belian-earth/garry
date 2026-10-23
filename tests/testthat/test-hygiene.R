@@ -48,6 +48,12 @@ test_that(".daemon_gc_after defers the pass until the transient budget fills", {
   # budget 0: every task cleans up, the historical behaviour
   options(garry.daemon_gc_mb = 0)
   expect_true(garry:::.daemon_gc_after(1))
+  # passes are minor collections, every eighth one full
+  st$passes <- 0L
+  for (i in 1:7) garry:::.daemon_gc_after(1)
+  expect_identical(st$passes, 7L)
+  garry:::.daemon_gc_after(1)
+  expect_identical(st$passes, 0L)
 })
 
 test_that(".payload_bytes sizes raw payloads, R vectors and lists", {

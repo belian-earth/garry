@@ -42,6 +42,9 @@
     one core and 0.34 s on six.
   * `kalman_llt()`'s backward pass recomputes the predicted state from the
     filtered one rather than storing five more f64 cubes.
+* Compute daemons clean up after a task with a minor garbage collection,
+  and a full one every eighth pass. A full collection walks every kernel
+  the daemon has compiled and took a fifth of the SI tail's compute time.
 
 * A full read store no longer serialises the compute pool. When the
   resident read regions exceeded their budget, only one compute task could
