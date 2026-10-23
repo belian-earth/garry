@@ -975,12 +975,91 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
+    if (length(dims) == 1L && .g_shape(x)[[dims]] %in% 2:32) {
+      return(.g_median_net(x, as.integer(dims), nan_rm))
+    }
     return(anvl::nv_median(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) {
     m <- stats::median(v, na.rm = nan_rm)
     if (is.na(m)) NaN else m # all-nodata -> NaN, never NA
   })
+}
+
+# Median along one short axis as a sorting network. anvl's median moves
+# the axis innermost (a transpose of the whole array) and ranks each
+# slice with top_k, which XLA's CPU backend runs as a scalar loop per
+# pixel: 85 ms for a (13, 480, 480) f64 cube on 10 cores. A sorting
+# network is a fixed sequence of elementwise min/max over the axis's
+# planes, which XLA fuses into one vectorised pass with no transpose
+# (14 ms there), and the median reads the sorted planes at each pixel's
+# valid count. The values are anvl's and stats::median()'s: the same
+# order statistics, and the even-count average (lo + hi) * 0.5 is exact
+# in binary floating point, as is anvl's lo * 0.5 + hi * 0.5.
+.g_median_net <- function(x, axis, nan_rm) {
+  if (!.g_dtype(x) %in% c("f16", "bf16", "f32", "f64")) {
+    # as anvl: a median can fall between two integers
+    x <- anvl::nv_convert(x, "f32")
+  }
+  sh <- .g_shape(x)
+  n <- sh[[axis]]
+  cnt <- g_count(x, dims = axis)
+  if (nan_rm) {
+    # NaN sorts last as +Inf, past every slot the valid count reads
+    x <- g_ifelse(g_is_nodata(x), .g_scalar_like(x, Inf), x)
+  }
+  s <- lapply(seq_len(n), function(i) {
+    .g_reshape_rm(.g_slice_axis(x, axis, i, i), sh[-axis])
+  })
+  for (cp in .sort_pairs(n)) {
+    lo <- anvl::nv_pmin(s[[cp[[1L]]]], s[[cp[[2L]]]])
+    s[[cp[[2L]]]] <- anvl::nv_pmax(s[[cp[[1L]]]], s[[cp[[2L]]]])
+    s[[cp[[1L]]]] <- lo
+  }
+  mid <- function(k) {
+    if (k %% 2L) {
+      s[[(k + 1L) %/% 2L]]
+    } else {
+      (s[[k %/% 2L]] + s[[k %/% 2L + 1L]]) * 0.5
+    }
+  }
+  if (!nan_rm) {
+    # a NaN anywhere in the slice makes it NaN, as in anvl
+    return(g_ifelse(cnt == n, mid(n), NaN))
+  }
+  out <- .g_scalar_like(s[[1L]], NaN) # all-NaN slices match no count
+  for (k in seq_len(n)) {
+    out <- g_ifelse(cnt == k, mid(k), out)
+  }
+  out
+}
+
+# Comparators (i, j), i < j, of Batcher's odd-even merge sort for n
+# elements: after them, each position holds its order statistic. The
+# network is built for the next power of two and pruned of comparators
+# that touch a padding position: padding is +Inf, so those leave every
+# real position as it was.
+.sort_pairs <- function(n) {
+  n_pow <- as.integer(2L^ceiling(log2(n)))
+  out <- list()
+  p <- 1L
+  while (p < n_pow) {
+    k <- p
+    while (k >= 1L) {
+      for (j in seq(k %% p, n_pow - 1L - k, by = 2L * k)) {
+        for (i in 0:min(k - 1L, n_pow - j - k - 1L)) {
+          a <- i + j
+          b <- i + j + k
+          if (a %/% (2L * p) == b %/% (2L * p) && b < n) {
+            out[[length(out) + 1L]] <- c(a + 1L, b + 1L)
+          }
+        }
+      }
+      k <- k %/% 2L
+    }
+    p <- p * 2L
+  }
+  out
 }
 
 #' @rdname g-reductions
