@@ -130,8 +130,9 @@ NULL
   if (.timed) {
     .expr <- bquote({
       .garry_t0 <- Sys.time()
+      .garry_v <- .(.expr)
       structure(
-        list(v = .(.expr), t0 = unclass(.garry_t0)),
+        list(v = .garry_v, t0 = unclass(.garry_t0), t1 = unclass(Sys.time())),
         class = "garry_timed"
       )
     })
@@ -2207,9 +2208,11 @@ execute_plan_mirai <- function(
         }
         res <- h$data
         if (inherits(res, "garry_timed")) {
-          # the daemon's own start time (same host clock), so queue time
-          # (start - launch) separates from run time (done - start)
+          # the daemon's own start and end times (same host clock), so
+          # queue time (start - launch) and harvest lag (done - end)
+          # separate from run time (end - start)
           log_line("start", k, time = .POSIXct(res$t0))
+          log_line("end", k, time = .POSIXct(res$t1))
           res <- res$v
         }
         chunk_vals[[k]] <- res

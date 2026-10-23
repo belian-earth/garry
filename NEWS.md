@@ -104,6 +104,9 @@
   `garry_task_report()` splits the time a task queued behind its daemon's
   previous task from its run time. Launch-to-done alone held both, so a
   busy daemon's tasks read about twice as slow as they ran.
+* The task log also records when a daemon finishes each task (`end`
+  rows), and `garry_task_report()` splits the harvest lag (the result's
+  return and the host noticing it) from the run time.
 
 # garry 0.1.0
 

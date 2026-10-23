@@ -32,13 +32,16 @@ test_that("garry_task_report summarises a distributed run's log", {
   expect_true(all(rep$tasks$wait_s >= -0.001))
   # per-stage summary covers every task
   expect_identical(sum(rep$stages$n), nrow(rep$tasks))
-  # timed launches: every task carries the daemon's start time, and
-  # queue + run add back up to launch-to-done
+  # timed launches: every task carries the daemon's start and end
+  # times, and queue + run + harvest add back up to launch-to-done
   expect_identical(as.integer(rep$events[["start"]]), nrow(rep$tasks))
+  expect_identical(as.integer(rep$events[["end"]]), nrow(rep$tasks))
   expect_false(anyNA(rep$tasks$queue_s))
+  expect_false(anyNA(rep$tasks$harvest_s))
   expect_true(all(rep$tasks$queue_s >= 0))
+  expect_true(all(rep$tasks$harvest_s >= 0))
   expect_equal(
-    rep$tasks$queue_s + rep$tasks$run_s,
+    rep$tasks$queue_s + rep$tasks$run_s + rep$tasks$harvest_s,
     rep$tasks$t_done - rep$tasks$t_launch,
     tolerance = 1e-6
   )
@@ -64,6 +67,25 @@ test_that("garry_task_report splits queue from run time on start rows", {
   expect_equal(t2$queue_s, c(0.1, 0.6), tolerance = 1e-9)
   expect_equal(t2$run_s, c(0.5, 0.5), tolerance = 1e-9)
   expect_equal(r$stages$queue_p50, 0.35, tolerance = 1e-9)
+})
+
+test_that("garry_task_report splits harvest lag from run time on end rows", {
+  f <- withr::local_tempfile(fileext = ".csv")
+  writeLines(c(
+    "time,event,key,pool,slot,mb,store_mb,ready",
+    "1.000,run_start,1x1,,,,,",
+    "1.000,launch,s1_c1,comp,garry_comp_1,10,0,1.0",
+    "1.100,start,s1_c1,,,,,",
+    "1.400,end,s1_c1,,,,,",
+    "1.600,done,s1_c1,,,,,",
+    "2.200,drain_end,-,,,,,",
+    "2.300,host_end,-,,,,,"
+  ), f)
+  r <- suppressMessages(garry_task_report(f))
+  # ran 0.3 s on the daemon; the host took 0.2 s more to harvest it
+  expect_equal(r$tasks$run_s, 0.3, tolerance = 1e-9)
+  expect_equal(r$tasks$harvest_s, 0.2, tolerance = 1e-9)
+  expect_equal(r$stages$harvest_p50, 0.2, tolerance = 1e-9)
 })
 
 test_that("garry_task_report refuses a non-log file, classed", {
