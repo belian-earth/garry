@@ -51,6 +51,9 @@
   `lazy_map()` functions alike. anvl 0.5.1 summed an integer input in its
   own dtype, so a mean of Int8 or Int16 values wrapped (100 and 120 gave
   -4.5).
+* Memory budgets respect a container's limit. Inside a container with its
+  own cgroup namespace (Docker's default on cgroup v2) and on cgroup v1,
+  garry found no limit and budgeted against the host's RAM.
 
 # garry 0.1.0
 

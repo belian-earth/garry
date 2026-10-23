@@ -33,59 +33,105 @@ NULL
   list(physical = as.integer(phys), logical = as.integer(logi))
 }
 
-# Headroom left in this process's cgroups (v2), in MB: the tightest of
-# (memory.max - memory.current + inactive file cache) over the process's
-# cgroup and every ancestor with a finite limit. NA when no level is
-# limited or the files are unreadable. /proc/meminfo reports the HOST, so
-# inside a container, a SLURM step or a systemd scope it can report tens
-# of free GB while this process is a breath away from its own limit --
-# budgeting on it would overcommit straight into a cgroup OOM kill.
-# Limits often sit on an ancestor (SLURM's job cgroup, a systemd slice),
-# and memory.current counts the page cache the kernel reclaims at the
-# limit, so the leaf alone either misses the limit or reads near-zero
-# headroom in any run that has read a few GB. `root` and `self` are
-# injectable for tests.
-.garry_cgroup_avail_mb <- function(
+# The memory cgroup level whose limit binds this process, in MB:
+# list(avail, current, limit), where avail is the tightest
+# (limit - usage + inactive file cache) over the process's cgroup and
+# every ancestor with a finite limit, and current/limit belong to that
+# level. NULL when no level is limited or the files are unreadable.
+# /proc/meminfo reports the HOST, so inside a container, a SLURM step or
+# a systemd scope it can report tens of free GB while this process is a
+# breath away from its own limit -- budgeting on it would overcommit
+# straight into a cgroup OOM kill. Limits often sit on an ancestor
+# (SLURM's job cgroup, a systemd slice), and usage counts the page cache
+# the kernel reclaims at the limit, so the leaf alone either misses the
+# limit or reads near-zero headroom in any run that has read a few GB.
+#
+# The walk includes the hierarchy's MOUNT ROOT. A container with a
+# private cgroup namespace (Docker's default on cgroup v2, so every
+# AL2023 Batch worker) sees its own cgroup as "0::/", whose files sit at
+# the root itself; the walk used to skip it, so garry budgeted against
+# the host's RAM there. A host's own root cgroup has no limit files, so
+# including it costs nothing. cgroup v1 (and hybrid hosts, where memory
+# stays on v1) reads the memory controller's line and files instead; a
+# v1 container sees its cgroup at the mount root under a path that does
+# not exist inside it, which the root step also covers. `root` and
+# `self` are injectable for tests.
+.garry_cgroup_mem <- function(
   root = "/sys/fs/cgroup",
   self = "/proc/self/cgroup"
 ) {
   if (!file.exists(self)) {
-    return(NA_real_)
+    return(NULL)
   } # non-Linux
-  ln <- tryCatch(readLines(self, n = 5L), error = function(e) character(0))
-  rel <- sub("^0::", "", grep("^0::", ln, value = TRUE)[1L])
-  if (is.na(rel) || !nzchar(rel)) {
-    return(NA_real_)
+  ln <- tryCatch(readLines(self, n = 50L), error = function(e) character(0))
+  v1 <- grep("^[0-9]+:([^:]*,)?memory(,[^:]*)?:", ln, value = TRUE)[1L]
+  v2 <- grep("^0::", ln, value = TRUE)[1L]
+  if (!is.na(v1)) {
+    rel <- sub("^[^:]*:[^:]*:", "", v1)
+    base <- file.path(root, "memory")
+    f <- c(
+      "memory.limit_in_bytes",
+      "memory.usage_in_bytes",
+      "total_inactive_file"
+    )
+  } else if (!is.na(v2)) {
+    rel <- sub("^0::", "", v2)
+    base <- root
+    f <- c("memory.max", "memory.current", "inactive_file")
+  } else {
+    return(NULL)
   }
-  read1 <- function(f) {
-    if (!file.exists(f)) {
-      return(NA_character_)
+  if (!nzchar(rel)) {
+    return(NULL)
+  }
+  read1 <- function(p) {
+    if (!file.exists(p)) {
+      return(NA_real_)
     }
-    tryCatch(readLines(f, n = 1L), error = function(e) NA_character_)
+    suppressWarnings(as.numeric(
+      tryCatch(readLines(p, n = 1L), error = function(e) NA_character_)
+    ))
   }
   inactive_file <- function(dir) {
-    f <- file.path(dir, "memory.stat")
-    st <- if (file.exists(f)) {
-      tryCatch(readLines(f), error = function(e) character(0))
+    p <- file.path(dir, "memory.stat")
+    st <- if (file.exists(p)) {
+      tryCatch(readLines(p), error = function(e) character(0))
     } else {
       character(0)
     }
-    v <- sub("^inactive_file ", "", grep("^inactive_file ", st, value = TRUE))
+    key <- paste0("^", f[[3L]], " ")
+    v <- sub(key, "", grep(key, st, value = TRUE))
     if (length(v)) suppressWarnings(as.numeric(v[[1L]])) else 0
   }
   parts <- strsplit(sub("^/", "", rel), "/", fixed = TRUE)[[1L]]
-  best <- NA_real_
-  for (k in rev(seq_along(parts))) {
-    dir <- file.path(root, paste(parts[seq_len(k)], collapse = "/"))
-    mx <- suppressWarnings(as.numeric(read1(file.path(dir, "memory.max"))))
-    cur <- suppressWarnings(as.numeric(read1(file.path(dir, "memory.current"))))
-    if (is.na(mx) || is.na(cur)) {
-      next # "max" (unlimited) or unreadable
+  parts <- parts[nzchar(parts)]
+  best <- NULL
+  for (k in rev(seq(0L, length(parts)))) {
+    dir <- if (k == 0L) {
+      base
+    } else {
+      file.path(base, paste(parts[seq_len(k)], collapse = "/"))
+    }
+    mx <- read1(file.path(dir, f[[1L]]))
+    cur <- read1(file.path(dir, f[[2L]]))
+    # "max" parses NA (v2 unlimited); v1 writes unlimited as ~2^63
+    if (is.na(mx) || is.na(cur) || mx >= 2^60) {
+      next
     }
     avail <- max(0, (mx - cur + inactive_file(dir)) / 2^20)
-    best <- min(best, avail, na.rm = TRUE)
+    if (is.null(best) || avail < best$avail) {
+      best <- list(avail = avail, current = cur / 2^20, limit = mx / 2^20)
+    }
   }
   best
+}
+
+# Headroom (MB) under the binding cgroup limit; NA when unlimited.
+.garry_cgroup_avail_mb <- function(
+  root = "/sys/fs/cgroup",
+  self = "/proc/self/cgroup"
+) {
+  .garry_cgroup_mem(root, self)$avail %||% NA_real_
 }
 
 # macOS reclaimable memory in MB via vm_stat, NA elsewhere or on parse

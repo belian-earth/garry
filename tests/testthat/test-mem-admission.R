@@ -108,3 +108,48 @@ test_that("cgroup headroom: tightest ancestor limit, page cache counted free", {
   writeLines("1", file.path(root, "free", "memory.current"))
   expect_true(is.na(.garry_cgroup_avail_mb(root, self)))
 })
+
+test_that("cgroup headroom: a namespaced container reads its limit at the root", {
+  # Docker on cgroup v2 gives the container a private namespace: its own
+  # cgroup is "0::/" and the limit files sit at the mount root.
+  root <- withr::local_tempdir()
+  self <- file.path(root, "self")
+  writeLines("0::/", self)
+  mb <- 2^20
+  writeLines(as.character(240000 * mb), file.path(root, "memory.max"))
+  writeLines(as.character(100000 * mb), file.path(root, "memory.current"))
+  writeLines(c("anon 1", paste("inactive_file", 20000 * mb)), file.path(root, "memory.stat"))
+  expect_equal(.garry_cgroup_avail_mb(root, self), 160000)
+  cg <- garry:::.garry_cgroup_mem(root, self)
+  expect_equal(cg$current, 100000)
+  expect_equal(cg$limit, 240000)
+  # a host's root cgroup has no limit files: still NA there
+  unlink(file.path(root, c("memory.max", "memory.current")))
+  expect_true(is.na(.garry_cgroup_avail_mb(root, self)))
+})
+
+test_that("cgroup headroom: v1 and hybrid hosts read the memory controller", {
+  root <- withr::local_tempdir()
+  self <- file.path(root, "self")
+  mb <- 2^20
+  mem <- file.path(root, "memory")
+  lvl <- function(path, mx, cur) {
+    d <- if (nzchar(path)) file.path(mem, path) else mem
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    writeLines(as.character(mx), file.path(d, "memory.limit_in_bytes"))
+    writeLines(as.character(cur), file.path(d, "memory.usage_in_bytes"))
+    writeLines(c("cache 1", "total_inactive_file 0"), file.path(d, "memory.stat"))
+  }
+  # hybrid: the unified line carries no memory controller, v1 does
+  writeLines(c("12:memory:/batch/job", "1:name=systemd:/x", "0::/x"), self)
+  lvl("", 9223372036854771712, 1) # v1 "unlimited" root
+  lvl("batch", 9223372036854771712, 1)
+  lvl("batch/job", 8000 * mb, 3000 * mb)
+  expect_equal(.garry_cgroup_avail_mb(root, self), 5000)
+  # a v1 container: its cgroup path does not exist inside it, its own
+  # files sit at the controller's mount root
+  unlink(file.path(mem, "batch"), recursive = TRUE)
+  writeLines("9:cpuset,memory:/docker/abc", self)
+  lvl("", 6000 * mb, 1000 * mb)
+  expect_equal(.garry_cgroup_avail_mb(root, self), 5000)
+})
