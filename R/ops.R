@@ -298,16 +298,18 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
 }
 
 # One jitted g_quantize per quantization (anvl's jit cache keys each by
-# input shape).
+# input shape), dropped wholesale past 64 like the daemon kernel cache.
 .g_quantize_cache <- new.env(parent = emptyenv())
 .g_quantize_jit <- function(scale, offset, nodata, dtype) {
-  key <- paste(
-    format(c(scale, offset, nodata), digits = 17),
-    dtype,
-    collapse = " "
-  )
+  key <- rlang::hash(list(scale, offset, nodata, dtype))
   jf <- .g_quantize_cache[[key]]
   if (is.null(jf)) {
+    if (length(ls(.g_quantize_cache, all.names = TRUE)) >= 64L) {
+      rm(
+        list = ls(.g_quantize_cache, all.names = TRUE),
+        envir = .g_quantize_cache
+      )
+    }
     jf <- g_jit(function(x) g_quantize(x, scale, offset, nodata, dtype))
     assign(key, jf, envir = .g_quantize_cache)
   }

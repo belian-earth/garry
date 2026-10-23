@@ -217,6 +217,13 @@ test_that("eager g_quantize runs jitted with the op-by-op values", {
   )
 })
 
+test_that("jitted quantizers are cached per exact quantization", {
+  qj <- garry:::.g_quantize_jit
+  # the same numbers split differently are different quantizations
+  expect_false(identical(qj(c(1, 2), 3, -1, "i16"), qj(1, c(2, 3), -1, "i16")))
+  expect_identical(qj(0.01, 0, -32768, "i16"), qj(0.01, 0, -32768, "i16"))
+})
+
 test_that("a composite-shaped quantized write routes to the scheduler, identically", {
   # Quantized writes bypass the cd/gd fast paths by design (one device
   # quantizer for every route; folding g_quantize into the cd band
