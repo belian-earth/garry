@@ -253,6 +253,12 @@ g_clamp <- function(x, lo, hi) {
 #' @return Traced array of `dtype`.
 #' @keywords internal
 g_quantize <- function(x, scale, offset, nodata, dtype) {
+  if (inherits(x, "AnvlArray") && length(nodata) == 1L) {
+    # Called eagerly (the daemons quantize kernel outputs outside the
+    # cached kernels), each operation below is its own device pass over
+    # the cube; jitted, they fuse into one.
+    return(.g_quantize_jit(scale, offset, nodata, dtype)(x))
+  }
   rng <- .g_int_range[[dtype]]
   if (is.null(rng)) {
     cli::cli_abort("unsupported quantize dtype {.val {dtype}}")
@@ -289,6 +295,23 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
     }
   }
   g_cast(q, dtype)
+}
+
+# One jitted g_quantize per quantization (anvl's jit cache keys each by
+# input shape).
+.g_quantize_cache <- new.env(parent = emptyenv())
+.g_quantize_jit <- function(scale, offset, nodata, dtype) {
+  key <- paste(
+    format(c(scale, offset, nodata), digits = 17),
+    dtype,
+    collapse = " "
+  )
+  jf <- .g_quantize_cache[[key]]
+  if (is.null(jf)) {
+    jf <- g_jit(function(x) g_quantize(x, scale, offset, nodata, dtype))
+    assign(key, jf, envir = .g_quantize_cache)
+  }
+  jf
 }
 
 # Shape of an AnvlArray (bridge; the executor must not touch anvl).

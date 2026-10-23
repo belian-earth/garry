@@ -45,6 +45,8 @@
 * Compute daemons clean up after a task with a minor garbage collection,
   and a full one every eighth pass. A full collection walks every kernel
   the daemon has compiled and took a fifth of the SI tail's compute time.
+* Write quantization on a daemon runs as one jitted kernel rather than
+  seven passes over the output.
 
 * A full read store no longer serialises the compute pool. When the
   resident read regions exceeded their budget, only one compute task could
