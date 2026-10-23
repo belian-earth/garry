@@ -43,8 +43,10 @@
   * `kalman_llt()`'s backward pass recomputes the predicted state from the
     filtered one rather than storing five more f64 cubes.
 * Compute daemons clean up after a task with a minor garbage collection,
-  and a full one every eighth pass. A full collection walks every kernel
-  the daemon has compiled and took a fifth of the SI tail's compute time.
+  and a full one once four `garry.daemon_gc_mb` budgets of task data
+  (512 MB) have passed since the last. A full collection walks every
+  kernel the daemon has compiled and took a fifth of the SI tail's
+  compute time.
 * Write quantization on a daemon runs as one jitted kernel rather than
   seven passes over the output.
 
