@@ -1059,9 +1059,11 @@ execute_plan_mirai <- function(
       # Edge chunks run the stage's modal kernel, warm from the
       # pre-drain compile, on inputs grown to the modal shape
       # (.sv_grow), instead of every daemon compiling a kernel for each
-      # edge shape (a robust Kalman stage: ~2.5 s a shape). A patch
-      # (model) member is left to its own edge handling.
+      # edge shape (a robust Kalman stage: ~2.5 s a shape). Compute
+      # stages only: a spatial reduction's partials would count the
+      # padding. A patch (model) member is left to its own edge handling.
       pad_edges <- isTRUE(garry_opt("pad_edge_chunks")) &&
+        s@kind == "compute" &&
         !any(vapply(
           s@members,
           function(id) S7::S7_inherits(graph_get(graph, id), PatchNode),

@@ -112,3 +112,26 @@ test_that("grown edge chunks equal edge chunks run at their own shape", {
   )
   expect_identical(collect(lazy_source(p1)), collect(lazy_source(p2)))
 })
+
+test_that("spatial reductions are not grown at edge chunks", {
+  # Padding a reduction's partials with nodata would poison a sum taken
+  # without nan_rm (rules placement keeps the reduction off the reads)
+  local_pools(2, 2)
+  withr::local_options(garry.chunk_target_px = 375, garry.placement = "rules")
+  g <- graph_new()
+  a <- lazy_source(fixture_gradient_f32(), graph = g) # no nodata
+  for (r in list(
+    reduce_over(a * 1, "sum", c("x", "y"), nan_rm = FALSE),
+    reduce_over(a * 1, "mean", c("x", "y"), nan_rm = FALSE),
+    reduce_over(a * 1, "count", c("x", "y"))
+  )) {
+    got <- collect(r, distributed = TRUE)
+    expect_false(anyNA(got))
+    expect_equal(
+      got,
+      collect(r, distributed = FALSE),
+      tolerance = 1e-6,
+      ignore_attr = TRUE
+    )
+  }
+})
