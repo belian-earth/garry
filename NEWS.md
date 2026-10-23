@@ -55,6 +55,15 @@
   own cgroup namespace (Docker's default on cgroup v2) and on cgroup v1,
   garry found no limit and budgeted against the host's RAM.
 
+## Observability
+
+* The task log (`garry.task_log`) tags each daemon's memory sample with its
+  role (read, comp or write), and samples the calling process's memory,
+  the container (cgroup) usage against its limit, `/dev/shm` use and the
+  compute and read admission budgets. `garry_task_report()` summarises
+  them. Sampling and the memory guard now run every 5 s during a drain,
+  including while every daemon is busy with a long task.
+
 # garry 0.1.0
 
 The first stable-track release. The API below is the one garry intends to

@@ -9,15 +9,22 @@ NULL
 #' `time,event,key,pool,slot,mb,store_mb,ready`): per-stage task counts
 #' and run/queue-wait quantiles, maximum concurrency, the drain vs
 #' host-tail split, and the peak measured (per-daemon anonymous RSS) vs
-#' modelled (in-flight + resident) memory. It answers "where did the
-#' time and memory go" for a distributed run.
+#' modelled (in-flight + resident) memory, with the fleet peak split by
+#' daemon role. Logs that carry them also report the calling process's
+#' peak anonymous RSS, the binding memory cgroup's peak usage against
+#' its limit, peak `/dev/shm` use, and the tightest compute admission
+#' budget. It answers "where did the time and memory go" for a
+#' distributed run.
 #'
 #' @param path Path to a task-log CSV written by the scheduler.
 #' @return Invisibly, a list: `events` (event counts), `tasks` (one row
 #'   per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
 #'   run_s), `stages` (per-stage counts and p50/p95 run and wait
 #'   seconds), `max_concurrency`, `drain_s`, `host_tail_s`,
-#'   `peak_model_mb`, `peak_rss_mb`. Printed as a cli summary.
+#'   `peak_model_mb`, `peak_rss_mb`, `peak_rss_by_role` (named MB),
+#'   `peak_host_mb`, `peak_cgroup_mb`, `cgroup_limit_mb`, `peak_shm_mb`
+#'   and `min_comp_budget_mb` (`NA` when the log has no such rows).
+#'   Printed as a cli summary.
 #' @export
 garry_task_report <- function(path) {
   if (!file.exists(path)) {
@@ -132,6 +139,30 @@ garry_task_report <- function(path) {
   } else {
     NA_real_
   }
+  # the fleet peak by daemon role (rss rows carry it in `pool`)
+  rss_r <- rss[!is.na(rss$pool) & nzchar(rss$pool), , drop = FALSE]
+  peak_rss_by_role <- vapply(
+    split(rss_r, rss_r$pool),
+    function(r) {
+      max(vapply(
+        split(suppressWarnings(as.numeric(r$mb)), r$time),
+        sum,
+        numeric(1),
+        na.rm = TRUE
+      ))
+    },
+    numeric(1)
+  )
+  col_max <- function(ev, col = "mb", f = max) {
+    v <- suppressWarnings(as.numeric(df[[col]][df$event == ev]))
+    v <- v[is.finite(v)]
+    if (length(v)) f(v) else NA_real_
+  }
+  peak_host_mb <- col_max("host")
+  peak_cgroup_mb <- col_max("cgroup")
+  cgroup_limit_mb <- col_max("cgroup", "store_mb", min)
+  peak_shm_mb <- col_max("shm")
+  min_comp_budget_mb <- col_max("budget", "mb", min)
 
   cli::cli_h1("garry task report: {path}")
   cli::cli_inform(c(
@@ -147,8 +178,35 @@ garry_task_report <- function(path) {
       " MB; peak fleet ",
       "anon RSS ",
       round(peak_rss_mb),
-      " MB"
-    )
+      " MB",
+      if (length(peak_rss_by_role)) {
+        paste0(
+          " (",
+          paste(
+            names(peak_rss_by_role),
+            round(peak_rss_by_role),
+            sep = " ",
+            collapse = ", "
+          ),
+          ")"
+        )
+      }
+    ),
+    "*" = if (any(is.finite(c(peak_host_mb, peak_cgroup_mb, peak_shm_mb)))) {
+      paste0(
+        "peak host anon ",
+        round(peak_host_mb),
+        " MB; peak cgroup ",
+        round(peak_cgroup_mb),
+        " of ",
+        round(cgroup_limit_mb),
+        " MB; peak /dev/shm ",
+        round(peak_shm_mb),
+        " MB; tightest compute budget ",
+        round(min_comp_budget_mb),
+        " MB"
+      )
+    }
   ))
   if (nrow(stages)) {
     cli::cli_h2("per stage (seconds)")
@@ -180,6 +238,12 @@ garry_task_report <- function(path) {
     drain_s = drain_s,
     host_tail_s = host_tail_s,
     peak_model_mb = peak_model_mb,
-    peak_rss_mb = peak_rss_mb
+    peak_rss_mb = peak_rss_mb,
+    peak_rss_by_role = peak_rss_by_role,
+    peak_host_mb = peak_host_mb,
+    peak_cgroup_mb = peak_cgroup_mb,
+    cgroup_limit_mb = cgroup_limit_mb,
+    peak_shm_mb = peak_shm_mb,
+    min_comp_budget_mb = min_comp_budget_mb
   ))
 }

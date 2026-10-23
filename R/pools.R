@@ -234,6 +234,25 @@ NULL
   avail_kb / 1024
 }
 
+# Used space on /dev/shm in MB (the task log's shm samples), NA when
+# absent or unreadable.
+.garry_shm_used_mb <- function() {
+  if (!dir.exists("/dev/shm")) {
+    return(NA_real_)
+  }
+  df <- tryCatch(
+    system2("df", c("-kP", "/dev/shm"), stdout = TRUE, stderr = FALSE),
+    error = function(e) character(0)
+  )
+  if (length(df) < 2L) {
+    return(NA_real_)
+  }
+  used_kb <- suppressWarnings(as.numeric(
+    strsplit(trimws(df[[2L]]), "\\s+")[[1L]][[3L]]
+  ))
+  if (is.finite(used_kb)) used_kb / 1024 else NA_real_
+}
+
 # Human-readable size from MB: MB below 1 GiB (rounding small budgets
 # to "0 GiB" erased both numbers from the oversized-chunk warning).
 .garry_fmt_mb <- function(mb) {
@@ -723,10 +742,20 @@ garry_daemons <- function(
   } else {
     integer(0)
   }
-  .garry_state$pool_pids <- c(
-    if (read > 0L) .garry_pool_pids("garry_read"),
-    .garry_state$comp_pids,
-    if (read > 0L || compute > 0L) .garry_pool_pids("garry_write")
+  p_read <- if (read > 0L) .garry_pool_pids("garry_read") else integer(0)
+  p_write <- if (read > 0L || compute > 0L) {
+    .garry_pool_pids("garry_write")
+  } else {
+    integer(0)
+  }
+  .garry_state$pool_pids <- c(p_read, .garry_state$comp_pids, p_write)
+  # pid -> role, for the task log's per-daemon rss rows
+  .garry_state$pid_role <- stats::setNames(
+    rep(
+      c("read", "comp", "write"),
+      c(length(p_read), length(.garry_state$comp_pids), length(p_write))
+    ),
+    .garry_state$pool_pids
   )
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L) {

@@ -2242,33 +2242,73 @@ execute_plan_mirai <- function(
     if (harvested) {
       flush_drops()
       scan_needed <- TRUE
-      # Re-read MemAvailable on a clock: the caller's own session can
-      # grow while we drain (host-side fits, assembled sinks), and the
-      # gates must follow the machine rather than the configuration.
-      if (difftime(Sys.time(), mem_last_check, units = "secs") >= 5) {
-        refresh_mem_budgets()
-        mem_last_check <- Sys.time()
-        # Sample measurement vs model on the same clock: per-daemon
-        # anon RSS and the modelled in-flight/resident bytes. This is
-        # the diverging-lines plot every memory postmortem rebuilt by
-        # hand (crop=0 flood, scan-compile OOM).
-        if (!is.null(task_log)) {
-          # one timestamp per sweep: the report sums a sweep's rows
-          sweep_t <- Sys.time()
-          for (p in .garry_state$pool_pids) {
-            a <- .garry_anon_mb_of(p)
-            if (is.finite(a)) {
-              log_line("rss", as.character(p), mb = round(a, 1), time = sweep_t)
-            }
+    }
+    # Re-read MemAvailable on a clock: the caller's own session can
+    # grow while we drain (host-side fits, assembled sinks), and the
+    # gates must follow the machine rather than the configuration. The
+    # clock runs whether or not anything landed: a stall with every
+    # daemon inside a long task is when memory moves fastest, and it
+    # used to go unsampled and unguarded until the next harvest.
+    if (difftime(Sys.time(), mem_last_check, units = "secs") >= 5) {
+      refresh_mem_budgets()
+      mem_last_check <- Sys.time()
+      scan_needed <- TRUE
+      # Sample measurement vs model on the same clock: per-daemon
+      # anon RSS and the modelled in-flight/resident bytes. This is
+      # the diverging-lines plot every memory postmortem rebuilt by
+      # hand (crop=0 flood, scan-compile OOM). The host process, the
+      # binding cgroup, /dev/shm and the admission budgets ride along:
+      # a container OOM counts all of them, and the budgets show when
+      # the RSS correction bit.
+      if (!is.null(task_log)) {
+        # one timestamp per sweep: the report sums a sweep's rows
+        sweep_t <- Sys.time()
+        roles <- .garry_state$pid_role %||% character(0)
+        for (p in .garry_state$pool_pids) {
+          a <- .garry_anon_mb_of(p)
+          if (is.finite(a)) {
+            r <- unname(roles[as.character(p)])
+            log_line(
+              "rss",
+              as.character(p),
+              pool = if (is.na(r)) "" else r,
+              mb = round(a, 1),
+              time = sweep_t
+            )
           }
+        }
+        log_line(
+          "model",
+          "-",
+          time = sweep_t,
+          mb = round(mb_inflight, 1),
+          store_mb = round(mb_store_resident, 1)
+        )
+        h <- .garry_anon_mb_of(Sys.getpid())
+        if (is.finite(h)) {
+          log_line("host", Sys.getpid(), mb = round(h, 1), time = sweep_t)
+        }
+        cg <- .garry_cgroup_mem()
+        if (!is.null(cg)) {
           log_line(
-            "model",
+            "cgroup",
             "-",
-            time = sweep_t,
-            mb = round(mb_inflight, 1),
-            store_mb = round(mb_store_resident, 1)
+            mb = round(cg$current, 1),
+            store_mb = round(cg$limit, 1),
+            time = sweep_t
           )
         }
+        shm <- .garry_shm_used_mb()
+        if (is.finite(shm)) {
+          log_line("shm", "-", mb = round(shm, 1), time = sweep_t)
+        }
+        log_line(
+          "budget",
+          "-",
+          mb = round(comp_budget_mb, 1),
+          store_mb = round(read_budget_mb, 1),
+          time = sweep_t
+        )
       }
     }
     if (

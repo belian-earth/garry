@@ -208,9 +208,13 @@
   #   time,event,key,pool,slot,mb,store_mb,ready
   # Events: launch (with pool/slot, admission-priced MB, store MB and
   # the ready timestamp, so queue-wait separates from run time), done,
-  # write, rss (per-daemon anon-RSS sample, key = pid), model (modelled
-  # in-flight + resident MB), drain_end, host_end. garry_task_report()
-  # summarises a log. NULL disables.
+  # write, rss (per-daemon anon-RSS sample, key = pid, pool = its role),
+  # model (modelled in-flight + resident MB), host (the calling
+  # process's anon RSS, key = pid), cgroup (usage and limit of the
+  # binding memory cgroup as mb / store_mb), shm (/dev/shm used MB),
+  # budget (compute / read admission budgets as mb / store_mb),
+  # drain_end, host_end. garry_task_report() summarises a log. NULL
+  # disables.
   task_log = list(
     default = NULL,
     tier = "user",
