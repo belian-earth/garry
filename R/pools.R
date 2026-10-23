@@ -218,20 +218,15 @@ NULL
   if (!dir.exists("/dev/shm")) {
     return(NA_real_)
   }
-  df <- tryCatch(
-    system2("df", c("-kP", "/dev/shm"), stdout = TRUE, stderr = FALSE),
-    error = function(e) character(0)
-  )
-  if (length(df) < 2L) {
-    return(NA_real_)
-  }
-  avail_kb <- suppressWarnings(as.numeric(
-    strsplit(trimws(df[[2L]]), "\\s+")[[1L]][[4L]]
-  ))
-  if (!is.finite(avail_kb)) {
-    return(NA_real_)
-  }
-  avail_kb / 1024
+  .garry_statvfs_mb("/dev/shm")[["avail"]]
+}
+
+# Total, available and used MB of the filesystem holding `path` (NA
+# when unreadable), as df reports them, without forking the host R
+# process for df on every memory sweep.
+.garry_statvfs_mb <- function(path) {
+  v <- .Call("garry_statvfs_mb", path, PACKAGE = "garry")
+  stats::setNames(v, c("total", "avail", "used"))
 }
 
 # Used space on /dev/shm in MB (the task log's shm samples), NA when
@@ -240,17 +235,7 @@ NULL
   if (!dir.exists("/dev/shm")) {
     return(NA_real_)
   }
-  df <- tryCatch(
-    system2("df", c("-kP", "/dev/shm"), stdout = TRUE, stderr = FALSE),
-    error = function(e) character(0)
-  )
-  if (length(df) < 2L) {
-    return(NA_real_)
-  }
-  used_kb <- suppressWarnings(as.numeric(
-    strsplit(trimws(df[[2L]]), "\\s+")[[1L]][[3L]]
-  ))
-  if (is.finite(used_kb)) used_kb / 1024 else NA_real_
+  .garry_statvfs_mb("/dev/shm")[["used"]]
 }
 
 # Human-readable size from MB: MB below 1 GiB (rounding small budgets

@@ -28,6 +28,7 @@
 #include <string.h>
 
 SEXP garry_malloc_trim(void);
+SEXP garry_statvfs_mb(SEXP path);
 
 /* Element size and family of a gdt tag. */
 static int gdt_es(const char *gdt, int *is_float, int *is_signed) {
@@ -308,6 +309,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"garry_f32_into_colmajor", (DL_FUNC) &garry_f32_into_colmajor, 4},
   {"garry_alloc_double", (DL_FUNC) &garry_alloc_double, 1},
   {"garry_finish_matrix", (DL_FUNC) &garry_finish_matrix, 6},
+  {"garry_statvfs_mb", (DL_FUNC) &garry_statvfs_mb, 1},
   {NULL, NULL, 0}
 };
 

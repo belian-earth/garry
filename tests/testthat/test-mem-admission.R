@@ -166,3 +166,13 @@ test_that("a full store admits one kernel task per daemon, one assemble alone", 
   expect_true(gate(300, 10, 200, 0L, 2L, kernel = FALSE))
   expect_false(gate(300, 10, 200, 1L, 2L, kernel = FALSE))
 })
+
+test_that("the /dev/shm probes read statvfs as df does", {
+  skip_if(!dir.exists("/dev/shm"), "no /dev/shm")
+  v <- garry:::.garry_statvfs_mb("/dev/shm")
+  expect_named(v, c("total", "avail", "used"))
+  expect_true(all(is.finite(v)) && v[["total"]] > 0)
+  expect_lte(v[["used"]], v[["total"]])
+  expect_identical(garry:::.garry_shm_free_mb(), v[["avail"]])
+  expect_true(is.na(garry:::.garry_statvfs_mb("/no/such/dir")[["total"]]))
+})
