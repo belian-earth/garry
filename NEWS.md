@@ -75,6 +75,10 @@
   compute and read admission budgets. `garry_task_report()` summarises
   them. Sampling and the memory guard now run every 5 s during a drain,
   including while every daemon is busy with a long task.
+* The task log records when a daemon starts each task (`start` rows), and
+  `garry_task_report()` splits the time a task queued behind its daemon's
+  previous task from its run time. Launch-to-done alone held both, so a
+  busy daemon's tasks read about twice as slow as they ran.
 
 # garry 0.1.0
 

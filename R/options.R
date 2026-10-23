@@ -207,7 +207,9 @@
   # Schema (header written on a fresh file):
   #   time,event,key,pool,slot,mb,store_mb,ready
   # Events: launch (with pool/slot, admission-priced MB, store MB and
-  # the ready timestamp, so queue-wait separates from run time), done,
+  # the ready timestamp, so queue-wait separates from run time), start
+  # (the daemon's own start time for the task, so time queued behind
+  # the daemon's previous task separates from run time), done,
   # write, rss (per-daemon anon-RSS sample, key = pid, pool = its role),
   # model (modelled in-flight + resident MB), host (the calling
   # process's anon RSS, key = pid), cgroup (usage and limit of the

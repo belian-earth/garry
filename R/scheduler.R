@@ -116,6 +116,28 @@ NULL
     2^20
 }
 
+# Launch a scheduler task's daemon call. With `timed`, the call runs
+# inside an envelope that records when the DAEMON started it, so the
+# task log can split queue time (a width-1 profile holds up to two
+# tasks; the second waits behind the first) from run time. Launch-to-
+# done alone conflates them: the SI tail's busy scan daemons read ~2x
+# slower per task than they were (2026-10-23). `.expr` is the call as a
+# language object; `...` are its data, as for mirai::mirai(). The
+# formals are dotted so no data name partially matches them (`ex = ex`
+# once bound to an `expr` formal).
+.task_mirai <- function(.expr, ..., .compute, .timed = FALSE) {
+  if (.timed) {
+    .expr <- bquote({
+      .garry_t0 <- Sys.time()
+      structure(
+        list(v = .(.expr), t0 = unclass(.garry_t0)),
+        class = "garry_timed"
+      )
+    })
+  }
+  mirai::mirai(.expr, ..., .compute = .compute)
+}
+
 # Element bytes a stored region of `dtype` costs under the run's store
 # mode: the raw store keeps f32 at 4 B; everything else (f64 raw or
 # any doubles fallback) is 8 B.
@@ -162,6 +184,8 @@ execute_plan_mirai <- function(
   }
   n_read <- .gd_n_compute("garry_read")
   n_comp <- .comp_n()
+  # daemon-side start times ride the task log (see .task_mirai)
+  task_timed <- !is.null(garry_opt("task_log"))
   read_prof <- "garry_read"
   comp_profs <- .comp_profiles()
   profiles <- unique(c(read_prof, comp_profs))
@@ -480,15 +504,17 @@ execute_plan_mirai <- function(
         tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
         nb <- st$nbands
         add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
-          mirai::mirai(
-            asNamespace("garry")$.daemon_fetch_window(
-              src,
-              dst,
-              ex,
-              cr,
-              nodata = nd,
-              target_res = tr,
-              nbands = nb
+          .task_mirai(
+            quote(
+              asNamespace("garry")$.daemon_fetch_window(
+                src,
+                dst,
+                ex,
+                cr,
+                nodata = nd,
+                target_res = tr,
+                nbands = nb
+              )
             ),
             # dispatch-time hook: a fetch launched deep into a long
             # drain re-signs a near-expiry MPC token (io R4)
@@ -499,7 +525,8 @@ execute_plan_mirai <- function(
             nd = nd,
             tr = tr,
             nb = nb,
-            .compute = prof
+            .compute = prof,
+            .timed = task_timed
           )
         })
       })
@@ -817,23 +844,25 @@ execute_plan_mirai <- function(
               mb = task_mb_read,
               store_mb = store_mb_read,
               launch = function(prof) {
-                mirai::mirai(
-                  asNamespace("garry")$.daemon_run_source_shm(
-                    p2,
-                    b2,
-                    nd,
-                    cg,
-                    core,
-                    k2,
-                    reg,
-                    open_options = oo,
-                    fuse = fs,
-                    read_raw = rr,
-                    store_raw = sr,
-                    scale = sc,
-                    offset = of,
-                    decim = dcm,
-                    resampling = rsm
+                .task_mirai(
+                  quote(
+                    asNamespace("garry")$.daemon_run_source_shm(
+                      p2,
+                      b2,
+                      nd,
+                      cg,
+                      core,
+                      k2,
+                      reg,
+                      open_options = oo,
+                      fuse = fs,
+                      read_raw = rr,
+                      store_raw = sr,
+                      scale = sc,
+                      offset = of,
+                      decim = dcm,
+                      resampling = rsm
+                    )
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -850,7 +879,8 @@ execute_plan_mirai <- function(
                   of = of,
                   dcm = dcm,
                   rsm = rsm,
-                  .compute = prof
+                  .compute = prof,
+                  .timed = task_timed
                 )
               }
             )
@@ -915,24 +945,26 @@ execute_plan_mirai <- function(
               mb = task_mb_read,
               store_mb = store_mb_read,
               launch = function(prof) {
-                mirai::mirai(
-                  asNamespace("garry")$.daemon_run_source_shm(
-                    p2,
-                    b2,
-                    nd,
-                    cg,
-                    core,
-                    k2,
-                    reg,
-                    parts = parts,
-                    open_options = oo,
-                    fuse = fs,
-                    read_raw = rr,
-                    store_raw = sr,
-                    scale = sc,
-                    offset = of,
-                    decim = dcm,
-                    resampling = rsm
+                .task_mirai(
+                  quote(
+                    asNamespace("garry")$.daemon_run_source_shm(
+                      p2,
+                      b2,
+                      nd,
+                      cg,
+                      core,
+                      k2,
+                      reg,
+                      parts = parts,
+                      open_options = oo,
+                      fuse = fs,
+                      read_raw = rr,
+                      store_raw = sr,
+                      scale = sc,
+                      offset = of,
+                      decim = dcm,
+                      resampling = rsm
+                    )
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -950,7 +982,8 @@ execute_plan_mirai <- function(
                   dcm = dcm,
                   rsm = rsm,
                   reg = .glue("r{run_id}_{key}"),
-                  .compute = prof
+                  .compute = prof,
+                  .timed = task_timed
                 )
               }
             )
@@ -1127,20 +1160,22 @@ execute_plan_mirai <- function(
               # stage closure from the warm-up broadcast, and re-shipping
               # it costs MBs of host serialization per task (the 145-band
               # predict closure measured 3.36 MB).
-              mirai::mirai(
-                asNamespace("garry")$.daemon_run_compute_shm(
-                  ck,
-                  fn,
-                  in_vals,
-                  in_keys,
-                  trims,
-                  dtypes,
-                  reg,
-                  out_keys = ok,
-                  device = dv,
-                  store_raw = sr,
-                  edge = eg,
-                  wq = wqt
+              .task_mirai(
+                quote(
+                  asNamespace("garry")$.daemon_run_compute_shm(
+                    ck,
+                    fn,
+                    in_vals,
+                    in_keys,
+                    trims,
+                    dtypes,
+                    reg,
+                    out_keys = ok,
+                    device = dv,
+                    store_raw = sr,
+                    edge = eg,
+                    wq = wqt
+                  )
                 ),
                 ck = ck,
                 fn = if (with_fn) fn else NULL,
@@ -1154,7 +1189,8 @@ execute_plan_mirai <- function(
                 sr = sr,
                 eg = edge,
                 wqt = wqs,
-                .compute = prof
+                .compute = prof,
+                .timed = task_timed
               )
             }
           )
@@ -2035,6 +2071,9 @@ execute_plan_mirai <- function(
           next
         }
         prof <- if (slot == "read") read_prof else cprof
+        # stamped BEFORE dispatch: a daemon can start the task before
+        # the launch call returns, and queue time must not go negative
+        t_launch <- Sys.time()
         inflight[[k]] <- if (is.null(t$ck)) {
           t$launch(prof)
         } else {
@@ -2081,7 +2120,8 @@ execute_plan_mirai <- function(
             tasks[[k]]$t_ready %||% t_drain0,
             format = "f",
             digits = 3
-          )
+          ),
+          time = t_launch
         )
       }
     }
@@ -2135,7 +2175,14 @@ execute_plan_mirai <- function(
             pool = tasks[[k]]$pool
           )
         }
-        chunk_vals[[k]] <- h$data
+        res <- h$data
+        if (inherits(res, "garry_timed")) {
+          # the daemon's own start time (same host clock), so queue time
+          # (start - launch) separates from run time (done - start)
+          log_line("start", k, time = .POSIXct(res$t0))
+          res <- res$v
+        }
+        chunk_vals[[k]] <- res
         tasks[[k]]$state <- "done"
         n_done <- n_done + 1L
         for (k2 in dependents[[k]]) {

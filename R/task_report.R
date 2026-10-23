@@ -19,8 +19,8 @@ NULL
 #' @param path Path to a task-log CSV written by the scheduler.
 #' @return Invisibly, a list: `events` (event counts), `tasks` (one row
 #'   per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
-#'   run_s), `stages` (per-stage counts and p50/p95 run and wait
-#'   seconds), `max_concurrency`, `drain_s`, `host_tail_s`,
+#'   queue_s, run_s), `stages` (per-stage counts, p50/p95 run and wait
+#'   seconds, p50 queue seconds), `max_concurrency`, `drain_s`, `host_tail_s`,
 #'   `peak_model_mb`, `peak_rss_mb`, `peak_rss_by_role` (named MB),
 #'   `peak_host_mb`, `peak_cgroup_mb`, `cgroup_limit_mb`, `peak_shm_mb`
 #'   and `min_comp_budget_mb` (`NA` when the log has no such rows).
@@ -58,12 +58,21 @@ garry_task_report <- function(path) {
   names(la)[[1L]] <- "t_launch"
   do <- df[df$event == "done", c("time", "run", "key")]
   names(do)[[1L]] <- "t_done"
-  # the k-th launch of a key in a run pairs with its k-th done
+  sa <- df[df$event == "start", c("time", "run", "key")]
+  names(sa)[[1L]] <- "t_start"
+  # the k-th launch of a key in a run pairs with its k-th done (and start)
   nth <- function(x) stats::ave(seq_along(x$key), x$run, x$key, FUN = seq_along)
   la$nth <- nth(la)
   do$nth <- nth(do)
+  sa$nth <- nth(sa)
   tasks <- merge(la, do, by = c("run", "key", "nth"))
-  tasks$run_s <- tasks$t_done - tasks$t_launch
+  tasks <- merge(tasks, sa, by = c("run", "key", "nth"), all.x = TRUE)
+  # With daemon start times (logs from garry's timed launches), run time
+  # is done - start and queue time (behind the daemon's previous task)
+  # is start - launch; without them, launch-to-done holds both.
+  started <- !is.na(tasks$t_start)
+  tasks$queue_s <- ifelse(started, tasks$t_start - tasks$t_launch, NA_real_)
+  tasks$run_s <- tasks$t_done - ifelse(started, tasks$t_start, tasks$t_launch)
   tasks$wait_s <- tasks$t_launch - suppressWarnings(as.numeric(tasks$ready))
   tasks$stage <- sub("^([a-z]+[0-9]+)_.*$", "\\1", tasks$key)
 
@@ -83,7 +92,8 @@ garry_task_report <- function(path) {
       run_p50 = numeric(0),
       run_p95 = numeric(0),
       wait_p50 = numeric(0),
-      wait_p95 = numeric(0)
+      wait_p95 = numeric(0),
+      queue_p50 = numeric(0)
     )), lapply(split(tasks, tasks$stage), function(s) {
       data.frame(
         stage = s$stage[[1L]],
@@ -92,7 +102,8 @@ garry_task_report <- function(path) {
         run_p50 = q(s$run_s, 0.5),
         run_p95 = q(s$run_s, 0.95),
         wait_p50 = q(s$wait_s, 0.5),
-        wait_p95 = q(s$wait_s, 0.95)
+        wait_p95 = q(s$wait_s, 0.95),
+        queue_p50 = q(s$queue_s, 0.5)
       )
     }))
   )
@@ -226,7 +237,8 @@ garry_task_report <- function(path) {
         "  wait p50/p95 ",
         s$wait_p50,
         "/",
-        s$wait_p95
+        s$wait_p95,
+        if (!is.na(s$queue_p50)) paste0("  queue p50 ", s$queue_p50)
       ))
     }
   }
