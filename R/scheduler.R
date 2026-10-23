@@ -138,6 +138,26 @@ NULL
   mirai::mirai(.expr, ..., .compute = .compute)
 }
 
+# May a compute-pool task pinning `store_mb` launch with the store at
+# `resident` of its `budget` MB, `n_inflight` compute-pool tasks in
+# flight on `n_comp` daemons? Over budget, a kernel task (one that
+# retires the regions filling the store) may run one per daemon and a
+# fetch-backed assemble (which adds a region) only alone. See
+# store_ok_comp in execute_plan_mirai().
+.store_gate_comp <- function(
+  resident,
+  store_mb,
+  budget,
+  n_inflight,
+  n_comp,
+  kernel
+) {
+  if (resident + store_mb <= budget) {
+    return(TRUE)
+  }
+  if (kernel) n_inflight < max(1L, n_comp) else n_inflight == 0L
+}
+
 # Element bytes a stored region of `dtype` costs under the run's store
 # mode: the raw store keeps f32 at 4 B; everything else (f64 raw or
 # any doubles fallback) is 8 B.
@@ -1836,18 +1856,27 @@ execute_plan_mirai <- function(
   # compute retirement can free accumulated to the memory ceiling
   # (measured: crop=2048 SI bench pinned its 24G scope at task ~70 and
   # hung on tmpfs reclaim). With its own escape, at least one compute
-  # task always drains a saturated store. The escape admits one compute
-  # task PER COMPUTE DAEMON, not one in total: compute tasks are what
-  # retire the regions filling the store, so a single-task escape made a
-  # full store keep itself full. The SI tail measured it: every compute
-  # task pins a small output region (~3 MB), the resident reads sat above
-  # the budget for most of the drain, and the compute pool ran one task
-  # at a time with its second daemon 7% busy (2026-10-23). Overshoot is
-  # bounded by n_comp output regions, under the /dev/shm backstop in
-  # refresh_mem_budgets().
+  # task always drains a saturated store. For a kernel task the escape
+  # admits one PER COMPUTE DAEMON, not one in total: kernel tasks are
+  # what retire the regions filling the store, so a single-task escape
+  # made a full store keep itself full. The SI tail measured it: every
+  # compute task pins a small output region (~3 MB), the resident reads
+  # sat above the budget for most of the drain, and the compute pool ran
+  # one task at a time with its second daemon 7% busy (2026-10-23). A
+  # fetch-backed assemble also runs on the compute pool, but it adds a
+  # read region rather than retiring one, so it keeps the single escape.
+  # Each escaped task pins its output until its consumers retire it, so
+  # the store can run past the budget by the outputs still waiting on
+  # theirs; the /dev/shm backstop in refresh_mem_budgets() bounds it.
   store_ok_comp <- function(t) {
-    n_inflight[["comp"]] < max(1L, n_comp) ||
-      mb_store_resident + t$store_mb <= read_budget_mb
+    .store_gate_comp(
+      mb_store_resident,
+      t$store_mb,
+      read_budget_mb,
+      n_inflight[["comp"]],
+      n_comp,
+      kernel = !is.null(t$ck)
+    )
   }
   # The in-flight BYTE budget covers every byte-accounted task, not
   # just comp-pool ones: a FUSED read runs its kernel's whole working

@@ -153,3 +153,16 @@ test_that("cgroup headroom: v1 and hybrid hosts read the memory controller", {
   lvl("", 6000 * mb, 1000 * mb)
   expect_equal(.garry_cgroup_avail_mb(root, self), 5000)
 })
+
+test_that("a full store admits one kernel task per daemon, one assemble alone", {
+  gate <- garry:::.store_gate_comp
+  # under budget: anything runs
+  expect_true(gate(100, 10, 200, 5L, 2L, kernel = TRUE))
+  expect_true(gate(100, 10, 200, 5L, 2L, kernel = FALSE))
+  # over budget: kernel tasks retire the regions, one per compute daemon
+  expect_true(gate(300, 10, 200, 1L, 2L, kernel = TRUE))
+  expect_false(gate(300, 10, 200, 2L, 2L, kernel = TRUE))
+  # an assemble adds a region: only with nothing in flight
+  expect_true(gate(300, 10, 200, 0L, 2L, kernel = FALSE))
+  expect_false(gate(300, 10, 200, 1L, 2L, kernel = FALSE))
+})
