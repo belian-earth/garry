@@ -1800,9 +1800,17 @@ execute_plan_mirai <- function(
   # compute retirement can free accumulated to the memory ceiling
   # (measured: crop=2048 SI bench pinned its 24G scope at task ~70 and
   # hung on tmpfs reclaim). With its own escape, at least one compute
-  # task always drains a saturated store.
+  # task always drains a saturated store. The escape admits one compute
+  # task PER COMPUTE DAEMON, not one in total: compute tasks are what
+  # retire the regions filling the store, so a single-task escape made a
+  # full store keep itself full. The SI tail measured it: every compute
+  # task pins a small output region (~3 MB), the resident reads sat above
+  # the budget for most of the drain, and the compute pool ran one task
+  # at a time with its second daemon 7% busy (2026-10-23). Overshoot is
+  # bounded by n_comp output regions, under the /dev/shm backstop in
+  # refresh_mem_budgets().
   store_ok_comp <- function(t) {
-    n_inflight[["comp"]] == 0L ||
+    n_inflight[["comp"]] < max(1L, n_comp) ||
       mb_store_resident + t$store_mb <= read_budget_mb
   }
   # The in-flight BYTE budget covers every byte-accounted task, not

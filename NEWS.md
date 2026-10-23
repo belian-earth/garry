@@ -23,6 +23,14 @@
 
 ## Performance
 
+* A full read store no longer serialises the compute pool. When the
+  resident read regions exceeded their budget, only one compute task could
+  run at a time, and compute tasks are what free those regions, so the
+  store stayed full. Now one compute task per compute daemon may run. On
+  hutan's SI tail at 5.76 M cells with two compute daemons, the second
+  daemon went from 36 of 650 compute tasks to 335, and the drain from
+  56.9 s to 43.5 s, for about 0.3 GB more shared memory at peak.
+
 * The bands of one file collapse into a single read per window when the
   file's bands share storage (a Zarr array, a pixel-interleaved file),
   also through a warp onto a target grid and through `lazy_map()` applied
