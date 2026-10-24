@@ -64,7 +64,8 @@
 <span>  input_nodes <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  exports <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  out_pad <span class="op">=</span> <span class="fl">0L</span>,</span>
-<span>  export_pads <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  export_pads <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  strip_rows <span class="op">=</span> <span class="fl">0L</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -136,6 +137,12 @@ materialise first. Inputs arrive padded to <code>halo + out_pad</code>.</p></dd>
 <dd><p>Integer vector parallel to <code>exports</code>: the padding
 each export value carries (post-focal exports carry less than
 pre-focal ones). Empty means all zero.</p></dd>
+
+
+<dt id="arg-strip-rows">strip_rows<a class="anchor" aria-label="anchor" href="#arg-strip-rows"></a></dt>
+<dd><p>Rows per strip when <code>fn</code> runs a compute stage's
+members over row strips of each chunk (see <code>garry.scan_strip_px</code>);
+0 runs the whole chunk at once.</p></dd>
 
 </dl></div>
     <div class="section level2">

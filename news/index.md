@@ -32,6 +32,59 @@
 
 ### Performance
 
+- Scan stages run faster. On hutan’s SI tail at 5.76 M cells, with the
+  daemon changes below, the robust Kalman smoother stage went from 0.66
+  s to 0.41 s a chunk and the drain from 44 s to 38 s with two compute
+  daemons (34 s to 30 s with six); the products are identical. Three
+  changes:
+
+  - [`g_median()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
+    takes a median over one short axis (up to 32 values) with a sorting
+    network, a fixed sequence of elementwise minima and maxima, instead
+    of anvl’s transpose and per-pixel sort: 6x faster for 13 values,
+    with identical results.
+    [`kalman_llt()`](https://belian-earth.github.io/garry/reference/kalman_llt.md)’s
+    robust passes,
+    [`hampel_smooth()`](https://belian-earth.github.io/garry/reference/hampel_smooth.md)
+    and `reduce_over(x, "median")` use it.
+  - A compute stage holding a scan runs its kernel over row strips of
+    about 4,000 cells (`garry.scan_strip_px`) inside one XLA program.
+    XLA runs each scan step as passes over whole f64 planes, so on a
+    full chunk the kernel was bound by memory bandwidth (six cores ran
+    it 2.1x faster than one); a strip’s planes stay in cache. The
+    smoother stage took 0.28 s a 480 x 480 chunk in strips on one core,
+    against 0.71 s whole on one core and 0.34 s on six.
+  - [`kalman_llt()`](https://belian-earth.github.io/garry/reference/kalman_llt.md)’s
+    backward pass recomputes the predicted state from the filtered one
+    rather than storing five more f64 cubes.
+
+- Edge chunks run their stage’s modal kernel. A grid that is not a
+  multiple of the chunk size has right, bottom and corner chunks of
+  three more shapes, and XLA compiles a kernel for each: every compute
+  daemon compiled each stage for each edge shape it met, about 2.5 s a
+  shape for the robust Kalman smoother and half the compute time of
+  hutan’s SI tail at 5.76 M cells. An edge chunk’s inputs now grow to
+  the modal shape with nodata, as beyond the raster’s edge, run the
+  kernel compiled for that shape and have the padding cropped from the
+  outputs (`garry.pad_edge_chunks`). This holds for compute stages on
+  daemons, in a single process, and fused onto reads; spatial reductions
+  and model (patch) stages keep their own shapes. The tail’s drain went
+  from 40 s to 30 s with two compute daemons and from 31 s to 23 s with
+  six, with identical products; a single-process robust smoother over
+  four chunk shapes went from 3.7 s to 2.6 s.
+
+- Reads with a fused kernel no longer run a full garbage collection
+  after every window; the daemon’s deferred pass collects them.
+
+- Compute daemons clean up after a task with a minor garbage collection,
+  and a full one once four `garry.daemon_gc_mb` budgets of task data
+  (512 MB) have passed since the last. A full collection walks every
+  kernel the daemon has compiled and took a fifth of the SI tail’s
+  compute time.
+
+- Write quantization on a daemon runs as one jitted kernel rather than
+  seven passes over the output.
+
 - A full read store no longer serialises the compute pool. When the
   resident read regions exceeded their budget, only one compute task
   could run at a time, and compute tasks are what free those regions, so
@@ -99,6 +152,11 @@
   splits the time a task queued behind its daemon’s previous task from
   its run time. Launch-to-done alone held both, so a busy daemon’s tasks
   read about twice as slow as they ran.
+- The task log also records when a daemon finishes each task (`end`
+  rows), and
+  [`garry_task_report()`](https://belian-earth.github.io/garry/reference/garry_task_report.md)
+  splits the harvest lag (the result’s return and the host noticing it)
+  from the run time.
 
 ## garry 0.1.0
 

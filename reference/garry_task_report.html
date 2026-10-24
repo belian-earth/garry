@@ -96,8 +96,9 @@ distributed run.</p>
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>Invisibly, a list: <code>events</code> (event counts), <code>tasks</code> (one row
 per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
-queue_s, run_s), <code>stages</code> (per-stage counts, p50/p95 run and wait
-seconds, p50 queue seconds), <code>max_concurrency</code>, <code>drain_s</code>, <code>host_tail_s</code>,
+queue_s, run_s, harvest_s), <code>stages</code> (per-stage counts, p50/p95 run
+and wait seconds, p50 queue and harvest seconds), <code>max_concurrency</code>,
+<code>drain_s</code>, <code>host_tail_s</code>,
 <code>peak_model_mb</code>, <code>peak_rss_mb</code>, <code>peak_rss_by_role</code> (named MB),
 <code>peak_host_mb</code>, <code>peak_cgroup_mb</code>, <code>cgroup_limit_mb</code>, <code>peak_shm_mb</code>
 and <code>min_comp_budget_mb</code> (<code>NA</code> when the log has no such rows).

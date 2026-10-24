@@ -27,10 +27,10 @@ garry_task_report(path)
 ## Value
 
 Invisibly, a list: `events` (event counts), `tasks` (one row per
-launch/done pair: key, pool, slot, mb, store_mb, wait_s, queue_s,
-run_s), `stages` (per-stage counts, p50/p95 run and wait seconds, p50
-queue seconds), `max_concurrency`, `drain_s`, `host_tail_s`,
-`peak_model_mb`, `peak_rss_mb`, `peak_rss_by_role` (named MB),
-`peak_host_mb`, `peak_cgroup_mb`, `cgroup_limit_mb`, `peak_shm_mb` and
-`min_comp_budget_mb` (`NA` when the log has no such rows). Printed as a
-cli summary.
+launch/done pair: key, pool, slot, mb, store_mb, wait_s, queue_s, run_s,
+harvest_s), `stages` (per-stage counts, p50/p95 run and wait seconds,
+p50 queue and harvest seconds), `max_concurrency`, `drain_s`,
+`host_tail_s`, `peak_model_mb`, `peak_rss_mb`, `peak_rss_by_role` (named
+MB), `peak_host_mb`, `peak_cgroup_mb`, `cgroup_limit_mb`, `peak_shm_mb`
+and `min_comp_budget_mb` (`NA` when the log has no such rows). Printed
+as a cli summary.

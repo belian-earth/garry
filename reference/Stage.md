@@ -18,7 +18,8 @@ Stage(
   input_nodes = integer(0),
   exports = integer(0),
   out_pad = 0L,
-  export_pads = integer(0)
+  export_pads = integer(0),
+  strip_rows = 0L
 )
 ```
 
@@ -88,6 +89,12 @@ Stage(
   Integer vector parallel to `exports`: the padding each export value
   carries (post-focal exports carry less than pre-focal ones). Empty
   means all zero.
+
+- strip_rows:
+
+  Rows per strip when `fn` runs a compute stage's members over row
+  strips of each chunk (see `garry.scan_strip_px`); 0 runs the whole
+  chunk at once.
 
 ## Value
 
