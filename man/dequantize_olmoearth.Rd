@@ -13,7 +13,7 @@ dequantize_olmoearth(x)
 The dequantized values, same shape as \code{x}.
 }
 \description{
-The OlmoEarth v1.3 embeddings (Allen Institute for AI, published on
+The OlmoEarth v1.3 embeddings (Ai2, published on
 Source Cooperative as a Zarr v3 store) quantize each 128-dimension
 annual vector to Int8 with the \code{signed_power} scheme, power 2:
 \verb{sign(q) * (|q| / 127.5)^2}, with \code{-128} as nodata. That is the
@@ -29,8 +29,8 @@ embeddings. The vectors are not unit length (the per-pixel norm over
 dot product as cosine similarity.
 }
 \references{
-Team OlmoEarth et al. (2026). OlmoEarth v1.3 Embeddings. Allen Institute
-for AI. \url{https://allenai.org/papers/olmoearth-v1-3}
+Team OlmoEarth et al. (2026). OlmoEarth v1.3 Embeddings. Ai2.
+\url{https://allenai.org/papers/olmoearth-v1-3}
 
 \url{https://source.coop/olmoearth/olmoearth-v1-3-embeddings}
 }

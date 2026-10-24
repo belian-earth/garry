@@ -12,9 +12,12 @@ garry_task_report(path)
 \value{
 Invisibly, a list: \code{events} (event counts), \code{tasks} (one row
 per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
-run_s), \code{stages} (per-stage counts and p50/p95 run and wait
-seconds), \code{max_concurrency}, \code{drain_s}, \code{host_tail_s},
-\code{peak_model_mb}, \code{peak_rss_mb}. Printed as a cli summary.
+queue_s, run_s), \code{stages} (per-stage counts, p50/p95 run and wait
+seconds, p50 queue seconds), \code{max_concurrency}, \code{drain_s}, \code{host_tail_s},
+\code{peak_model_mb}, \code{peak_rss_mb}, \code{peak_rss_by_role} (named MB),
+\code{peak_host_mb}, \code{peak_cgroup_mb}, \code{cgroup_limit_mb}, \code{peak_shm_mb}
+and \code{min_comp_budget_mb} (\code{NA} when the log has no such rows).
+Printed as a cli summary.
 }
 \description{
 Summarises the task log CSV the distributed scheduler writes when
@@ -22,6 +25,10 @@ the \code{garry.task_log} option is set (see \code{\link[=garry_options]{garry_o
 \verb{time,event,key,pool,slot,mb,store_mb,ready}): per-stage task counts
 and run/queue-wait quantiles, maximum concurrency, the drain vs
 host-tail split, and the peak measured (per-daemon anonymous RSS) vs
-modelled (in-flight + resident) memory. It answers "where did the
-time and memory go" for a distributed run.
+modelled (in-flight + resident) memory, with the fleet peak split by
+daemon role. Logs that carry them also report the calling process's
+peak anonymous RSS, the binding memory cgroup's peak usage against
+its limit, peak \verb{/dev/shm} use, and the tightest compute admission
+budget. It answers "where did the time and memory go" for a
+distributed run.
 }

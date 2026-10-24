@@ -116,6 +116,48 @@ NULL
     2^20
 }
 
+# Launch a scheduler task's daemon call. With `timed`, the call runs
+# inside an envelope that records when the DAEMON started it, so the
+# task log can split queue time (a width-1 profile holds up to two
+# tasks; the second waits behind the first) from run time. Launch-to-
+# done alone conflates them: the SI tail's busy scan daemons read ~2x
+# slower per task than they were (2026-10-23). `.expr` is the call as a
+# language object; `...` are its data, as for mirai::mirai(). The
+# formals are dotted so no data name partially matches them (`ex = ex`
+# once bound to an `expr` formal).
+.task_mirai <- function(.expr, ..., .compute, .timed = FALSE) {
+  if (.timed) {
+    .expr <- bquote({
+      .garry_t0 <- Sys.time()
+      structure(
+        list(v = .(.expr), t0 = unclass(.garry_t0)),
+        class = "garry_timed"
+      )
+    })
+  }
+  mirai::mirai(.expr, ..., .compute = .compute)
+}
+
+# May a compute-pool task pinning `store_mb` launch with the store at
+# `resident` of its `budget` MB, `n_inflight` compute-pool tasks in
+# flight on `n_comp` daemons? Over budget, a kernel task (one that
+# retires the regions filling the store) may run one per daemon and a
+# fetch-backed assemble (which adds a region) only alone. See
+# store_ok_comp in execute_plan_mirai().
+.store_gate_comp <- function(
+  resident,
+  store_mb,
+  budget,
+  n_inflight,
+  n_comp,
+  kernel
+) {
+  if (resident + store_mb <= budget) {
+    return(TRUE)
+  }
+  if (kernel) n_inflight < max(1L, n_comp) else n_inflight == 0L
+}
+
 # Element bytes a stored region of `dtype` costs under the run's store
 # mode: the raw store keeps f32 at 4 B; everything else (f64 raw or
 # any doubles fallback) is 8 B.
@@ -162,6 +204,8 @@ execute_plan_mirai <- function(
   }
   n_read <- .gd_n_compute("garry_read")
   n_comp <- .comp_n()
+  # daemon-side start times ride the task log (see .task_mirai)
+  task_timed <- !is.null(garry_opt("task_log"))
   read_prof <- "garry_read"
   comp_profs <- .comp_profiles()
   profiles <- unique(c(read_prof, comp_profs))
@@ -480,15 +524,17 @@ execute_plan_mirai <- function(
         tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
         nb <- st$nbands
         add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
-          mirai::mirai(
-            asNamespace("garry")$.daemon_fetch_window(
-              src,
-              dst,
-              ex,
-              cr,
-              nodata = nd,
-              target_res = tr,
-              nbands = nb
+          .task_mirai(
+            quote(
+              asNamespace("garry")$.daemon_fetch_window(
+                src,
+                dst,
+                ex,
+                cr,
+                nodata = nd,
+                target_res = tr,
+                nbands = nb
+              )
             ),
             # dispatch-time hook: a fetch launched deep into a long
             # drain re-signs a near-expiry MPC token (io R4)
@@ -499,7 +545,8 @@ execute_plan_mirai <- function(
             nd = nd,
             tr = tr,
             nb = nb,
-            .compute = prof
+            .compute = prof,
+            .timed = task_timed
           )
         })
       })
@@ -817,23 +864,25 @@ execute_plan_mirai <- function(
               mb = task_mb_read,
               store_mb = store_mb_read,
               launch = function(prof) {
-                mirai::mirai(
-                  asNamespace("garry")$.daemon_run_source_shm(
-                    p2,
-                    b2,
-                    nd,
-                    cg,
-                    core,
-                    k2,
-                    reg,
-                    open_options = oo,
-                    fuse = fs,
-                    read_raw = rr,
-                    store_raw = sr,
-                    scale = sc,
-                    offset = of,
-                    decim = dcm,
-                    resampling = rsm
+                .task_mirai(
+                  quote(
+                    asNamespace("garry")$.daemon_run_source_shm(
+                      p2,
+                      b2,
+                      nd,
+                      cg,
+                      core,
+                      k2,
+                      reg,
+                      open_options = oo,
+                      fuse = fs,
+                      read_raw = rr,
+                      store_raw = sr,
+                      scale = sc,
+                      offset = of,
+                      decim = dcm,
+                      resampling = rsm
+                    )
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -850,7 +899,8 @@ execute_plan_mirai <- function(
                   of = of,
                   dcm = dcm,
                   rsm = rsm,
-                  .compute = prof
+                  .compute = prof,
+                  .timed = task_timed
                 )
               }
             )
@@ -915,24 +965,26 @@ execute_plan_mirai <- function(
               mb = task_mb_read,
               store_mb = store_mb_read,
               launch = function(prof) {
-                mirai::mirai(
-                  asNamespace("garry")$.daemon_run_source_shm(
-                    p2,
-                    b2,
-                    nd,
-                    cg,
-                    core,
-                    k2,
-                    reg,
-                    parts = parts,
-                    open_options = oo,
-                    fuse = fs,
-                    read_raw = rr,
-                    store_raw = sr,
-                    scale = sc,
-                    offset = of,
-                    decim = dcm,
-                    resampling = rsm
+                .task_mirai(
+                  quote(
+                    asNamespace("garry")$.daemon_run_source_shm(
+                      p2,
+                      b2,
+                      nd,
+                      cg,
+                      core,
+                      k2,
+                      reg,
+                      parts = parts,
+                      open_options = oo,
+                      fuse = fs,
+                      read_raw = rr,
+                      store_raw = sr,
+                      scale = sc,
+                      offset = of,
+                      decim = dcm,
+                      resampling = rsm
+                    )
                   ),
                   p2 = p2,
                   b2 = b2,
@@ -950,7 +1002,8 @@ execute_plan_mirai <- function(
                   dcm = dcm,
                   rsm = rsm,
                   reg = .glue("r{run_id}_{key}"),
-                  .compute = prof
+                  .compute = prof,
+                  .timed = task_timed
                 )
               }
             )
@@ -1127,20 +1180,22 @@ execute_plan_mirai <- function(
               # stage closure from the warm-up broadcast, and re-shipping
               # it costs MBs of host serialization per task (the 145-band
               # predict closure measured 3.36 MB).
-              mirai::mirai(
-                asNamespace("garry")$.daemon_run_compute_shm(
-                  ck,
-                  fn,
-                  in_vals,
-                  in_keys,
-                  trims,
-                  dtypes,
-                  reg,
-                  out_keys = ok,
-                  device = dv,
-                  store_raw = sr,
-                  edge = eg,
-                  wq = wqt
+              .task_mirai(
+                quote(
+                  asNamespace("garry")$.daemon_run_compute_shm(
+                    ck,
+                    fn,
+                    in_vals,
+                    in_keys,
+                    trims,
+                    dtypes,
+                    reg,
+                    out_keys = ok,
+                    device = dv,
+                    store_raw = sr,
+                    edge = eg,
+                    wq = wqt
+                  )
                 ),
                 ck = ck,
                 fn = if (with_fn) fn else NULL,
@@ -1154,7 +1209,8 @@ execute_plan_mirai <- function(
                 sr = sr,
                 eg = edge,
                 wqt = wqs,
-                .compute = prof
+                .compute = prof,
+                .timed = task_timed
               )
             }
           )
@@ -1800,10 +1856,27 @@ execute_plan_mirai <- function(
   # compute retirement can free accumulated to the memory ceiling
   # (measured: crop=2048 SI bench pinned its 24G scope at task ~70 and
   # hung on tmpfs reclaim). With its own escape, at least one compute
-  # task always drains a saturated store.
+  # task always drains a saturated store. For a kernel task the escape
+  # admits one PER COMPUTE DAEMON, not one in total: kernel tasks are
+  # what retire the regions filling the store, so a single-task escape
+  # made a full store keep itself full. The SI tail measured it: every
+  # compute task pins a small output region (~3 MB), the resident reads
+  # sat above the budget for most of the drain, and the compute pool ran
+  # one task at a time with its second daemon 7% busy (2026-10-23). A
+  # fetch-backed assemble also runs on the compute pool, but it adds a
+  # read region rather than retiring one, so it keeps the single escape.
+  # Each escaped task pins its output until its consumers retire it, so
+  # the store can run past the budget by the outputs still waiting on
+  # theirs; the /dev/shm backstop in refresh_mem_budgets() bounds it.
   store_ok_comp <- function(t) {
-    n_inflight[["comp"]] == 0L ||
-      mb_store_resident + t$store_mb <= read_budget_mb
+    .store_gate_comp(
+      mb_store_resident,
+      t$store_mb,
+      read_budget_mb,
+      n_inflight[["comp"]],
+      n_comp,
+      kernel = !is.null(t$ck)
+    )
   }
   # The in-flight BYTE budget covers every byte-accounted task, not
   # just comp-pool ones: a FUSED read runs its kernel's whole working
@@ -2027,6 +2100,9 @@ execute_plan_mirai <- function(
           next
         }
         prof <- if (slot == "read") read_prof else cprof
+        # stamped BEFORE dispatch: a daemon can start the task before
+        # the launch call returns, and queue time must not go negative
+        t_launch <- Sys.time()
         inflight[[k]] <- if (is.null(t$ck)) {
           t$launch(prof)
         } else {
@@ -2073,7 +2149,8 @@ execute_plan_mirai <- function(
             tasks[[k]]$t_ready %||% t_drain0,
             format = "f",
             digits = 3
-          )
+          ),
+          time = t_launch
         )
       }
     }
@@ -2127,7 +2204,14 @@ execute_plan_mirai <- function(
             pool = tasks[[k]]$pool
           )
         }
-        chunk_vals[[k]] <- h$data
+        res <- h$data
+        if (inherits(res, "garry_timed")) {
+          # the daemon's own start time (same host clock), so queue time
+          # (start - launch) separates from run time (done - start)
+          log_line("start", k, time = .POSIXct(res$t0))
+          res <- res$v
+        }
+        chunk_vals[[k]] <- res
         tasks[[k]]$state <- "done"
         n_done <- n_done + 1L
         for (k2 in dependents[[k]]) {
@@ -2242,33 +2326,73 @@ execute_plan_mirai <- function(
     if (harvested) {
       flush_drops()
       scan_needed <- TRUE
-      # Re-read MemAvailable on a clock: the caller's own session can
-      # grow while we drain (host-side fits, assembled sinks), and the
-      # gates must follow the machine rather than the configuration.
-      if (difftime(Sys.time(), mem_last_check, units = "secs") >= 5) {
-        refresh_mem_budgets()
-        mem_last_check <- Sys.time()
-        # Sample measurement vs model on the same clock: per-daemon
-        # anon RSS and the modelled in-flight/resident bytes. This is
-        # the diverging-lines plot every memory postmortem rebuilt by
-        # hand (crop=0 flood, scan-compile OOM).
-        if (!is.null(task_log)) {
-          # one timestamp per sweep: the report sums a sweep's rows
-          sweep_t <- Sys.time()
-          for (p in .garry_state$pool_pids) {
-            a <- .garry_anon_mb_of(p)
-            if (is.finite(a)) {
-              log_line("rss", as.character(p), mb = round(a, 1), time = sweep_t)
-            }
+    }
+    # Re-read MemAvailable on a clock: the caller's own session can
+    # grow while we drain (host-side fits, assembled sinks), and the
+    # gates must follow the machine rather than the configuration. The
+    # clock runs whether or not anything landed: a stall with every
+    # daemon inside a long task is when memory moves fastest, and it
+    # used to go unsampled and unguarded until the next harvest.
+    if (difftime(Sys.time(), mem_last_check, units = "secs") >= 5) {
+      refresh_mem_budgets()
+      mem_last_check <- Sys.time()
+      scan_needed <- TRUE
+      # Sample measurement vs model on the same clock: per-daemon
+      # anon RSS and the modelled in-flight/resident bytes. This is
+      # the diverging-lines plot every memory postmortem rebuilt by
+      # hand (crop=0 flood, scan-compile OOM). The host process, the
+      # binding cgroup, /dev/shm and the admission budgets ride along:
+      # a container OOM counts all of them, and the budgets show when
+      # the RSS correction bit.
+      if (!is.null(task_log)) {
+        # one timestamp per sweep: the report sums a sweep's rows
+        sweep_t <- Sys.time()
+        roles <- .garry_state$pid_role %||% character(0)
+        for (p in .garry_state$pool_pids) {
+          a <- .garry_anon_mb_of(p)
+          if (is.finite(a)) {
+            r <- unname(roles[as.character(p)])
+            log_line(
+              "rss",
+              as.character(p),
+              pool = if (is.na(r)) "" else r,
+              mb = round(a, 1),
+              time = sweep_t
+            )
           }
+        }
+        log_line(
+          "model",
+          "-",
+          time = sweep_t,
+          mb = round(mb_inflight, 1),
+          store_mb = round(mb_store_resident, 1)
+        )
+        h <- .garry_anon_mb_of(Sys.getpid())
+        if (is.finite(h)) {
+          log_line("host", Sys.getpid(), mb = round(h, 1), time = sweep_t)
+        }
+        cg <- .garry_cgroup_mem()
+        if (!is.null(cg)) {
           log_line(
-            "model",
+            "cgroup",
             "-",
-            time = sweep_t,
-            mb = round(mb_inflight, 1),
-            store_mb = round(mb_store_resident, 1)
+            mb = round(cg$current, 1),
+            store_mb = round(cg$limit, 1),
+            time = sweep_t
           )
         }
+        shm <- .garry_shm_used_mb()
+        if (is.finite(shm)) {
+          log_line("shm", "-", mb = round(shm, 1), time = sweep_t)
+        }
+        log_line(
+          "budget",
+          "-",
+          mb = round(comp_budget_mb, 1),
+          store_mb = round(read_budget_mb, 1),
+          time = sweep_t
+        )
       }
     }
     if (

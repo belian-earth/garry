@@ -140,7 +140,7 @@
   gdal_cachemax_mb = list(
     default = 256,
     tier = "tuning",
-    desc = "GDAL block cache (MB per process) on read daemons",
+    desc = "GDAL block cache (MB per process) on every garry daemon",
     check = .opt_num(min = 1)
   ),
   zarr_handle_mb = list(
@@ -207,10 +207,16 @@
   # Schema (header written on a fresh file):
   #   time,event,key,pool,slot,mb,store_mb,ready
   # Events: launch (with pool/slot, admission-priced MB, store MB and
-  # the ready timestamp, so queue-wait separates from run time), done,
-  # write, rss (per-daemon anon-RSS sample, key = pid), model (modelled
-  # in-flight + resident MB), drain_end, host_end. garry_task_report()
-  # summarises a log. NULL disables.
+  # the ready timestamp, so queue-wait separates from run time), start
+  # (the daemon's own start time for the task, so time queued behind
+  # the daemon's previous task separates from run time), done,
+  # write, rss (per-daemon anon-RSS sample, key = pid, pool = its role),
+  # model (modelled in-flight + resident MB), host (the calling
+  # process's anon RSS, key = pid), cgroup (usage and limit of the
+  # binding memory cgroup as mb / store_mb), shm (/dev/shm used MB),
+  # budget (compute / read admission budgets as mb / store_mb),
+  # drain_end, host_end. garry_task_report() summarises a log. NULL
+  # disables.
   task_log = list(
     default = NULL,
     tier = "user",
