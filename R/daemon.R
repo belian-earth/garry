@@ -34,16 +34,31 @@ NULL
 # gc + malloc_trim pass runs once `garry.daemon_gc_mb` of them have
 # accumulated, so big tasks (device buffers, chunk payloads) still
 # clean up every time and small ones amortise.
+#
+# The pass is a minor collection: a task's transients are young, and a
+# minor gc frees them in ~1 ms, where a full one walks every traced
+# kernel in the jit cache (0.2 s on a daemon holding hutan's SI tail,
+# a fifth of its busy time). A minor gc leaves what an automatic gc
+# promoted mid-task, such as a big task's inputs held by device
+# buffers, so the pass is full once `.daemon_gc_full_factor` x
+# garry.daemon_gc_mb of transients (512 MB by default) have passed
+# since the last full one. That bounds what a daemon holds back; on the
+# SI tail minor passes settled ~110 MB above the full-gc footprint.
 .daemon_gc_state <- new.env(parent = emptyenv())
+.daemon_gc_full_factor <- 4
 
 .daemon_gc_after <- function(bytes) {
+  budget <- garry_opt("daemon_gc_mb") * 2^20
   acc <- (.daemon_gc_state$bytes %||% 0) + bytes
-  if (acc < garry_opt("daemon_gc_mb") * 2^20) {
+  if (acc < budget) {
     .daemon_gc_state$bytes <- acc
     return(invisible(FALSE))
   }
   .daemon_gc_state$bytes <- 0
-  gc(FALSE)
+  since <- (.daemon_gc_state$since_full %||% 0) + acc
+  full <- since >= .daemon_gc_full_factor * budget
+  .daemon_gc_state$since_full <- if (full) 0 else since
+  gc(FALSE, full = full)
   .garry_malloc_trim()
   invisible(TRUE)
 }

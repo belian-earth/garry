@@ -197,6 +197,33 @@ test_that("g_quantize matches the historical writer semantics", {
                c(1, 2))
 })
 
+test_that("eager g_quantize runs jitted with the op-by-op values", {
+  set.seed(3)
+  # values on and around the rounding half-steps of scale 0.01
+  x <- c(round(runif(4000, -40, 400), 2) + 0.005 * sample(-1:1, 4000, TRUE),
+         runif(4000, -400, 4000), NaN, 1e9, -1e9, 0)
+  dev <- g_upload(matrix(x, 4L), "f32")
+  step_by_step <- function(scale, offset, nodata, lo, hi, dtype) {
+    q <- g_clamp(g_round((dev - offset) / scale), lo, hi)
+    g_download(g_cast(g_ifelse(g_is_nodata(dev), nodata, q), dtype))
+  }
+  expect_identical(
+    g_download(g_quantize(dev, 0.01, 0, -32768, "i16")),
+    step_by_step(0.01, 0, -32768, -32767, 32767, "i16")
+  )
+  expect_identical(
+    g_download(g_quantize(dev, 0.25, -10, 255, "u8")),
+    step_by_step(0.25, -10, 255, 0, 254, "u8")
+  )
+})
+
+test_that("jitted quantizers are cached per exact quantization", {
+  qj <- garry:::.g_quantize_jit
+  # the same numbers split differently are different quantizations
+  expect_false(identical(qj(c(1, 2), 3, -1, "i16"), qj(1, c(2, 3), -1, "i16")))
+  expect_identical(qj(0.01, 0, -32768, "i16"), qj(0.01, 0, -32768, "i16"))
+})
+
 test_that("a composite-shaped quantized write routes to the scheduler, identically", {
   # Quantized writes bypass the cd/gd fast paths by design (one device
   # quantizer for every route; folding g_quantize into the cd band

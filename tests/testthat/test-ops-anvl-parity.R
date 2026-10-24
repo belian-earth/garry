@@ -88,6 +88,50 @@ test_that("reductions match under tracing (2D and 3D, nan_rm both ways)", {
   expect_true(is.nan(got$poison))
 })
 
+test_that("g_median's sorting network matches anvl's median exactly", {
+  set.seed(36)
+  for (n in c(2L, 3L, 7L, 13L, 16L, 32L)) {
+    a <- array(round(rnorm(n * 6 * 5), 1), c(n, 6L, 5L)) # ties included
+    a[sample(length(a), length(a) %/% 4)] <- NaN
+    a[, 1L, 1L] <- NaN # an all-NaN slice
+    for (dt in c("f32", "f64")) {
+      for (ax in 1:3) {
+        for (rm in c(TRUE, FALSE)) {
+          jf <- g_jit(function(inputs) {
+            list(
+              net = g_median(inputs[[1L]], dims = ax, nan_rm = rm),
+              anvl = anvl::nv_median(inputs[[1L]], axes = ax, nan_rm = rm)
+            )
+          })
+          got <- g_download(jf(list(g_upload(a, dt))))
+          expect_identical(got$net, got$anvl)
+        }
+      }
+    }
+  }
+  # integer input: a median between two integers comes back as f32
+  q <- array(sample(0:9, 7 * 4 * 3, TRUE), c(7L, 4L, 3L))
+  jf <- g_jit(function(inputs) {
+    list(
+      net = g_median(inputs[[1L]], dims = 1L),
+      anvl = anvl::nv_median(inputs[[1L]], axes = 1L)
+    )
+  })
+  got <- g_download(jf(list(g_upload(q, "i16"))))
+  expect_identical(got$net, got$anvl)
+  expect_identical(garry:::.sort_pairs(2L), list(c(1L, 2L)))
+  # two middle values near the f32 limit: the average stays finite
+  jf <- g_jit(function(inputs) {
+    list(
+      net = g_median(inputs[[1L]], dims = 1L),
+      anvl = anvl::nv_median(inputs[[1L]], axes = 1L)
+    )
+  })
+  got <- g_download(jf(list(g_upload(array(c(1, 3e38, 3.1e38, 3.2e38), c(4L, 1L, 1L)), "f32"))))
+  expect_true(is.finite(got$net))
+  expect_identical(got$net, got$anvl)
+})
+
 test_that("bitwise family matches under tracing", {
   set.seed(35)
   qa <- matrix(sample(0:65535, 60, replace = TRUE), 6, 10)

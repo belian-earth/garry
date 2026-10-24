@@ -374,6 +374,54 @@ NULL
   vapply(exports, function(e) get(.key(e), envir = pads), integer(1))
 }
 
+# Rows per strip for a stage's kernel (.strip_stage_fn), or 0 for the
+# whole chunk. Only scan stages strip: XLA runs each scan step as a
+# sequence of whole-plane passes over ~20 f64 planes, which on a full
+# chunk stream from memory (see garry.scan_strip_px). Only stages that
+# are pointwise in y and x strip: no halo or output ring, no focal or
+# patch member, no reduction over x or y.
+.stage_strip_rows <- function(graph, s) {
+  px <- garry_opt("scan_strip_px")
+  if (px <= 0 || s@kind != "compute" || s@halo + s@out_pad > 0L) {
+    return(0L)
+  }
+  nodes <- lapply(s@members, function(id) graph_get(graph, id))
+  is_a <- function(cls) {
+    vapply(nodes, function(n) S7::S7_inherits(n, cls), logical(1))
+  }
+  spatial <- is_a(FocalNode) |
+    is_a(PatchNode) |
+    vapply(
+      nodes,
+      function(n) {
+        S7::S7_inherits(n, ReduceNode) && any(n@over %in% c("x", "y"))
+      },
+      logical(1)
+    )
+  if (!any(is_a(ScanNode)) || any(spatial)) {
+    return(0L)
+  }
+  cd <- pmin(s@chunks@chunk_dim, s@grid@dims[c("x", "y")])
+  rows <- max(1L, as.integer(px %/% cd[[1L]]))
+  if (rows >= cd[[2L]]) 0L else rows
+}
+
+# Run a stage closure over row strips of its chunk inside one XLA
+# program (.g_map_row_strips), so each step of a scan member works on
+# planes that stay in cache. The members are pointwise in y and x, so a
+# strip computes exactly the rows of the whole chunk it covers.
+# Untraced values (the oracle) run whole.
+.strip_stage_fn <- function(f, rows) {
+  force(f)
+  force(rows)
+  function(inputs) {
+    if (!length(inputs) || !.g_traced(inputs[[1L]])) {
+      return(f(inputs))
+    }
+    .g_map_row_strips(f, inputs, rows)
+  }
+}
+
 # Pass-through closure for source_read / warp stages (executor supplies
 # the window array as the single input).
 .passthrough_fn <- function(node_id) {
@@ -1523,7 +1571,7 @@ plan_lazy <- function(x) {
     numeric(1)
   )
   stage_objs <- lapply(protos, function(s) {
-    Stage(
+    st <- Stage(
       id = as.integer(s$id),
       kind = s$kind,
       members = as.integer(s$members),
@@ -1549,6 +1597,12 @@ plan_lazy <- function(x) {
       out_pad = as.integer(s$out_pad %||% 0L),
       export_pads = as.integer(s$export_pads %||% integer(0))
     )
+    rows <- .stage_strip_rows(graph, st)
+    if (rows > 0L) {
+      st@fn <- .strip_stage_fn(st@fn, rows)
+      st@strip_rows <- rows
+    }
+    st
   })
 
   # The merge pass renumbers stages; find the sink by membership. A

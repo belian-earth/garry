@@ -253,6 +253,12 @@ g_clamp <- function(x, lo, hi) {
 #' @return Traced array of `dtype`.
 #' @keywords internal
 g_quantize <- function(x, scale, offset, nodata, dtype) {
+  if (inherits(x, "AnvlArray") && length(nodata) == 1L) {
+    # Called eagerly (the daemons quantize kernel outputs outside the
+    # cached kernels), each operation below is its own device pass over
+    # the cube; jitted, they fuse into one.
+    return(.g_quantize_jit(scale, offset, nodata, dtype)(x))
+  }
   rng <- .g_int_range[[dtype]]
   if (is.null(rng)) {
     cli::cli_abort("unsupported quantize dtype {.val {dtype}}")
@@ -289,6 +295,25 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
     }
   }
   g_cast(q, dtype)
+}
+
+# One jitted g_quantize per quantization (anvl's jit cache keys each by
+# input shape), dropped wholesale past 64 like the daemon kernel cache.
+.g_quantize_cache <- new.env(parent = emptyenv())
+.g_quantize_jit <- function(scale, offset, nodata, dtype) {
+  key <- rlang::hash(list(scale, offset, nodata, dtype))
+  jf <- .g_quantize_cache[[key]]
+  if (is.null(jf)) {
+    if (length(ls(.g_quantize_cache, all.names = TRUE)) >= 64L) {
+      rm(
+        list = ls(.g_quantize_cache, all.names = TRUE),
+        envir = .g_quantize_cache
+      )
+    }
+    jf <- g_jit(function(x) g_quantize(x, scale, offset, nodata, dtype))
+    assign(key, jf, envir = .g_quantize_cache)
+  }
+  jf
 }
 
 # Shape of an AnvlArray (bridge; the executor must not touch anvl).
@@ -719,6 +744,59 @@ g_slice_t <- function(x, from, to) {
   do.call(anvl::nv_concatenate, c(xs, list(axis = as.integer(axis))))
 }
 
+# Apply `f` (a list of traced (outer.., y, x) arrays -> a list of the
+# same) over row strips of `rows` rows inside one program: the inputs
+# are cut into strips along a new leading axis (the last strip padded
+# with zero rows) and a scan applies `f` to one strip per step; the
+# padded rows are cut from the outputs. Exact for an `f` that is
+# pointwise in y and x (.strip_stage_fn). Inputs that disagree on their
+# y and x extents, or no taller than a strip, run whole.
+.g_map_row_strips <- function(f, inputs, rows) {
+  yx <- lapply(inputs, function(v) utils::tail(.g_shape(v), 2L))
+  ny <- yx[[1L]][[1L]]
+  nx <- yx[[1L]][[2L]]
+  if (ny <= rows || length(unique(yx)) != 1L) {
+    return(f(inputs))
+  }
+  ns <- as.integer(ceiling(ny / rows))
+  pad <- ns * rows - ny
+  # (outer.., ny, nx) -> (ns, outer.., rows, nx)
+  to_strips <- function(v) {
+    n <- length(.g_shape(v))
+    if (pad > 0L) {
+      v <- anvl::nv_pad(
+        v,
+        .g_scalar_like(v, 0),
+        low = rep(0L, n),
+        high = c(rep(0L, n - 2L), pad, 0L)
+      )
+    }
+    outer <- .g_shape(v)[seq_len(n - 2L)]
+    v <- .g_reshape_rm(v, c(outer, ns, rows, nx))
+    if (n == 2L) {
+      v
+    } else {
+      anvl::nv_transpose(v, c(n - 1L, seq_len(n - 2L), n, n + 1L))
+    }
+  }
+  # (ns, outer.., rows, nx) -> (outer.., ny, nx)
+  from_strips <- function(v) {
+    m <- length(.g_shape(v))
+    if (m > 3L) {
+      v <- anvl::nv_transpose(v, c(2:(m - 2L), 1L, m - 1L, m))
+    }
+    outer <- .g_shape(v)[seq_len(m - 3L)]
+    v <- .g_reshape_rm(v, c(outer, ns * rows, nx))
+    if (pad > 0L) .g_slice_axis(v, m - 2L, 1L, ny) else v
+  }
+  res <- anvl::nv_scan(
+    init = anvl::nv_fill(0, shape = integer(), dtype = "f32"),
+    xs = lapply(inputs, to_strips),
+    body = function(carry, s) list(carry = carry, out = f(unname(s)))
+  )
+  lapply(res$out, from_strips)
+}
+
 #' Concatenate along dim 1 (the scanned axis).
 #'
 #' Matrices are treated as single (1, y, x) slices, so a scan's stacked
@@ -975,12 +1053,95 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
+    if (length(dims) == 1L && .g_shape(x)[[dims]] %in% 2:32) {
+      return(.g_median_net(x, as.integer(dims), nan_rm))
+    }
     return(anvl::nv_median(x, axes = dims, nan_rm = nan_rm))
   }
   .g_reduce(x, dims, function(v) {
     m <- stats::median(v, na.rm = nan_rm)
     if (is.na(m)) NaN else m # all-nodata -> NaN, never NA
   })
+}
+
+# Median along one short axis as a sorting network. anvl's median moves
+# the axis innermost (a transpose of the whole array) and ranks each
+# slice with top_k, which XLA's CPU backend runs as a scalar loop per
+# pixel: 85 ms for a (13, 480, 480) f64 cube on 10 cores. A sorting
+# network is a fixed sequence of elementwise min/max over the axis's
+# planes, which XLA fuses into one vectorised pass with no transpose
+# (14 ms there), and the median reads the sorted planes at each pixel's
+# valid count. The values are anvl's: the same order statistics, and
+# the even-count average in anvl's form, lo * 0.5 + hi * 0.5, which
+# does not overflow where (lo + hi) * 0.5 would near the dtype's limit.
+.g_median_net <- function(x, axis, nan_rm) {
+  if (!.g_dtype(x) %in% c("f16", "bf16", "f32", "f64")) {
+    # as anvl: a median can fall between two integers
+    x <- anvl::nv_convert(x, "f32")
+  }
+  sh <- .g_shape(x)
+  n <- sh[[axis]]
+  cnt <- g_count(x, dims = axis)
+  if (nan_rm) {
+    # NaN sorts last as +Inf, past every slot the valid count reads
+    x <- g_ifelse(g_is_nodata(x), .g_scalar_like(x, Inf), x)
+  }
+  s <- lapply(seq_len(n), function(i) {
+    .g_reshape_rm(.g_slice_axis(x, axis, i, i), sh[-axis])
+  })
+  for (cp in .sort_pairs(n)) {
+    lo <- anvl::nv_pmin(s[[cp[[1L]]]], s[[cp[[2L]]]])
+    s[[cp[[2L]]]] <- anvl::nv_pmax(s[[cp[[1L]]]], s[[cp[[2L]]]])
+    s[[cp[[1L]]]] <- lo
+  }
+  # anvl's even-count weight, a run-time 0.5: with a literal 0.5 XLA's
+  # simplifier refactors lo * 0.5 + hi * 0.5 into (lo + hi) * 0.5, which
+  # overflows near the dtype's limit
+  w <- g_cast(cnt, .g_dtype(x)) * 0 + 0.5
+  mid <- function(k) {
+    if (k %% 2L) {
+      s[[(k + 1L) %/% 2L]]
+    } else {
+      s[[k %/% 2L]] * (1 - w) + s[[k %/% 2L + 1L]] * w
+    }
+  }
+  if (!nan_rm) {
+    # a NaN anywhere in the slice makes it NaN, as in anvl
+    return(g_ifelse(cnt == n, mid(n), NaN))
+  }
+  out <- .g_scalar_like(s[[1L]], NaN) # all-NaN slices match no count
+  for (k in seq_len(n)) {
+    out <- g_ifelse(cnt == k, mid(k), out)
+  }
+  out
+}
+
+# Comparators (i, j), i < j, of Batcher's odd-even merge sort for n
+# elements: after them, each position holds its order statistic. The
+# network is built for the next power of two and pruned of comparators
+# that touch a padding position: padding is +Inf, so those leave every
+# real position as it was.
+.sort_pairs <- function(n) {
+  n_pow <- as.integer(2L^ceiling(log2(n)))
+  out <- list()
+  p <- 1L
+  while (p < n_pow) {
+    k <- p
+    while (k >= 1L) {
+      for (j in seq(k %% p, n_pow - 1L - k, by = 2L * k)) {
+        for (i in 0:min(k - 1L, n_pow - j - k - 1L)) {
+          a <- i + j
+          b <- i + j + k
+          if (a %/% (2L * p) == b %/% (2L * p) && b < n) {
+            out[[length(out) + 1L]] <- c(a + 1L, b + 1L)
+          }
+        }
+      }
+      k <- k %/% 2L
+    }
+    p <- p * 2L
+  }
+  out
 }
 
 #' @rdname g-reductions

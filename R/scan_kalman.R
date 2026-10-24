@@ -149,6 +149,26 @@ kalman_llt <- function(
 
     ok <- g_count(y, dims = 1L) >= 3 # hutan: < 3 valid obs -> all-NaN
 
+    # predict: x <- F x, P <- F P F' + Q  (F = [[1,1],[0,1]]) from the
+    # filtered state `f`. The forward pass predicts into each year, and
+    # the backward pass recomputes the same prediction from the stored
+    # filtered state rather than the forward pass storing it: five fewer
+    # (t, y, x) f64 cubes to write and read back, and identical bits,
+    # since both run these operations on the same values.
+    predict <- function(f, q_lvl, bd) {
+      P11p <- f$P11 + 2 * f$P12 + f$P22 + q_lvl
+      P12p <- f$P12 + f$P22
+      P22p <- f$P22 + q_slp
+      if (!is.null(bd)) {
+        # a regime boundary: the diffuse start again (the predicted
+        # mean is kept as the prior's centre; its weight is ~0)
+        P11p <- g_ifelse(bd > 0, kap + 0 * P11p, P11p)
+        P12p <- g_ifelse(bd > 0, 0 * P12p, P12p)
+        P22p <- g_ifelse(bd > 0, kap + 0 * P22p, P22p)
+      }
+      list(a1 = f$a1 + f$a2, a2 = f$a2, P11 = P11p, P12 = P12p, P22 = P22p)
+    }
+
     # One filter+smoother pass. q_scale: NULL (plain) or a (t, y, x)
     # per-year level-noise multiplier (robust reweighting). Returns
     # (t, y, x) cubes of the smoothed level mean and sd, gap-masked.
@@ -175,19 +195,12 @@ kalman_llt <- function(
         body = function(carry, s) {
           q_lvl <- if (!is.null(s$qs)) q_lvl0 * s$qs else q_lvl0
           h_t <- if (!is.null(s$r)) h0 * s$r else h0
-          # predict: x <- F x, P <- F P F' + Q  (F = [[1,1],[0,1]])
-          a1p <- carry$a1 + carry$a2
-          a2p <- carry$a2
-          P11p <- carry$P11 + 2 * carry$P12 + carry$P22 + q_lvl
-          P12p <- carry$P12 + carry$P22
-          P22p <- carry$P22 + q_slp
-          if (!is.null(s$bd)) {
-            # a regime boundary: the diffuse start again (the predicted
-            # mean is kept as the prior's centre; its weight is ~0)
-            P11p <- g_ifelse(s$bd > 0, kap + 0 * P11p, P11p)
-            P12p <- g_ifelse(s$bd > 0, 0 * P12p, P12p)
-            P22p <- g_ifelse(s$bd > 0, kap + 0 * P22p, P22p)
-          }
+          pr <- predict(carry, q_lvl, s$bd)
+          a1p <- pr$a1
+          a2p <- pr$a2
+          P11p <- pr$P11
+          P12p <- pr$P12
+          P22p <- pr$P22
           # update (analytic gain, Z = [1, 0]); NaN y flows through the
           # update terms and the select keeps the prediction.
           v <- s$y - a1p
@@ -209,12 +222,7 @@ kalman_llt <- function(
               P11f = P11,
               P12f = P12,
               P22f = P22,
-              z = z,
-              a1p = a1p,
-              a2p = a2p,
-              P11p = P11p,
-              P12p = P12p,
-              P22p = P22p
+              z = z
             )
           )
         },
@@ -244,9 +252,10 @@ kalman_llt <- function(
         ))
       }
 
-      # backward RTS over t = T-1 .. 1: step t reads filtered means at t
-      # and the PREDICTED state at t+1 (the series shifted by one),
-      # carrying smoothed(t+1). Cancellation-free forms (header note):
+      # backward RTS over t = T-1 .. 1: step t reads the filtered state
+      # at t and predicts from it into t+1 (with year t+1's level noise
+      # and boundary, as the forward pass did), carrying smoothed(t+1).
+      # Cancellation-free forms (header note):
       #   J   = F^-1 (I - Q S^-1)
       #   P_s = F^-1 (Q - Q S^-1 Q) F^-1' + J P_s_next J'
       # with S = P_pred(t+1) and Q = diag(q_lvl(t+1), q_slp).
@@ -254,20 +263,15 @@ kalman_llt <- function(
       bxs <- list(
         a1f = g_slice_t(f$a1f, 1L, T_ - 1L),
         a2f = g_slice_t(f$a2f, 1L, T_ - 1L),
-        a1pn = g_slice_t(f$a1p, 2L, T_),
-        a2pn = g_slice_t(f$a2p, 2L, T_),
-        P11pn = g_slice_t(f$P11p, 2L, T_),
-        P12pn = g_slice_t(f$P12p, 2L, T_),
-        P22pn = g_slice_t(f$P22p, 2L, T_)
+        P11f = g_slice_t(f$P11f, 1L, T_ - 1L),
+        P12f = g_slice_t(f$P12f, 1L, T_ - 1L),
+        P22f = g_slice_t(f$P22f, 1L, T_ - 1L)
       )
       if (!is.null(q_scale)) {
         bxs$qsn <- g_slice_t(q_scale, 2L, T_)
       }
       if (!is.null(bnd)) {
         bxs$bdn <- g_slice_t(bnd, 2L, T_)
-        bxs$P11f <- g_slice_t(f$P11f, 1L, T_ - 1L)
-        bxs$P12f <- g_slice_t(f$P12f, 1L, T_ - 1L)
-        bxs$P22f <- g_slice_t(f$P22f, 1L, T_ - 1L)
       }
       bwd <- g_scan(
         init = list(
@@ -279,12 +283,23 @@ kalman_llt <- function(
         ),
         body = function(carry, s) {
           q1 <- if (!is.null(s$qsn)) q_lvl0 * s$qsn else q_lvl0
-          det <- s$P11pn * s$P22pn - s$P12pn * s$P12pn
+          pn <- predict(
+            list(
+              a1 = s$a1f,
+              a2 = s$a2f,
+              P11 = s$P11f,
+              P12 = s$P12f,
+              P22 = s$P22f
+            ),
+            q1,
+            s$bdn
+          )
+          det <- pn$P11 * pn$P22 - pn$P12 * pn$P12
           # M = I - Q S^-1  (S^-1 via the analytic 2x2 inverse)
-          M11 <- 1 - q1 * s$P22pn / det
-          M12 <- q1 * s$P12pn / det
-          M21 <- q_slp * s$P12pn / det
-          M22 <- 1 - q_slp * s$P11pn / det
+          M11 <- 1 - q1 * pn$P22 / det
+          M12 <- q1 * pn$P12 / det
+          M21 <- q_slp * pn$P12 / det
+          M22 <- 1 - q_slp * pn$P11 / det
           J11 <- M11 - M21
           J12 <- M12 - M22
           J21 <- M21
@@ -295,14 +310,14 @@ kalman_llt <- function(
             J11 <- J11 * keep; J12 <- J12 * keep; J21 <- J21 * keep; J22 <- J22 * keep
           }
           # a_s(t) = a_f(t) + J (a_s(t+1) - a_pred(t+1))
-          d1 <- carry$a1s - s$a1pn
-          d2 <- carry$a2s - s$a2pn
+          d1 <- carry$a1s - pn$a1
+          d2 <- carry$a2s - pn$a2
           a1s <- s$a1f + J11 * d1 + J12 * d2
           a2s <- s$a2f + J21 * d1 + J22 * d2
           # E = F^-1 (Q - Q S^-1 Q) F^-1'   (G symmetric)
-          G11 <- q1 * (1 - q1 * s$P22pn / det)
-          G12 <- q1 * q_slp * s$P12pn / det
-          G22 <- q_slp * (1 - q_slp * s$P11pn / det)
+          G11 <- q1 * (1 - q1 * pn$P22 / det)
+          G12 <- q1 * q_slp * pn$P12 / det
+          G22 <- q_slp * (1 - q_slp * pn$P11 / det)
           E11 <- G11 - 2 * G12 + G22
           E12 <- G12 - G22
           E22 <- G22

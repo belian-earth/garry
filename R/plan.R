@@ -57,6 +57,9 @@ NULL
 #' @param export_pads Integer vector parallel to `exports`: the padding
 #'   each export value carries (post-focal exports carry less than
 #'   pre-focal ones). Empty means all zero.
+#' @param strip_rows Rows per strip when `fn` runs a compute stage's
+#'   members over row strips of each chunk (see `garry.scan_strip_px`);
+#'   0 runs the whole chunk at once.
 #' @return A `Stage`.
 #' @export
 Stage <- S7::new_class(
@@ -77,7 +80,8 @@ Stage <- S7::new_class(
     export_pads = S7::new_property(
       S7::class_integer,
       default = quote(integer(0))
-    )
+    ),
+    strip_rows = S7::new_property(S7::class_integer, default = 0L)
   ),
   validator = function(self) {
     kinds <- c(

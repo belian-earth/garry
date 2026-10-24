@@ -12,8 +12,9 @@ garry_task_report(path)
 \value{
 Invisibly, a list: \code{events} (event counts), \code{tasks} (one row
 per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
-queue_s, run_s), \code{stages} (per-stage counts, p50/p95 run and wait
-seconds, p50 queue seconds), \code{max_concurrency}, \code{drain_s}, \code{host_tail_s},
+queue_s, run_s, harvest_s), \code{stages} (per-stage counts, p50/p95 run
+and wait seconds, p50 queue and harvest seconds), \code{max_concurrency},
+\code{drain_s}, \code{host_tail_s},
 \code{peak_model_mb}, \code{peak_rss_mb}, \code{peak_rss_by_role} (named MB),
 \code{peak_host_mb}, \code{peak_cgroup_mb}, \code{cgroup_limit_mb}, \code{peak_shm_mb}
 and \code{min_comp_budget_mb} (\code{NA} when the log has no such rows).
