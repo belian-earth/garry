@@ -32,6 +32,14 @@
 
 ### Performance
 
+- A full read store no longer serialises the compute pool. When the
+  resident read regions exceeded their budget, only one compute task
+  could run at a time, and compute tasks are what free those regions, so
+  the store stayed full. Now one compute task per compute daemon may
+  run. On hutan’s SI tail at 5.76 M cells with two compute daemons, the
+  second daemon went from 36 of 650 compute tasks to 335, and the drain
+  from 56.9 s to 43.5 s, for about 0.3 GB more shared memory at peak.
+
 - The bands of one file collapse into a single read per window when the
   file’s bands share storage (a Zarr array, a pixel-interleaved file),
   also through a warp onto a target grid and through
@@ -40,10 +48,12 @@
   11 times its bytes before (102 s for 1024 x 1024 pixels) and fetches
   them once now (14 s). Band-interleaved files keep their per-band
   reads.
+
 - A Zarr dataset handle is closed once it has read
   `garry.zarr_handle_mb` (256 MB), and daemons close their Zarr handles
   between runs, since GDAL keeps every chunk it decodes for the life of
   the handle.
+
 - A Zarr store on a reprojected grid warps window by window from its
   cached handle rather than through a warped VRT, which reopened the
   store inside GDAL for every read.
@@ -65,6 +75,30 @@
   [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
   functions alike. anvl 0.5.1 summed an integer input in its own dtype,
   so a mean of Int8 or Int16 values wrapped (100 and 120 gave -4.5).
+- Memory budgets respect a container’s limit. Inside a container with
+  its own cgroup namespace (Docker’s default on cgroup v2) and on cgroup
+  v1, garry found no limit and budgeted against the host’s RAM.
+- [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
+  caps the GDAL block cache of every daemon at
+  `garry_opt("gdal_cachemax_mb")`, not only the read daemons’. The
+  compute daemons and the writer were on GDAL’s default of 5% of RAM
+  each, about 12 GB apiece on a 240 GB machine.
+
+### Observability
+
+- The task log (`garry.task_log`) tags each daemon’s memory sample with
+  its role (read, comp or write), and samples the calling process’s
+  memory, the container (cgroup) usage against its limit, `/dev/shm` use
+  and the compute and read admission budgets.
+  [`garry_task_report()`](https://belian-earth.github.io/garry/reference/garry_task_report.md)
+  summarises them. Sampling and the memory guard now run every 5 s
+  during a drain, including while every daemon is busy with a long task.
+- The task log records when a daemon starts each task (`start` rows),
+  and
+  [`garry_task_report()`](https://belian-earth.github.io/garry/reference/garry_task_report.md)
+  splits the time a task queued behind its daemon’s previous task from
+  its run time. Launch-to-done alone held both, so a busy daemon’s tasks
+  read about twice as slow as they ran.
 
 ## garry 0.1.0
 

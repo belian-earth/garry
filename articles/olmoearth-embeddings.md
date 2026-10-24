@@ -1,8 +1,8 @@
 # OlmoEarth embeddings from Zarr
 
-[OlmoEarth v1.3](https://allenai.org/papers/olmoearth-v1-3) from the
-Allen Institute for AI summarises each year of Sentinel-1, Sentinel-2
-and Landsat 8/9 imagery as a 128-dimensional vector per 10 m pixel. The
+[OlmoEarth v1.3](https://allenai.org/papers/olmoearth-v1-3) from Ai2
+summarises each year of Sentinel-1, Sentinel-2 and Landsat 8/9 imagery
+as a 128-dimensional vector per 10 m pixel. The
 [embeddings](https://source.coop/olmoearth/olmoearth-v1-3-embeddings)
 are public on Source Cooperative as one Zarr v3 store, with no account
 or signing needed:

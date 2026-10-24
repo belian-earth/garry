@@ -1,9 +1,9 @@
 # Dequantize OlmoEarth embedding codes.
 
-The OlmoEarth v1.3 embeddings (Allen Institute for AI, published on
-Source Cooperative as a Zarr v3 store) quantize each 128-dimension
-annual vector to Int8 with the `signed_power` scheme, power 2:
-`sign(q) * (|q| / 127.5)^2`, with `-128` as nodata. That is the decode
+The OlmoEarth v1.3 embeddings (Ai2, published on Source Cooperative as a
+Zarr v3 store) quantize each 128-dimension annual vector to Int8 with
+the `signed_power` scheme, power 2: `sign(q) * (|q| / 127.5)^2`, with
+`-128` as nodata. That is the decode
 [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
 applies too; this name records which product a pipeline reads.
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
@@ -36,8 +36,8 @@ product as cosine similarity.
 
 ## References
 
-Team OlmoEarth et al. (2026). OlmoEarth v1.3 Embeddings. Allen Institute
-for AI. <https://allenai.org/papers/olmoearth-v1-3>
+Team OlmoEarth et al. (2026). OlmoEarth v1.3 Embeddings. Ai2.
+<https://allenai.org/papers/olmoearth-v1-3>
 
 <https://source.coop/olmoearth/olmoearth-v1-3-embeddings>
 

@@ -64,9 +64,10 @@
 </ul></div>
 <div class="section level3">
 <h3 id="performance-development-version">Performance<a class="anchor" aria-label="anchor" href="#performance-development-version"></a></h3>
-<ul><li>The bands of one file collapse into a single read per window when the file’s bands share storage (a Zarr array, a pixel-interleaved file), also through a warp onto a target grid and through <code><a href="../reference/lazy_map.html">lazy_map()</a></code> applied per band. A pooled read of a 128-band OlmoEarth window fetched 11 times its bytes before (102 s for 1024 x 1024 pixels) and fetches them once now (14 s). Band-interleaved files keep their per-band reads.</li>
-<li>A Zarr dataset handle is closed once it has read <code>garry.zarr_handle_mb</code> (256 MB), and daemons close their Zarr handles between runs, since GDAL keeps every chunk it decodes for the life of the handle.</li>
-<li>A Zarr store on a reprojected grid warps window by window from its cached handle rather than through a warped VRT, which reopened the store inside GDAL for every read.</li>
+<ul><li><p>A full read store no longer serialises the compute pool. When the resident read regions exceeded their budget, only one compute task could run at a time, and compute tasks are what free those regions, so the store stayed full. Now one compute task per compute daemon may run. On hutan’s SI tail at 5.76 M cells with two compute daemons, the second daemon went from 36 of 650 compute tasks to 335, and the drain from 56.9 s to 43.5 s, for about 0.3 GB more shared memory at peak.</p></li>
+<li><p>The bands of one file collapse into a single read per window when the file’s bands share storage (a Zarr array, a pixel-interleaved file), also through a warp onto a target grid and through <code><a href="../reference/lazy_map.html">lazy_map()</a></code> applied per band. A pooled read of a 128-band OlmoEarth window fetched 11 times its bytes before (102 s for 1024 x 1024 pixels) and fetches them once now (14 s). Band-interleaved files keep their per-band reads.</p></li>
+<li><p>A Zarr dataset handle is closed once it has read <code>garry.zarr_handle_mb</code> (256 MB), and daemons close their Zarr handles between runs, since GDAL keeps every chunk it decodes for the life of the handle.</p></li>
+<li><p>A Zarr store on a reprojected grid warps window by window from its cached handle rather than through a warped VRT, which reopened the store inside GDAL for every read.</p></li>
 </ul></div>
 <div class="section level3">
 <h3 id="bug-fixes-development-version">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-development-version"></a></h3>
@@ -76,6 +77,14 @@
 <code><a href="../reference/garry_gdal_config.html">garry_gdal_config()</a></code> no longer sets <code>GDAL_HTTP_RETRY_CODES</code>. GDAL matches that list by substring, so <code>"500"</code> made every curl failure (DNS included) retry with backoff for minutes; GDAL’s default set is the same codes plus timeouts and resets.</li>
 <li>
 <code><a href="../reference/g-reductions.html">g_mean()</a></code> averages integer input at f32, in custom reducers and <code><a href="../reference/lazy_map.html">lazy_map()</a></code> functions alike. anvl 0.5.1 summed an integer input in its own dtype, so a mean of Int8 or Int16 values wrapped (100 and 120 gave -4.5).</li>
+<li>Memory budgets respect a container’s limit. Inside a container with its own cgroup namespace (Docker’s default on cgroup v2) and on cgroup v1, garry found no limit and budgeted against the host’s RAM.</li>
+<li>
+<code><a href="../reference/garry_daemons.html">garry_daemons()</a></code> caps the GDAL block cache of every daemon at <code>garry_opt("gdal_cachemax_mb")</code>, not only the read daemons’. The compute daemons and the writer were on GDAL’s default of 5% of RAM each, about 12 GB apiece on a 240 GB machine.</li>
+</ul></div>
+<div class="section level3">
+<h3 id="observability-development-version">Observability<a class="anchor" aria-label="anchor" href="#observability-development-version"></a></h3>
+<ul><li>The task log (<code>garry.task_log</code>) tags each daemon’s memory sample with its role (read, comp or write), and samples the calling process’s memory, the container (cgroup) usage against its limit, <code>/dev/shm</code> use and the compute and read admission budgets. <code><a href="../reference/garry_task_report.html">garry_task_report()</a></code> summarises them. Sampling and the memory guard now run every 5 s during a drain, including while every daemon is busy with a long task.</li>
+<li>The task log records when a daemon starts each task (<code>start</code> rows), and <code><a href="../reference/garry_task_report.html">garry_task_report()</a></code> splits the time a task queued behind its daemon’s previous task from its run time. Launch-to-done alone held both, so a busy daemon’s tasks read about twice as slow as they ran.</li>
 </ul></div>
 </div>
     <div class="section level2">

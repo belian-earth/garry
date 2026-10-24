@@ -148,7 +148,9 @@ GDAL block cache.</p></dd>
 (default <code>TRUE</code>). The host session's GDAL config is never changed;
 call <code><a href="garry_gdal_config.html">garry_gdal_config()</a></code> yourself for host-side discovery. Set
 <code>FALSE</code> to leave the daemons on GDAL's defaults too (e.g. when
-mixing local multi-file reads).</p></dd>
+mixing local multi-file reads). Either way every daemon's GDAL
+block cache is capped at <code>garry_opt("gdal_cachemax_mb")</code>: GDAL's
+own default is 5% of RAM per process.</p></dd>
 
 
 <dt id="arg--">...<a class="anchor" aria-label="anchor" href="#arg--"></a></dt>

@@ -66,7 +66,10 @@ garry_daemons(
   is never changed; call
   [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
   yourself for host-side discovery. Set `FALSE` to leave the daemons on
-  GDAL's defaults too (e.g. when mixing local multi-file reads).
+  GDAL's defaults too (e.g. when mixing local multi-file reads). Either
+  way every daemon's GDAL block cache is capped at
+  `garry_opt("gdal_cachemax_mb")`: GDAL's own default is 5% of RAM per
+  process.
 
 - ...:
 
