@@ -279,6 +279,10 @@ NULL
 # 4 tiles hold ~0.5 GB), so a reader fleet fits the in-flight byte
 # budget several times over instead of serialising on it. At most two
 # distinct tile heights occur, so the jit cache compiles twice.
+#
+# `fuse$grow` = c(rows, cols) grows an edge read window to the stage's
+# modal window shape and crops the export back (.sv_grow), so every
+# window runs the one kernel.
 .apply_fuse <- function(m, fuse, store_raw = FALSE) {
   if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
@@ -287,6 +291,9 @@ NULL
   if (is.null(jf)) {
     jf <- g_jit(fuse$fn)
     .daemon_cache[[fuse$ck]] <- jf
+  }
+  if (!is.null(fuse$grow)) {
+    m <- .sv_grow(m, fuse$grow)
   }
   up <- if (.sv_is(m)) {
     g_upload_raw(m, "f32", .sv_dim(m))
@@ -325,8 +332,12 @@ NULL
   } else {
     g_download(out_dev)
   }
+  if (!is.null(fuse$grow)) {
+    out <- .sv_crop(out, fuse$grow)
+  }
+  # the caller's deferred pass (.daemon_gc_after) collects the device
+  # buffers; a full gc here ran after every fused window
   rm(res, out_dev, up)
-  gc(FALSE)
   out
 }
 
@@ -410,6 +421,10 @@ NULL
     decim = decim,
     resampling = resampling
   )
+  # a fused read's window (and its device copy, counted through it) dies
+  # with the task however small the export (a 145-band predict window is
+  # ~150 MB for a ~1 MB export)
+  win_bytes <- .payload_bytes(m)
   if (!is.null(fuse)) {
     m <- .apply_fuse(m, fuse, store_raw)
     if ((fuse$out_pad %||% 0L) > 0L) {
@@ -449,6 +464,9 @@ NULL
   # pages nothing else returns to the OS (the 11.1 drain plateau).
   # Deferred by transient size (.daemon_gc_after).
   bytes <- .payload_bytes(m) + .payload_bytes(val)
+  if (!is.null(fuse)) {
+    bytes <- bytes + win_bytes
+  }
   rm(m, val)
   .daemon_gc_after(bytes)
   sh
@@ -694,6 +712,8 @@ NULL
 #'   describe the inputs (`in_keys` name the element to extract from
 #'   each shared value: the node key, or a part name for coarse
 #'   reads); `reg_key` the daemon registry slot for the result.
+#'   `grow` = c(rows, cols) pads an edge chunk's inputs to the stage's
+#'   modal chunk shape and crops the outputs back (see `.sv_grow()`).
 #' @return The shared result (serialises as its region name).
 #' @keywords internal
 .daemon_run_compute_shm <- function(
@@ -708,7 +728,8 @@ NULL
   device = "cpu",
   store_raw = FALSE,
   edge = NULL,
-  wq = NULL
+  wq = NULL,
+  grow = NULL
 ) {
   if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
@@ -728,7 +749,7 @@ NULL
   }
   inputs <- Map(
     function(v, k, tr, dt) {
-      .sv_upload(v[[k]], tr, dt, dev)
+      .sv_upload(v[[k]], tr, dt, dev, grow = grow)
     },
     in_vals,
     in_keys,
@@ -754,6 +775,9 @@ NULL
     }
   }
   res <- .sv_download_exports(dev_res, store_raw)
+  if (!is.null(grow)) {
+    res <- .sv_crop(res, grow)
+  }
   # Content-addressed cache keys share one jitted wrapper across
   # structurally identical stages; the wrapper's export NAMES belong
   # to whichever stage compiled it, so rename positionally (exports

@@ -1,6 +1,6 @@
 # Decision D14: anvl's LRU jit cache is the kernel cache, and a regular
-# chunk grid submits at most 4 distinct shapes per stage (D4), so each
-# stage compiles at most 4 executables.
+# chunk grid submits at most 4 distinct shapes per stage (D4). Compute
+# stages grow their edge chunks to the modal shape, so they submit one.
 
 
 test_that("a ragged chunk grid submits at most 4 shapes per stage", {
@@ -9,17 +9,26 @@ test_that("a ragged chunk grid submits at most 4 shapes per stage", {
   expr <- focal_map(a * 2, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
   old <- options(garry.chunk_target_px = 17 * 23,   # ragged everywhere
-                 garry.exec_stats = TRUE)
+                 garry.exec_stats = TRUE,
+                 garry.pad_edge_chunks = FALSE)
   on.exit(options(old))
-  got <- collect(expr)
-  stats <- attr(got, "garry_exec_stats")
+  whole <- collect(expr)
+  stats <- attr(whole, "garry_exec_stats")
 
   for (shapes in stats) {
     expect_lte(length(shapes), 4L)
   }
-  # The compute stage really did see several chunks.
+  # The compute stage really did see several chunk shapes.
   compute_shapes <- stats[[2L]]
   expect_gte(length(compute_shapes), 2L)
+
+  # Grown edge chunks: the compute stage submits the modal shape alone,
+  # with the same values
+  options(garry.pad_edge_chunks = TRUE)
+  got <- collect(expr)
+  expect_length(attr(got, "garry_exec_stats")[[2L]], 1L)
+  expect_identical(dim(got), dim(whole))
+  expect_identical(as.vector(got), as.vector(whole))
 })
 
 test_that("cached dispatch is fast after first-shape compilation", {

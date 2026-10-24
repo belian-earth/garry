@@ -17,7 +17,8 @@ inputs.}
   device = "cpu",
   store_raw = FALSE,
   edge = NULL,
-  wq = NULL
+  wq = NULL,
+  grow = NULL
 )
 }
 \arguments{
@@ -26,7 +27,9 @@ inputs.}
 \item{fn}{Stage closure; \code{in_vals}/\code{in_keys}/\code{trims}/\code{dtypes}
 describe the inputs (\code{in_keys} name the element to extract from
 each shared value: the node key, or a part name for coarse
-reads); \code{reg_key} the daemon registry slot for the result.}
+reads); \code{reg_key} the daemon registry slot for the result.
+\code{grow} = c(rows, cols) pads an edge chunk's inputs to the stage's
+modal chunk shape and crops the outputs back (see \code{.sv_grow()}).}
 }
 \value{
 The shared result (serialises as its region name).

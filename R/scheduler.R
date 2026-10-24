@@ -769,6 +769,13 @@ execute_plan_mirai <- function(
           },
           "f32"
         )
+      # A fused kernel runs at read granularity: edge read windows grow
+      # to the modal window like edge compute chunks (.apply_fuse).
+      fuse_grows <- !is.null(fspec) &&
+        .stage_grows_edges(
+          graph,
+          Filter(function(st) st@id == fspec$cid, plan@stages)[[1L]]
+        )
       fetch_deps <- character(0)
       read_pool <- "read"
       # A FUSED read's kernel working set rides the in-flight compute
@@ -851,6 +858,9 @@ execute_plan_mirai <- function(
             k2 <- skey
             oo <- roo
             fs <- fspec
+            if (fuse_grows) {
+              fs$grow <- .chunk_grow(cg, core)
+            }
             oid2 <- oid
             rr <- raw_in
             sr <- use_raw
@@ -941,6 +951,9 @@ execute_plan_mirai <- function(
             k2 <- skey
             oo <- roo
             fs <- fspec
+            if (fuse_grows) {
+              fs$grow <- .chunk_grow(cg, core)
+            }
             oid2 <- oid
             rr <- raw_in
             sr <- use_raw
@@ -1056,6 +1069,11 @@ execute_plan_mirai <- function(
       if (!has_scan) {
         task_mb <- task_mb / 2
       }
+      # Edge chunks run the stage's modal kernel, warm from the
+      # pre-drain compile, on inputs grown to the modal shape
+      # (.sv_grow), instead of every daemon compiling a kernel for each
+      # edge shape (a robust Kalman stage: ~2.5 s a shape).
+      pad_edges <- .stage_grows_edges(graph, s)
       # Scan kernels pre-warm too: the broadcast is TARGETED at the
       # K designated scan profiles only (the validated <= 2 concurrent
       # pre-drain compiles, daemon-exact at any pool width).
@@ -1157,6 +1175,7 @@ execute_plan_mirai <- function(
           dtypes <- vapply(meta, function(m) m$dtype, character(1))
           key <- .glue("s{sid}_c{jj}")
           sr <- use_raw
+          grow <- if (pad_edges) .chunk_grow(s@chunks, it[jj, ])
           wqs <- if (
             !is.null(wq) &&
               length(wq_keys_of[[.key(s@id)]] %||% character(0))
@@ -1196,7 +1215,8 @@ execute_plan_mirai <- function(
                     device = dv,
                     store_raw = sr,
                     edge = eg,
-                    wq = wqt
+                    wq = wqt,
+                    grow = gr
                   )
                 ),
                 ck = ck,
@@ -1211,6 +1231,7 @@ execute_plan_mirai <- function(
                 sr = sr,
                 eg = edge,
                 wqt = wqs,
+                gr = grow,
                 .compute = prof,
                 .timed = task_timed
               )
