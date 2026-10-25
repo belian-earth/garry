@@ -1550,12 +1550,25 @@ plan_lazy <- function(x) {
         # compute chunk size and the writer streams them as each read
         # lands instead of taking a handful of full-depth regions after
         # a three-way drain (issue #25: 4 windows x 64 bands, 8 idle
-        # readers). Warp sinks keep the coarse window: the warper's
-        # per-call setup and source block decode do not shrink with it.
-        if (protos[[i]]$kind == "source_read") {
+        # readers). So do warp sinks served by a direct read (an aligned
+        # target, see .rio_direct_spec()). Other warp sinks keep the
+        # coarse window, since the warper's per-call setup and source
+        # block decode do not shrink with it, but sized by their own
+        # bands: two windows of them fit the read budget, as two input
+        # sets do for a consumer (.plan_read_px()). A 128-band warp at
+        # the full read_target_px was one 16 GB f32 window.
+        if (
+          protos[[i]]$kind == "source_read" ||
+            .warp_reads_direct(graph, protos[[i]])
+        ) {
           return(prod(as.numeric(chunk_dim)))
         }
-        return(read_px)
+        d <- protos[[i]]$grid@dims
+        nb <- max(1, prod(d[!names(d) %in% c("x", "y")]))
+        return(min(
+          read_px,
+          max(1, garry_opt("read_budget_mb") * 2^20 / (2 * 4 * nb))
+        ))
       }
       min(
         vapply(

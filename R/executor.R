@@ -150,6 +150,20 @@ NULL
   )
 }
 
+# Is a warp stage served by a direct read of its source rather than the
+# warper (.warp_read_plan())?
+.warp_reads_direct <- function(graph, s) {
+  if (!identical(s$kind, "warp")) {
+    return(FALSE)
+  }
+  wnode <- graph_get(graph, s$members[[1L]])
+  rp <- tryCatch(
+    .warp_read_plan(wnode, graph_get(graph, wnode@parents[[1L]])),
+    error = function(e) NULL
+  )
+  !is.null(rp$decim$fx)
+}
+
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,

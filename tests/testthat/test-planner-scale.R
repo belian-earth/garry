@@ -79,3 +79,32 @@ test_that("read windows are budgeted per source stage, not plan-wide", {
   # the 2-input arm reads bigger windows than the 6-input arm
   expect_gt(min(narrow_px), max(wide_px))
 })
+
+test_that("warp sinks read by their bands, at compute chunks when read directly", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd() # 4 bands a year
+  budget <- 0.005
+  old <- options(
+    garry.chunk_target_px = 9,
+    garry.read_budget_mb = budget,
+    garry.read_target_px = 1e7
+  )
+  on.exit(options(old), add = TRUE)
+  window <- function(dx) {
+    g <- grid_spec(
+      "EPSG:32632",
+      c(500050 + dx, 4599850, 500250 + dx, 4599950),
+      res = 10
+    )
+    p <- plan_lazy(stack_bands(time_sel(lazy_dataset(fx$path, g), "2023")))
+    w <- Filter(function(s) s@kind == "warp", p@stages)[[1L]]
+    w@chunks@chunk_dim
+  }
+  # half a pixel east is a warp: two windows of all 4 f32 bands fit the
+  # read budget (priced at one band, the window was 24 x 24)
+  warped <- window(5)
+  expect_lte(prod(warped), budget * 2^20 / (2 * 4 * 4))
+  expect_gt(prod(warped), 9)
+  # aligned, the direct read is chunked like a source sink
+  expect_identical(window(0), c(3L, 3L))
+})
