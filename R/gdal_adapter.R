@@ -839,6 +839,115 @@ gdal_read_window <- function(
   )
 }
 
+# Rows a multi-band read takes per slab: as many as keep half the GDAL
+# block cache holding one image row of every band (strips span the full
+# raster width whatever the window; tiles at least the window's
+# columns), in whole block rows. A decimating read (see
+# .rio_direct_spec()) maps target rows to source rows by a factor, so
+# each band reads its whole window in one call.
+.gdal_band_slab <- function(ds, band, x_size, y_size, decim = NULL) {
+  if (!is.null(decim)) {
+    return(y_size)
+  }
+  bs <- as.integer(ds$getBlockSize(band[[1L]])) # (x, y)
+  el_b <- tryCatch(
+    .gdal_dtype_bytes(ds$getDataTypeName(band[[1L]])),
+    error = function(e) 8L
+  )
+  row_b <- max(bs[[1L]], x_size) * length(band) * el_b
+  cache_b <- garry_opt("gdal_cachemax_mb") * 2^20
+  by <- max(1L, bs[[2L]])
+  slab <- max(by, as.integer(floor(cache_b * 0.5 / row_b) %/% by) * by)
+  min(slab, y_size)
+}
+
+# Source band types f32 holds exactly: their values reach an integer
+# output unchanged whether read as integers or through the f32 payload.
+.gdal_exact_int_types <- c("Byte", "Int8", "UInt16", "Int16")
+
+# Read a window's bands as the integer planes an integer output writes
+# (row-major, one per band, as gdal_write_window() hands them to GDAL),
+# with no f32 payload between: an Int8 embedding store copied to an i8
+# file spent more time building and unpacking the f32 cube than
+# reading. Cells GDAL masks as nodata, or equal to the source node's
+# `nodata`, become `out_nodata`, as the f32 route makes them NaN and
+# its write folds NaN to the sentinel. Row slabs as
+# .gdal_read_window_bands(). NULL, for the f32 route to take over, when
+# a band is not an exact integer type, the source is a raw-BSQ cube, or
+# a nodata cell meets no `out_nodata` (the f32 route raises that).
+gdal_read_int_planes <- function(
+  path,
+  band,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  nodata = numeric(0),
+  out_nodata = numeric(0),
+  open_options = character(0),
+  decim = NULL
+) {
+  if (length(open_options) == 0L && !is.null(.raw_vrt_info(path))) {
+    return(NULL)
+  }
+  fx <- decim$fx %||% 1L
+  fy <- decim$fy %||% 1L
+  if ((fx > 1L || fy > 1L) && !identical(decim$resamp, "NEAREST")) {
+    return(NULL)
+  }
+  if (.gdal_is_zarr(path)) {
+    .gdal_zarr_budget(
+      path,
+      open_options,
+      band,
+      as.numeric(x_size) * y_size * fx * fy
+    )
+  }
+  ds <- .gdal_handle(path, open_options)
+  types <- vapply(band, function(b) ds$getDataTypeName(b), character(1))
+  if (!all(types %in% .gdal_exact_int_types)) {
+    return(NULL)
+  }
+  slab <- .gdal_band_slab(ds, band, x_size, y_size, decim)
+  n_px <- as.numeric(y_size) * x_size
+  planes <- lapply(band, function(b) integer(n_px))
+  bare <- FALSE
+  r0 <- 0L
+  while (r0 < y_size) {
+    rows <- min(slab, y_size - r0)
+    for (k in seq_along(band)) {
+      v <- if (is.null(decim)) {
+        .gdal_read_rows(ds, band[[k]], x_off, y_off + r0, x_size, rows)
+      } else {
+        ds$read(
+          band[[k]],
+          decim$x_off + x_off * fx,
+          decim$y_off + y_off * fy,
+          x_size * fx,
+          y_size * fy,
+          x_size,
+          y_size
+        )
+      }
+      if (!is.integer(v)) {
+        return(NULL)
+      }
+      hit <- .Call(
+        "garry_fold_int_into",
+        planes[[k]],
+        as.numeric(r0) * x_size,
+        v,
+        as.numeric(nodata),
+        as.numeric(out_nodata),
+        PACKAGE = "garry"
+      )
+      bare <- bare || hit
+    }
+    r0 <- r0 + rows
+  }
+  if (bare) NULL else planes
+}
+
 # Multi-band window read: every band of the window in ONE pass, as a
 # (band, y, x) cube (matrix out) or a rank-3 row-major raw f32 payload
 # (band planes contiguous). Bands are read together inside row SLABS
@@ -862,25 +971,7 @@ gdal_read_window <- function(
   decim = NULL
 ) {
   nb <- length(band)
-  bs <- as.integer(ds$getBlockSize(band[[1L]])) # (x, y)
-  el_b <- tryCatch(
-    .gdal_dtype_bytes(ds$getDataTypeName(band[[1L]])),
-    error = function(e) 8L
-  )
-  # Native bytes one image row of all bands pins in cache (strips span
-  # the full raster width whatever the window; tiles at least the
-  # window's columns).
-  row_b <- max(bs[[1L]], x_size) * nb * el_b
-  cache_b <- garry_opt("gdal_cachemax_mb") * 2^20
-  by <- max(1L, bs[[2L]])
-  slab <- max(by, as.integer(floor(cache_b * 0.5 / row_b) %/% by) * by)
-  slab <- min(slab, y_size)
-  # A decimating read (see .rio_direct_spec()) maps target rows to source
-  # rows by a factor, so each band reads its whole window in one call.
-  if (!is.null(decim)) {
-    slab <- y_size
-  }
-
+  slab <- .gdal_band_slab(ds, band, x_size, y_size, decim)
   n_px <- as.numeric(y_size) * x_size
   res <- if (out == "raw_f32") {
     raw(4 * nb * n_px)

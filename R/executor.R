@@ -164,6 +164,38 @@ NULL
   !is.null(rp$decim$fx)
 }
 
+# A read-only chunk bound for an integer output, read straight into the
+# integer planes it writes (gdal_read_int_planes()), or NULL for the f32
+# route: a float output, a warp, several sources, a band affine or a
+# halo keep it, and so does a failed read, which retries there.
+.read_int_planes <- function(ra, cg, core, dtype, nodata) {
+  if (
+    .dtype_family(dtype) == "float" ||
+      cg@halo != 0L ||
+      length(ra$path) != 1L ||
+      isTRUE(ra$decim$warp) ||
+      length(ra$scale) > 0L ||
+      length(ra$offset) > 0L
+  ) {
+    return(NULL)
+  }
+  tryCatch(
+    gdal_read_int_planes(
+      ra$path,
+      ra$band,
+      core$x_off,
+      core$y_off,
+      core$x_size,
+      core$y_size,
+      nodata = ra$nodata,
+      out_nodata = nodata,
+      open_options = ra$open_options,
+      decim = ra$decim
+    ),
+    error = function(e) NULL
+  )
+}
+
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,

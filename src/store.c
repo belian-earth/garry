@@ -365,9 +365,45 @@ SEXP garry_alloc_double(SEXP n) {
   return Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
 }
 
+/* Copy an integer band read into `dst` from element `off` on, folding
+ * NA (GDAL's nodata mask) and `nodata` (the source node's sentinel) to
+ * `out_nd`, or NA without one. `dst` is a private plane the caller
+ * allocated; it is filled in place. Returns whether a nodata cell met
+ * no sentinel. */
+SEXP garry_fold_int_into(SEXP dst, SEXP off, SEXP src, SEXP nodata,
+                         SEXP out_nd) {
+  if (TYPEOF(dst) != INTSXP || TYPEOF(src) != INTSXP) {
+    error("integer planes expected");
+  }
+  const R_xlen_t o0 = (R_xlen_t) asReal(off);
+  const R_xlen_t n = XLENGTH(src);
+  if (o0 < 0 || o0 + n > XLENGTH(dst)) {
+    error("read of %lld cells at %lld overruns a %lld cell plane",
+          (long long) n, (long long) o0, (long long) XLENGTH(dst));
+  }
+  const int has_nd = LENGTH(nodata) == 1;
+  const double nd = has_nd ? REAL(nodata)[0] : 0.0;
+  const int has_out = LENGTH(out_nd) == 1;
+  const int ond = has_out ? (int) REAL(out_nd)[0] : NA_INTEGER;
+  const int *s = INTEGER(src);
+  int *d = INTEGER(dst) + o0;
+  int bare = 0;
+  for (R_xlen_t i = 0; i < n; i++) {
+    const int v = s[i];
+    if (v == NA_INTEGER || (has_nd && (double) v == nd)) {
+      d[i] = ond;
+      bare |= !has_out;
+    } else {
+      d[i] = v;
+    }
+  }
+  return ScalarLogical(bare);
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},
   {"garry_sv_plane", (DL_FUNC) &garry_sv_plane, 6},
+  {"garry_fold_int_into", (DL_FUNC) &garry_fold_int_into, 5},
   {"garry_finish_f32", (DL_FUNC) &garry_finish_f32, 4},
   {"garry_finish_f32_into", (DL_FUNC) &garry_finish_f32_into, 6},
   {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},

@@ -531,7 +531,9 @@ NULL
 #' vector GDAL writes (nodata folded, the integer-output check made)
 #' and shares the planes in one shared-memory region pinned under
 #' `reg`. The writer daemon maps the region by name, so the payload
-#' never passes through the host and the writer only writes.
+#' never passes through the host and the writer only writes. Integer
+#' sources bound for an integer output read straight into their planes
+#' (.read_int_planes()).
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
@@ -543,28 +545,38 @@ NULL
 #'   key, the window size and the region's size in MB.
 #' @keywords internal
 .daemon_read_for_write <- function(ra, cg, core, dtype, nodata, reg) {
-  v <- .exec_read_padded(
-    ra$path,
-    ra$band,
-    ra$nodata,
-    cg,
-    core,
-    open_options = ra$open_options,
-    out = "raw_f32",
-    scale = ra$scale,
-    offset = ra$offset,
-    decim = ra$decim,
-    resampling = ra$resampling
-  )
-  d <- .sv_dim(v)
-  planes <- lapply(seq_len(if (length(d) == 3L) d[[1L]] else 1L), function(b) {
-    .write_vec(v, dtype, nodata, b)$v
-  })
+  planes <- .read_int_planes(ra, cg, core, dtype, nodata)
+  bytes <- 0
+  d <- c(core$y_size, core$x_size)
+  if (is.null(planes)) {
+    v <- .exec_read_padded(
+      ra$path,
+      ra$band,
+      ra$nodata,
+      cg,
+      core,
+      open_options = ra$open_options,
+      out = "raw_f32",
+      scale = ra$scale,
+      offset = ra$offset,
+      decim = ra$decim,
+      resampling = ra$resampling
+    )
+    d <- .sv_dim(v)
+    planes <- lapply(
+      seq_len(if (length(d) == 3L) d[[1L]] else 1L),
+      function(b) {
+        .write_vec(v, dtype, nodata, b)$v
+      }
+    )
+    bytes <- .payload_bytes(v)
+    rm(v)
+  }
   sh <- mori::share(planes)
   .daemon_shm[[reg]] <- sh
   bytes_shared <- .payload_bytes(planes)
-  bytes <- .payload_bytes(v) + bytes_shared
-  rm(v, planes)
+  bytes <- bytes + bytes_shared
+  rm(planes)
   .daemon_gc_after(bytes)
   list(
     name = mori::shared_name(sh),
