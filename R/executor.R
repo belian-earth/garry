@@ -358,7 +358,9 @@ NULL
 # a sentinel is given; quantized integer payloads as integers. One C
 # pass from the byte offset: no R index vector over the bytes (the
 # writer-daemon tail of issue #25, 41 ms a plane on a 64-band write).
-.sv_plane_vec <- function(v, b, nodata = numeric(0)) {
+# `as_int` (an integer output) returns a float plane of whole numbers
+# as integers, which GDAL writes to an integer band 4x faster.
+.sv_plane_vec <- function(v, b, nodata = numeric(0), as_int = FALSE) {
   d <- .sv_dim(v)
   n <- prod(as.numeric(d[length(d) - 1:0]))
   .Call(
@@ -368,6 +370,7 @@ NULL
     n,
     attr(v, "gdt"),
     as.numeric(nodata),
+    as_int,
     PACKAGE = "garry"
   )
 }
@@ -475,6 +478,7 @@ NULL
     n,
     attr(v, "gdt"),
     numeric(0),
+    FALSE,
     PACKAGE = "garry"
   )
 }

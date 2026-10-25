@@ -1823,7 +1823,7 @@ gdal_write_window <- function(
     d <- .sv_dim(m)
     nr <- d[[length(d) - 1L]]
     nc <- d[[length(d)]]
-    v <- .sv_plane_vec(m, plane, nodata)
+    v <- .sv_plane_vec(m, plane, nodata, .dtype_family(dtype) != "float")
     if (is.integer(v)) {
       return(list(v = v, nr = nr, nc = nc))
     }

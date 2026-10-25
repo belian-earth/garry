@@ -356,3 +356,43 @@ test_that("distributed int8 multiband sink with nodata matches the oracle", {
       single[[1]][10:14, 20:24] == -128
   ))
 })
+
+test_that("float planes of whole numbers come back as integers for an integer output", {
+  mk <- function(x, gdt) {
+    structure(
+      writeBin(x, raw(), size = if (gdt == "f64") 8L else 4L),
+      gdim = c(2L, 3L),
+      gdt = gdt
+    )
+  }
+  for (gdt in c("f32", "f64")) {
+    v <- mk(c(1, -128, NaN, 300, 0, -7), gdt)
+    expect_identical(
+      .sv_plane_vec(v, 1L, -128, as_int = TRUE),
+      c(1L, -128L, -128L, 300L, 0L, -7L)
+    )
+    # doubles wherever integers would not say the same: a fraction, a
+    # value past int range, NaN with no sentinel, a fractional sentinel
+    frac <- mk(c(1, 2.5, 3, 4, 5, 6), gdt)
+    expect_identical(
+      .sv_plane_vec(frac, 1L, 0, as_int = TRUE),
+      c(1, 2.5, 3, 4, 5, 6)
+    )
+    big <- mk(c(1, 3e9, 3, 4, 5, 6), gdt)
+    expect_identical(
+      .sv_plane_vec(big, 1L, 0, as_int = TRUE),
+      c(1, 3e9, 3, 4, 5, 6)
+    )
+    expect_identical(
+      .sv_plane_vec(v, 1L, as_int = TRUE),
+      c(1, -128, NaN, 300, 0, -7)
+    )
+    expect_identical(
+      .sv_plane_vec(v, 1L, -0.5, as_int = TRUE),
+      c(1, -128, -0.5, 300, 0, -7)
+    )
+    expect_type(.write_vec(v, "i16", -128)$v, "integer")
+    expect_type(.write_vec(v, "f32", -128)$v, "double")
+    expect_error(.write_vec(v, "i16"), "sentinel")
+  }
+})
