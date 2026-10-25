@@ -501,9 +501,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' target maps onto a window of the source just the same. The warper
 #' reprojects every pixel there to reach the same cells; a nearest-
 #' neighbour read of a 128-band OlmoEarth Zarr window took 8x longer
-#' through it. Such a target takes the fast path when the read does not
-#' decimate or is nearest neighbour, the reads that match the warper
-#' exactly.
+#' through it. Such a target takes the fast path for nearest-neighbour
+#' reads only, the one read that matches the warper on every GDAL version.
 #'
 #' Integer bands are the one exception to that identity: an
 #' interpolating resampler produces fractional values that each engine
@@ -599,10 +598,11 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   if (fx < 1 || fy < 1 || x_off < 0 || y_off < 0) {
     return(NULL)
   }
-  # Through a shifted CRS, take only reads that match the warper cell for
-  # cell: no decimation, or nearest neighbour. Decimating bilinear, cubic
-  # and average reads differ from it, here as in the source CRS.
-  if (any(shift != 0) && (fx > 1 || fy > 1) && resamp != "NEAREST") {
+  # Through a shifted CRS, take only nearest-neighbour reads: the warper's
+  # interpolating reads there depend on the GDAL version (3.13 returns the
+  # source cells at a whole-pixel shift, 3.11 does not), so nearest
+  # neighbour is the one read that matches it everywhere.
+  if (any(shift != 0) && resamp != "NEAREST") {
     return(NULL)
   }
   # The target must lie wholly inside the source: the warper pads beyond

@@ -241,22 +241,15 @@ test_that("a target on the source's southern UTM grid reads directly", {
     spec[c("fx", "fy", "x_off", "y_off")],
     list(fx = 1L, fy = 1L, x_off = 7L, y_off = 5L)
   )
-  expect_false(is.null(.rio_direct_spec(f, .utm_s_grid(), "bilinear")))
   expect_false(is.null(.rio_direct_spec(f, .utm_s_grid(2L), "near")))
-  # decimating interpolators differ from the warper, so they keep it
-  expect_null(.rio_direct_spec(f, .utm_s_grid(2L), "bilinear"))
+  # interpolators keep the warper: its reads through the shift change
+  # with the GDAL version (3.11 does not return the source cells)
+  for (r in c("bilinear", "cubic", "average")) {
+    expect_null(.rio_direct_spec(f, .utm_s_grid(), r))
+  }
   # off the source's pixel grid is a genuine warp
   expect_null(.rio_direct_spec(f, .utm_s_grid(dx = 5), "near"))
-  cases <- list(
-    list("near", 1L),
-    list("bilinear", 1L),
-    list("cubic", 1L),
-    list("average", 1L),
-    list("near", 2L),
-    list("bilinear", 2L),
-    list("average", 2L)
-  )
-  for (case in cases) {
+  for (case in list(list("near", 1L), list("near", 2L))) {
     expr <- function() {
       align_to(lazy_source(f), .utm_s_grid(case[[2L]]), resampling = case[[1L]])
     }

@@ -49,9 +49,8 @@ southern 327NN grid) is the source CRS shifted by a constant, so the
 target maps onto a window of the source just the same. The warper
 reprojects every pixel there to reach the same cells; a nearest-
 neighbour read of a 128-band OlmoEarth Zarr window took 8x longer
-through it. Such a target takes the fast path when the read does not
-decimate or is nearest neighbour, the reads that match the warper
-exactly.
+through it. Such a target takes the fast path for nearest-neighbour
+reads only, the one read that matches the warper on every GDAL version.
 
 Integer bands are the one exception to that identity: an
 interpolating resampler produces fractional values that each engine
