@@ -43,6 +43,16 @@ overview selection and nodata handling at fill boundaries, because
 both paths hand the same request to the same GDAL resampler.
 }
 \details{
+A target CRS that differs from the source's only by its false origin
+(UTM north and south of one zone: a store in 326NN read onto a
+southern 327NN grid) is the source CRS shifted by a constant, so the
+target maps onto a window of the source just the same. The warper
+reprojects every pixel there to reach the same cells; a nearest-
+neighbour read of a 128-band OlmoEarth Zarr window took 8x longer
+through it. Such a target takes the fast path when the read does not
+decimate or is nearest neighbour, the reads that match the warper
+exactly.
+
 Integer bands are the one exception to that identity: an
 interpolating resampler produces fractional values that each engine
 rounds back to the band type itself, and under GDAL 3.13.1 on ARM

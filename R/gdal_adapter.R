@@ -495,6 +495,16 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' overview selection and nodata handling at fill boundaries, because
 #' both paths hand the same request to the same GDAL resampler.
 #'
+#' A target CRS that differs from the source's only by its false origin
+#' (UTM north and south of one zone: a store in 326NN read onto a
+#' southern 327NN grid) is the source CRS shifted by a constant, so the
+#' target maps onto a window of the source just the same. The warper
+#' reprojects every pixel there to reach the same cells; a nearest-
+#' neighbour read of a 128-band OlmoEarth Zarr window took 8x longer
+#' through it. Such a target takes the fast path when the read does not
+#' decimate or is nearest neighbour, the reads that match the warper
+#' exactly.
+#'
 #' Integer bands are the one exception to that identity: an
 #' interpolating resampler produces fractional values that each engine
 #' rounds back to the band type itself, and under GDAL 3.13.1 on ARM
@@ -564,7 +574,10 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   if (gt[[3L]] != 0 || gt[[5L]] != 0 || gt[[2L]] <= 0 || gt[[6L]] >= 0) {
     return(NULL)
   }
-  if (!crs_equal(ds$getProjectionRef(), target_grid@crs)) {
+  # A CRS that differs only by its false origin is the source's shifted:
+  # the target's origin moves into source coordinates and the rest holds
+  shift <- .crs_false_origin_shift(ds$getProjectionRef(), target_grid@crs)
+  if (is.null(shift)) {
     return(NULL)
   }
 
@@ -574,8 +587,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   }
   fx <- tt[[2L]] / gt[[2L]]
   fy <- tt[[6L]] / gt[[6L]]
-  x_off <- (tt[[1L]] - gt[[1L]]) / gt[[2L]]
-  y_off <- (gt[[4L]] - tt[[4L]]) / -gt[[6L]]
+  x_off <- (tt[[1L]] - shift[[1L]] - gt[[1L]]) / gt[[2L]]
+  y_off <- (gt[[4L]] - (tt[[4L]] - shift[[2L]])) / -gt[[6L]]
   if (!all(vapply(list(fx, fy, x_off, y_off), .rio_near_int, TRUE))) {
     return(NULL)
   }
@@ -584,6 +597,12 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   x_off <- round(x_off)
   y_off <- round(y_off)
   if (fx < 1 || fy < 1 || x_off < 0 || y_off < 0) {
+    return(NULL)
+  }
+  # Through a shifted CRS, take only reads that match the warper cell for
+  # cell: no decimation, or nearest neighbour. Decimating bilinear, cubic
+  # and average reads differ from it, here as in the source CRS.
+  if (any(shift != 0) && (fx > 1 || fy > 1) && resamp != "NEAREST") {
     return(NULL)
   }
   # The target must lie wholly inside the source: the warper pads beyond
