@@ -356,3 +356,159 @@ test_that("distributed int8 multiband sink with nodata matches the oracle", {
       single[[1]][10:14, 20:24] == -128
   ))
 })
+
+test_that("float planes of whole numbers come back as integers for an integer output", {
+  mk <- function(x, gdt) {
+    structure(
+      writeBin(x, raw(), size = if (gdt == "f64") 8L else 4L),
+      gdim = c(2L, 3L),
+      gdt = gdt
+    )
+  }
+  for (gdt in c("f32", "f64")) {
+    v <- mk(c(1, -128, NaN, 300, 0, -7), gdt)
+    expect_identical(
+      .sv_plane_vec(v, 1L, -128, as_int = TRUE),
+      c(1L, -128L, -128L, 300L, 0L, -7L)
+    )
+    # doubles wherever integers would not say the same: a fraction, a
+    # value past int range, NaN with no sentinel, a fractional sentinel
+    frac <- mk(c(1, 2.5, 3, 4, 5, 6), gdt)
+    expect_identical(
+      .sv_plane_vec(frac, 1L, 0, as_int = TRUE),
+      c(1, 2.5, 3, 4, 5, 6)
+    )
+    big <- mk(c(1, 3e9, 3, 4, 5, 6), gdt)
+    expect_identical(
+      .sv_plane_vec(big, 1L, 0, as_int = TRUE),
+      c(1, 3e9, 3, 4, 5, 6)
+    )
+    expect_identical(
+      .sv_plane_vec(v, 1L, as_int = TRUE),
+      c(1, -128, NaN, 300, 0, -7)
+    )
+    expect_identical(
+      .sv_plane_vec(v, 1L, -0.5, as_int = TRUE),
+      c(1, -128, -0.5, 300, 0, -7)
+    )
+    expect_type(.write_vec(v, "i16", -128)$v, "integer")
+    expect_type(.write_vec(v, "f32", -128)$v, "double")
+    expect_error(.write_vec(v, "i16"), "sentinel")
+  }
+})
+
+test_that("integer bands read straight into integer planes match the f32 route", {
+  # the f32 route's planes as doubles, then integers
+  ref <- function(path, band, w, nodata, out_nodata, decim = NULL) {
+    v <- gdal_read_window(
+      path,
+      band,
+      w[[1L]],
+      w[[2L]],
+      w[[3L]],
+      w[[4L]],
+      nodata = nodata,
+      out = "raw_f32",
+      decim = decim
+    )
+    lapply(seq_along(band), function(b) {
+      as.integer(.sv_plane_vec(v, b, out_nodata))
+    })
+  }
+  fi <- fixture_i16_nodata() # Int16, file nodata -9999
+  w <- c(15L, 5L, 30L, 20L)
+  got <- gdal_read_int_planes(
+    fi,
+    1L,
+    w[[1L]],
+    w[[2L]],
+    w[[3L]],
+    w[[4L]],
+    nodata = -9999,
+    out_nodata = -32768
+  )
+  expect_identical(got, ref(fi, 1L, w, -9999, -32768))
+  expect_true(any(got[[1L]] == -32768L))
+  # a node sentinel the file does not declare folds as well
+  s <- gdal_read_int_planes(
+    fi,
+    1L,
+    0L,
+    0L,
+    70L,
+    50L,
+    nodata = 100,
+    out_nodata = -1
+  )
+  expect_identical(s, ref(fi, 1L, c(0L, 0L, 70L, 50L), 100, -1))
+  # nodata cells with no sentinel are the f32 route's to refuse; a
+  # window without them reads
+  expect_null(gdal_read_int_planes(fi, 1L, 0L, 0L, 70L, 50L, nodata = -9999))
+  expect_type(
+    gdal_read_int_planes(fi, 1L, 30L, 30L, 10L, 10L, nodata = -9999)[[1L]],
+    "integer"
+  )
+  # float bands keep the f32 route
+  expect_null(gdal_read_int_planes(
+    fixture_gradient_f32(),
+    1L,
+    0L,
+    0L,
+    10L,
+    10L
+  ))
+  skip_if_not_installed("jsonlite")
+  # several Int8 bands of a Zarr store, through the fast path's window
+  fx <- fixture_zarr_nd()
+  g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
+  dec <- .rio_direct_spec(fx$path, g, "near", band = 5:8)
+  expect_false(is.null(dec))
+  z <- gdal_read_int_planes(
+    fx$path,
+    5:8,
+    2L,
+    1L,
+    15L,
+    8L,
+    nodata = -128,
+    out_nodata = -128,
+    decim = dec
+  )
+  expect_identical(z, ref(fx$path, 5:8, c(2L, 1L, 15L, 8L), -128, -128, dec))
+})
+
+test_that("read-only chunks keep the f32 route for floats, warps and affines", {
+  fi <- fixture_i16_nodata()
+  cg <- ChunkGrid(
+    grid = gdal_grid_spec(fi)$grid,
+    chunk_dim = c(70L, 50L),
+    block_dim = c(16L, 16L),
+    halo = 0L
+  )
+  core <- chunk_iter(cg)[1L, ]
+  ra <- list(
+    path = fi,
+    band = 1L,
+    nodata = -9999,
+    open_options = character(0),
+    scale = numeric(0),
+    offset = numeric(0),
+    decim = NULL
+  )
+  expect_type(.read_int_planes(ra, cg, core, "i16", -32768)[[1L]], "integer")
+  expect_null(.read_int_planes(ra, cg, core, "f32", -32768))
+  expect_null(.read_int_planes(
+    modifyList(ra, list(scale = 0.1, offset = 0)),
+    cg,
+    core,
+    "i16",
+    -32768
+  ))
+  expect_null(.read_int_planes(
+    modifyList(ra, list(decim = list(warp = TRUE))),
+    cg,
+    core,
+    "i16",
+    -32768
+  ))
+})

@@ -145,6 +145,57 @@ crs_equal <- function(a, b) {
   identical(a, b) || gdalraster::srs_is_same(a, b)
 }
 
+# A projected CRS's false origin c(easting, northing), read from its
+# WKT1 parameters (NA when it declares none).
+.crs_false_origin <- function(wkt) {
+  vapply(
+    c("false_easting", "false_northing"),
+    function(nm) {
+      pat <- paste0('PARAMETER\\["', nm, '",([^],]+)')
+      m <- regmatches(wkt, regexec(pat, wkt, ignore.case = TRUE))[[1L]]
+      if (length(m) == 2L) as.numeric(m[[2L]]) else NA_real_
+    },
+    numeric(1),
+    USE.NAMES = FALSE
+  )
+}
+
+# The WKT with its false origin zeroed and its own authority code
+# dropped (the code names the origin: EPSG:32637 against 32737).
+.crs_zero_origin <- function(wkt) {
+  for (nm in c("false_easting", "false_northing")) {
+    wkt <- sub(
+      paste0('PARAMETER\\["', nm, '",[^],]+'),
+      paste0('PARAMETER["', nm, '",0'),
+      wkt,
+      ignore.case = TRUE
+    )
+  }
+  sub(',AUTHORITY\\["[^"]*","[^"]*"\\]\\]$', "]", wkt)
+}
+
+# How far apart are the false origins of two CRSs that are otherwise the
+# same (UTM north and south of one zone)? Coordinates differ by exactly
+# this shift: x_a = x_b - shift[1], y_a = y_b - shift[2], in the CRS's
+# linear unit. c(0, 0) for equal CRSs; NULL when they differ in anything
+# else.
+.crs_false_origin_shift <- function(a, b) {
+  if (crs_equal(a, b)) {
+    return(c(0, 0))
+  }
+  wa <- .canon_crs(a)
+  wb <- .canon_crs(b)
+  oa <- .crs_false_origin(wa)
+  ob <- .crs_false_origin(wb)
+  if (anyNA(c(oa, ob))) {
+    return(NULL)
+  }
+  if (!gdalraster::srs_is_same(.crs_zero_origin(wa), .crs_zero_origin(wb))) {
+    return(NULL)
+  }
+  ob - oa
+}
+
 # -- GridSpec -----------------------------------------------------------------
 
 # Allowed dim names, in default assignment order (decision D7).

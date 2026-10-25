@@ -57,11 +57,36 @@ static int gdt_es(const char *gdt, int *is_float, int *is_signed) {
   return 0;
 }
 
+/* A float plane as integers, NaN folded to `nd`. Returns 0, leaving
+ * `o` partly written, at the first value that is not a whole number in
+ * int range, or at a NaN with no sentinel (the caller's doubles carry
+ * it to the integer-output check). */
+static int float_plane_int(int *o, const unsigned char *src, R_xlen_t n_el,
+                           int es, int has_nd, int nd) {
+  for (R_xlen_t i = 0; i < n_el; i++) {
+    const double v = es == 8 ? ((const double *) src)[i]
+                             : (double) ((const float *) src)[i];
+    if (isnan(v)) {
+      if (!has_nd) return 0;
+      o[i] = nd;
+    } else if (v >= -2147483647.0 && v <= 2147483647.0 && v == (int) v) {
+      o[i] = (int) v;
+    } else {
+      return 0;
+    }
+  }
+  return 1;
+}
+
 /* One plane of a payload as the R vector GDAL writes: doubles for
  * float payloads (NaN folded to `nodata` when one is given), integers
  * for the quantized integer payloads. `off` is the plane's byte
- * offset, `n` its element count. */
-SEXP garry_sv_plane(SEXP x, SEXP off, SEXP n, SEXP gdt, SEXP nodata) {
+ * offset, `n` its element count. With `as_int` (an integer output), a
+ * float plane of whole numbers comes back as integers: GDAL converts
+ * those to the band type 4x faster than doubles, and clamps a whole
+ * number the same way from either. */
+SEXP garry_sv_plane(SEXP x, SEXP off, SEXP n, SEXP gdt, SEXP nodata,
+                    SEXP as_int) {
   if (TYPEOF(x) != RAWSXP) error("payload must be raw");
   int is_float, is_signed;
   const int es = gdt_es(CHAR(STRING_ELT(gdt, 0)), &is_float, &is_signed);
@@ -75,6 +100,15 @@ SEXP garry_sv_plane(SEXP x, SEXP off, SEXP n, SEXP gdt, SEXP nodata) {
   const int has_nd = LENGTH(nodata) == 1;
   const double nd = has_nd ? REAL(nodata)[0] : 0.0;
   SEXP out;
+  if (is_float && asLogical(as_int) == TRUE &&
+      (!has_nd || (fabs(nd) <= 2147483647.0 && nd == (int) nd))) {
+    out = PROTECT(allocVector(INTSXP, n_el));
+    if (float_plane_int(INTEGER(out), src, n_el, es, has_nd, (int) nd)) {
+      UNPROTECT(1);
+      return out;
+    }
+    UNPROTECT(1);
+  }
   if (is_float) {
     out = PROTECT(allocVector(REALSXP, n_el));
     double *o = REAL(out);
@@ -331,9 +365,45 @@ SEXP garry_alloc_double(SEXP n) {
   return Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
 }
 
+/* Copy an integer band read into `dst` from element `off` on, folding
+ * NA (GDAL's nodata mask) and `nodata` (the source node's sentinel) to
+ * `out_nd`, or NA without one. `dst` is a private plane the caller
+ * allocated; it is filled in place. Returns whether a nodata cell met
+ * no sentinel. */
+SEXP garry_fold_int_into(SEXP dst, SEXP off, SEXP src, SEXP nodata,
+                         SEXP out_nd) {
+  if (TYPEOF(dst) != INTSXP || TYPEOF(src) != INTSXP) {
+    error("integer planes expected");
+  }
+  const R_xlen_t o0 = (R_xlen_t) asReal(off);
+  const R_xlen_t n = XLENGTH(src);
+  if (o0 < 0 || o0 + n > XLENGTH(dst)) {
+    error("read of %lld cells at %lld overruns a %lld cell plane",
+          (long long) n, (long long) o0, (long long) XLENGTH(dst));
+  }
+  const int has_nd = LENGTH(nodata) == 1;
+  const double nd = has_nd ? REAL(nodata)[0] : 0.0;
+  const int has_out = LENGTH(out_nd) == 1;
+  const int ond = has_out ? (int) REAL(out_nd)[0] : NA_INTEGER;
+  const int *s = INTEGER(src);
+  int *d = INTEGER(dst) + o0;
+  int bare = 0;
+  for (R_xlen_t i = 0; i < n; i++) {
+    const int v = s[i];
+    if (v == NA_INTEGER || (has_nd && (double) v == nd)) {
+      d[i] = ond;
+      bare |= !has_out;
+    } else {
+      d[i] = v;
+    }
+  }
+  return ScalarLogical(bare);
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},
-  {"garry_sv_plane", (DL_FUNC) &garry_sv_plane, 5},
+  {"garry_sv_plane", (DL_FUNC) &garry_sv_plane, 6},
+  {"garry_fold_int_into", (DL_FUNC) &garry_fold_int_into, 5},
   {"garry_finish_f32", (DL_FUNC) &garry_finish_f32, 4},
   {"garry_finish_f32_into", (DL_FUNC) &garry_finish_f32_into, 6},
   {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},

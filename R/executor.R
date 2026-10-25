@@ -150,6 +150,52 @@ NULL
   )
 }
 
+# Is a warp stage served by a direct read of its source rather than the
+# warper (.warp_read_plan())?
+.warp_reads_direct <- function(graph, s) {
+  if (!identical(s$kind, "warp")) {
+    return(FALSE)
+  }
+  wnode <- graph_get(graph, s$members[[1L]])
+  rp <- tryCatch(
+    .warp_read_plan(wnode, graph_get(graph, wnode@parents[[1L]])),
+    error = function(e) NULL
+  )
+  !is.null(rp$decim$fx)
+}
+
+# A read-only chunk bound for an integer output, read straight into the
+# integer planes it writes (gdal_read_int_planes()), or NULL for the f32
+# route: a float output, a warp, several sources, a band affine or a
+# halo keep it, and so does a failed read, which retries there.
+.read_int_planes <- function(ra, cg, core, dtype, nodata) {
+  if (
+    .dtype_family(dtype) == "float" ||
+      cg@halo != 0L ||
+      length(ra$path) != 1L ||
+      isTRUE(ra$decim$warp) ||
+      length(ra$scale) > 0L ||
+      length(ra$offset) > 0L
+  ) {
+    return(NULL)
+  }
+  tryCatch(
+    gdal_read_int_planes(
+      ra$path,
+      ra$band,
+      core$x_off,
+      core$y_off,
+      core$x_size,
+      core$y_size,
+      nodata = ra$nodata,
+      out_nodata = nodata,
+      open_options = ra$open_options,
+      decim = ra$decim
+    ),
+    error = function(e) NULL
+  )
+}
+
 # Read one halo-padded chunk from a GDAL source into a NaN-initialised
 # buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
 # stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
@@ -344,7 +390,9 @@ NULL
 # a sentinel is given; quantized integer payloads as integers. One C
 # pass from the byte offset: no R index vector over the bytes (the
 # writer-daemon tail of issue #25, 41 ms a plane on a 64-band write).
-.sv_plane_vec <- function(v, b, nodata = numeric(0)) {
+# `as_int` (an integer output) returns a float plane of whole numbers
+# as integers, which GDAL writes to an integer band 4x faster.
+.sv_plane_vec <- function(v, b, nodata = numeric(0), as_int = FALSE) {
   d <- .sv_dim(v)
   n <- prod(as.numeric(d[length(d) - 1:0]))
   .Call(
@@ -354,6 +402,7 @@ NULL
     n,
     attr(v, "gdt"),
     as.numeric(nodata),
+    as_int,
     PACKAGE = "garry"
   )
 }
@@ -461,6 +510,7 @@ NULL
     n,
     attr(v, "gdt"),
     numeric(0),
+    FALSE,
     PACKAGE = "garry"
   )
 }

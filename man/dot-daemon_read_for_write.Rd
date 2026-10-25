@@ -25,7 +25,9 @@ pool: reads the chunk as raw f32, turns each band plane into the
 vector GDAL writes (nodata folded, the integer-output check made)
 and shares the planes in one shared-memory region pinned under
 \code{reg}. The writer daemon maps the region by name, so the payload
-never passes through the host and the writer only writes.
+never passes through the host and the writer only writes. Integer
+sources bound for an integer output read straight into their planes
+(.read_int_planes()).
 }
 \details{
 Internal; daemons reach it through \code{asNamespace("garry")}.
