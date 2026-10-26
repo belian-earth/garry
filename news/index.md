@@ -157,6 +157,15 @@
   [`garry_task_report()`](https://belian-earth.github.io/garry/reference/garry_task_report.md)
   splits the harvest lag (the result’s return and the host noticing it)
   from the run time.
+- A plan that only reads now logs its tasks too, written
+  ([`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
+  of a dataset, say) or collected with daemons: each read on the read
+  pool and each write on the writer daemon, with start and end times,
+  and memory samples every 5 s. Before, such runs left no rows in the
+  log. Every run also logs its pool widths, and
+  [`garry_task_report()`](https://belian-earth.github.io/garry/reference/garry_task_report.md)
+  adds each pool’s busy seconds and the last run’s share of each pool’s
+  time busy, which shows whether the readers or the writer set the pace.
 
 ## garry 0.1.0
 
