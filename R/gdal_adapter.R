@@ -513,6 +513,12 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' integer bands take the fast path only for NEAREST, where no rounding
 #' happens.
 #'
+#' A south-up source (positive y pixel size: every AEF tile) stores its
+#' rows from the south. A target on its own pixels is still a window of
+#' it, read with its rows reversed (`flip`), the read
+#' [gdal_read_window()] gives any south-up file; a decimating target
+#' keeps the warper.
+#'
 #' Returns `NULL` (keep the warper) unless every condition holds, so the
 #' warper stays the default and this is a pure opt-in fast path.
 #'
@@ -525,7 +531,13 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   data types drive the integer gate above.
 #' @param nodata The source node's sentinel (length 0 or 1). Averaging
 #'   declines unless the file declares the same value.
-#' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
+#' @param partial `TRUE` for one source of several
+#'   ([.rio_direct_multi_spec()]): the target may reach beyond the source,
+#'   and only a nearest-neighbour read on the source's own pixels, with
+#'   the file's nodata (if any) the node's, qualifies.
+#' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off` (the
+#'   target origin in source pixels, rows counted from the north),
+#'   `resamp`, `flip`, and the source's `nx` and `ny`.
 #' @keywords internal
 .rio_direct_spec <- function(
   src_path,
@@ -533,7 +545,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   resampling,
   open_options = character(0),
   band = 1L,
-  nodata = numeric(0)
+  nodata = numeric(0),
+  partial = FALSE
 ) {
   if (length(src_path) != 1L || length(open_options) > 0L || !length(band)) {
     return(NULL)
@@ -543,9 +556,24 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
 
+  if (partial && resamp != "NEAREST") {
+    return(NULL)
+  }
   ds <- tryCatch(.gdal_handle(src_path), error = function(e) NULL)
   if (is.null(ds)) {
     return(NULL)
+  }
+  if (partial && length(nodata) == 1L) {
+    # the warper takes the node's sentinel for every source; a file whose
+    # own differs would mask cells the warper keeps
+    for (b in band) {
+      file_nd <- tryCatch(ds$getNoDataValue(b), error = function(e) NA)
+      if (
+        !is.na(file_nd) && !identical(as.numeric(file_nd), as.numeric(nodata))
+      ) {
+        return(NULL)
+      }
+    }
   }
   if (resamp != "NEAREST") {
     for (b in band) {
@@ -567,12 +595,14 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   if (length(gt) != 6L || anyNA(gt)) {
     return(NULL)
   }
-  # Axis-aligned and north-up only: RasterIO offsets are in the file's own
-  # row order, so a south-up source would need the y axis flipped and a
-  # rotated one cannot be expressed as a window at all.
-  if (gt[[3L]] != 0 || gt[[5L]] != 0 || gt[[2L]] <= 0 || gt[[6L]] >= 0) {
+  # Axis-aligned only: a rotated source cannot be expressed as a window.
+  # A south-up one is read from its northern edge with its rows reversed.
+  if (gt[[3L]] != 0 || gt[[5L]] != 0 || gt[[2L]] <= 0 || gt[[6L]] == 0) {
     return(NULL)
   }
+  flip <- gt[[6L]] > 0
+  res_y <- abs(gt[[6L]])
+  north <- if (flip) gt[[4L]] + ds$getRasterYSize() * res_y else gt[[4L]]
   # A CRS that differs only by its false origin is the source's shifted:
   # the target's origin moves into source coordinates and the rest holds
   shift <- .crs_false_origin_shift(ds$getProjectionRef(), target_grid@crs)
@@ -585,9 +615,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
   fx <- tt[[2L]] / gt[[2L]]
-  fy <- tt[[6L]] / gt[[6L]]
+  fy <- -tt[[6L]] / res_y
   x_off <- (tt[[1L]] - shift[[1L]] - gt[[1L]]) / gt[[2L]]
-  y_off <- (gt[[4L]] - (tt[[4L]] - shift[[2L]])) / -gt[[6L]]
+  y_off <- (north - (tt[[4L]] - shift[[2L]])) / res_y
   if (!all(vapply(list(fx, fy, x_off, y_off), .rio_near_int, TRUE))) {
     return(NULL)
   }
@@ -595,7 +625,12 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   fy <- round(fy)
   x_off <- round(x_off)
   y_off <- round(y_off)
-  if (fx < 1 || fy < 1 || x_off < 0 || y_off < 0) {
+  if (fx < 1 || fy < 1) {
+    return(NULL)
+  }
+  # A flipped read, and one source's share of a mosaic, take the target
+  # on the source's own pixels only.
+  if ((flip || partial) && (fx != 1 || fy != 1)) {
     return(NULL)
   }
   # Through a shifted CRS, take only nearest-neighbour reads: the warper's
@@ -606,10 +641,14 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
   # The target must lie wholly inside the source: the warper pads beyond
-  # the edge with nodata, a windowed read cannot.
+  # the edge with nodata, a windowed read cannot. One source of several
+  # covers only its share (gdal_read_window_multi()).
   if (
-    x_off + target_grid@dims[["x"]] * fx > ds$getRasterXSize() ||
-      y_off + target_grid@dims[["y"]] * fy > ds$getRasterYSize()
+    !partial &&
+      (x_off < 0 ||
+        y_off < 0 ||
+        x_off + target_grid@dims[["x"]] * fx > ds$getRasterXSize() ||
+        y_off + target_grid@dims[["y"]] * fy > ds$getRasterYSize())
   ) {
     return(NULL)
   }
@@ -619,8 +658,49 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     fy = as.integer(fy),
     x_off = as.integer(x_off),
     y_off = as.integer(y_off),
-    resamp = resamp
+    resamp = resamp,
+    flip = flip,
+    nx = as.integer(ds$getRasterXSize()),
+    ny = as.integer(ds$getRasterYSize())
   )
+}
+
+#' Can a multi-path warp be served by direct reads of its sources?
+#'
+#' Tiles no mosaic VRT can hold (south-up AEF tiles) stay a multi-path
+#' source that the warper reads together, every source warped into each
+#' window. When each source lies on the target's own pixels in a CRS
+#' the target shares (or shifts, see [.rio_direct_spec()]), a
+#' nearest-neighbour read needs none of that: each source's share of a
+#' window is a window of it ([gdal_read_window_multi()]). Every source
+#' must qualify, or the warper reads them all.
+#'
+#' @inheritParams .rio_direct_spec
+#' @param paths The source paths, in mosaic order.
+#' @return `NULL`, or a list with `fx = fy = 1`, `resamp` and `srcs`, one
+#'   [.rio_direct_spec()] result a source.
+#' @keywords internal
+.rio_direct_multi_spec <- function(
+  paths,
+  target_grid,
+  resampling,
+  band = 1L,
+  nodata = numeric(0)
+) {
+  srcs <- lapply(paths, function(p) {
+    .rio_direct_spec(
+      p,
+      target_grid,
+      resampling,
+      band = band,
+      nodata = nodata,
+      partial = TRUE
+    )
+  })
+  if (!length(srcs) || any(vapply(srcs, is.null, logical(1)))) {
+    return(NULL)
+  }
+  list(fx = 1L, fy = 1L, resamp = "NEAREST", srcs = srcs)
 }
 
 # Shared tail of a window read: nodata sentinel -> NaN, band affine, and
@@ -667,8 +747,14 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   ny <- ds$getRasterYSize()
   v <- ds$read(band, 0L, 0L, nx, ny, out_nx, out_ny)
   if (ds$getGeoTransform()[[6L]] > 0) {
-    idx <- as.vector(matrix(seq_len(out_ny * out_nx), nrow = out_nx)[, out_ny:1L])
-    v <- v[idx] # south-up: rows to north-first
+    # south-up: rows to north-first
+    v <- .Call(
+      "garry_flip_rows",
+      v,
+      as.numeric(out_ny),
+      as.numeric(out_nx),
+      PACKAGE = "garry"
+    )
   }
   .gdal_finish_vec(v, out_ny, out_nx, nodata, numeric(0), numeric(0), "matrix")
 }
@@ -684,9 +770,13 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   }
   y_file <- ds$getRasterYSize() - y_off - rows
   v <- ds$read(band, x_off, y_file, x_size, rows, x_size, rows)
-  # row-major: row r occupies ((r - 1) * x_size + 1):(r * x_size)
-  idx <- as.vector(matrix(seq_len(rows * x_size), nrow = x_size)[, rows:1L])
-  v[idx]
+  .Call(
+    "garry_flip_rows",
+    v,
+    as.numeric(rows),
+    as.numeric(x_size),
+    PACKAGE = "garry"
+  )
 }
 
 
@@ -737,6 +827,13 @@ gdal_read_window <- function(
   # a scale alone means no offset (v * scale + numeric(0) is numeric(0))
   if (length(scale) == 1L && length(offset) == 0L) {
     offset <- 0
+  }
+  # A flipped direct read (a south-up source, see .rio_direct_spec()) is
+  # the plain window read at the target's offset, which reverses its rows.
+  if (isTRUE(decim$flip)) {
+    x_off <- x_off + decim$x_off
+    y_off <- y_off + decim$y_off
+    decim <- NULL
   }
   if (.gdal_is_zarr(path)) {
     .gdal_zarr_budget(
@@ -889,6 +986,12 @@ gdal_read_int_planes <- function(
 ) {
   if (length(open_options) == 0L && !is.null(.raw_vrt_info(path))) {
     return(NULL)
+  }
+  if (isTRUE(decim$flip)) {
+    # as gdal_read_window(): a plain window read, rows reversed
+    x_off <- x_off + decim$x_off
+    y_off <- y_off + decim$y_off
+    decim <- NULL
   }
   fx <- decim$fx %||% 1L
   fy <- decim$fy %||% 1L
@@ -2072,6 +2175,14 @@ gdal_warp_window <- function(
     return(structure(buf, gdim = as.integer(c(nb, y_size, x_size)), gdt = "f32"))
   }
   v <- readBin(buf, "numeric", n = n_px * nb, size = 4L)
+  .gdal_finish_planes(v, nb, y_size, x_size, scale, offset, out)
+}
+
+# Band-sequential row-major planes `v` (nodata already NaN) in the
+# requested output form: one band's matrix or raw f32 payload, or a
+# (band, y, x) cube or rank-3 raw f32 payload, after the band affine.
+.gdal_finish_planes <- function(v, nb, y_size, x_size, scale, offset, out) {
+  n_px <- as.numeric(x_size) * y_size
   if (nb == 1L) {
     return(.gdal_finish_vec(v, y_size, x_size, numeric(0), scale, offset, out))
   }
@@ -2096,6 +2207,101 @@ gdal_warp_window <- function(
     )
   }
   cube
+}
+
+# Read one window of a multi-path source whose every source lies on the
+# target's pixels (.rio_direct_multi_spec()): each source's share of the
+# window read directly (a south-up one with its rows reversed) and laid
+# over the window in source order, a later source's valid cells winning,
+# as gdal_warp_window() mosaics them. Cells no source covers stay NaN.
+# A window inside a single source is that source's own window read.
+gdal_read_window_multi <- function(
+  paths,
+  band,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  decim,
+  nodata = numeric(0),
+  out = c("matrix", "raw_f32"),
+  scale = numeric(0),
+  offset = numeric(0)
+) {
+  out <- rlang::arg_match(out)
+  # every source stays open from window to window (see gdal_warp_window())
+  old <- options(
+    garry.handle_cache_max = max(garry_opt("handle_cache_max"), length(paths))
+  )
+  on.exit(options(old), add = TRUE)
+  parts <- list()
+  for (i in seq_along(paths)) {
+    s <- decim$srcs[[i]]
+    sx <- x_off + s$x_off # the window's origin in source pixels
+    sy <- y_off + s$y_off
+    c0 <- max(0L, -sx)
+    c1 <- min(x_size, s$nx - sx)
+    r0 <- max(0L, -sy)
+    r1 <- min(y_size, s$ny - sy)
+    if (c1 > c0 && r1 > r0) {
+      parts[[length(parts) + 1L]] <- list(
+        i = i,
+        sx = sx,
+        sy = sy,
+        c0 = c0,
+        c1 = c1,
+        r0 = r0,
+        r1 = r1
+      )
+    }
+  }
+  # offsets count rows from the north, as a plain window read takes them
+  # whichever way the file runs
+  read_part <- function(p, out, scale, offset) {
+    gdal_read_window(
+      paths[[p$i]],
+      band,
+      p$sx + p$c0,
+      p$sy + p$r0,
+      p$c1 - p$c0,
+      p$r1 - p$r0,
+      nodata = nodata,
+      out = out,
+      scale = scale,
+      offset = offset
+    )
+  }
+  if (length(parts) == 1L) {
+    p <- parts[[1L]]
+    if (p$c0 == 0L && p$r0 == 0L && p$c1 == x_size && p$r1 == y_size) {
+      return(read_part(p, out, scale, offset))
+    }
+  }
+  nb <- length(band)
+  n_px <- as.numeric(x_size) * y_size
+  # f32 band planes, NaN where no source reaches
+  buf <- .Call(
+    "garry_paste_f32",
+    NULL,
+    raw(0),
+    as.numeric(c(nb, x_size, y_size, 0, 0, 0, 0)),
+    PACKAGE = "garry"
+  )
+  for (p in parts) {
+    .Call(
+      "garry_paste_f32",
+      buf,
+      read_part(p, "raw_f32", numeric(0), numeric(0)),
+      as.numeric(c(nb, x_size, y_size, p$c0, p$r0, p$c1 - p$c0, p$r1 - p$r0)),
+      PACKAGE = "garry"
+    )
+  }
+  if (out == "raw_f32" && length(scale) == 0L) {
+    gdim <- if (nb > 1L) c(nb, y_size, x_size) else c(y_size, x_size)
+    return(structure(buf, gdim = as.integer(gdim), gdt = "f32"))
+  }
+  v <- readBin(buf, "numeric", n = n_px * nb, size = 4L)
+  .gdal_finish_planes(v, nb, y_size, x_size, scale, offset, out)
 }
 
 # Run an idempotent read/fetch/warp thunk with task-scoped retries.

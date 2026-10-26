@@ -23,6 +23,15 @@
 
 ## Performance
 
+* `lazy_dataset()` over tiles no mosaic VRT can hold, such as AEF's
+  south-up tiles, reads them directly when every tile lies on the target
+  grid's pixels and the read is nearest-neighbour. Each tile's share of a
+  window is a window read of it, and later tiles win where they hold data,
+  as when the tiles are warped together. A single south-up file read onto
+  a subset of its own pixels is now a direct read too, and south-up rows
+  flip in C. One AEF box-year (four tiles, 4488 x 5727 px, 64 bands)
+  fetched to Int8 in 5.4 s instead of 9.8 s with 8 readers, identical to
+  gdalwarp's result.
 * Scan stages run faster. On hutan's SI tail at 5.76 M cells, with the
   daemon changes below, the robust Kalman smoother stage went from 0.66 s
   to 0.41 s a chunk and the drain from 44 s to 38 s with two compute

@@ -10,7 +10,8 @@
   resampling,
   open_options = character(0),
   band = 1L,
-  nodata = numeric(0)
+  nodata = numeric(0),
+  partial = FALSE
 )
 }
 \arguments{
@@ -28,9 +29,16 @@ data types drive the integer gate above.}
 
 \item{nodata}{The source node's sentinel (length 0 or 1). Averaging
 declines unless the file declares the same value.}
+
+\item{partial}{\code{TRUE} for one source of several
+(\code{\link[=.rio_direct_multi_spec]{.rio_direct_multi_spec()}}): the target may reach beyond the source,
+and only a nearest-neighbour read on the source's own pixels, with
+the file's nodata (if any) the node's, qualifies.}
 }
 \value{
-\code{NULL}, or a list with \code{fx}, \code{fy}, \code{x_off}, \code{y_off}, \code{resamp}.
+\code{NULL}, or a list with \code{fx}, \code{fy}, \code{x_off}, \code{y_off} (the
+target origin in source pixels, rows counted from the north),
+\code{resamp}, \code{flip}, and the source's \code{nx} and \code{ny}.
 }
 \description{
 A \code{WarpNode} whose target grid shares the source CRS, is axis-aligned,
@@ -60,6 +68,12 @@ rounds back to the band type itself, and under GDAL 3.13.1 on ARM
 the fast path on the macOS CI runners. Identity is the contract, so
 integer bands take the fast path only for NEAREST, where no rounding
 happens.
+
+A south-up source (positive y pixel size: every AEF tile) stores its
+rows from the south. A target on its own pixels is still a window of
+it, read with its rows reversed (\code{flip}), the read
+\code{\link[=gdal_read_window]{gdal_read_window()}} gives any south-up file; a decimating target
+keeps the warper.
 
 Returns \code{NULL} (keep the warper) unless every condition holds, so the
 warper stays the default and this is a pure opt-in fast path.

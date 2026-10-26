@@ -76,17 +76,18 @@ NULL
 
 # Resolve a "warp" stage to the read that actually serves it. An aligned
 # same-CRS target needs no warping (see .rio_direct_spec()): read the
-# source directly and let RasterIO resample in the same pass. A Zarr
-# store, or several sources, warp straight into each window
-# (gdal_warp_window()); anything else builds the warped VRT. Shared by
-# execute_plan() and the
-# mirai scheduler so the two cannot disagree about which read they do.
+# source directly and let RasterIO resample in the same pass. Several
+# sources on the target's pixels read directly too, source by source
+# (.rio_direct_multi_spec()). A Zarr store, or other sources together,
+# warp straight into each window (gdal_warp_window()); anything else
+# builds the warped VRT. Shared by execute_plan() and the mirai
+# scheduler so the two cannot disagree about which read they do.
 .warp_read_plan <- function(wnode, snode) {
   # a collapsed band stack of warps reads its own bands of the source
   band <- if (length(wnode@bands)) wnode@bands else snode@band
   if (length(snode@path) > 1L) {
-    # a multi-path source (tiles no mosaic can hold): every source
-    # warped straight into each target window (gdal_warp_window)
+    # a multi-path source (tiles no mosaic can hold): direct reads of
+    # each, or every source warped straight into each target window
     return(list(
       path = snode@path,
       band = band,
@@ -94,7 +95,13 @@ NULL
       open_options = character(0),
       scale = snode@scale,
       offset = snode@offset,
-      decim = NULL,
+      decim = .rio_direct_multi_spec(
+        snode@path,
+        wnode@target_grid,
+        wnode@resampling,
+        band = band,
+        nodata = snode@nodata
+      ),
       resampling = wnode@resampling
     ))
   }
@@ -260,6 +267,21 @@ NULL
     core$y_size
   )
   read_one <- function() {
+    if (length(decim$srcs)) {
+      return(gdal_read_window_multi(
+        path,
+        band,
+        w$x_off,
+        w$y_off,
+        w$x_size,
+        w$y_size,
+        decim = decim,
+        nodata = nodata,
+        out = out,
+        scale = scale,
+        offset = offset
+      ))
+    }
     if (length(path) > 1L || isTRUE(decim$warp)) {
       return(gdal_warp_window(
         path,
