@@ -672,7 +672,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' window. When each source lies on the target's own pixels in a CRS
 #' the target shares (or shifts, see [.rio_direct_spec()]), a
 #' nearest-neighbour read needs none of that: each source's share of a
-#' window is a window of it ([gdal_read_window_multi()]). Every source
+#' window is a window of it (`gdal_read_window_multi()`). Every source
 #' must qualify, or the warper reads them all.
 #'
 #' @inheritParams .rio_direct_spec
