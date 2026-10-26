@@ -509,10 +509,11 @@ NULL
       suppressMessages(library(garry))
       garry::garry_gdal_config()
       asNamespace("garry")$.daemon_jit_reset()
-      options(garry.read_retry = rr)
+      options(garry.read_retry = rr, garry.warp_exact = we)
     }),
     profiles = prof,
-    rr = garry_opt("read_retry")
+    rr = garry_opt("read_retry"),
+    we = garry_opt("warp_exact")
   )
 }
 

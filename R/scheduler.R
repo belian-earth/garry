@@ -412,7 +412,8 @@ execute_plan_mirai <- function(
       options(
         garry.read_fail = rf,
         garry.read_retry = rr,
-        garry.daemon_gc_mb = gc_mb
+        garry.daemon_gc_mb = gc_mb,
+        garry.warp_exact = we
       )
       asNamespace("garry")$.daemon_hygiene()
     }),
@@ -423,7 +424,8 @@ execute_plan_mirai <- function(
     )),
     rf = garry_opt("read_fail"),
     rr = garry_opt("read_retry"),
-    gc_mb = garry_opt("daemon_gc_mb")
+    gc_mb = garry_opt("daemon_gc_mb"),
+    we = garry_opt("warp_exact")
   )
 
   graph <- plan@graph
@@ -812,15 +814,15 @@ execute_plan_mirai <- function(
         rdecim <- rp$decim
         rresamp <- rp$resampling %||% "near"
       } else {
-        node <- graph_get(graph, s@members[[1L]])
-        rpath <- .gti_resampled_path(node@path, node@resampling)
-        rband <- node@band
-        rresamp <- node@resampling
-        rnodata <- node@nodata
-        roo <- node@open_options
-        rsc <- node@scale
-        rof <- node@offset
-        rdecim <- NULL
+        ra <- .source_read_args(graph_get(graph, s@members[[1L]]))
+        rpath <- ra$path
+        rband <- ra$band
+        rresamp <- ra$resampling
+        rnodata <- ra$nodata
+        roo <- ra$open_options
+        rsc <- ra$scale
+        rof <- ra$offset
+        rdecim <- ra$decim
       }
       skey <- .key(s@members[[1L]])
       fspec <- fuse_of[[.key(s@id)]]

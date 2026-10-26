@@ -400,7 +400,96 @@ SEXP garry_fold_int_into(SEXP dst, SEXP off, SEXP src, SEXP nodata,
   return ScalarLogical(bare);
 }
 
+/* A row-major vector of `nr` rows of `nc` elements with its rows in
+ * reverse order: a south-up file read in its own row order, put north
+ * first (one memcpy a row, no index vector). */
+SEXP garry_flip_rows(SEXP v, SEXP nr_, SEXP nc_) {
+  const R_xlen_t nr = (R_xlen_t) asReal(nr_), nc = (R_xlen_t) asReal(nc_);
+  if (nr * nc != XLENGTH(v)) error("%lld x %lld rows do not hold %lld elements",
+                                   (long long) nr, (long long) nc,
+                                   (long long) XLENGTH(v));
+  SEXP out = PROTECT(allocVector(TYPEOF(v), XLENGTH(v)));
+  const char *s;
+  char *d;
+  size_t es;
+  switch (TYPEOF(v)) {
+  case INTSXP:
+    s = (const char *) INTEGER_RO(v);
+    d = (char *) INTEGER(out);
+    es = sizeof(int);
+    break;
+  case LGLSXP:
+    s = (const char *) LOGICAL_RO(v);
+    d = (char *) LOGICAL(out);
+    es = sizeof(int);
+    break;
+  case REALSXP:
+    s = (const char *) REAL_RO(v);
+    d = (char *) REAL(out);
+    es = sizeof(double);
+    break;
+  case RAWSXP:
+    s = (const char *) RAW_RO(v);
+    d = (char *) RAW(out);
+    es = 1;
+    break;
+  default:
+    UNPROTECT(1);
+    error("cannot flip a vector of this type");
+  }
+  const size_t row = (size_t) nc * es;
+  for (R_xlen_t r = 0; r < nr; r++) {
+    memcpy(d + (size_t) r * row, s + (size_t) (nr - 1 - r) * row, row);
+  }
+  UNPROTECT(1);
+  return out;
+}
+
+/* Lay the valid (non-NaN) cells of a (nb, h, w) row-major f32 payload
+ * over the (nb, y, x) f32 buffer `dst` at column c0 and row r0, in
+ * place: one source's share of a mosaic window, a later source's valid
+ * cells winning. `geo` = (nb, x, y, c0, r0, w, h). A NULL `dst` starts
+ * a new window, every cell NaN. */
+SEXP garry_paste_f32(SEXP dst, SEXP src, SEXP geo) {
+  if (LENGTH(geo) != 7) error("paste geometry is (nb, x, y, c0, r0, w, h)");
+  const double *g = REAL(geo);
+  const R_xlen_t nb = (R_xlen_t) g[0], x = (R_xlen_t) g[1], y = (R_xlen_t) g[2];
+  const R_xlen_t c0 = (R_xlen_t) g[3], r0 = (R_xlen_t) g[4];
+  const R_xlen_t w = (R_xlen_t) g[5], h = (R_xlen_t) g[6];
+  int prot = 0;
+  if (isNull(dst)) {
+    dst = PROTECT(allocVector(RAWSXP, nb * x * y * 4));
+    prot = 1;
+    float *d = (float *) RAW(dst);
+    for (R_xlen_t i = 0; i < nb * x * y; i++) d[i] = NAN;
+  }
+  if (TYPEOF(dst) != RAWSXP || TYPEOF(src) != RAWSXP) {
+    error("raw f32 payloads expected");
+  }
+  if (c0 < 0 || r0 < 0 || c0 + w > x || r0 + h > y ||
+      XLENGTH(dst) != nb * x * y * 4 || XLENGTH(src) != nb * w * h * 4) {
+    error("a %lld x %lld part at (%lld, %lld) does not fit a %lld x %lld window",
+          (long long) w, (long long) h, (long long) c0, (long long) r0,
+          (long long) x, (long long) y);
+  }
+  const float *s = (const float *) RAW(src);
+  float *d = (float *) RAW(dst);
+  for (R_xlen_t b = 0; b < nb; b++) {
+    for (R_xlen_t r = 0; r < h; r++) {
+      const float *sr = s + (b * h + r) * w;
+      float *dr = d + (b * y + r0 + r) * x + c0;
+      for (R_xlen_t c = 0; c < w; c++) {
+        if (!isnan(sr[c])) dr[c] = sr[c];
+      }
+    }
+  }
+  UNPROTECT(prot);
+  return dst;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_flip_rows", (DL_FUNC) &garry_flip_rows, 3},
+  {"garry_paste_f32", (DL_FUNC) &garry_paste_f32, 3},
   {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},
   {"garry_sv_plane", (DL_FUNC) &garry_sv_plane, 6},
   {"garry_fold_int_into", (DL_FUNC) &garry_fold_int_into, 5},

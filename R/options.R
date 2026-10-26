@@ -96,6 +96,20 @@
     desc = "print task-completion progress during distributed drains",
     check = .opt_flag()
   ),
+  # Warp windows (several sources together, a Zarr array, a source of a
+  # mosaic read source by source) with GDAL's exact transformer, as the
+  # warped VRT of one source already is: which source pixel a cell takes
+  # then never depends on where windows fall. GDAL's default
+  # interpolates the transform along each row of the window it is given
+  # to within 0.125 px, so a cell near a pixel boundary can take the
+  # neighbouring pixel in another window layout. Off by default: a
+  # one-band window warp across projections costs 3-15x more with it.
+  warp_exact = list(
+    default = FALSE,
+    tier = "tuning",
+    desc = "exact transformer for window warps (window-independent picks, slower)",
+    check = .opt_flag()
+  ),
   # Max open GDAL dataset handles per process (LRU-evicted, closed on
   # eviction). Open warped/GTI mosaics pin warper + cache memory; on
   # daemons this bounds it. Reopening an evicted dataset is cheap.
