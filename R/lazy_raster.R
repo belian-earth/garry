@@ -107,6 +107,9 @@ LazyRaster <- S7::new_class(
 #'   Pure metadata: surfaced by [plan_view()] and diagnostics, never
 #'   read by the planner or executors. [lazy_dataset()] sets it to the
 #'   asset/band name automatically.
+#' @param decode Optional function decoding the band's 8-bit codes
+#'   before any resampling, as in [lazy_dataset()]; `nodata` is then the
+#'   code to mask.
 #' @return A `LazyRaster`.
 #' @seealso [collect()], [lazy_dataset()]
 #' @examples
@@ -126,8 +129,24 @@ lazy_source <- function(
   resampling = "near",
   scale = FALSE,
   offset = NULL,
-  name = NULL
+  name = NULL,
+  decode = NULL
 ) {
+  # A decoded source reads its lookup-table VRT (Float32, nodata NaN);
+  # lazy_dataset() prepares the decode once for all its bands.
+  if (!is.null(decode)) {
+    if (!inherits(decode, "garry_decode")) {
+      if (!isFALSE(scale) || !is.null(offset)) {
+        cli::cli_abort(
+          "{.arg decode} and {.arg scale}/{.arg offset} do not combine."
+        )
+      }
+      decode <- .decode_prepare(path, decode, nodata)
+      nodata <- NULL
+      grid <- NULL
+    }
+    path <- decode$vrt
+  }
   if (is.null(grid)) {
     meta <- gdal_grid_spec(
       path[[1L]],
@@ -177,7 +196,12 @@ lazy_source <- function(
     resampling = .check_resampling(resampling),
     scale = aff$scale,
     offset = aff$offset,
-    name = if (is.null(name)) character(0) else as.character(name)
+    name = if (is.null(name)) character(0) else as.character(name),
+    decode = if (is.null(decode)) {
+      list()
+    } else {
+      unclass(decode)[c("src", "lo", "table")]
+    }
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }

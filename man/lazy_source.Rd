@@ -15,7 +15,8 @@ lazy_source(
   resampling = "near",
   scale = FALSE,
   offset = NULL,
-  name = NULL
+  name = NULL,
+  decode = NULL
 )
 }
 \arguments{
@@ -55,6 +56,10 @@ defaults to 0. Ignored when \code{scale} is logical.}
 Pure metadata: surfaced by \code{\link[=plan_view]{plan_view()}} and diagnostics, never
 read by the planner or executors. \code{\link[=lazy_dataset]{lazy_dataset()}} sets it to the
 asset/band name automatically.}
+
+\item{decode}{Optional function decoding the band's 8-bit codes
+before any resampling, as in \code{\link[=lazy_dataset]{lazy_dataset()}}; \code{nodata} is then the
+code to mask.}
 }
 \value{
 A \code{LazyRaster}.

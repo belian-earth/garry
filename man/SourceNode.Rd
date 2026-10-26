@@ -18,7 +18,8 @@ SourceNode(
   scale = numeric(0),
   offset = numeric(0),
   name = character(0),
-  collapsed = integer(0)
+  collapsed = integer(0),
+  decode = list()
 )
 }
 \arguments{
@@ -55,6 +56,11 @@ metadata, shown by \code{\link[=plan_view]{plan_view()}}; set by \code{\link[=la
 \item{collapsed}{Node ids of the single-band sources a band-stack
 collapse folded into this multi-band read, in band order. Length 0
 for an ordinary source.}
+
+\item{decode}{For a source whose 8-bit codes are decoded at read (see
+\code{\link[=lazy_dataset]{lazy_dataset()}}): the codes file (\code{src}), its first code (\code{lo}) and
+the table of decoded values (\code{table}); \code{path} is then the
+lookup-table VRT. Empty for an ordinary source.}
 }
 \value{
 A \code{SourceNode}.

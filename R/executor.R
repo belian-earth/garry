@@ -86,6 +86,29 @@ NULL
 .warp_read_plan <- function(wnode, snode) {
   # a collapsed band stack of warps reads its own bands of the source
   band <- if (length(wnode@bands)) wnode@bands else snode@band
+  if (length(snode@decode)) {
+    # a decoded source onto aligned pixels reads its codes and decodes
+    # them itself; anything else warps its lookup-table VRT (`path`)
+    spec <- .rio_direct_spec(
+      snode@decode$src,
+      wnode@target_grid,
+      wnode@resampling,
+      band = band,
+      decode = TRUE
+    )
+    if (!is.null(spec)) {
+      spec$decode <- snode@decode
+      return(list(
+        path = snode@decode$src,
+        band = band,
+        nodata = numeric(0),
+        open_options = character(0),
+        scale = numeric(0),
+        offset = numeric(0),
+        decim = spec
+      ))
+    }
+  }
   if (length(snode@path) > 1L) {
     # a multi-path source (tiles no mosaic can hold): source by source
     # by nearest neighbour, else every source warped straight into each
@@ -179,6 +202,7 @@ NULL
       cg@halo != 0L ||
       length(ra$path) != 1L ||
       isTRUE(ra$decim$warp) ||
+      length(ra$decim$decode) > 0L ||
       length(ra$scale) > 0L ||
       length(ra$offset) > 0L
   ) {
@@ -225,6 +249,29 @@ NULL
 # per-read arguments. Shared by the executor and the gradient path, which
 # must read a source identically.
 .source_read_args <- function(node) {
+  if (length(node@decode)) {
+    # a decoded source on its own grid reads and decodes its codes
+    spec <- .rio_direct_spec(
+      node@decode$src,
+      node@grid,
+      "near",
+      band = node@band,
+      decode = TRUE
+    )
+    if (!is.null(spec)) {
+      spec$decode <- node@decode
+      return(list(
+        path = node@decode$src,
+        band = node@band,
+        nodata = numeric(0),
+        open_options = character(0),
+        scale = numeric(0),
+        offset = numeric(0),
+        resampling = "near",
+        decim = spec
+      ))
+    }
+  }
   list(
     path = .gti_resampled_path(node@path, node@resampling),
     band = node@band,

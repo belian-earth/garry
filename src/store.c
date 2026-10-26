@@ -487,7 +487,57 @@ SEXP garry_paste_f32(SEXP dst, SEXP src, SEXP geo) {
   return dst;
 }
 
+/* Decode a slab of codes into rows of `dst` from cell `off`, in place:
+ * `codes` holds (ny * by) rows of (nx * bx) codes, north first, and
+ * each of the ny x nx target cells takes the mean of the decoded values
+ * of its by x bx block (the value itself when the block is one code),
+ * NaN where none is valid. A code decodes to table[code - lo]; NA (a
+ * masked code), a code outside the table and a NaN entry (the nodata
+ * code) drop out. The sum runs in double over the block row by row, as
+ * GDAL averages a Float32 band. `geo` = (lo, bx, by, nx, ny). */
+SEXP garry_decode_into(SEXP dst, SEXP off, SEXP codes, SEXP geo, SEXP table) {
+  if (TYPEOF(dst) != REALSXP || TYPEOF(codes) != INTSXP || TYPEOF(table) != REALSXP) {
+    error("double output, integer codes and a double table expected");
+  }
+  if (LENGTH(geo) != 5) error("decode geometry is (lo, bx, by, nx, ny)");
+  const double *g = REAL(geo);
+  const int lo = (int) g[0];
+  const R_xlen_t bx = (R_xlen_t) g[1], by = (R_xlen_t) g[2];
+  const R_xlen_t nx = (R_xlen_t) g[3], ny = (R_xlen_t) g[4];
+  const R_xlen_t o0 = (R_xlen_t) asReal(off);
+  const R_xlen_t sw = nx * bx;
+  if (XLENGTH(codes) != sw * ny * by || o0 < 0 || o0 + nx * ny > XLENGTH(dst)) {
+    error("%lld codes do not decode to %lld x %lld cells at %lld of %lld",
+          (long long) XLENGTH(codes), (long long) nx, (long long) ny,
+          (long long) o0, (long long) XLENGTH(dst));
+  }
+  const int nt = LENGTH(table);
+  const double *t = REAL(table);
+  const int *c = INTEGER(codes);
+  double *d = REAL(dst) + o0;
+  for (R_xlen_t r = 0; r < ny; r++) {
+    for (R_xlen_t q = 0; q < nx; q++) {
+      double sum = 0.0;
+      R_xlen_t n = 0;
+      for (R_xlen_t j = 0; j < by; j++) {
+        const int *row = c + (r * by + j) * sw + q * bx;
+        for (R_xlen_t i = 0; i < bx; i++) {
+          const int code = row[i];
+          if (code == NA_INTEGER) continue;
+          const int k = code - lo;
+          if (k < 0 || k >= nt || isnan(t[k])) continue;
+          sum += t[k];
+          n++;
+        }
+      }
+      d[r * nx + q] = n ? sum / (double) n : NAN;
+    }
+  }
+  return dst;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_decode_into", (DL_FUNC) &garry_decode_into, 5},
   {"garry_flip_rows", (DL_FUNC) &garry_flip_rows, 3},
   {"garry_paste_f32", (DL_FUNC) &garry_paste_f32, 3},
   {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},

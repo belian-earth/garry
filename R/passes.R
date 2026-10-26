@@ -795,7 +795,8 @@ NULL
       open_options = p1@open_options,
       resampling = p1@resampling,
       scale = p1@scale,
-      offset = p1@offset
+      offset = p1@offset,
+      decode = p1@decode
     ))
   }
   if (!all(vapply(ps, .single_band_warp, logical(1), graph = graph))) {
