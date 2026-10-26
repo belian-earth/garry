@@ -16,7 +16,8 @@ lazy_dataset(
   resampling = "near",
   scale = FALSE,
   offset = NULL,
-  bands = NULL
+  bands = NULL,
+  time = NULL
 )
 }
 \arguments{
@@ -80,6 +81,14 @@ Table form: a list named by asset, each entry an integer vector of
 that asset's band indices; names on the indices rename the dataset
 bands, e.g. \code{list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))}.
 Assets left out read every band; \code{mask_asset} always reads band 1.}
+
+\item{time}{File form, N-D array: the time slices to build, selected
+by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or positions).
+\code{lazy_dataset(src, grid, time = "2024")} is
+\code{time_sel(lazy_dataset(src, grid), "2024")} without building the
+other slices' bands first (a 9-year, 128-band OlmoEarth store builds
+1152 band reads, about 1.7 s, before \code{time_sel()} keeps 128).
+\code{NULL} (the default) builds every slice.}
 }
 \value{
 A \code{LazyDataset}.
@@ -118,7 +127,7 @@ GDAL's classic view flattens it to one band per (time, band) pair, and
 garry reads the dimension tags GDAL puts on each band to rebuild the
 axes. Bands take the band dimension's coordinate values as names
 (else \verb{b<index>}) and slices take the time coordinate's (e.g. years);
-pick slices with \code{\link[=time_sel]{time_sel()}}.
+pick slices with \code{\link[=time_sel]{time_sel()}}, or build only some with \code{time}.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask
