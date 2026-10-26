@@ -866,14 +866,16 @@ garry_last_route <- function() .garry_state$route
       live_mb <<- live_mb + w$mb
       n_write <<- n_write + 1L
       wkey <- .glue("w{spec$read_stage[[k]]@id}_c{n_write}")
-      # ready now: its read has landed
+      # ready now, as its read has landed: taken before the launch row's
+      # own time, which log_line() reads first
+      t_ready <- formatC(unclass(Sys.time()), format = "f", digits = 3)
       log_line(
         "launch",
         wkey,
         pool = "write",
         slot = "write",
         mb = round(w$mb, 1),
-        ready = formatC(unclass(Sys.time()), format = "f", digits = 3)
+        ready = t_ready
       )
       writes[[w$reg]] <<- list(
         reg = w$reg,
