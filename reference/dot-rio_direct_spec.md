@@ -18,7 +18,9 @@ paths hand the same request to the same GDAL resampler.
   resampling,
   open_options = character(0),
   band = 1L,
-  nodata = numeric(0)
+  nodata = numeric(0),
+  partial = FALSE,
+  decode = FALSE
 )
 ```
 
@@ -52,9 +54,25 @@ paths hand the same request to the same GDAL resampler.
   The source node's sentinel (length 0 or 1). Averaging declines unless
   the file declares the same value.
 
+- partial:
+
+  `TRUE` for one source of several
+  ([`.mosaic_read_spec()`](https://belian-earth.github.io/garry/reference/dot-mosaic_read_spec.md)):
+  the target may reach beyond the source, and only a nearest-neighbour
+  read on the source's own pixels, with the file's nodata (if any) the
+  node's, qualifies.
+
+- decode:
+
+  `TRUE` for the codes behind a decoded source (`.gdal_read_decoded()`):
+  integer bands qualify for `"near"` and `"average"`, the two reads that
+  decode applies itself, and no others.
+
 ## Value
 
-`NULL`, or a list with `fx`, `fy`, `x_off`, `y_off`, `resamp`.
+`NULL`, or a list with `fx`, `fy`, `x_off`, `y_off` (the target origin
+in source pixels, rows counted from the north), `resamp`, `flip`, and
+the source's `nx` and `ny`.
 
 ## Details
 
@@ -74,6 +92,12 @@ conversion paths) RasterIO and the warper round .5 ties in opposite
 directions – every tie came back +1 DN through the fast path on the
 macOS CI runners. Identity is the contract, so integer bands take the
 fast path only for NEAREST, where no rounding happens.
+
+A south-up source (positive y pixel size: every AEF tile) stores its
+rows from the south. A target on its own pixels is still a window of it,
+read with its rows reversed (`flip`), the read
+[`gdal_read_window()`](https://belian-earth.github.io/garry/reference/gdal_read_window.md)
+gives any south-up file; a decimating target keeps the warper.
 
 Returns `NULL` (keep the warper) unless every condition holds, so the
 warper stays the default and this is a pure opt-in fast path.

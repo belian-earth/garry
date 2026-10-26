@@ -17,7 +17,9 @@ lazy_dataset(
   resampling = "near",
   scale = FALSE,
   offset = NULL,
-  bands = NULL
+  bands = NULL,
+  decode = NULL,
+  time = NULL
 )
 ```
 
@@ -114,6 +116,33 @@ lazy_dataset(
   `list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))`. Assets left out
   read every band; `mask_asset` always reads band 1.
 
+- decode:
+
+  File form: a function decoding the source's 8-bit codes (Byte or
+  Int8), such as
+  [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md).
+  It is evaluated once on every code to make a table. Each source cell's
+  code is decoded through the table first, the nodata code to NaN;
+  resampling then works on the decoded values. With
+  `resampling = "average"` onto a grid 3x coarser, each target cell is
+  the mean of the valid decoded values of its 3 x 3 source cells, the
+  order a nonlinear code needs, and a cell whose source cells are all
+  nodata stays NaN. Values are Float32. Reads go through a lookup-table
+  VRT; the source's own grid, a window of its pixels, or an aligned
+  coarser grid read with `"near"` or `"average"` read the codes and
+  decode them directly, 2-3x faster. `NULL` (the default) reads the
+  codes as they are.
+
+- time:
+
+  File form, N-D array: the time slices to build, selected by label as
+  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
+  selects them (`"2024"`, or positions).
+  `lazy_dataset(src, grid, time = "2024")` is
+  `time_sel(lazy_dataset(src, grid), "2024")` without building the other
+  slices' bands first, which matters for long time series of many bands.
+  `NULL` (the default) builds every slice.
+
 ## Value
 
 A `LazyDataset`.
@@ -159,7 +188,8 @@ A `LazyDataset`.
   axes. Bands take the band dimension's coordinate values as names (else
   `b<index>`) and slices take the time coordinate's (e.g. years); pick
   slices with
-  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md).
+  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md),
+  or build only some with `time`.
 
 All bands share one intermediate representation (IR) graph, so a mask
 defined once (see

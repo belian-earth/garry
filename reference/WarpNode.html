@@ -61,7 +61,8 @@ Barrier. At execution time this materialises as a gdalraster VRT warp.</p>
 <span>  role <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  target_grid <span class="op">=</span> <span class="fu"><a href="GridSpec.html">GridSpec</a></span><span class="op">(</span><span class="op">)</span>,</span>
 <span>  resampling <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  bands <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  bands <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  coarsen <span class="op">=</span> <span class="fl">1L</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -100,6 +101,13 @@ Pure metadata: never read by the planner or executors; surfaced by
 source's band. Length 0 (the default) reads the parent's band; the
 planner sets it when it collapses a band stack of warps over one file
 into a single multi-band warp.</p></dd>
+
+
+<dt id="arg-coarsen">coarsen<a class="anchor" aria-label="anchor" href="#arg-coarsen"></a></dt>
+<dd><p>Block factor set by <code><a href="coarsen.html">coarsen()</a></code>: the sources go by
+nearest neighbour onto the grid <code>coarsen</code> times finer than
+<code>target_grid</code>, and each target cell is the mean of the valid values
+of its block. 1 (the default) is an ordinary warp.</p></dd>
 
 </dl></div>
     <div class="section level2">

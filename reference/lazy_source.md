@@ -21,7 +21,8 @@ lazy_source(
   resampling = "near",
   scale = FALSE,
   offset = NULL,
-  name = NULL
+  name = NULL,
+  decode = NULL
 )
 ```
 
@@ -87,6 +88,13 @@ lazy_source(
   and diagnostics, never read by the planner or executors.
   [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   sets it to the asset/band name automatically.
+
+- decode:
+
+  Optional function decoding the band's 8-bit codes before any
+  resampling, as in
+  [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md);
+  `nodata` is then the code to mask.
 
 ## Value
 

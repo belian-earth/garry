@@ -74,7 +74,8 @@ time.</p>
 <span>  scale <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  offset <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  name <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  collapsed <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  collapsed <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  decode <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -140,6 +141,13 @@ metadata, shown by <code><a href="plan_view.html">plan_view()</a></code>; set by
 <dd><p>Node ids of the single-band sources a band-stack
 collapse folded into this multi-band read, in band order. Length 0
 for an ordinary source.</p></dd>
+
+
+<dt id="arg-decode">decode<a class="anchor" aria-label="anchor" href="#arg-decode"></a></dt>
+<dd><p>For a source whose 8-bit codes are decoded at read (see
+<code><a href="lazy_dataset.html">lazy_dataset()</a></code>): the codes file (<code>src</code>), its first code (<code>lo</code>) and
+the table of decoded values (<code>table</code>); <code>path</code> is then the
+lookup-table VRT. Empty for an ordinary source.</p></dd>
 
 </dl></div>
     <div class="section level2">

@@ -4,6 +4,39 @@
 
 ### New features
 
+- `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
+  by block means of its valid values. Its read assembles each window’s
+  finer cells from the sources as their nearest-neighbour read does
+  (direct window reads of the sources on those cells’ pixels, a warp of
+  each other source alone, later sources winning where they hold data),
+  decodes them if the dataset decodes, and averages each block in one
+  pass.
+  `stack_bands(coarsen(lazy_dataset(tiles, grid10, resampling = "near", decode = dequantize_aef), 3L))`
+  builds a 30 m embedding cube straight from the tiles, identical to
+  writing the 10 m codes and then averaging their decoded values: an AEF
+  box-year (four south-up tiles, 64 bands, 4488 x 5727 codes) in 8.5 s
+  instead of 14 s through the codes (about 36 s before this release), an
+  OlmoEarth window (128 bands, through a false-origin shift) in 6.8 s
+  instead of 9.7 s. Cells warped from a reprojected source match the 10
+  m read’s under `garry.warp_exact = TRUE`.
+- `lazy_dataset(decode = )` takes several sources and Zarr arrays, one
+  lookup-table VRT each.
+- `lazy_dataset(decode = )` decodes a file’s 8-bit codes before any
+  resampling: each code goes through a table made by evaluating the
+  decode (for example
+  [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md))
+  on every code, the nodata code becoming NaN, and
+  `resampling = "average"` then takes the mean of the valid decoded
+  values. This replaces the lookup-table VRT a caller built to average
+  decoded embeddings. Every read takes the codes at full resolution,
+  never an overview’s resampled codes. Aligned reads, south-up files
+  included, decode the codes themselves: a 30 m cube of a 64-band AEF
+  box-year (codes 4488 x 5727 px) wrote in 4.0 s instead of 19 s through
+  the lookup-table VRT, and a 128-band OlmoEarth one in 2.4 s instead of
+  12.6 s. The two agree to f32 rounding: 0.6% of OlmoEarth cells differ,
+  by at most 6e-8 (GDAL averages in an order garry does not reproduce).
+  A `mask_asset` band is read as stored, and bands must share one nodata
+  code.
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   reads N-D arrays such as a `(time, band, y, x)` Zarr array
   (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using the
@@ -21,6 +54,13 @@
   (the planner rewrites collected stacks in place).
 - [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
   takes a dataset and keeps the matching slices of every band.
+- `lazy_dataset(time = )` builds only the selected time slices of an N-D
+  source, selected as
+  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
+  selects them. A 9-year, 128-band OlmoEarth store built 1152 band reads
+  (about 2 s) before
+  [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
+  kept 128; with `time = "2024"` it builds those 128 (0.25 s).
 - [`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
   decodes signed-power Int8 embeddings, and
   [`dequantize_olmoearth()`](https://belian-earth.github.io/garry/reference/dequantize_olmoearth.md)
@@ -31,6 +71,21 @@
 - New vignette: OlmoEarth embeddings from Zarr.
 
 ### Performance
+
+- A nearest-neighbour read of several sources no mosaic VRT can hold
+  (south-up tiles, tiles in a neighbouring projection, one Zarr array
+  per UTM zone) goes source by source: a direct window read of each
+  source that lies on the target grid’s pixels, and a warp of each other
+  source alone, laid over the window in order with later sources winning
+  where they hold data, the cells the warper gives them all together.
+  Only the sources off the target’s pixels pay for warping. Masked
+  sources, and float sources whose nodata is not NaN where they overlap,
+  keep the warper. A single south-up file read onto a subset of its own
+  pixels is a direct read too, and south-up rows flip in C. One box-year
+  of four south-up 64-band tiles (4488 x 5727 px) fetched to Int8 in 10
+  s instead of 17 s with 8 readers, identical to gdalwarp’s result; two
+  4-band tiles in neighbouring UTM zones, one on the target’s pixels, in
+  1.05 s instead of 1.13 s.
 
 - Scan stages run faster. On hutan’s SI tail at 5.76 M cells, with the
   daemon changes below, the robust Kalman smoother stage went from 0.66
@@ -113,24 +168,45 @@
 
 ### Bug fixes
 
+- A multi-band warp of several sources or a Zarr array masks each band’s
+  nodata alone. GDAL’s default (`UNIFIED_SRC_NODATA=PARTIAL`) masked a
+  pixel only when every band held nodata, so one band’s sentinel came
+  through as a value and, from a later source of a mosaic, overwrote an
+  earlier source’s data.
+
+- `garry.warp_exact = TRUE` warps windows with GDAL’s exact transformer,
+  as the warped VRT of a single source already is, so which source pixel
+  a cell takes never depends on where windows fall. GDAL’s default
+  interpolates the transform along each row of a window to within 0.125
+  px. It is off by default: a one-band warp across projections costs
+  3-15x more with it.
+
+- A direct (unwarped) read declines a source whose band has a mask or
+  alpha band, which the warper honours and a plain read did not.
+
 - Read daemons can open Zarr stores: the vsicurl allowlist admits Zarr
   v3 and v2 metadata and chunk keys.
+
 - Reads that touch a Zarr store no longer turn on GDAL’s worker threads.
   GDAL reports from those threads, and gdalraster’s message handler then
   calls into R off the main thread, which aborted the R session.
+
 - [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
   no longer sets `GDAL_HTTP_RETRY_CODES`. GDAL matches that list by
   substring, so `"500"` made every curl failure (DNS included) retry
   with backoff for minutes; GDAL’s default set is the same codes plus
   timeouts and resets.
+
 - [`g_mean()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
   averages integer input at f32, in custom reducers and
   [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
   functions alike. anvl 0.5.1 summed an integer input in its own dtype,
   so a mean of Int8 or Int16 values wrapped (100 and 120 gave -4.5).
+
 - Memory budgets respect a container’s limit. Inside a container with
   its own cgroup namespace (Docker’s default on cgroup v2) and on cgroup
   v1, garry found no limit and budgeted against the host’s RAM.
+
 - [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
   caps the GDAL block cache of every daemon at
   `garry_opt("gdal_cachemax_mb")`, not only the read daemons’. The

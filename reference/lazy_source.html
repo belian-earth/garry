@@ -74,7 +74,8 @@ read time in the adapter.</p>
 <span>  resampling <span class="op">=</span> <span class="st">"near"</span>,</span>
 <span>  scale <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  offset <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  name <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  name <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  decode <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -139,6 +140,12 @@ defaults to 0. Ignored when <code>scale</code> is logical.</p></dd>
 Pure metadata: surfaced by <code><a href="plan_view.html">plan_view()</a></code> and diagnostics, never
 read by the planner or executors. <code><a href="lazy_dataset.html">lazy_dataset()</a></code> sets it to the
 asset/band name automatically.</p></dd>
+
+
+<dt id="arg-decode">decode<a class="anchor" aria-label="anchor" href="#arg-decode"></a></dt>
+<dd><p>Optional function decoding the band's 8-bit codes
+before any resampling, as in <code><a href="lazy_dataset.html">lazy_dataset()</a></code>; <code>nodata</code> is then the
+code to mask.</p></dd>
 
 </dl></div>
     <div class="section level2">

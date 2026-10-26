@@ -14,7 +14,8 @@ WarpNode(
   role = character(0),
   target_grid = GridSpec(),
   resampling = character(0),
-  bands = integer(0)
+  bands = integer(0),
+  coarsen = 1L
 )
 ```
 
@@ -56,6 +57,14 @@ WarpNode(
   Length 0 (the default) reads the parent's band; the planner sets it
   when it collapses a band stack of warps over one file into a single
   multi-band warp.
+
+- coarsen:
+
+  Block factor set by
+  [`coarsen()`](https://belian-earth.github.io/garry/reference/coarsen.md):
+  the sources go by nearest neighbour onto the grid `coarsen` times
+  finer than `target_grid`, and each target cell is the mean of the
+  valid values of its block. 1 (the default) is an ordinary warp.
 
 ## Value
 

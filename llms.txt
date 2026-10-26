@@ -437,6 +437,9 @@ collect().
 - [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
   : Lazily resample/reproject onto a target grid.
 
+- [`coarsen()`](https://belian-earth.github.io/garry/reference/coarsen.md)
+  : Coarsen a raster or dataset by block means.
+
 ## Execution
 
 Plan, distribute across daemons, and write the result.

@@ -63,7 +63,9 @@
 <span>  resampling <span class="op">=</span> <span class="st">"near"</span>,</span>
 <span>  scale <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  offset <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  bands <span class="op">=</span> <span class="cn">NULL</span></span>
+<span>  bands <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  decode <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  time <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -155,6 +157,30 @@ that asset's band indices; names on the indices rename the dataset
 bands, e.g. <code>list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))</code>.
 Assets left out read every band; <code>mask_asset</code> always reads band 1.</p></dd>
 
+
+<dt id="arg-decode">decode<a class="anchor" aria-label="anchor" href="#arg-decode"></a></dt>
+<dd><p>File form: a function decoding the source's 8-bit codes
+(Byte or Int8), such as <code><a href="dequantize_aef.html">dequantize_aef()</a></code>. It is evaluated once on
+every code to make a table. Each source cell's code is decoded
+through the table first, the nodata code to NaN; resampling then
+works on the decoded values. With <code>resampling = "average"</code> onto a
+grid 3x coarser, each target cell is the mean of the valid decoded
+values of its 3 x 3 source cells, the order a nonlinear code needs,
+and a cell whose source cells are all nodata stays NaN. Values are
+Float32. Reads go through a lookup-table VRT; the source's own grid,
+a window of its pixels, or an aligned coarser grid read with
+<code>"near"</code> or <code>"average"</code> read the codes and decode them directly,
+2-3x faster. <code>NULL</code> (the default) reads the codes as they are.</p></dd>
+
+
+<dt id="arg-time">time<a class="anchor" aria-label="anchor" href="#arg-time"></a></dt>
+<dd><p>File form, N-D array: the time slices to build, selected
+by label as <code><a href="time_sel.html">time_sel()</a></code> selects them (<code>"2024"</code>, or positions).
+<code>lazy_dataset(src, grid, time = "2024")</code> is
+<code>time_sel(lazy_dataset(src, grid), "2024")</code> without building the
+other slices' bands first, which matters for long time series of
+many bands. <code>NULL</code> (the default) builds every slice.</p></dd>
+
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
@@ -191,7 +217,7 @@ GDAL's classic view flattens it to one band per (time, band) pair, and
 garry reads the dimension tags GDAL puts on each band to rebuild the
 axes. Bands take the band dimension's coordinate values as names
 (else <code>b&lt;index&gt;</code>) and slices take the time coordinate's (e.g. years);
-pick slices with <code><a href="time_sel.html">time_sel()</a></code>.</p></li>
+pick slices with <code><a href="time_sel.html">time_sel()</a></code>, or build only some with <code>time</code>.</p></li>
 </ul><p>All bands share one intermediate representation (IR) graph, so a mask
 defined once (see <code><a href="apply_mask.html">apply_mask()</a></code>) is computed once and dedup'd across bands, and
 <code><a href="collect.html">collect()</a></code> plans the whole dataset in one pass.</p>

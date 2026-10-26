@@ -23,7 +23,8 @@ SourceNode(
   scale = numeric(0),
   offset = numeric(0),
   name = character(0),
-  collapsed = integer(0)
+  collapsed = integer(0),
+  decode = list()
 )
 ```
 
@@ -95,6 +96,14 @@ SourceNode(
 
   Node ids of the single-band sources a band-stack collapse folded into
   this multi-band read, in band order. Length 0 for an ordinary source.
+
+- decode:
+
+  For a source whose 8-bit codes are decoded at read (see
+  [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)):
+  the codes file (`src`), its first code (`lo`) and the table of decoded
+  values (`table`); `path` is then the lookup-table VRT. Empty for an
+  ordinary source.
 
 ## Value
 

@@ -78,7 +78,9 @@ both paths hand the same request to the same GDAL resampler.</p>
 <span>  <span class="va">resampling</span>,</span>
 <span>  open_options <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  band <span class="op">=</span> <span class="fl">1L</span>,</span>
-<span>  nodata <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
+<span>  nodata <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">numeric</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
+<span>  partial <span class="op">=</span> <span class="cn">FALSE</span>,</span>
+<span>  decode <span class="op">=</span> <span class="cn">FALSE</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -112,10 +114,25 @@ data types drive the integer gate above.</p></dd>
 <dd><p>The source node's sentinel (length 0 or 1). Averaging
 declines unless the file declares the same value.</p></dd>
 
+
+<dt id="arg-partial">partial<a class="anchor" aria-label="anchor" href="#arg-partial"></a></dt>
+<dd><p><code>TRUE</code> for one source of several
+(<code><a href="dot-mosaic_read_spec.html">.mosaic_read_spec()</a></code>): the target may reach beyond the source,
+and only a nearest-neighbour read on the source's own pixels, with
+the file's nodata (if any) the node's, qualifies.</p></dd>
+
+
+<dt id="arg-decode">decode<a class="anchor" aria-label="anchor" href="#arg-decode"></a></dt>
+<dd><p><code>TRUE</code> for the codes behind a decoded source
+(<code>.gdal_read_decoded()</code>): integer bands qualify for <code>"near"</code> and
+<code>"average"</code>, the two reads that decode applies itself, and no others.</p></dd>
+
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
-    <p><code>NULL</code>, or a list with <code>fx</code>, <code>fy</code>, <code>x_off</code>, <code>y_off</code>, <code>resamp</code>.</p>
+    <p><code>NULL</code>, or a list with <code>fx</code>, <code>fy</code>, <code>x_off</code>, <code>y_off</code> (the
+target origin in source pixels, rows counted from the north),
+<code>resamp</code>, <code>flip</code>, and the source's <code>nx</code> and <code>ny</code>.</p>
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
@@ -135,6 +152,11 @@ rounds back to the band type itself, and under GDAL 3.13.1 on ARM
 the fast path on the macOS CI runners. Identity is the contract, so
 integer bands take the fast path only for NEAREST, where no rounding
 happens.</p>
+<p>A south-up source (positive y pixel size: every AEF tile) stores its
+rows from the south. A target on its own pixels is still a window of
+it, read with its rows reversed (<code>flip</code>), the read
+<code><a href="gdal_read_window.html">gdal_read_window()</a></code> gives any south-up file; a decimating target
+keeps the warper.</p>
 <p>Returns <code>NULL</code> (keep the warper) unless every condition holds, so the
 warper stays the default and this is a pure opt-in fast path.</p>
     </div>
