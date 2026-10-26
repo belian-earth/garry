@@ -140,6 +140,46 @@ NULL
   mirai::mirai(.expr, ..., .compute = .compute)
 }
 
+# One memory sample for the task log, every row at `time` (the report
+# sums a sweep's rows): each daemon's anon RSS (key = pid, pool = its
+# role), the calling process's, the binding cgroup's usage against its
+# limit, and /dev/shm in use.
+.task_log_memory <- function(log_line, time = Sys.time()) {
+  roles <- .garry_state$pid_role %||% character(0)
+  for (p in .garry_state$pool_pids) {
+    a <- .garry_anon_mb_of(p)
+    if (is.finite(a)) {
+      r <- unname(roles[as.character(p)])
+      log_line(
+        "rss",
+        as.character(p),
+        pool = if (is.na(r)) "" else r,
+        mb = round(a, 1),
+        time = time
+      )
+    }
+  }
+  h <- .garry_anon_mb_of(Sys.getpid())
+  if (is.finite(h)) {
+    log_line("host", Sys.getpid(), mb = round(h, 1), time = time)
+  }
+  cg <- .garry_cgroup_mem()
+  if (!is.null(cg)) {
+    log_line(
+      "cgroup",
+      "-",
+      mb = round(cg$current, 1),
+      store_mb = round(cg$limit, 1),
+      time = time
+    )
+  }
+  shm <- .garry_shm_used_mb()
+  if (is.finite(shm)) {
+    log_line("shm", "-", mb = round(shm, 1), time = time)
+  }
+  invisible(NULL)
+}
+
 # The line writer for the task log at `task_log` (a no-op without one),
 # shared by the scheduler and the read-only write route. Task-log schema
 # (locked; garry_task_report() is the reader):
@@ -147,7 +187,8 @@ NULL
 # launch rows carry pool/slot, the admission-priced working set and
 # store bytes, and the READY timestamp (deps satisfied) so queue-wait
 # separates from run time; rss rows sample one daemon's anon MB
-# (key = pid); model rows sample the modelled in-flight/resident MB.
+# (key = pid); model rows sample the modelled in-flight/resident MB;
+# pool rows give a run's pool widths (key = pool, mb = daemons).
 .task_log_writer <- function(task_log) {
   if (is.null(task_log)) {
     return(function(...) NULL)
@@ -2061,6 +2102,8 @@ execute_plan_mirai <- function(
   task_log <- garry_opt("task_log")
   log_line <- .task_log_writer(task_log)
   log_line("run_start", run_id) # runs share a log file: mark each one
+  log_line("pool", "read", mb = .gd_n_compute("garry_read"))
+  log_line("pool", "comp", mb = length(comp_profs))
   t_drain0 <- unclass(Sys.time()) # zero-dep tasks are ready at drain start
   n_total <- length(tasks)
   last_report <- Sys.time()
@@ -2377,20 +2420,7 @@ execute_plan_mirai <- function(
       if (!is.null(task_log)) {
         # one timestamp per sweep: the report sums a sweep's rows
         sweep_t <- Sys.time()
-        roles <- .garry_state$pid_role %||% character(0)
-        for (p in .garry_state$pool_pids) {
-          a <- .garry_anon_mb_of(p)
-          if (is.finite(a)) {
-            r <- unname(roles[as.character(p)])
-            log_line(
-              "rss",
-              as.character(p),
-              pool = if (is.na(r)) "" else r,
-              mb = round(a, 1),
-              time = sweep_t
-            )
-          }
-        }
+        .task_log_memory(log_line, sweep_t)
         log_line(
           "model",
           "-",
@@ -2398,24 +2428,6 @@ execute_plan_mirai <- function(
           mb = round(mb_inflight, 1),
           store_mb = round(mb_store_resident, 1)
         )
-        h <- .garry_anon_mb_of(Sys.getpid())
-        if (is.finite(h)) {
-          log_line("host", Sys.getpid(), mb = round(h, 1), time = sweep_t)
-        }
-        cg <- .garry_cgroup_mem()
-        if (!is.null(cg)) {
-          log_line(
-            "cgroup",
-            "-",
-            mb = round(cg$current, 1),
-            store_mb = round(cg$limit, 1),
-            time = sweep_t
-          )
-        }
-        shm <- .garry_shm_used_mb()
-        if (is.finite(shm)) {
-          log_line("shm", "-", mb = round(shm, 1), time = sweep_t)
-        }
         log_line(
           "budget",
           "-",

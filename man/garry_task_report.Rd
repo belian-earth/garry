@@ -14,7 +14,9 @@ Invisibly, a list: \code{events} (event counts), \code{tasks} (one row
 per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
 queue_s, run_s, harvest_s), \code{stages} (per-stage counts, p50/p95 run
 and wait seconds, p50 queue and harvest seconds), \code{pools} (per-pool
-task counts, summed and p50 run seconds), \code{max_concurrency},
+task counts, summed and p50 run seconds over every run, and the last
+run's daemon count and utilisation, its busy seconds over daemons x
+the run's span), \code{max_concurrency},
 \code{drain_s}, \code{host_tail_s},
 \code{peak_model_mb}, \code{peak_rss_mb}, \code{peak_rss_by_role} (named MB),
 \code{peak_host_mb}, \code{peak_cgroup_mb}, \code{cgroup_limit_mb}, \code{peak_shm_mb}
