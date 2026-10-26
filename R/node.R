@@ -342,6 +342,10 @@ ScanNode <- S7::new_class(
 #'   source's band. Length 0 (the default) reads the parent's band; the
 #'   planner sets it when it collapses a band stack of warps over one file
 #'   into a single multi-band warp.
+#' @param coarsen Block factor set by [coarsen()]: the sources go by
+#'   nearest neighbour onto the grid `coarsen` times finer than
+#'   `target_grid`, and each target cell is the mean of the valid values
+#'   of its block. 1 (the default) is an ordinary warp.
 #' @return A `WarpNode`.
 #' @export
 WarpNode <- S7::new_class(
@@ -350,7 +354,8 @@ WarpNode <- S7::new_class(
   properties = list(
     target_grid = GridSpec,
     resampling = S7::class_character, # "nearest", "bilinear", "cubic", ...
-    bands = S7::new_property(S7::class_integer, default = quote(integer(0)))
+    bands = S7::new_property(S7::class_integer, default = quote(integer(0))),
+    coarsen = S7::new_property(S7::class_integer, default = 1L)
   )
 )
 

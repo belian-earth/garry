@@ -200,7 +200,7 @@ lazy_source <- function(
     decode = if (is.null(decode)) {
       list()
     } else {
-      unclass(decode)[c("src", "lo", "table")]
+      unclass(decode)[c("src", "lo", "table", "nodata")]
     }
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
@@ -1536,6 +1536,127 @@ align_to <- function(x, to, resampling = "near") {
     resampling = resampling
   )
   LazyRaster(graph = x@graph, node_id = id, grid = target)
+}
+
+#' Coarsen a raster or dataset by block means.
+#'
+#' Maps `x` onto the grid `factor` times coarser, anchored on its origin:
+#' each coarse cell is the mean of the valid (non-NaN) values of its
+#' `factor` x `factor` block, NaN when none is valid. This is exact block
+#' arithmetic, not a GDAL resampler, so the two stages stay explicit: a
+#' decoded embedding read by nearest neighbour onto a 10 m grid, then
+#' averaged to 30 m,
+#'
+#' ```
+#' codes <- lazy_dataset(tiles, grid10, resampling = "near", decode = dequantize_aef)
+#' cube <- stack_bands(coarsen(codes, 3L))
+#' ```
+#'
+#' takes, for each 30 m cell, the mean of the nine decoded 10 m values the
+#' two-stage path writes, and never a GDAL average over the reprojected
+#' source footprint. The coarsening runs inside the read: each window's
+#' finer cells are assembled from every source in order (a direct window
+#' read where a source lies on those cells' pixels, a nearest-neighbour
+#' warp of that source alone where it does not; later sources win where
+#' they hold data), decoded, and averaged in one pass, so the finer grid
+#' is never written.
+#'
+#' Version 1 coarsens reads only: `x` must come straight from
+#' [lazy_dataset()] or [lazy_source()] (decoded or not) by
+#' nearest-neighbour, and its dims must divide by `factor`.
+#'
+#' @param x A `LazyRaster` or `LazyDataset` reading its sources.
+#' @param factor Integer block size (>= 1).
+#' @param fun Block statistic; only `"mean"`.
+#' @return A `LazyRaster` or `LazyDataset` on the coarser grid (f32).
+#' @export
+coarsen <- function(x, factor, fun = "mean") {
+  fun <- rlang::arg_match(fun, "mean")
+  if (
+    !is.numeric(factor) ||
+      length(factor) != 1L ||
+      factor < 1 ||
+      factor != round(factor)
+  ) {
+    cli::cli_abort("{.arg factor} must be a whole number >= 1.")
+  }
+  k <- as.integer(factor)
+  if (S7::S7_inherits(x, LazyDataset)) {
+    bands <- lapply(x@bands, function(slices) {
+      if (S7::S7_inherits(slices, LazyRaster)) {
+        return(coarsen(slices, k, fun))
+      }
+      lapply(slices, coarsen, factor = k, fun = fun)
+    })
+    return(LazyDataset(
+      graph = x@graph,
+      bands = bands,
+      mask_asset = x@mask_asset,
+      steps = x@steps
+    ))
+  }
+  .assert_class(x, LazyRaster, "LazyRaster")
+  n <- graph_get(x@graph, x@node_id)
+  if (S7::S7_inherits(n, WarpNode) && n@coarsen == 1L) {
+    src_id <- n@parents[[1L]]
+    resampling <- n@resampling
+    bands <- n@bands
+  } else if (S7::S7_inherits(n, SourceNode)) {
+    src_id <- x@node_id
+    resampling <- "near"
+    bands <- integer(0)
+  } else {
+    src_id <- NULL
+  }
+  src <- if (!is.null(src_id)) graph_get(x@graph, src_id)
+  if (
+    is.null(src) || !S7::S7_inherits(src, SourceNode) || length(src@collapsed)
+  ) {
+    cli::cli_abort(c(
+      "{.fn coarsen} averages a read: apply it to a band of {.fn lazy_dataset} or {.fn lazy_source}.",
+      "i" = "Coarsening computed rasters is not supported yet."
+    ))
+  }
+  if (!resampling %in% c("near", "nearest")) {
+    cli::cli_abort(c(
+      "{.fn coarsen} averages a nearest-neighbour read, not a {.val {resampling}} one.",
+      "i" = "Read the sources with {.code resampling = \"near\"}."
+    ))
+  }
+  g <- x@grid
+  d <- g@dims
+  if (any(d[c("x", "y")] %% k != 0L)) {
+    cli::cli_abort(
+      "{.arg x}'s grid ({d[['x']]} x {d[['y']]}) does not divide into {k} x {k} blocks."
+    )
+  }
+  if (k == 1L) {
+    return(x)
+  }
+  tt <- g@transform
+  coarse <- GridSpec(
+    crs = g@crs,
+    transform = c(tt[[1L]], tt[[2L]] * k, 0, tt[[4L]], 0, tt[[6L]] * k),
+    extent = g@extent,
+    dims = c(
+      x = d[["x"]] %/% k,
+      y = d[["y"]] %/% k,
+      d[setdiff(names(d), c("x", "y"))]
+    ),
+    dtype = "f32",
+    labels = g@labels
+  )
+  id <- graph_add(
+    x@graph,
+    WarpNode,
+    parents = src_id,
+    grid = coarse,
+    target_grid = coarse,
+    resampling = "near",
+    bands = bands,
+    coarsen = k
+  )
+  LazyRaster(graph = x@graph, node_id = id, grid = coarse)
 }
 
 # print() cards and plan_draw() live in draw.R.

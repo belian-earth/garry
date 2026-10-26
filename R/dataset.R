@@ -186,10 +186,13 @@ LazyDataset <- S7::new_class(
 #'   grid 3x coarser, each target cell is the mean of the valid decoded
 #'   values of its 3 x 3 source cells, the order a nonlinear code needs,
 #'   and a cell whose source cells are all nodata stays NaN. Values are
-#'   Float32. Reads go through a lookup-table VRT; the source's own grid,
-#'   a window of its pixels, or an aligned coarser grid read with
-#'   `"near"` or `"average"` read the codes and decode them directly,
-#'   2-3x faster. `NULL` (the default) reads the codes as they are.
+#'   Float32. Several sources (tiles, one Zarr array per UTM zone) share
+#'   one table and nodata code. Reads go through a lookup-table VRT per
+#'   source; the source's own grid, a window of its pixels, or an aligned
+#'   coarser grid read with `"near"` or `"average"` read the codes and
+#'   decode them directly, 2-3x faster, and so does a nearest-neighbour
+#'   read of several sources or a Zarr array and its [coarsen()]. `NULL`
+#'   (the default) reads the codes as they are.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
@@ -597,7 +600,12 @@ lazy_dataset <- function(
       )
     }
     dec <- .decode_prepare(path, decode, nodata)
-    meta <- gdal_grid_spec(dec$vrt)
+    # one source: its VRT's grid; several: their planning grid, decoded
+    meta <- if (length(path) == 1L) {
+      gdal_grid_spec(dec$vrt)
+    } else {
+      utils::modifyList(meta, list(grid = .grid_retype(meta$grid, "f32")))
+    }
   }
   if (is.null(meta)) meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path[[1L]])
@@ -706,31 +714,31 @@ lazy_dataset <- function(
 # Prepare a decode for the 8-bit codes at `path` (lazy_dataset(decode =)):
 # `fn` evaluated once on every code of the band type gives the table
 # (rounded to f32, NaN at the nodata code), written as a lookup-table
-# VRT every read path takes. `nodata` is the code to mask: the file's
-# own, or one given that matches it.
+# VRT per source that every read path takes. `nodata` is the code to
+# mask: the sources' own, or one given that matches it. Several sources
+# (tiles, one Zarr array per UTM zone) share one table and code.
 .decode_prepare <- function(path, fn, nodata = NULL) {
   if (!is.function(fn)) {
     cli::cli_abort(
       "{.arg decode} must be a function of the codes, such as {.fn dequantize_aef}."
     )
   }
-  if (length(path) != 1L || .gdal_is_zarr(path)) {
-    cli::cli_abort(c(
-      "{.arg decode} reads one coded raster file.",
-      "i" = "Decode a Zarr array or a multi-file source with {.fn lazy_map} instead."
-    ))
-  }
-  types <- unique(gdal_band_types(path))
+  types <- unique(unlist(lapply(path, gdal_band_types)))
   ranges <- list(Byte = c(0L, 255L), Int8 = c(-128L, 127L))
   if (length(types) != 1L || !types %in% names(ranges)) {
     cli::cli_abort(c(
-      "{.arg decode} decodes 8-bit codes; {.path {path}} holds {.val {types}} bands.",
+      "{.arg decode} decodes 8-bit codes; {.path {path[[1L]]}} holds {.val {types}} bands.",
       "i" = "Decode other types with {.fn lazy_map}."
     ))
   }
   r <- ranges[[types]]
   codes <- seq(r[[1L]], r[[2L]])
-  file_nd <- gdal_grid_spec(path)$nodata
+  file_nd <- unique(unlist(lapply(path, function(p) gdal_grid_spec(p)$nodata)))
+  if (length(file_nd) > 1L) {
+    cli::cli_abort(
+      "The sources declare different nodata codes ({.val {file_nd}})."
+    )
+  }
   if (
     !is.null(nodata) &&
       length(file_nd) == 1L &&
@@ -760,10 +768,22 @@ lazy_dataset <- function(
     size = 4L
   )
   table[!valid] <- NaN
-  vrt <- tempfile("garry-decode-", fileext = ".vrt")
-  gdal_decode_vrt(vrt, path, r[[1L]], table, nd)
+  vrt <- vapply(
+    path,
+    function(p) {
+      gdal_decode_vrt(
+        tempfile("garry-decode-", fileext = ".vrt"),
+        p,
+        r[[1L]],
+        table,
+        nd
+      )
+    },
+    "",
+    USE.NAMES = FALSE
+  )
   structure(
-    list(vrt = vrt, src = path, lo = r[[1L]], table = table),
+    list(vrt = vrt, src = path, lo = r[[1L]], table = table, nodata = nd),
     class = "garry_decode"
   )
 }

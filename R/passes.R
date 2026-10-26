@@ -779,7 +779,7 @@ NULL
     if (
       !.same_file_bands(ps) ||
         ((shared_only || length(p1@path) > 1L) &&
-          !.bands_share_blocks(p1@path, p1@open_options))
+          !.bands_share_blocks(.source_storage(p1), p1@open_options))
     ) {
       return(NULL)
     }
@@ -808,13 +808,14 @@ NULL
     ps[-1L],
     function(w) {
       identical(w@resampling, w1@resampling) &&
+        identical(w@coarsen, w1@coarsen) &&
         grid_equal(w@target_grid, w1@target_grid)
     },
     logical(1)
   )
   if (
     !all(same_warp) || !.same_file_bands(srcs) ||
-      !.bands_share_blocks(srcs[[1L]]@path, srcs[[1L]]@open_options)
+      !.bands_share_blocks(.source_storage(srcs[[1L]]), srcs[[1L]]@open_options)
   ) {
     return(NULL)
   }
@@ -824,7 +825,8 @@ NULL
     grid = grid,
     target_grid = grid,
     resampling = w1@resampling,
-    bands = vapply(srcs, function(n) n@band, integer(1))
+    bands = vapply(srcs, function(n) n@band, integer(1)),
+    coarsen = w1@coarsen
   )
 }
 
@@ -837,6 +839,12 @@ NULL
   src <- graph_get(graph, n@parents[[1L]])
   S7::S7_inherits(src, SourceNode) && length(src@band) == 1L &&
     length(src@collapsed) == 0L
+}
+
+# The files a source's bands are stored in: a decoded source's codes,
+# not the lookup-table VRT its path names.
+.source_storage <- function(n) {
+  if (length(n@decode)) n@decode$src else n@path
 }
 
 # Do a file's bands share storage blocks, so that reading one band of a
@@ -1560,6 +1568,7 @@ plan_lazy <- function(x) {
         # the full read_target_px was one 16 GB f32 window.
         if (
           protos[[i]]$kind == "source_read" ||
+            .stage_coarsen(graph, protos[[i]]) > 1L ||
             .warp_reads_direct(graph, protos[[i]])
         ) {
           return(prod(as.numeric(chunk_dim)))
@@ -1777,7 +1786,24 @@ plan_lazy <- function(x) {
       numeric(1)
     )
   ))
-  8 * outer_max + 8 * max(1, in_px) + 16 + scan_px + patch_px
+  # A coarsened warp assembles k^2 finer f32 cells a band for each of
+  # its own (coarsen()), each also held once more as the read lands.
+  coarsen_px <- max(c(
+    0,
+    vapply(
+      members,
+      function(id) {
+        n <- graph_get(graph, id)
+        if (!S7::S7_inherits(n, WarpNode) || n@coarsen <= 1L) {
+          return(0)
+        }
+        d <- n@grid@dims
+        8 * n@coarsen^2 * max(1, prod(d[!names(d) %in% c("x", "y")]))
+      },
+      numeric(1)
+    )
+  ))
+  8 * outer_max + 8 * max(1, in_px) + 16 + scan_px + patch_px + coarsen_px
 }
 
 # Per-pixel COMPUTE estimate for one stage's kernel, in flops. The

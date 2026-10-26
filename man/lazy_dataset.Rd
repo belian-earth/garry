@@ -90,10 +90,13 @@ works on the decoded values. With \code{resampling = "average"} onto a
 grid 3x coarser, each target cell is the mean of the valid decoded
 values of its 3 x 3 source cells, the order a nonlinear code needs,
 and a cell whose source cells are all nodata stays NaN. Values are
-Float32. Reads go through a lookup-table VRT; the source's own grid,
-a window of its pixels, or an aligned coarser grid read with
-\code{"near"} or \code{"average"} read the codes and decode them directly,
-2-3x faster. \code{NULL} (the default) reads the codes as they are.}
+Float32. Several sources (tiles, one Zarr array per UTM zone) share
+one table and nodata code. Reads go through a lookup-table VRT per
+source; the source's own grid, a window of its pixels, or an aligned
+coarser grid read with \code{"near"} or \code{"average"} read the codes and
+decode them directly, 2-3x faster, and so does a nearest-neighbour
+read of several sources or a Zarr array and its \code{\link[=coarsen]{coarsen()}}. \code{NULL}
+(the default) reads the codes as they are.}
 }
 \value{
 A \code{LazyDataset}.

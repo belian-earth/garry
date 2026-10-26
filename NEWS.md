@@ -2,6 +2,20 @@
 
 ## New features
 
+* `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
+  by block means of its valid values. Its read assembles each window's
+  finer cells from the sources by nearest neighbour (a direct window read
+  where a source lies on those cells' pixels, a nearest warp of that
+  source alone where it does not, later sources winning where they hold
+  data), decodes them if the dataset decodes, and averages each block in
+  one pass. `stack_bands(coarsen(lazy_dataset(tiles, grid10, resampling =
+  "near", decode = dequantize_aef), 3L))` builds a 30 m embedding cube
+  straight from the remote tiles, identical to writing the 10 m codes and
+  averaging their decoded values afterwards: an AEF box-year (four tiles,
+  64 bands) in 3.2 s instead of 7.8 s, an OlmoEarth window (128 bands) in
+  3.1 s instead of 12.8 s, bit-identical on both.
+* `lazy_dataset(decode = )` takes several sources and Zarr arrays, one
+  lookup-table VRT each.
 * `lazy_dataset(decode = )` decodes a file's 8-bit codes before any
   resampling: each code goes through a table made by evaluating the
   decode (for example `dequantize_aef()`) on every code, the nodata code
@@ -108,6 +122,21 @@
   inside GDAL for every read.
 
 ## Bug fixes
+
+* Nearest-neighbour warps use GDAL's exact transformer (`-et 0`): which
+  source pixel a target cell takes no longer depends on where the warp
+  window falls. GDAL's default interpolates the transform along each row
+  to within 0.125 px, and a cell near a pixel boundary could take the
+  neighbouring pixel in one window layout and not another. This changes
+  results where a nearest warp reprojects: in a box straddling UTM zones
+  36 and 37, 0.6% of an AEF 30 m cube's cells (0.2% of an OlmoEarth one's)
+  changed, all within reach of the other zone's sources. A one-band warp
+  costs about 0.1 us more a target cell; a multi-band warp pays it once
+  for all its bands.
+* A multi-band warp masks each band's nodata alone. GDAL's default
+  (`UNIFIED_SRC_NODATA=PARTIAL`) masked a pixel only when every band held
+  nodata, so one band's sentinel came through as a value and, from a
+  later source of a mosaic, overwrote an earlier source's data.
 
 * Read daemons can open Zarr stores: the vsicurl allowlist admits Zarr v3
   and v2 metadata and chunk keys.

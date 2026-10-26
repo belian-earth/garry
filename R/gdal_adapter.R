@@ -1884,6 +1884,33 @@ gdal_decode_vrt <- function(vrt, src, lo, table, nodata = numeric(0)) {
   vrt
 }
 
+# The footprint of `path` on `grid`'s pixels: the columns and rows
+# c(c0, r0, c1, r1) (end-exclusive) its densified extent covers, two
+# pixels wider each side and clipped to the grid; NULL where the
+# extent cannot be transformed.
+gdal_footprint_px <- function(path, grid) {
+  ds <- .gdal_handle(path)
+  gt <- ds$getGeoTransform()
+  xs <- gt[[1L]] + c(0, ds$getRasterXSize()) * gt[[2L]]
+  ys <- gt[[4L]] + c(0, ds$getRasterYSize()) * gt[[6L]]
+  e <- c(min(xs), min(ys), max(xs), max(ys))
+  b <- tryCatch(
+    gdalraster::transform_bounds(e, ds$getProjection(), grid@crs),
+    error = function(err) NULL
+  )
+  if (is.null(b) || anyNA(b)) {
+    return(NULL)
+  }
+  tt <- grid@transform
+  d <- grid@dims
+  c(
+    max(0, floor((b[[1L]] - tt[[1L]]) / tt[[2L]]) - 2),
+    max(0, floor((tt[[4L]] - b[[4L]]) / -tt[[6L]]) - 2),
+    min(d[["x"]], ceiling((b[[3L]] - tt[[1L]]) / tt[[2L]]) + 2),
+    min(d[["y"]], ceiling((tt[[4L]] - b[[2L]]) / -tt[[6L]]) + 2)
+  )
+}
+
 # The GDAL data type of each band of `path`.
 gdal_band_types <- function(path) {
   ds <- .gdal_handle(path)
@@ -2228,7 +2255,8 @@ gdal_warp_to_buffer <- function(
   srcs,
   srcnodata = NULL,
   resampling = "near",
-  band = NULL
+  band = NULL,
+  exact = FALSE
 ) {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES") # >=3.10 gate
   # `buf` is a RAW f32 byte vector (the raw-f32 store, D19-D21). The public
@@ -2247,8 +2275,24 @@ gdal_warp_to_buffer <- function(
   o <- methods::new(gdalraster::GDALRaster, dsn, FALSE)
   o$setProjection(wkt)
   cl <- c("-r", resampling, "-q", "-dstnodata", "nan")
+  if (exact) {
+    # the exact transformer: every target pixel's source position is
+    # computed, not interpolated along the row (GDAL's default allows
+    # 0.125 px of error), so a pick never depends on the window
+    cl <- c(cl, "-et", "0")
+  }
   if (length(srcnodata) == 1L) {
-    cl <- c(cl, "-srcnodata", format(srcnodata, scientific = FALSE))
+    # each band's sentinel masks that band alone: GDAL's default for a
+    # multi-band warp (UNIFIED_SRC_NODATA=PARTIAL) masks a pixel only when
+    # every band holds nodata, so one band's sentinel passed through as a
+    # value and, from a later source, overwrote an earlier one's data
+    cl <- c(
+      cl,
+      "-srcnodata",
+      format(srcnodata, scientific = FALSE),
+      "-wo",
+      "UNIFIED_SRC_NODATA=NO"
+    )
   }
   if (length(band) == 1L) {
     cl <- c(cl, "-srcband", as.character(as.integer(band))) # GDAL >= 3.7
@@ -2289,7 +2333,8 @@ gdal_warp_window <- function(
   nodata = numeric(0),
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
-  offset = numeric(0)
+  offset = numeric(0),
+  exact = resampling %in% c("near", "nearest")
 ) {
   out <- rlang::arg_match(out)
   nb <- length(band)
@@ -2311,7 +2356,8 @@ gdal_warp_window <- function(
   warp <- function() {
     gdal_warp_to_buffer(
       buf, x_size, y_size, gtstr, grid@crs, srcs,
-      srcnodata = nodata, resampling = resampling, band = band
+      srcnodata = nodata, resampling = resampling, band = band,
+      exact = exact
     )
   }
   # the warper reloads a Zarr band's dimension metadata, repeating the
@@ -2453,6 +2499,147 @@ gdal_read_window_multi <- function(
     return(structure(buf, gdim = as.integer(gdim), gdt = "f32"))
   }
   v <- readBin(buf, "numeric", n = n_px * nb, size = 4L)
+  .gdal_finish_planes(v, nb, y_size, x_size, scale, offset, out)
+}
+
+# Read one window of a coarsened warp (.coarsen_read_plan()): the sources
+# onto the target's `k`-times finer grid by nearest neighbour, each by a
+# direct window read where it lies on that grid's pixels and by an exact
+# nearest warp of it alone elsewhere, laid over the finer window in
+# source order (a later source's valid cells win, as gdal_warp_window()
+# mosaics them), decoded through the source's table when it has one,
+# and each k x k block averaged over its valid values in C. The finer
+# window is assembled in row slabs of about 128 MB across its bands; a
+# slab one direct source fills is that source's read, with no copy.
+gdal_read_window_coarsen <- function(
+  paths,
+  band,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  decim,
+  out = c("matrix", "raw_f32"),
+  scale = numeric(0),
+  offset = numeric(0)
+) {
+  out <- rlang::arg_match(out)
+  k <- decim$coarsen
+  fine <- decim$fine
+  dec <- decim$decode
+  nb <- length(band)
+  n_px <- as.numeric(x_size) * y_size
+  # every source stays open from window to window (see gdal_warp_window())
+  old <- options(
+    garry.handle_cache_max = max(garry_opt("handle_cache_max"), length(paths))
+  )
+  on.exit(options(old), add = TRUE)
+  v <- .Call("garry_alloc_double", nb * n_px, PACKAGE = "garry")
+  fw <- x_size * k
+  slab <- max(1L, as.integer(2^27 %/% (4 * nb * as.numeric(fw) * k)))
+  geo_paste <- function(c0, r0, w, h, fh) {
+    as.numeric(c(nb, fw, fh, c0, r0, w, h))
+  }
+  # lay `part` over the slab: the first part filling the whole slab is
+  # the slab itself; anything else lands on a NaN slab, in order
+  paste_part <- function(buf, part, c0, r0, w, h, fh) {
+    if (is.null(buf) && c0 == 0L && r0 == 0L && w == fw && h == fh) {
+      return(part)
+    }
+    if (is.null(buf)) {
+      buf <- .Call(
+        "garry_paste_f32",
+        NULL,
+        raw(0),
+        geo_paste(0, 0, 0, 0, fh),
+        PACKAGE = "garry"
+      )
+    }
+    .Call(
+      "garry_paste_f32",
+      buf,
+      part,
+      geo_paste(c0, r0, w, h, fh),
+      PACKAGE = "garry"
+    )
+  }
+  r0 <- 0L
+  while (r0 < y_size) {
+    rows <- min(slab, y_size - r0)
+    fx0 <- x_off * k
+    fy0 <- (y_off + r0) * k
+    fh <- rows * k
+    buf <- NULL
+    for (i in seq_along(paths)) {
+      p <- decim$parts[[i]]
+      if (isTRUE(p$warp)) {
+        # warped only where the source reaches: its footprint in finer
+        # pixels (the exact transformer makes the clip pick-neutral)
+        c0 <- max(0L, p$box[[1L]] - fx0)
+        c1 <- min(fw, p$box[[3L]] - fx0)
+        q0 <- max(0L, p$box[[2L]] - fy0)
+        q1 <- min(fh, p$box[[4L]] - fy0)
+        if (c1 <= c0 || q1 <= q0) {
+          next
+        }
+        part <- gdal_warp_window(
+          paths[[i]],
+          band,
+          fine,
+          fx0 + c0,
+          fy0 + q0,
+          c1 - c0,
+          q1 - q0,
+          resampling = "near",
+          nodata = decim$nodata,
+          out = "raw_f32",
+          exact = TRUE
+        )
+        buf <- paste_part(buf, part, c0, q0, c1 - c0, q1 - q0, fh)
+        next
+      }
+      # the source's share of the finer window, rows from the north
+      sx <- fx0 + p$x_off
+      sy <- fy0 + p$y_off
+      c0 <- max(0L, -sx)
+      c1 <- min(fw, p$nx - sx)
+      q0 <- max(0L, -sy)
+      q1 <- min(fh, p$ny - sy)
+      if (c1 <= c0 || q1 <= q0) {
+        next
+      }
+      part <- gdal_read_window(
+        paths[[i]],
+        band,
+        sx + c0,
+        sy + q0,
+        c1 - c0,
+        q1 - q0,
+        nodata = decim$nodata,
+        out = "raw_f32"
+      )
+      buf <- paste_part(buf, part, c0, q0, c1 - c0, q1 - q0, fh)
+    }
+    if (is.null(buf)) {
+      buf <- .Call(
+        "garry_paste_f32",
+        NULL,
+        raw(0),
+        geo_paste(0, 0, 0, 0, fh),
+        PACKAGE = "garry"
+      )
+    }
+    .Call(
+      "garry_coarsen_into",
+      v,
+      as.numeric(r0) * x_size,
+      buf,
+      as.numeric(c(nb, k, x_size, rows, n_px, dec$lo %||% 0)),
+      dec$table %||% numeric(0),
+      PACKAGE = "garry"
+    )
+    r0 <- r0 + rows
+  }
   .gdal_finish_planes(v, nb, y_size, x_size, scale, offset, out)
 }
 

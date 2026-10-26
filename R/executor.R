@@ -85,6 +85,17 @@ NULL
 .warp_read_plan <- function(wnode, snode) {
   # a collapsed band stack of warps reads its own bands of the source
   band <- if (length(wnode@bands)) wnode@bands else snode@band
+  # a coarsened warp, or a decoded mosaic or Zarr array read by nearest
+  # neighbour, assembles each window from its sources itself
+  if (
+    wnode@coarsen > 1L ||
+      (length(snode@decode) &&
+        wnode@resampling %in% c("near", "nearest") &&
+        (length(snode@decode$src) > 1L ||
+          .gdal_is_zarr(snode@decode$src[[1L]])))
+  ) {
+    return(.coarsen_read_plan(wnode, snode, band))
+  }
   if (length(snode@decode)) {
     # a decoded source onto aligned pixels reads its codes and decodes
     # them itself; anything else warps its lookup-table VRT (`path`)
@@ -180,6 +191,72 @@ NULL
   )
 }
 
+# The read behind a coarsened warp (coarsen()), and behind a decoded
+# mosaic's nearest read (k = 1): every source onto the target's k-times
+# finer grid by nearest neighbour, each by a direct window read where it
+# lies on that grid's pixels (.rio_direct_spec(partial = TRUE)) and by an
+# exact nearest warp of it alone elsewhere, then decoded and averaged by
+# block (gdal_read_window_coarsen()).
+.coarsen_read_plan <- function(wnode, snode, band) {
+  k <- wnode@coarsen
+  dec <- snode@decode
+  paths <- if (length(dec)) dec$src else snode@path
+  nodata <- if (length(dec)) dec$nodata else snode@nodata
+  tg <- wnode@target_grid
+  tt <- tg@transform
+  d <- tg@dims
+  fine <- GridSpec(
+    crs = tg@crs,
+    transform = c(tt[[1L]], tt[[2L]] / k, 0, tt[[4L]], 0, tt[[6L]] / k),
+    extent = tg@extent,
+    dims = c(x = d[["x"]] * k, y = d[["y"]] * k),
+    dtype = "f32"
+  )
+  parts <- lapply(paths, function(p) {
+    spec <- .rio_direct_spec(
+      p,
+      fine,
+      "near",
+      band = band,
+      nodata = nodata,
+      partial = TRUE
+    )
+    if (!is.null(spec)) {
+      return(spec)
+    }
+    box <- gdal_footprint_px(p, fine)
+    list(
+      warp = TRUE,
+      box = box %||% c(0, 0, fine@dims[["x"]], fine@dims[["y"]])
+    )
+  })
+  list(
+    path = paths,
+    band = band,
+    nodata = nodata,
+    open_options = character(0),
+    scale = snode@scale,
+    offset = snode@offset,
+    resampling = "near",
+    decim = list(
+      coarsen = k,
+      fine = fine,
+      parts = parts,
+      decode = dec,
+      nodata = nodata
+    )
+  )
+}
+
+# The block factor of a warp stage: its WarpNode's coarsen, 1 for any
+# other stage.
+.stage_coarsen <- function(graph, s) {
+  if (!identical(s$kind, "warp")) {
+    return(1L)
+  }
+  graph_get(graph, s$members[[1L]])@coarsen
+}
+
 # Is a warp stage served by a direct read of its source rather than the
 # warper (.warp_read_plan())?
 .warp_reads_direct <- function(graph, s) {
@@ -205,6 +282,7 @@ NULL
       length(ra$path) != 1L ||
       isTRUE(ra$decim$warp) ||
       length(ra$decim$decode) > 0L ||
+      !is.null(ra$decim$coarsen) ||
       length(ra$scale) > 0L ||
       length(ra$offset) > 0L
   ) {
@@ -312,6 +390,20 @@ NULL
     core$y_size
   )
   read_one <- function() {
+    if (!is.null(decim$coarsen)) {
+      return(gdal_read_window_coarsen(
+        path,
+        band,
+        w$x_off,
+        w$y_off,
+        w$x_size,
+        w$y_size,
+        decim = decim,
+        out = out,
+        scale = scale,
+        offset = offset
+      ))
+    }
     if (length(decim$srcs)) {
       return(gdal_read_window_multi(
         path,

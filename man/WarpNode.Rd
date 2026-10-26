@@ -12,7 +12,8 @@ WarpNode(
   role = character(0),
   target_grid = GridSpec(),
   resampling = character(0),
-  bands = integer(0)
+  bands = integer(0),
+  coarsen = 1L
 )
 }
 \arguments{
@@ -34,6 +35,11 @@ Pure metadata: never read by the planner or executors; surfaced by
 source's band. Length 0 (the default) reads the parent's band; the
 planner sets it when it collapses a band stack of warps over one file
 into a single multi-band warp.}
+
+\item{coarsen}{Block factor set by \code{\link[=coarsen]{coarsen()}}: the sources go by
+nearest neighbour onto the grid \code{coarsen} times finer than
+\code{target_grid}, and each target cell is the mean of the valid values
+of its block. 1 (the default) is an ordinary warp.}
 }
 \value{
 A \code{WarpNode}.
