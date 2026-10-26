@@ -12,8 +12,9 @@
   "near", decode = dequantize_aef), 3L))` builds a 30 m embedding cube
   straight from the tiles, identical to writing the 10 m codes and then
   averaging their decoded values: an AEF box-year (four south-up tiles,
-  64 bands, 4488 x 5727 codes) in 8.5 s instead of about 36 s, an
-  OlmoEarth window (128 bands, through a false-origin shift) in 3.8 s.
+  64 bands, 4488 x 5727 codes) in 8.5 s instead of 14 s through the
+  codes (about 36 s before this release), an OlmoEarth window (128
+  bands, through a false-origin shift) in 6.8 s instead of 9.7 s.
   Cells warped from a reprojected source match the 10 m read's under
   `garry.warp_exact = TRUE`.
 * `lazy_dataset(decode = )` takes several sources and Zarr arrays, one
@@ -26,8 +27,8 @@
   built to average decoded embeddings. Every read takes the codes at
   full resolution, never an overview's resampled codes. Aligned reads,
   south-up files included, decode the codes themselves: a 30 m cube of
-  a 64-band AEF box-year (codes 4488 x 5727 px) wrote in 2.6 s instead
-  of 6.2 s through the lookup-table VRT, and a 128-band OlmoEarth one
+  a 64-band AEF box-year (codes 4488 x 5727 px) wrote in 4.0 s instead
+  of 19 s through the lookup-table VRT, and a 128-band OlmoEarth one
   in 2.4 s instead of 12.6 s. The two agree to f32 rounding: 0.6% of
   OlmoEarth cells differ, by at most 6e-8 (GDAL averages in an order
   garry does not reproduce). A `mask_asset` band is read as stored, and
@@ -67,8 +68,8 @@
   float sources whose nodata is not NaN where they overlap, keep the
   warper. A single south-up file read onto a subset of its own pixels is
   a direct read too, and south-up rows flip in C. One box-year of four
-  south-up 64-band tiles (4488 x 5727 px) fetched to Int8 in 5.6 s
-  instead of 9.8 s with 8 readers, identical to gdalwarp's result; two
+  south-up 64-band tiles (4488 x 5727 px) fetched to Int8 in 10 s
+  instead of 17 s with 8 readers, identical to gdalwarp's result; two
   4-band tiles in neighbouring UTM zones, one on the target's pixels, in
   1.05 s instead of 1.13 s.
 * Scan stages run faster. On hutan's SI tail at 5.76 M cells, with the
