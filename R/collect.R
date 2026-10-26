@@ -576,12 +576,17 @@ garry_last_route <- function() .garry_state$route
   .pool_broadcast(
     quote({
       suppressMessages(library(garry))
-      options(garry.read_fail = rf, garry.read_retry = rr)
+      options(
+        garry.read_fail = rf,
+        garry.read_retry = rr,
+        garry.warp_exact = we
+      )
       asNamespace("garry")$.gdal_zarr_release()
     }),
     profiles = prof,
     rf = garry_opt("read_fail"),
-    rr = garry_opt("read_retry")
+    rr = garry_opt("read_retry"),
+    we = garry_opt("warp_exact")
   )
   todo <- do.call(rbind, lapply(seq_along(spec$read_stage), function(k) {
     data.frame(k = k, j = seq_len(nrow(chunk_iter(spec$read_stage[[k]]@chunks))))

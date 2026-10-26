@@ -31,7 +31,7 @@ data types drive the integer gate above.}
 declines unless the file declares the same value.}
 
 \item{partial}{\code{TRUE} for one source of several
-(\code{\link[=.rio_direct_multi_spec]{.rio_direct_multi_spec()}}): the target may reach beyond the source,
+(\code{\link[=.mosaic_read_spec]{.mosaic_read_spec()}}): the target may reach beyond the source,
 and only a nearest-neighbour read on the source's own pixels, with
 the file's nodata (if any) the node's, qualifies.}
 }

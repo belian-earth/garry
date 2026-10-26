@@ -2,18 +2,27 @@
 # RasterIO read instead of a warped VRT. The fast path is only ever a
 # speed change, so every test here pins it to the warper's answer.
 
-# Force the warper for `expr`, whatever the predicate says.
+# Force the warper for `expr`, whatever the predicates say: no direct
+# read of a source, and several sources warped together.
 with_warper <- function(expr) {
   ns <- asNamespace("garry")
-  orig <- get(".rio_direct_spec", envir = ns)
-  unlockBinding(".rio_direct_spec", ns)
-  assign(".rio_direct_spec", function(...) NULL, envir = ns)
-  on.exit({
-    assign(".rio_direct_spec", orig, envir = ns)
-    lockBinding(".rio_direct_spec", ns)
-  })
+  fns <- c(".rio_direct_spec", ".mosaic_read_spec")
+  orig <- lapply(fns, get, envir = ns)
+  for (f in fns) {
+    unlockBinding(f, ns)
+    assign(f, function(...) NULL, envir = ns)
+  }
+  on.exit(
+    for (i in seq_along(fns)) {
+      assign(fns[[i]], orig[[i]], envir = ns)
+      lockBinding(fns[[i]], ns)
+    }
+  )
   force(expr)
 }
+
+# Is every part of a mosaic spec warped (TRUE), or read directly?
+.warped <- function(spec) vapply(spec$parts, function(p) isTRUE(p$warp), NA)
 
 # Target grid `fact`-times coarser than `g`, anchored on its origin.
 coarser <- function(g, fact, nx, ny, ...) {
@@ -394,19 +403,15 @@ test_that("a south-up source on its own pixels reads directly, rows flipped", {
 test_that("south-up tiles no mosaic can hold read directly, tile by tile", {
   tiles <- .south_up_tiles(2L)
   g <- .south_up_grid()
-  spec <- .rio_direct_multi_spec(tiles, g, "near", band = 1:2, nodata = -1)
-  expect_length(spec$srcs, 2L)
-  expect_identical(vapply(spec$srcs, `[[`, integer(1), "x_off"), c(-1L, -5L))
-  expect_identical(vapply(spec$srcs, `[[`, integer(1), "y_off"), c(-1L, -1L))
-  # every source must qualify
-  expect_null(.rio_direct_multi_spec(tiles, g, "bilinear", band = 1L))
-  expect_null(.rio_direct_multi_spec(
-    tiles,
-    .south_up_grid(20),
-    "near",
-    band = 1L
-  ))
-  expect_null(.rio_direct_multi_spec(tiles, g, "near", band = 1L, nodata = -2))
+  spec <- .mosaic_read_spec(tiles, g, band = 1:2, nodata = -1)
+  expect_length(spec$parts, 2L)
+  expect_false(any(.warped(spec)))
+  expect_identical(vapply(spec$parts, `[[`, integer(1), "x_off"), c(-1L, -5L))
+  expect_identical(vapply(spec$parts, `[[`, integer(1), "y_off"), c(-1L, -1L))
+  # a source off the target's pixels, with another nodata, or in another
+  # projection is warped alone
+  expect_true(all(.warped(.mosaic_read_spec(tiles, .south_up_grid(20), 1L))))
+  expect_true(all(.warped(.mosaic_read_spec(tiles, g, 1L, nodata = -2))))
   other <- file.path(tempdir(), "garry-south-up-other.tif")
   gdalraster::warp(
     tiles[[2L]],
@@ -415,17 +420,23 @@ test_that("south-up tiles no mosaic can hold read directly, tile by tile", {
     cl_arg = c("-r", "near"),
     quiet = TRUE
   )
-  expect_null(.rio_direct_multi_spec(
-    c(tiles[[1L]], other),
+  expect_identical(
+    .warped(.mosaic_read_spec(c(tiles[[1L]], other), g, 1L)),
+    c(FALSE, TRUE)
+  )
+  # an interpolating read warps them together
+  p_bil <- plan_lazy(stack_bands(lazy_dataset(
+    tiles,
     g,
-    "near",
-    band = 1L
-  ))
+    resampling = "bilinear"
+  )))
+  w_bil <- Filter(function(s) s@kind == "warp", p_bil@stages)[[1L]]
+  expect_null(.stage_read_args(p_bil@graph, w_bil)$decim)
 
   ds <- function() lazy_dataset(tiles, g, resampling = "near")
   p <- plan_lazy(stack_bands(ds()))
   ws <- Filter(function(s) s@kind == "warp", p@stages)[[1L]]
-  expect_length(.stage_read_args(p@graph, ws)$decim$srcs, 2L)
+  expect_length(.stage_read_args(p@graph, ws)$decim$parts, 2L)
   # windows of 3 x 3 px straddle the tiles, their overlap and the margin
   for (px in c(9, 1e6)) {
     withr::local_options(garry.chunk_target_px = px)
@@ -511,4 +522,220 @@ test_that("rows flip and mosaic parts paste in C", {
     ),
     "does not fit"
   )
+})
+
+# Two Float32 south-up tiles overlapping by two columns, nodata -9999;
+# the second holds NaN values in the overlap.
+.float_tiles <- function() {
+  dir <- file.path(tempdir(), "garry-float-tiles")
+  dir.create(dir, showWarnings = FALSE)
+  mk <- function(name, x0, v) {
+    f <- file.path(dir, name)
+    if (!file.exists(f)) {
+      ds <- gdalraster::create(
+        "GTiff",
+        f,
+        6L,
+        5L,
+        1L,
+        "Float32",
+        return_obj = TRUE
+      )
+      ds$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+      ds$setGeoTransform(c(x0, 10, 0, 8600000, 0, 10))
+      ds$setNoDataValue(1L, -9999)
+      ds$write(1L, 0L, 0L, 6L, 5L, v)
+      ds$close()
+    }
+    f
+  }
+  vb <- 200 + seq_len(30)
+  vb[c(1, 2, 7, 8)] <- NaN # file columns 0 and 1: the overlap
+  c(mk("a.tif", 500000, 100 + seq_len(30)), mk("b.tif", 500040, vb))
+}
+
+test_that("tiles in two projections read source by source as the warper reads them", {
+  tiles <- .south_up_tiles(2L)
+  other <- file.path(tempdir(), "garry-south-up-other.tif")
+  if (!file.exists(other)) {
+    gdalraster::warp(
+      tiles[[2L]],
+      other,
+      t_srs = "EPSG:32735",
+      cl_arg = c("-r", "near"),
+      quiet = TRUE
+    )
+  }
+  ds <- function() {
+    lazy_dataset(c(tiles[[1L]], other), .south_up_grid(), resampling = "near")
+  }
+  for (px in c(9, 1e6)) {
+    withr::local_options(garry.chunk_target_px = px)
+    expect_identical(
+      collect(stack_bands(ds()), distributed = FALSE),
+      with_warper(collect(stack_bands(ds()), distributed = FALSE))
+    )
+  }
+  # under the exact transformer a nearest warp takes the same cells
+  # whatever window it is given, and the source-by-source read with it
+  withr::local_options(garry.warp_exact = TRUE)
+  for (px in c(9, 1e6)) {
+    withr::local_options(garry.chunk_target_px = px)
+    expect_identical(
+      collect(stack_bands(ds()), distributed = FALSE),
+      with_warper(collect(stack_bands(ds()), distributed = FALSE))
+    )
+  }
+  g <- .south_up_grid()
+  whole <- gdal_warp_window(other, 1L, g, 0L, 0L, 12L, 7L, nodata = -1)
+  halves <- cbind(
+    gdal_warp_window(other, 1L, g, 0L, 0L, 5L, 7L, nodata = -1),
+    gdal_warp_window(other, 1L, g, 5L, 0L, 7L, 7L, nodata = -1)
+  )
+  expect_identical(whole, halves)
+})
+
+test_that("a masked source keeps the warper, and a mosaic warps it alone", {
+  tiles <- .south_up_tiles(1L)
+  g <- .south_up_grid()
+  masked <- file.path(tempdir(), "garry-south-up-masked.tif")
+  if (!file.exists(masked)) {
+    # its nodata becomes an internal mask the warper honours
+    gdalraster::translate(
+      tiles[[2L]],
+      masked,
+      cl_arg = c("-a_nodata", "none", "-mask", "1"),
+      quiet = TRUE
+    )
+  }
+  expect_null(.rio_direct_spec(masked, g, "near", partial = TRUE))
+  expect_identical(
+    .warped(.mosaic_read_spec(c(tiles[[1L]], masked), g, 1L)),
+    c(FALSE, TRUE)
+  )
+  ds <- function() lazy_dataset(c(tiles[[1L]], masked), g, resampling = "near")
+  expect_identical(
+    collect(stack_bands(ds()), distributed = FALSE),
+    with_warper(collect(stack_bands(ds()), distributed = FALSE))
+  )
+})
+
+test_that("overlapping float tiles keep the warper unless their nodata is NaN", {
+  tiles <- .float_tiles()
+  g <- .south_up_grid()
+  # the warper lets the second tile's NaN cover the first's values
+  expect_null(.mosaic_read_spec(tiles, g, 1L, nodata = -9999))
+  expect_false(is.null(.mosaic_read_spec(tiles, g, 1L, nodata = NaN)))
+  ds <- function() lazy_dataset(tiles, g, resampling = "near")
+  expect_identical(
+    collect(stack_bands(ds()), distributed = FALSE),
+    with_warper(collect(stack_bands(ds()), distributed = FALSE))
+  )
+})
+
+test_that("a node nodata over a south-up file's own keeps the warper", {
+  f <- .south_up_tiles(1L)[[1L]]
+  sub <- grid_spec("EPSG:32736", c(500010, 8600010, 500050, 8600040), res = 10)
+  expect_null(.rio_direct_spec(f, sub, "near", nodata = -2))
+  expect_false(is.null(.rio_direct_spec(f, sub, "near", nodata = -1)))
+})
+
+test_that("a mosaic read gives f32 values whatever the window", {
+  dir <- file.path(tempdir(), "garry-f64-tiles")
+  dir.create(dir, showWarnings = FALSE)
+  mk <- function(name, x0) {
+    f <- file.path(dir, name)
+    if (!file.exists(f)) {
+      ds <- gdalraster::create(
+        "GTiff",
+        f,
+        6L,
+        5L,
+        1L,
+        "Float64",
+        return_obj = TRUE
+      )
+      ds$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+      ds$setGeoTransform(c(x0, 10, 0, 8600000, 0, 10))
+      ds$write(1L, 0L, 0L, 6L, 5L, 20.1 + seq_len(30))
+      ds$close()
+    }
+    f
+  }
+  tiles <- c(mk("a.tif", 500000), mk("b.tif", 500060))
+  ds <- function() lazy_dataset(tiles, .south_up_grid(), resampling = "near")
+  withr::local_options(garry.chunk_target_px = 4)
+  small <- collect(stack_bands(ds()), distributed = FALSE)
+  withr::local_options(garry.chunk_target_px = 1e6)
+  expect_identical(small, collect(stack_bands(ds()), distributed = FALSE))
+})
+
+test_that("several sources on their own grid read source by source", {
+  tiles <- .south_up_tiles(2L)
+  ds <- function() lazy_dataset(tiles, resampling = "near")
+  p <- plan_lazy(stack_bands(ds()))
+  rs <- Filter(function(s) s@kind == "source_read", p@stages)[[1L]]
+  expect_length(.stage_read_args(p@graph, rs)$decim$parts, 2L)
+  expect_identical(
+    collect(stack_bands(ds()), distributed = FALSE),
+    with_warper(collect(stack_bands(ds()), distributed = FALSE))
+  )
+})
+
+test_that("a multi-band warp masks each band's nodata alone", {
+  f <- file.path(tempdir(), "garry-band-nodata.tif")
+  if (!file.exists(f)) {
+    ds <- gdalraster::create(
+      "GTiff",
+      f,
+      4L,
+      3L,
+      2L,
+      "Int16",
+      options = "INTERLEAVE=PIXEL",
+      return_obj = TRUE
+    )
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+    ds$setGeoTransform(c(500000, 10, 0, 8600030, 0, -10))
+    v1 <- seq_len(12)
+    v1[2] <- -1L
+    v2 <- seq_len(12) + 100L
+    v2[7] <- -1L
+    ds$setNoDataValue(1L, -1)
+    ds$setNoDataValue(2L, -1)
+    ds$write(1L, 0L, 0L, 4L, 3L, v1)
+    ds$write(2L, 0L, 0L, 4L, 3L, v2)
+    ds$close()
+  }
+  g <- grid_spec(
+    "EPSG:32735",
+    gdalraster::transform_bounds(
+      c(500000, 8600000, 500040, 8600030),
+      "EPSG:32736",
+      "EPSG:32735"
+    ),
+    res = 10
+  )
+  both <- gdal_warp_window(
+    f,
+    1:2,
+    g,
+    0L,
+    0L,
+    g@dims[["x"]],
+    g@dims[["y"]],
+    nodata = -1
+  )
+  one <- gdal_warp_window(
+    f,
+    2L,
+    g,
+    0L,
+    0L,
+    g@dims[["x"]],
+    g@dims[["y"]],
+    nodata = -1
+  )
+  expect_identical(both[2L, , ], one)
+  expect_false(any(both == -1, na.rm = TRUE))
 })

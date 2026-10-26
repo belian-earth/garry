@@ -23,15 +23,20 @@
 
 ## Performance
 
-* `lazy_dataset()` over tiles no mosaic VRT can hold, such as AEF's
-  south-up tiles, reads them directly when every tile lies on the target
-  grid's pixels and the read is nearest-neighbour. Each tile's share of a
-  window is a window read of it, and later tiles win where they hold data,
-  as when the tiles are warped together. A single south-up file read onto
-  a subset of its own pixels is now a direct read too, and south-up rows
-  flip in C. One AEF box-year (four tiles, 4488 x 5727 px, 64 bands)
-  fetched to Int8 in 5.4 s instead of 9.8 s with 8 readers, identical to
-  gdalwarp's result.
+* A nearest-neighbour read of several sources no mosaic VRT can hold
+  (south-up tiles, tiles in a neighbouring projection, one Zarr array per
+  UTM zone) goes source by source: a direct window read of each source
+  that lies on the target grid's pixels, and a warp of each other source
+  alone, laid over the window in order with later sources winning where
+  they hold data, the cells the warper gives them all together. Only the
+  sources off the target's pixels pay for warping. Masked sources, and
+  float sources whose nodata is not NaN where they overlap, keep the
+  warper. A single south-up file read onto a subset of its own pixels is
+  a direct read too, and south-up rows flip in C. One box-year of four
+  south-up 64-band tiles (4488 x 5727 px) fetched to Int8 in 5.6 s
+  instead of 9.8 s with 8 readers, identical to gdalwarp's result; two
+  4-band tiles in neighbouring UTM zones, one on the target's pixels, in
+  1.05 s instead of 1.13 s.
 * Scan stages run faster. On hutan's SI tail at 5.76 M cells, with the
   daemon changes below, the robust Kalman smoother stage went from 0.66 s
   to 0.41 s a chunk and the drain from 44 s to 38 s with two compute
@@ -97,6 +102,20 @@
   inside GDAL for every read.
 
 ## Bug fixes
+
+* A multi-band warp of several sources or a Zarr array masks each band's
+  nodata alone. GDAL's default (`UNIFIED_SRC_NODATA=PARTIAL`) masked a
+  pixel only when every band held nodata, so one band's sentinel came
+  through as a value and, from a later source of a mosaic, overwrote an
+  earlier source's data.
+* `garry.warp_exact = TRUE` warps windows with GDAL's exact transformer,
+  as the warped VRT of a single source already is, so which source pixel
+  a cell takes never depends on where windows fall. GDAL's default
+  interpolates the transform along each row of a window to within 0.125
+  px. It is off by default: a one-band warp across projections costs
+  3-15x more with it.
+* A direct (unwarped) read declines a source whose band has a mask or
+  alpha band, which the warper honours and a plain read did not.
 
 * Read daemons can open Zarr stores: the vsicurl allowlist admits Zarr v3
   and v2 metadata and chunk keys.
