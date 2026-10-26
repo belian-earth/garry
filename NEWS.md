@@ -44,6 +44,10 @@
 * `band_sel()`, `time_sel()` and per-slice operations work on a stack after
   it has been collected (the planner rewrites collected stacks in place).
 * `time_sel()` takes a dataset and keeps the matching slices of every band.
+* `lazy_dataset(time = )` builds only the selected time slices of an N-D
+  source, selected as `time_sel()` selects them. A 9-year, 128-band
+  OlmoEarth store built 1152 band reads (about 2 s) before `time_sel()`
+  kept 128; with `time = "2024"` it builds those 128 (0.25 s).
 * `dequantize_signed_power()` decodes signed-power Int8 embeddings, and
   `dequantize_olmoearth()` decodes the OlmoEarth v1.3 embeddings (the
   same scheme as `dequantize_aef()`).
@@ -183,6 +187,14 @@
 * The task log also records when a daemon finishes each task (`end`
   rows), and `garry_task_report()` splits the harvest lag (the result's
   return and the host noticing it) from the run time.
+* A plan that only reads now logs its tasks too, written (`write_tif()`
+  of a dataset, say) or collected with daemons: each read on the read
+  pool and each write on the writer daemon, with start and end times,
+  and memory samples every 5 s. Before, such runs left no rows in the
+  log. Every run also logs its pool widths, and `garry_task_report()`
+  adds each pool's busy seconds and the last run's share of each pool's
+  time busy, which shows whether the readers or the writer set the
+  pace.
 
 # garry 0.1.0
 

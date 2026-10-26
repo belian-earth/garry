@@ -156,7 +156,7 @@ LazyDataset <- S7::new_class(
 #'   garry reads the dimension tags GDAL puts on each band to rebuild the
 #'   axes. Bands take the band dimension's coordinate values as names
 #'   (else `b<index>`) and slices take the time coordinate's (e.g. years);
-#'   pick slices with [time_sel()].
+#'   pick slices with [time_sel()], or build only some with `time`.
 #'
 #' All bands share one intermediate representation (IR) graph, so a mask
 #' defined once (see [apply_mask()]) is computed once and dedup'd across bands, and
@@ -190,6 +190,12 @@ LazyDataset <- S7::new_class(
 #'   a window of its pixels, or an aligned coarser grid read with
 #'   `"near"` or `"average"` read the codes and decode them directly,
 #'   2-3x faster. `NULL` (the default) reads the codes as they are.
+#' @param time File form, N-D array: the time slices to build, selected
+#'   by label as [time_sel()] selects them (`"2024"`, or positions).
+#'   `lazy_dataset(src, grid, time = "2024")` is
+#'   `time_sel(lazy_dataset(src, grid), "2024")` without building the
+#'   other slices' bands first, which matters for long time series of
+#'   many bands. `NULL` (the default) builds every slice.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
@@ -244,7 +250,8 @@ lazy_dataset <- function(
   scale = FALSE,
   offset = NULL,
   bands = NULL,
-  decode = NULL
+  decode = NULL,
+  time = NULL
 ) {
   if (is.character(sources)) {
     return(.ds_from_files(
@@ -257,7 +264,8 @@ lazy_dataset <- function(
       nodata,
       scale,
       offset,
-      decode
+      decode,
+      time
     ))
   }
   .assert_class(grid, GridSpec, "GridSpec")
@@ -265,6 +273,12 @@ lazy_dataset <- function(
     cli::cli_abort(c(
       "{.arg decode} decodes a coded raster file.",
       "i" = "Decode STAC assets with {.fn lazy_map}."
+    ))
+  }
+  if (!is.null(time)) {
+    cli::cli_abort(c(
+      "{.arg time} selects the slices of an N-D file source.",
+      "i" = "Filter the STAC items by date instead, or use {.fn time_sel}."
     ))
   }
   if (length(assets) < 1L) {
@@ -533,7 +547,8 @@ lazy_dataset <- function(
   nodata,
   scale,
   offset,
-  decode = NULL
+  decode = NULL,
+  time = NULL
 ) {
   if (!is.null(assets) && !is.null(bands)) {
     cli::cli_abort(
@@ -627,6 +642,18 @@ lazy_dataset <- function(
   } else {
     all_nms <- nd$band_names
     file_bands <- nd$file_bands
+    if (!is.null(time)) {
+      # build only the selected slices' bands
+      keep <- .label_keep(nd$time_labels, time, "t", arg = "time")
+      file_bands <- file_bands[, keep, drop = FALSE]
+      nd$time_labels <- nd$time_labels[keep]
+    }
+  }
+  if (!is.null(time) && is.null(nd)) {
+    cli::cli_abort(c(
+      "{.arg time} selects the slices of an N-D source; {.path {path[[1L]]}} is not read as a (time, band) array.",
+      "i" = "Its bands are read as bands; select them with {.arg bands} or {.arg assets}."
+    ))
   }
   n_axis <- length(all_nms)
 

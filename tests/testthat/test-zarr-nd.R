@@ -65,6 +65,41 @@ test_that("time_sel() on a dataset keeps the matching slices of every band", {
                tolerance = 1e-6)
 })
 
+test_that("time builds only the selected slices, as time_sel() keeps them", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  g <- grid_spec("EPSG:32632", c(500000, 4599800, 500300, 4600000), res = 10)
+  for (sel in list("2023", c("2021", "2023"), 2L, "202")) {
+    got <- lazy_dataset(fx$path, g, time = sel)
+    want <- time_sel(lazy_dataset(fx$path, g), sel)
+    expect_identical(lapply(got@bands, names), lapply(want@bands, names))
+    # one slice stacks; several reduce over time first
+    as_raster <- if (length(time_labels(want)) == 1L) {
+      stack_bands
+    } else {
+      function(ds) reduce_over(ds, "mean", "t")
+    }
+    expect_identical(
+      collect(as_raster(got), distributed = FALSE),
+      collect(as_raster(want), distributed = FALSE)
+    )
+  }
+  # one slice's band reads, not every slice's
+  n_src <- function(ds) {
+    ids <- graph_ids(ds@graph)
+    is_src <- function(i) S7::S7_inherits(graph_get(ds@graph, i), SourceNode)
+    sum(vapply(ids, is_src, NA))
+  }
+  expect_identical(n_src(lazy_dataset(fx$path, g, time = "2022")), 4L)
+  expect_identical(n_src(lazy_dataset(fx$path, g)), 12L)
+  expect_error(lazy_dataset(fx$path, g, time = "1999"), "match")
+  expect_error(lazy_dataset(fx$path, g, time = NA), "time")
+  expect_error(
+    lazy_dataset(fixture_gradient_f32(), time = "2023"),
+    "not read as a \\(time, band\\) array"
+  )
+})
+
 test_that("a year's bands on a target grid collapse into one multi-band read", {
   skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()

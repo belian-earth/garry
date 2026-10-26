@@ -17,7 +17,8 @@ lazy_dataset(
   scale = FALSE,
   offset = NULL,
   bands = NULL,
-  decode = NULL
+  decode = NULL,
+  time = NULL
 )
 }
 \arguments{
@@ -94,6 +95,13 @@ Float32. Reads go through a lookup-table VRT; the source's own grid,
 a window of its pixels, or an aligned coarser grid read with
 \code{"near"} or \code{"average"} read the codes and decode them directly,
 2-3x faster. \code{NULL} (the default) reads the codes as they are.}
+
+\item{time}{File form, N-D array: the time slices to build, selected
+by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or positions).
+\code{lazy_dataset(src, grid, time = "2024")} is
+\code{time_sel(lazy_dataset(src, grid), "2024")} without building the
+other slices' bands first, which matters for long time series of
+many bands. \code{NULL} (the default) builds every slice.}
 }
 \value{
 A \code{LazyDataset}.
@@ -132,7 +140,7 @@ GDAL's classic view flattens it to one band per (time, band) pair, and
 garry reads the dimension tags GDAL puts on each band to rebuild the
 axes. Bands take the band dimension's coordinate values as names
 (else \verb{b<index>}) and slices take the time coordinate's (e.g. years);
-pick slices with \code{\link[=time_sel]{time_sel()}}.
+pick slices with \code{\link[=time_sel]{time_sel()}}, or build only some with \code{time}.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask

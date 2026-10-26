@@ -567,7 +567,10 @@ garry_last_route <- function() .garry_state$route
   backlog = function() 0L,
   poll = function() FALSE,
   task = NULL,
-  cap = NULL
+  cap = NULL,
+  run = NULL,
+  host_end = TRUE,
+  widths = NULL
 ) {
   prof <- "garry_read"
   .assert_pools_alive(prof)
@@ -593,17 +596,48 @@ garry_last_route <- function() .garry_state$route
   }))
   its <- lapply(spec$read_stage, function(s) chunk_iter(s@chunks))
   cap <- cap %||% max(2L * .gd_n_compute(prof), 2L)
+  # The scheduler's task-log rows, read tasks keyed as its chunk reads
+  # are: each read is ready at the start, and the daemon's own start and
+  # end times separate its run time from its wait behind the daemon's
+  # last read. A caller with a tail of its own logs `host_end` itself.
+  task_log <- garry_opt("task_log")
+  log_line <- .task_log_writer(task_log)
+  timed <- !is.null(task_log)
+  log_line("run_start", run %||% .garry_run_id())
+  log_line("pool", "read", mb = .gd_n_compute(prof))
+  for (nm in names(widths)) {
+    log_line("pool", nm, mb = widths[[nm]])
+  }
+  if (host_end) {
+    on.exit(log_line("host_end", "-"), add = TRUE)
+  }
+  t_ready <- formatC(unclass(Sys.time()), format = "f", digits = 3)
+  key_of <- function(i) {
+    .glue("s{spec$read_stage[[todo$k[[i]]]]@id}_c{todo$j[[i]]}")
+  }
+  mem_last <- Sys.time()
   inflight <- list()
   next_i <- 1L
   last_check <- Sys.time()
   launch <- function(i) {
     k <- todo$k[[i]]
     a <- ra[[k]]
-    if (!is.null(task)) {
-      return(task(i, a, spec$read_stage[[k]]@chunks, its[[k]][todo$j[[i]], ]))
+    core <- its[[k]][todo$j[[i]], ]
+    if (timed) {
+      log_line(
+        "launch",
+        key_of(i),
+        pool = "read",
+        slot = "read",
+        mb = round(core$x_size * core$y_size * spec$nb[[k]] * 4 / 2^20, 1),
+        ready = t_ready
+      )
     }
-    mirai::mirai(
-      asNamespace("garry")$.exec_read_padded(
+    if (!is.null(task)) {
+      return(task(i, a, spec$read_stage[[k]]@chunks, core, timed))
+    }
+    .task_mirai(
+      quote(asNamespace("garry")$.exec_read_padded(
         path,
         band,
         nodata,
@@ -615,18 +649,19 @@ garry_last_route <- function() .garry_state$route
         offset = of,
         decim = dcm,
         resampling = rsm
-      ),
+      )),
       path = a$path,
       band = a$band,
       nodata = a$nodata,
       cg = spec$read_stage[[k]]@chunks,
-      core = its[[k]][todo$j[[i]], ],
+      core = core,
       oo = a$open_options,
       sc = a$scale,
       of = a$offset,
       dcm = a$decim,
       rsm = a$resampling,
-      .compute = prof
+      .compute = prof,
+      .timed = timed
     )
   }
   while (next_i <= nrow(todo) || length(inflight)) {
@@ -653,7 +688,19 @@ garry_last_route <- function() .garry_state$route
       i <- as.integer(key)
       k <- todo$k[[i]]
       core <- its[[k]][todo$j[[i]], ]
-      emit(h$data, core$y_off, core$x_off, k)
+      res <- h$data
+      if (inherits(res, "garry_timed")) {
+        log_line("start", key_of(i), time = .POSIXct(res$t0))
+        log_line("end", key_of(i), time = .POSIXct(res$t1))
+        log_line("done", key_of(i))
+        res <- res$v
+      }
+      emit(res, core$y_off, core$x_off, k)
+    }
+    # memory on the scheduler's clock: the readers pin shared regions
+    if (timed && difftime(Sys.time(), mem_last, units = "secs") >= 5) {
+      .task_log_memory(log_line)
+      mem_last <- Sys.time()
     }
     if (!harvested) {
       # a dead read daemon leaves its task unresolved forever
@@ -664,6 +711,7 @@ garry_last_route <- function() .garry_state$route
       Sys.sleep(0.002)
     }
   }
+  log_line("drain_end", "-")
   invisible(NULL)
 }
 
@@ -759,6 +807,14 @@ garry_last_route <- function() .garry_state$route
   live_mb <- 0 # shared memory pinned on the readers
   budget_mb <- garry_opt("read_budget_mb")
   done <- FALSE
+  # Writes log as tasks of their own pool (keys w<leaf>_c<n>), so a log
+  # shows whether the readers or the writer set the pace.
+  task_log <- garry_opt("task_log")
+  log_line <- .task_log_writer(task_log)
+  timed <- !is.null(task_log)
+  n_write <- 0L
+  # the write tail is this run's host tail, logged however the run ends
+  on.exit(log_line("host_end", "-"), add = TRUE)
   # A drop is a broadcast to every reader, which waits for each one's
   # current read: drop in large batches (a quarter of the read budget),
   # not per write. The rest go at the end.
@@ -806,6 +862,11 @@ garry_last_route <- function() .garry_state$route
           class = c("garry_write_error", "garry_error")
         )
       }
+      if (inherits(w$h$data, "garry_timed")) {
+        log_line("start", w$key, time = .POSIXct(w$h$data$t0))
+        log_line("end", w$key, time = .POSIXct(w$h$data$t1))
+        log_line("done", w$key)
+      }
       writes[[key]] <<- NULL
       pending <<- c(pending, w$reg)
       pending_mb <<- pending_mb + w$mb
@@ -828,17 +889,35 @@ garry_last_route <- function() .garry_state$route
     spec,
     function(w, y_off, x_off, k) {
       live_mb <<- live_mb + w$mb
+      n_write <<- n_write + 1L
+      wkey <- ""
+      if (timed) {
+        wkey <- .glue("w{spec$read_stage[[k]]@id}_c{n_write}")
+        # ready now, as its read has landed: taken before the launch
+        # row's own time, which log_line() reads first
+        t_ready <- formatC(unclass(Sys.time()), format = "f", digits = 3)
+        log_line(
+          "launch",
+          wkey,
+          pool = "write",
+          slot = "write",
+          mb = round(w$mb, 1),
+          ready = t_ready
+        )
+      }
       writes[[w$reg]] <<- list(
         reg = w$reg,
         mb = w$mb,
-        h = mirai::mirai(
-          asNamespace("garry")$.daemon_write_shared(path, xo, yo, w, b0),
+        key = wkey,
+        h = .task_mirai(
+          quote(asNamespace("garry")$.daemon_write_shared(path, xo, yo, w, b0)),
           path = path,
           xo = x_off,
           yo = y_off,
           w = w,
           b0 = spec$k0[[k]],
-          .compute = prof
+          .compute = prof,
+          .timed = timed
         )
       )
     },
@@ -846,16 +925,27 @@ garry_last_route <- function() .garry_state$route
     backlog = function() if (live_mb >= 0.5 * budget_mb) cap else length(writes),
     poll = harvest,
     cap = cap,
-    task = function(i, a, cg, core) {
-      mirai::mirai(
-        asNamespace("garry")$.daemon_read_for_write(a, cg, core, dt, nd, reg),
+    run = run,
+    host_end = FALSE,
+    widths = c(write = 1),
+    task = function(i, a, cg, core, timed) {
+      .task_mirai(
+        quote(asNamespace("garry")$.daemon_read_for_write(
+          a,
+          cg,
+          core,
+          dt,
+          nd,
+          reg
+        )),
         a = a,
         cg = cg,
         core = core,
         dt = dtype,
         nd = nodata,
         reg = .glue("ro{run}_{i}"),
-        .compute = "garry_read"
+        .compute = "garry_read",
+        .timed = timed
       )
     }
   )

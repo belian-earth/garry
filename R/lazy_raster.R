@@ -448,9 +448,9 @@ lazy_stack <- function(xs, along = "t") {
 # Positions of `labs` that `sel` selects: each character selector its
 # exact label, else every label it prefixes ("2023-06"); logical or
 # integer positions as given. Errors when a selector matches nothing.
-.label_keep <- function(labs, sel, axis) {
+.label_keep <- function(labs, sel, axis, arg = "sel") {
   if (anyNA(sel)) {
-    cli::cli_abort("{.arg sel} must not contain NA.")
+    cli::cli_abort("{.arg {arg}} must not contain NA.")
   }
   keep <- if (is.character(sel)) {
     hits <- lapply(sel, function(s) {

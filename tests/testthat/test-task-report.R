@@ -47,6 +47,51 @@ test_that("garry_task_report summarises a distributed run's log", {
   )
 })
 
+test_that("a read-only pool write logs its reads and writes as tasks", {
+  local_pools(2, 1)
+  tlog <- withr::local_tempfile(fileext = ".csv")
+  out <- withr::local_tempfile(fileext = ".tif")
+  withr::local_options(garry.task_log = tlog,
+                       garry.chunk_target_px = 600)
+  write_tif(lazy_source(fixture_gradient_f32()), out, distributed = TRUE)
+  expect_identical(garry_last_route(), "read_only")
+
+  rep <- suppressMessages(garry_task_report(tlog))
+  # every read and every write is a complete, timed task
+  expect_identical(sort(unique(rep$tasks$pool)), c("read", "write"))
+  expect_gt(sum(rep$tasks$pool == "read"), 1L)
+  expect_identical(
+    sum(rep$tasks$pool == "write"),
+    sum(rep$tasks$pool == "read")
+  )
+  expect_identical(nrow(rep$tasks), as.integer(rep$events[["launch"]]))
+  expect_identical(as.integer(rep$events[["start"]]), nrow(rep$tasks))
+  expect_identical(as.integer(rep$events[["end"]]), nrow(rep$tasks))
+  expect_true(all(rep$tasks$run_s >= 0))
+  expect_true(all(rep$tasks$queue_s >= 0))
+  expect_true(all(rep$tasks$wait_s >= -0.001))
+  expect_false(is.na(rep$drain_s))
+  expect_false(is.na(rep$host_tail_s))
+  # busy seconds per pool add up the tasks' run times; utilisation
+  # divides the run's by its pool widths and span
+  expect_identical(rep$pools$pool, c("read", "write"))
+  expect_equal(
+    rep$pools$busy_s,
+    as.vector(tapply(rep$tasks$run_s, rep$tasks$pool, sum)),
+    tolerance = 1e-3
+  )
+  expect_identical(rep$pools$daemons, c(2, 1))
+  expect_true(all(rep$pools$util_last > 0 & rep$pools$util_last <= 1))
+
+  # a distributed read-only collect logs its reads and its host end too
+  unlink(tlog)
+  invisible(collect(lazy_source(fixture_gradient_f32()), distributed = TRUE))
+  expect_identical(garry_last_route(), "read_only")
+  rep <- suppressMessages(garry_task_report(tlog))
+  expect_identical(unique(rep$tasks$pool), "read")
+  expect_false(is.na(rep$host_tail_s))
+})
+
 test_that("garry_task_report splits queue from run time on start rows", {
   f <- withr::local_tempfile(fileext = ".csv")
   writeLines(c(
