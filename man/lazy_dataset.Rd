@@ -86,9 +86,8 @@ Assets left out read every band; \code{mask_asset} always reads band 1.}
 by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or positions).
 \code{lazy_dataset(src, grid, time = "2024")} is
 \code{time_sel(lazy_dataset(src, grid), "2024")} without building the
-other slices' bands first (a 9-year, 128-band OlmoEarth store builds
-1152 band reads, about 1.7 s, before \code{time_sel()} keeps 128).
-\code{NULL} (the default) builds every slice.}
+other slices' bands first, which matters for long time series of
+many bands. \code{NULL} (the default) builds every slice.}
 }
 \value{
 A \code{LazyDataset}.

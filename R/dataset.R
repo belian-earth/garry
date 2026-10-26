@@ -182,9 +182,8 @@ LazyDataset <- S7::new_class(
 #'   by label as [time_sel()] selects them (`"2024"`, or positions).
 #'   `lazy_dataset(src, grid, time = "2024")` is
 #'   `time_sel(lazy_dataset(src, grid), "2024")` without building the
-#'   other slices' bands first (a 9-year, 128-band OlmoEarth store builds
-#'   1152 band reads, about 1.7 s, before `time_sel()` keeps 128).
-#'   `NULL` (the default) builds every slice.
+#'   other slices' bands first, which matters for long time series of
+#'   many bands. `NULL` (the default) builds every slice.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
@@ -597,14 +596,14 @@ lazy_dataset <- function(
     file_bands <- nd$file_bands
     if (!is.null(time)) {
       # build only the selected slices' bands
-      keep <- .label_keep(nd$time_labels, time, "t")
+      keep <- .label_keep(nd$time_labels, time, "t", arg = "time")
       file_bands <- file_bands[, keep, drop = FALSE]
       nd$time_labels <- nd$time_labels[keep]
     }
   }
   if (!is.null(time) && is.null(nd)) {
     cli::cli_abort(c(
-      "{.arg time} selects the slices of an N-D source; {.path {path[[1L]]}} has no time dimension.",
+      "{.arg time} selects the slices of an N-D source; {.path {path[[1L]]}} is not read as a (time, band) array.",
       "i" = "Its bands are read as bands; select them with {.arg bands} or {.arg assets}."
     ))
   }

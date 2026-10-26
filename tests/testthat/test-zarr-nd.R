@@ -93,9 +93,10 @@ test_that("time builds only the selected slices, as time_sel() keeps them", {
   expect_identical(n_src(lazy_dataset(fx$path, g, time = "2022")), 4L)
   expect_identical(n_src(lazy_dataset(fx$path, g)), 12L)
   expect_error(lazy_dataset(fx$path, g, time = "1999"), "match")
+  expect_error(lazy_dataset(fx$path, g, time = NA), "time")
   expect_error(
     lazy_dataset(fixture_gradient_f32(), time = "2023"),
-    "no time dimension"
+    "not read as a \\(time, band\\) array"
   )
 })
 
