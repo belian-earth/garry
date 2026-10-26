@@ -808,6 +808,7 @@ NULL
     ps[-1L],
     function(w) {
       identical(w@resampling, w1@resampling) &&
+        identical(w@coarsen, w1@coarsen) &&
         grid_equal(w@target_grid, w1@target_grid)
     },
     logical(1)
@@ -824,7 +825,8 @@ NULL
     grid = grid,
     target_grid = grid,
     resampling = w1@resampling,
-    bands = vapply(srcs, function(n) n@band, integer(1))
+    bands = vapply(srcs, function(n) n@band, integer(1)),
+    coarsen = w1@coarsen
   )
 }
 
@@ -969,6 +971,7 @@ NULL
       .node_parents(n)[[1L]],
       n@resampling,
       paste(n@bands, collapse = ","),
+      n@coarsen,
       sep = "\x1f"
     )
     hit <- NULL
@@ -1591,6 +1594,20 @@ plan_lazy <- function(x) {
     numeric(1)
   )
   stage_objs <- lapply(protos, function(s) {
+    # A coarsened warp read for a sink holds k^2 finer f32 cells a band
+    # for each of its own: its windows hold ram_budget_mb of them, as a
+    # chunk holds its working set (.plan_chunk_dim()). A sink's windows
+    # need not be unions of compute chunks.
+    cd <- chunk_dim
+    rpx <- read_px_of[[s$id]]
+    kc <- .stage_coarsen(graph, s)
+    if (kc > 1L && length(cons_idx[[s$id]]) == 0L) {
+      d <- s$grid@dims
+      nb <- max(1, prod(d[!names(d) %in% c("x", "y")]))
+      px <- max(1, garry_opt("ram_budget_mb") * 2^20 / (4 * kc^2 * nb))
+      cd <- rep(max(1L, as.integer(floor(sqrt(px)))), 2L)
+      rpx <- prod(as.numeric(cd))
+    }
     st <- Stage(
       id = as.integer(s$id),
       kind = s$kind,
@@ -1603,8 +1620,8 @@ plan_lazy <- function(x) {
         .stage_block(graph, protos, s),
         s$halo,
         s$kind,
-        chunk_dim,
-        read_px_of[[s$id]]
+        cd,
+        rpx
       ),
       device = if (s$kind %in% c("compute", "reduce_partial")) {
         garry_opt("device")

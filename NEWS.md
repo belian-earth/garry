@@ -2,6 +2,22 @@
 
 ## New features
 
+* `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
+  by block means of its valid values. Its read assembles each window's
+  finer cells from the sources as their nearest-neighbour read does
+  (direct window reads of the sources on those cells' pixels, a warp of
+  each other source alone, later sources winning where they hold data),
+  decodes them if the dataset decodes, and averages each block in one
+  pass. `stack_bands(coarsen(lazy_dataset(tiles, grid10, resampling =
+  "near", decode = dequantize_aef), 3L))` builds a 30 m embedding cube
+  straight from the tiles, identical to writing the 10 m codes and then
+  averaging their decoded values: an AEF box-year (four south-up tiles,
+  64 bands, 4488 x 5727 codes) in 8.5 s instead of about 36 s, an
+  OlmoEarth window (128 bands, through a false-origin shift) in 3.8 s.
+  Cells warped from a reprojected source match the 10 m read's under
+  `garry.warp_exact = TRUE`.
+* `lazy_dataset(decode = )` takes several sources and Zarr arrays, one
+  lookup-table VRT each.
 * `lazy_dataset(decode = )` decodes a file's 8-bit codes before any
   resampling: each code goes through a table made by evaluating the
   decode (for example `dequantize_aef()`) on every code, the nodata code

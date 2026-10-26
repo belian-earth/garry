@@ -599,7 +599,15 @@ lazy_dataset <- function(
     }
     dec <- .decode_prepare(path, decode, nodata)
     meta_codes <- meta %||% gdal_grid_spec(path)
-    meta <- gdal_grid_spec(dec$vrt)
+    # one source: its VRT's grid; several: their planning grid, decoded
+    meta <- if (length(path) == 1L) {
+      gdal_grid_spec(dec$vrt)
+    } else {
+      utils::modifyList(
+        meta_codes,
+        list(grid = .grid_retype(meta_codes$grid, "f32"))
+      )
+    }
     # chunks snap to the codes' blocks, not the VRT's
     meta$block_dim <- meta_codes$block_dim
   }
@@ -710,37 +718,33 @@ lazy_dataset <- function(
 # Prepare a decode for the 8-bit codes at `path` (lazy_dataset(decode =)):
 # `fn` evaluated once on every code of the band type gives the table
 # (rounded to f32, NaN at the nodata code), written as a lookup-table
-# VRT every read path takes. `nodata` is the code to mask: the file's
-# own, or one given that matches it.
+# VRT per source that every read path takes. `nodata` is the code to
+# mask: the sources' own, or one given that matches it. Several sources
+# (tiles, one Zarr array per UTM zone) share the table and the code.
 .decode_prepare <- function(path, fn, nodata = NULL) {
   if (!is.function(fn)) {
     cli::cli_abort(
       "{.arg decode} must be a function of the codes, such as {.fn dequantize_aef}."
     )
   }
-  if (length(path) != 1L || .gdal_is_zarr(path)) {
-    cli::cli_abort(c(
-      "{.arg decode} reads one coded raster file.",
-      "i" = "Decode a Zarr array or a multi-file source with {.fn lazy_map} instead."
-    ))
-  }
-  types <- unique(gdal_band_types(path))
+  types <- unique(unlist(lapply(path, gdal_band_types)))
   ranges <- list(Byte = c(0L, 255L), Int8 = c(-128L, 127L))
   if (length(types) != 1L || !types %in% names(ranges)) {
     cli::cli_abort(c(
-      "{.arg decode} decodes 8-bit codes; {.path {path}} holds {.val {types}} bands.",
+      "{.arg decode} decodes 8-bit codes; {.path {path[[1L]]}} holds {.val {types}} bands.",
       "i" = "Decode other types with {.fn lazy_map}."
     ))
   }
   r <- ranges[[types]]
   codes <- seq(r[[1L]], r[[2L]])
-  # One table serves every band, so every band must declare one nodata
-  # code (or none): a band's own code is masked on a direct read.
-  file_nd <- unique(gdal_band_nodata(path))
+  # One table serves every band of every source, so they must declare
+  # one nodata code (or none): a band's own code is masked on a direct
+  # read.
+  file_nd <- unique(unlist(lapply(path, gdal_band_nodata)))
   if (length(file_nd) > 1L) {
     cli::cli_abort(c(
-      "{.arg decode} needs one nodata code for every band; {.path {path}} declares {.val {file_nd}}.",
-      "i" = "Decode bands with different codes as separate sources."
+      "{.arg decode} needs one nodata code for every band and source; these declare {.val {file_nd}}.",
+      "i" = "Decode bands or sources with different codes separately."
     ))
   }
   file_nd <- if (is.na(file_nd)) numeric(0) else file_nd
@@ -779,10 +783,22 @@ lazy_dataset <- function(
     )
   }
   table[!valid] <- NaN
-  vrt <- tempfile("garry-decode-", fileext = ".vrt")
-  gdal_decode_vrt(vrt, path, r[[1L]], table, nd)
+  vrt <- vapply(
+    path,
+    function(p) {
+      gdal_decode_vrt(
+        tempfile("garry-decode-", fileext = ".vrt"),
+        p,
+        r[[1L]],
+        table,
+        nd
+      )
+    },
+    "",
+    USE.NAMES = FALSE
+  )
   structure(
-    list(vrt = vrt, src = path, lo = r[[1L]], table = table),
+    list(vrt = vrt, src = path, lo = r[[1L]], table = table, nodata = nd),
     class = "garry_decode"
   )
 }

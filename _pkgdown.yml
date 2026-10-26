@@ -96,6 +96,7 @@ reference:
   - scan_over
   - lazy_patch
   - align_to
+  - coarsen
 - title: Execution
   desc: Plan, distribute across daemons, and write the result.
   contents:

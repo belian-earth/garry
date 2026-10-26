@@ -2379,7 +2379,8 @@ gdal_warp_to_buffer <- function(
   srcnodata = NULL,
   resampling = "near",
   band = NULL,
-  exact = FALSE
+  exact = FALSE,
+  overviews = TRUE
 ) {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES") # >=3.10 gate
   # `buf` is a RAW f32 byte vector (the raw-f32 store, D19-D21). The public
@@ -2401,6 +2402,9 @@ gdal_warp_to_buffer <- function(
   if (exact) {
     # the exact transformer (garry.warp_exact), as gdal_warp_vrt() warps
     cl <- c(cl, "-et", "0")
+  }
+  if (!overviews) {
+    cl <- c(cl, "-ovr", "NONE")
   }
   if (length(srcnodata) == 1L) {
     # each band's sentinel masks that band alone: GDAL's default for a
@@ -2455,7 +2459,8 @@ gdal_warp_window <- function(
   out = c("matrix", "raw_f32"),
   scale = numeric(0),
   offset = numeric(0),
-  exact = isTRUE(garry_opt("warp_exact"))
+  exact = isTRUE(garry_opt("warp_exact")),
+  overviews = TRUE
 ) {
   out <- rlang::arg_match(out)
   nb <- length(band)
@@ -2478,7 +2483,7 @@ gdal_warp_window <- function(
     gdal_warp_to_buffer(
       buf, x_size, y_size, gtstr, grid@crs, srcs,
       srcnodata = nodata, resampling = resampling, band = band,
-      exact = exact
+      exact = exact, overviews = overviews
     )
   }
   # the warper reloads a Zarr band's dimension metadata, repeating the
@@ -2600,7 +2605,8 @@ gdal_read_window_multi <- function(
         nodata = nodata,
         out = out,
         scale = scale,
-        offset = offset
+        offset = offset,
+        overviews = !isTRUE(decim$codes)
       ))
     }
     # offsets count rows from the north, as a plain window read takes them
@@ -2670,6 +2676,102 @@ gdal_read_window_multi <- function(
   }
   v <- readBin(buf, "numeric", n = as.numeric(x_size) * y_size * nb, size = 4L)
   .gdal_finish_planes(v, nb, y_size, x_size, scale, offset, out)
+}
+
+# Read one window of a coarsened warp (.coarsen_read_plan()): its finer
+# cells, `k` times as many each way, assembled from the sources as their
+# nearest read assembles them (gdal_read_window_multi(), or one warp of
+# them all where that read declines), decoded through the source's
+# table when it has one, and each k x k block averaged over its valid
+# values in C. Codes are never read from an overview. The finer cells go
+# in row slabs of about 128 MB across the bands; the means go straight
+# into the f32 payload when that is wanted.
+gdal_read_window_coarsen <- function(
+  paths,
+  band,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  decim,
+  nodata = numeric(0),
+  out = c("matrix", "raw_f32"),
+  scale = numeric(0),
+  offset = numeric(0)
+) {
+  out <- rlang::arg_match(out)
+  k <- decim$coarsen
+  dec <- decim$decode
+  nb <- length(band)
+  n_px <- as.numeric(x_size) * y_size
+  f32 <- out == "raw_f32" && length(scale) == 0L
+  dst <- if (f32) {
+    .Call(
+      "garry_paste_f32",
+      NULL,
+      raw(0),
+      as.numeric(c(nb, x_size, y_size, 0, 0, 0, 0)),
+      PACKAGE = "garry"
+    )
+  } else {
+    .Call("garry_alloc_double", nb * n_px, PACKAGE = "garry")
+  }
+  multi <- list(
+    parts = decim$parts,
+    grid = decim$grid,
+    codes = length(dec) > 0L
+  )
+  fw <- x_size * k
+  slab <- max(1L, as.integer(2^27 %/% (4 * nb * as.numeric(fw) * k)))
+  r0 <- 0L
+  while (r0 < y_size) {
+    rows <- min(slab, y_size - r0)
+    fx0 <- x_off * k
+    fy0 <- (y_off + r0) * k
+    fh <- rows * k
+    finer <- if (length(decim$parts)) {
+      gdal_read_window_multi(
+        paths,
+        band,
+        fx0,
+        fy0,
+        fw,
+        fh,
+        decim = multi,
+        nodata = nodata,
+        out = "raw_f32"
+      )
+    } else {
+      gdal_warp_window(
+        paths,
+        band,
+        decim$grid,
+        fx0,
+        fy0,
+        fw,
+        fh,
+        resampling = "near",
+        nodata = nodata,
+        out = "raw_f32",
+        overviews = !multi$codes
+      )
+    }
+    .Call(
+      "garry_coarsen_into",
+      dst,
+      as.numeric(r0) * x_size,
+      finer,
+      as.numeric(c(nb, k, x_size, rows, n_px, dec$lo %||% 0)),
+      dec$table %||% numeric(0),
+      PACKAGE = "garry"
+    )
+    r0 <- r0 + rows
+  }
+  if (f32) {
+    gdim <- if (nb > 1L) c(nb, y_size, x_size) else c(y_size, x_size)
+    return(structure(dst, gdim = as.integer(gdim), gdt = "f32"))
+  }
+  .gdal_finish_planes(dst, nb, y_size, x_size, scale, offset, out)
 }
 
 # Run an idempotent read/fetch/warp thunk with task-scoped retries.

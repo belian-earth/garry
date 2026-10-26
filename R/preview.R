@@ -495,7 +495,8 @@ NULL
       grid = cg,
       target_grid = cg,
       resampling = n@resampling,
-      bands = n@bands
+      bands = n@bands,
+      coarsen = n@coarsen
     )
   } else {
     NULL
