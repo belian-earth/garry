@@ -20,7 +20,10 @@ NULL
 #' @return Invisibly, a list: `events` (event counts), `tasks` (one row
 #'   per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
 #'   queue_s, run_s, harvest_s), `stages` (per-stage counts, p50/p95 run
-#'   and wait seconds, p50 queue and harvest seconds), `max_concurrency`,
+#'   and wait seconds, p50 queue and harvest seconds), `pools` (per-pool
+#'   task counts, summed and p50 run seconds over every run, and the last
+#'   run's daemon count and utilisation, its busy seconds over daemons x
+#'   the run's span), `max_concurrency`,
 #'   `drain_s`, `host_tail_s`,
 #'   `peak_model_mb`, `peak_rss_mb`, `peak_rss_by_role` (named MB),
 #'   `peak_host_mb`, `peak_cgroup_mb`, `cgroup_limit_mb`, `peak_shm_mb`
@@ -122,7 +125,6 @@ garry_task_report <- function(path) {
   )
   stages <- stages[order(stages$stage), , drop = FALSE]
   row.names(stages) <- NULL
-
   # Max concurrency: +1 at each launch, -1 at each done, in time order.
   ev <- df[df$event %in% c("launch", "done"), c("time", "event")]
   ev <- ev[order(ev$time), , drop = FALSE]
@@ -140,6 +142,45 @@ garry_task_report <- function(path) {
   } else {
     NA_real_
   }
+
+  # Per pool: tasks and busy seconds over every run, and the last run's
+  # utilisation, its busy seconds over (daemons x the run's span, start
+  # to host end), from the pool rows that give each run's pool widths.
+  # The busier pool set the pace (a read-bound write keeps its readers
+  # busy and its writer idle).
+  span_s <- sum(c(drain_s, host_tail_s), na.rm = TRUE)
+  widths <- last[last$event == "pool", , drop = FALSE]
+  pools <- do.call(
+    rbind,
+    c(
+      list(data.frame(
+        pool = character(0),
+        n = integer(0),
+        busy_s = numeric(0),
+        run_p50 = numeric(0),
+        daemons = numeric(0),
+        util_last = numeric(0)
+      )),
+      lapply(split(tasks, tasks$pool), function(s) {
+        w <- suppressWarnings(as.numeric(widths$mb[widths$key == s$pool[[1L]]]))
+        w <- if (length(w)) w[[length(w)]] else NA_real_
+        busy_last <- sum(s$run_s[s$run == max(df$run)], na.rm = TRUE)
+        data.frame(
+          pool = s$pool[[1L]],
+          n = nrow(s),
+          busy_s = round(sum(s$run_s, na.rm = TRUE), 3),
+          run_p50 = q(s$run_s, 0.5),
+          daemons = w,
+          util_last = if (is.finite(w) && w > 0 && span_s > 0) {
+            round(busy_last / (w * span_s), 3)
+          } else {
+            NA_real_
+          }
+        )
+      })
+    )
+  )
+  row.names(pools) <- NULL
 
   model <- df[df$event == "model", ]
   rss <- df[df$event == "rss", ]
@@ -196,6 +237,36 @@ garry_task_report <- function(path) {
     ),
     "*" = "{n_runs} run{?s}; {nrow(tasks)} launch/done pairs, max concurrency {max_conc}",
     "*" = paste0("last run: drain ", drain_s, " s; host tail ", host_tail_s, " s"),
+    "*" = if (nrow(pools)) {
+      paste0(
+        "busy per pool, all runs: ",
+        paste0(
+          pools$pool,
+          " ",
+          pools$busy_s,
+          " s (n=",
+          pools$n,
+          ")",
+          collapse = ", "
+        )
+      )
+    },
+    "*" = if (any(is.finite(pools$util_last))) {
+      u <- pools[is.finite(pools$util_last), , drop = FALSE]
+      paste0(
+        "last run, share of each pool's time busy: ",
+        paste0(
+          u$pool,
+          " ",
+          round(100 * u$util_last),
+          "% of ",
+          u$daemons,
+          " daemon",
+          ifelse(u$daemons == 1, "", "s"),
+          collapse = ", "
+        )
+      )
+    },
     "*" = paste0(
       "peak modelled ",
       round(peak_model_mb),
@@ -260,6 +331,7 @@ garry_task_report <- function(path) {
     events = events,
     tasks = tasks,
     stages = stages,
+    pools = pools,
     max_concurrency = max_conc,
     drain_s = drain_s,
     host_tail_s = host_tail_s,
