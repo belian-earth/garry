@@ -644,8 +644,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
   # A flipped read, and one source's share of a mosaic, take the target
-  # on the source's own pixels only.
-  if ((flip || partial) && (fx != 1 || fy != 1)) {
+  # on the source's own pixels only; a decoded read reads full rows and
+  # flips them itself, so it decimates either way.
+  if ((partial || (flip && !decode)) && (fx != 1 || fy != 1)) {
     return(NULL)
   }
   # Through a shifted CRS, take only nearest-neighbour reads: the warper's
@@ -1037,12 +1038,15 @@ gdal_read_window <- function(
 }
 
 # A decoded source's direct read (.rio_direct_spec(decode = TRUE)): the
-# window's codes read from the codes file, rows north first, and each
-# target cell decoded through the table in C: the code itself at the
-# source's resolution, the mean of the valid decoded codes of its block
-# for "average" (sum in double, as GDAL averages a Float32 band), the
-# code GDAL picks for a decimating "near". Rows go in slabs of about
-# 16 M codes, so a coarse window never holds its codes at once.
+# window's codes read from the codes file at full resolution, rows north
+# first (an overview never stands in for codes: its resampled codes
+# would decode to values no code has), and each target cell decoded
+# through the table in C: the mean of the valid decoded codes of its
+# block for "average" (sum in double, as GDAL averages a Float32 band),
+# the code GDAL's nearest-neighbour decimation picks for "near". Rows go
+# in slabs of about 16 M codes, every band of a slab before the next, so
+# an interleaved file's blocks serve all its bands; the f32 payload is
+# written directly.
 .gdal_read_decoded <- function(
   ds,
   band,
@@ -1056,48 +1060,63 @@ gdal_read_window <- function(
   d <- decim$decode
   fx <- decim$fx
   fy <- decim$fy
-  pick <- identical(decim$resamp, "NEAREST") && (fx > 1L || fy > 1L)
-  bx <- if (pick) 1L else fx # the block each cell averages
-  by <- if (pick) 1L else fy
+  pick <- identical(decim$resamp, "NEAREST")
   sx <- decim$x_off + x_off * fx
   sy <- decim$y_off + y_off * fy
   nb <- length(band)
   n_px <- as.numeric(x_size) * y_size
-  v <- .Call("garry_alloc_double", nb * n_px, PACKAGE = "garry")
+  dst <- if (out == "raw_f32") {
+    .Call(
+      "garry_paste_f32",
+      NULL,
+      raw(0),
+      as.numeric(c(nb, x_size, y_size, 0, 0, 0, 0)),
+      PACKAGE = "garry"
+    )
+  } else {
+    .Call("garry_alloc_double", nb * n_px, PACKAGE = "garry")
+  }
+  # target rows a slab: at most ~16 M codes a band, and for several
+  # bands no more source rows than keep the slab's blocks of every band
+  # in the GDAL cache (.gdal_band_slab()), so an interleaved file
+  # decompresses each block once
   slab <- max(1L, as.integer(2^24 %/% (as.numeric(x_size) * fx * fy)))
-  for (k in seq_len(nb)) {
-    r0 <- 0L
-    while (r0 < y_size) {
-      rows <- min(slab, y_size - r0)
-      codes <- if (pick) {
-        ds$read(
-          band[[k]],
-          sx,
-          sy + r0 * fy,
-          x_size * fx,
-          rows * fy,
-          x_size,
-          rows
-        )
-      } else {
-        .gdal_read_rows(ds, band[[k]], sx, sy + r0 * fy, x_size * fx, rows * fy)
-      }
+  if (nb > 1L) {
+    src_rows <- .gdal_band_slab(ds, band, x_size * fx, y_size * fy)
+    slab <- min(slab, max(1L, src_rows %/% fy))
+  }
+  r0 <- 0L
+  while (r0 < y_size) {
+    rows <- min(slab, y_size - r0)
+    for (k in seq_len(nb)) {
+      codes <- .gdal_read_rows(
+        ds,
+        band[[k]],
+        sx,
+        sy + r0 * fy,
+        x_size * fx,
+        rows * fy
+      )
       if (!is.integer(codes)) {
         storage.mode(codes) <- "integer"
       }
       .Call(
         "garry_decode_into",
-        v,
+        dst,
         (k - 1) * n_px + as.numeric(r0) * x_size,
         codes,
-        as.numeric(c(d$lo, bx, by, x_size, rows)),
+        as.numeric(c(d$lo, fx, fy, x_size, rows, pick, isTRUE(decim$flip))),
         d$table,
         PACKAGE = "garry"
       )
-      r0 <- r0 + rows
     }
+    r0 <- r0 + rows
   }
-  .gdal_finish_planes(v, nb, y_size, x_size, numeric(0), numeric(0), out)
+  if (out == "raw_f32") {
+    gdim <- if (nb > 1L) c(nb, y_size, x_size) else c(y_size, x_size)
+    return(structure(dst, gdim = as.integer(gdim), gdt = "f32"))
+  }
+  .gdal_finish_planes(dst, nb, y_size, x_size, numeric(0), numeric(0), out)
 }
 
 # Rows a multi-band read takes per slab: as many as keep half the GDAL
@@ -1961,18 +1980,27 @@ gdal_decode_vrt <- function(vrt, src, lo, table, nodata = numeric(0)) {
   codes <- lo + seq_along(table) - 1L
   ok <- !is.nan(table)
   lut <- paste0(codes[ok], ":", num(table[ok]), collapse = ",")
-  href <- .xml_escape(if (file.exists(src)) normalizePath(src) else src)
-  nd <- if (length(nodata) == 1L) .glue("<NODATA>{num(nodata)}</NODATA>") else ""
+  href <- .xml_escape(
+    if (file.exists(src)) normalizePath(src) else .gdal_href(src)
+  )
+  nd <- if (length(nodata) == 1L) {
+    .glue("<NODATA>{num(nodata)}</NODATA>")
+  } else {
+    ""
+  }
   bands <- vapply(
     seq_len(ds$getRasterCount()),
     function(b) {
       desc <- .xml_escape(ds$getDescription(b))
+      # the codes at full resolution only: GDAL would otherwise read an
+      # overview's resampled codes for a coarse read
       .glue(
         '  <VRTRasterBand dataType="Float32" band="{b}">',
         "<Description>{desc}</Description>",
         "<NoDataValue>nan</NoDataValue>",
         "<ComplexSource>",
         '<SourceFilename relativeToVRT="0">{href}</SourceFilename>',
+        '<OpenOptions><OOI key="OVERVIEW_LEVEL">NONE</OOI></OpenOptions>',
         "<SourceBand>{b}</SourceBand>",
         '<SrcRect xOff="0" yOff="0" xSize="{nx}" ySize="{ny}" />',
         '<DstRect xOff="0" yOff="0" xSize="{nx}" ySize="{ny}" />',
@@ -1994,6 +2022,16 @@ gdal_decode_vrt <- function(vrt, src, lo, table, nodata = numeric(0)) {
     vrt
   )
   vrt
+}
+
+# The nodata value each band of `path` declares (NA for none).
+gdal_band_nodata <- function(path) {
+  ds <- .gdal_handle(path)
+  vapply(
+    seq_len(ds$getRasterCount()),
+    function(b) as.numeric(ds$getNoDataValue(b)),
+    numeric(1)
+  )
 }
 
 # The GDAL data type of each band of `path`.

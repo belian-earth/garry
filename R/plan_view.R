@@ -246,7 +246,10 @@ NULL
     if (S7::S7_inherits(n, SourceNode)) {
       # no query string (a signed URL's SAS token must not land in a
       # saved widget), and escaped for the HTML tooltip
-      files <- .xml_escape(paste(basename(sub("\\?.*$", "", n@path)), collapse = ", "))
+      files <- .xml_escape(paste(
+        basename(sub("\\?.*$", "", .source_storage(n))),
+        collapse = ", "
+      ))
       ln <- if (length(n@name)) {
         .glue("asset: {.xml_escape(n@name)} \u00b7 {files}")
       } else {

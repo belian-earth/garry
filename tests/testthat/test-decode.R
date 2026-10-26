@@ -67,6 +67,20 @@
   out
 }
 
+# k x k block means (row by row, in order) of a decoded [y, x] matrix,
+# NaN where no value is valid, rounded to f32.
+.block_mean_dec <- function(m, k) {
+  out <- matrix(NaN, nrow(m) %/% k, ncol(m) %/% k)
+  for (r in seq_len(nrow(out))) {
+    for (q in seq_len(ncol(out))) {
+      blk <- t(m[(k * r - k + 1):(k * r), (k * q - k + 1):(k * q)])
+      ok <- !is.nan(blk)
+      if (any(ok)) out[r, q] <- .f32(Reduce(`+`, blk[ok]) / sum(ok))
+    }
+  }
+  out
+}
+
 .g10 <- function() {
   grid_spec("EPSG:32736", c(500000, 8599910, 500120, 8600000), res = 10)
 }
@@ -244,7 +258,8 @@ test_that("pixel-interleaved and south-up codes decode as band-interleaved ones 
     resampling = "average",
     decode = dequantize_aef
   )
-  expect_null(.warp_args(s30)$decim$decode)
+  # a decoded read flips full rows itself, so it decimates south-up too
+  expect_false(is.null(.warp_args(s30)$decim$decode))
   expect_equal(
     collect(stack_bands(s30), distributed = FALSE),
     want,
@@ -287,7 +302,7 @@ test_that("decode refuses what it cannot read", {
   )
   expect_error(lazy_dataset(f, decode = "aef"), "must be a function")
   expect_error(lazy_dataset(f, decode = function(x) 1), "one number per code")
-  expect_error(lazy_dataset(f, decode = function(x) 1 / x), "finite value")
+  expect_error(lazy_dataset(f, decode = function(x) 1 / x), "finite Float32")
   expect_error(
     lazy_dataset(f, decode = dequantize_aef, nodata = -127),
     "differs from the file"
@@ -312,7 +327,7 @@ test_that("rows of codes decode and average in C", {
     out,
     0,
     codes,
-    c(-1, 2, 2, 2, 1),
+    c(-1, 2, 2, 2, 1, 0, 0),
     tab,
     PACKAGE = "garry"
   )
@@ -323,10 +338,182 @@ test_that("rows of codes decode and average in C", {
       out,
       1,
       codes,
-      c(-1, 2, 2, 2, 1),
+      c(-1, 2, 2, 2, 1, 0, 0),
       tab,
       PACKAGE = "garry"
     ),
     "do not decode"
+  )
+})
+
+# A Byte file of codes 0 and 200 only, 96 x 96 at 10 m, with overviews
+# built by averaging: an overview holds codes no pixel has.
+.overviewed <- function(south_up = FALSE) {
+  f <- file.path(
+    tempdir(),
+    paste0("garry-overviewed", if (south_up) "-s", ".tif")
+  )
+  if (!file.exists(f)) {
+    set.seed(3)
+    ds <- gdalraster::create(
+      "GTiff",
+      f,
+      96L,
+      96L,
+      1L,
+      "Byte",
+      return_obj = TRUE
+    )
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+    ds$setGeoTransform(
+      if (south_up) {
+        c(500000, 10, 0, 8599040, 0, 10)
+      } else {
+        c(500000, 10, 0, 8600000, 0, -10)
+      }
+    )
+    ds$write(1L, 0L, 0L, 96L, 96L, sample(c(0L, 200L), 9216L, replace = TRUE))
+    ds$close()
+    ds <- methods::new(gdalraster::GDALRaster, f, read_only = FALSE)
+    ds$buildOverviews("AVERAGE", c(2L, 4L), 1L)
+    ds$close()
+  }
+  f
+}
+
+test_that("no read decodes an overview's resampled codes", {
+  sq <- function(x) x^2
+  for (su in c(FALSE, TRUE)) {
+    f <- .overviewed(su)
+    g10 <- grid_spec(
+      "EPSG:32736",
+      c(500000, 8599040, 500960, 8600000),
+      res = 10
+    )
+    full <- unname(collect(lazy_source(f, decode = sq), distributed = FALSE))
+    expect_true(all(full %in% c(0, 40000)))
+    # 3x average onto aligned pixels, directly and through the VRT
+    g30 <- grid_spec(
+      "EPSG:32736",
+      c(500000, 8599040, 500960, 8600000),
+      res = 30
+    )
+    want <- .block_mean_dec(full, 3L)
+    for (fast in c(TRUE, FALSE)) {
+      run <- function() {
+        collect(
+          stack_bands(lazy_dataset(
+            f,
+            g30,
+            resampling = "average",
+            decode = sq
+          )),
+          distributed = FALSE
+        )
+      }
+      got <- if (fast) run() else with_no_decode_read(run())
+      expect_equal(unname(got), want, tolerance = 1e-6, ignore_attr = TRUE)
+    }
+    # an unaligned average warps the VRT, at full resolution
+    g15 <- grid_spec(
+      "EPSG:32736",
+      c(500005, 8599045, 500905, 8599945),
+      res = 30
+    )
+    got <- collect(
+      stack_bands(lazy_dataset(f, g15, resampling = "average", decode = sq)),
+      distributed = FALSE
+    )
+    expect_true(all(got >= 0 & got <= 40000, na.rm = TRUE))
+    # a decimating near read picks codes, never averaged ones
+    g40 <- grid_spec(
+      "EPSG:32736",
+      c(500000, 8599040, 500960, 8600000),
+      res = 40
+    )
+    fast <- collect(
+      stack_bands(lazy_dataset(f, g40, decode = sq)),
+      distributed = FALSE
+    )
+    slow <- with_no_decode_read(collect(
+      stack_bands(lazy_dataset(f, g40, decode = sq)),
+      distributed = FALSE
+    ))
+    expect_true(all(fast %in% c(0, 40000)))
+    expect_identical(fast, slow)
+  }
+})
+
+test_that("a mask band reads as stored, and the VRT keeps the codes' blocks", {
+  f <- file.path(tempdir(), "garry-coded-mask.tif")
+  if (!file.exists(f)) {
+    ds <- gdalraster::create(
+      "GTiff",
+      f,
+      40L,
+      30L,
+      2L,
+      "Byte",
+      options = c("TILED=YES", "BLOCKXSIZE=16", "BLOCKYSIZE=16"),
+      return_obj = TRUE
+    )
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+    ds$setGeoTransform(c(500000, 10, 0, 8600300, 0, -10))
+    ds$setDescription(1L, "v")
+    ds$setDescription(2L, "qa")
+    ds$write(1L, 0L, 0L, 40L, 30L, rep(c(10L, 20L, 30L), 400L))
+    ds$write(2L, 0L, 0L, 40L, 30L, rep(c(0L, 8L), 600L))
+    ds$close()
+  }
+  ds <- lazy_dataset(f, decode = function(x) x / 100, mask_asset = "qa")
+  got <- collect(stack_bands(ds), distributed = FALSE)
+  expect_setequal(unique(as.vector(got[,, 2L])), c(0, 8))
+  expect_setequal(unique(as.vector(got[,, 1L])), .f32(c(0.1, 0.2, 0.3)))
+  # chunks snap to the codes' blocks, not the VRT's
+  src <- graph_get(ds@graph, min(graph_ids(ds@graph)))
+  expect_identical(src@block_dim, gdal_grid_spec(f)$block_dim)
+  x <- lazy_source(f, decode = function(x) x / 100)
+  expect_identical(
+    graph_get(x@graph, x@node_id)@block_dim,
+    gdal_grid_spec(f)$block_dim
+  )
+})
+
+test_that("decode refuses bands with different nodata codes, NA nodata and f32 overflow", {
+  # GeoTIFF keeps one nodata a file: a VRT of two files holds one each
+  f <- file.path(tempdir(), "garry-coded-ndmix.vrt")
+  if (!file.exists(f)) {
+    one <- function(name, nd) {
+      p <- file.path(tempdir(), name)
+      ds <- gdalraster::create(
+        "GTiff",
+        p,
+        4L,
+        3L,
+        1L,
+        "Int8",
+        return_obj = TRUE
+      )
+      ds$setProjection(gdalraster::srs_to_wkt("EPSG:32736"))
+      ds$setGeoTransform(c(500000, 10, 0, 8600030, 0, -10))
+      ds$setNoDataValue(1L, nd)
+      ds$close()
+      p
+    }
+    gdalraster::buildVRT(
+      f,
+      c(one("garry-nd-a.tif", -128), one("garry-nd-b.tif", 5)),
+      cl_arg = "-separate",
+      quiet = TRUE
+    )
+  }
+  expect_error(lazy_dataset(f, decode = dequantize_aef), "one nodata code")
+  expect_error(
+    lazy_dataset(.coded(), decode = dequantize_aef, nodata = NA),
+    "a number"
+  )
+  expect_error(
+    lazy_dataset(.coded(), decode = function(x) x * 1e300),
+    "finite Float32"
   )
 })

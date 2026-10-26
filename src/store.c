@@ -488,40 +488,55 @@ SEXP garry_paste_f32(SEXP dst, SEXP src, SEXP geo) {
 }
 
 /* Decode a slab of codes into rows of `dst` from cell `off`, in place:
- * `codes` holds (ny * by) rows of (nx * bx) codes, north first, and
- * each of the ny x nx target cells takes the mean of the decoded values
- * of its by x bx block (the value itself when the block is one code),
- * NaN where none is valid. A code decodes to table[code - lo]; NA (a
- * masked code), a code outside the table and a NaN entry (the nodata
- * code) drop out. The sum runs in double over the block row by row, as
- * GDAL averages a Float32 band. `geo` = (lo, bx, by, nx, ny). */
+ * `codes` holds (ny * by) rows of (nx * bx) codes, north first, read at
+ * full resolution, and each of the ny x nx target cells takes the mean
+ * of the decoded values of its by x bx block (the value itself when the
+ * block is one code), NaN where none is valid; with `pick`, the decoded
+ * value of the one code GDAL's nearest-neighbour decimation takes:
+ * column bx/2 of the block and row by/2 in the file's own row order, so
+ * row by - 1 - by/2 north first when the file is south-up (`flip`). A code decodes to table[code - lo];
+ * NA (a masked code), a code outside the table and a NaN entry (the
+ * nodata code) drop out. The sum runs in double over the block row by
+ * row, as GDAL averages a Float32 band. `dst` is doubles, or a raw f32
+ * buffer the cells go into rounded.
+ * `geo` = (lo, bx, by, nx, ny, pick, flip). */
 SEXP garry_decode_into(SEXP dst, SEXP off, SEXP codes, SEXP geo, SEXP table) {
-  if (TYPEOF(dst) != REALSXP || TYPEOF(codes) != INTSXP || TYPEOF(table) != REALSXP) {
-    error("double output, integer codes and a double table expected");
+  if ((TYPEOF(dst) != REALSXP && TYPEOF(dst) != RAWSXP) ||
+      TYPEOF(codes) != INTSXP || TYPEOF(table) != REALSXP ||
+      TYPEOF(geo) != REALSXP) {
+    error("double or raw f32 output, integer codes, a double table and double geometry expected");
   }
-  if (LENGTH(geo) != 5) error("decode geometry is (lo, bx, by, nx, ny)");
+  if (LENGTH(geo) != 7) error("decode geometry is (lo, bx, by, nx, ny, pick, flip)");
   const double *g = REAL(geo);
   const int lo = (int) g[0];
   const R_xlen_t bx = (R_xlen_t) g[1], by = (R_xlen_t) g[2];
   const R_xlen_t nx = (R_xlen_t) g[3], ny = (R_xlen_t) g[4];
+  const int pick = g[5] != 0, flip = g[6] != 0;
+  const int f32 = TYPEOF(dst) == RAWSXP;
+  const R_xlen_t n_dst = f32 ? XLENGTH(dst) / 4 : XLENGTH(dst);
   const R_xlen_t o0 = (R_xlen_t) asReal(off);
   const R_xlen_t sw = nx * bx;
-  if (XLENGTH(codes) != sw * ny * by || o0 < 0 || o0 + nx * ny > XLENGTH(dst)) {
+  if (bx < 1 || by < 1 || XLENGTH(codes) != sw * ny * by || o0 < 0 ||
+      o0 + nx * ny > n_dst) {
     error("%lld codes do not decode to %lld x %lld cells at %lld of %lld",
           (long long) XLENGTH(codes), (long long) nx, (long long) ny,
-          (long long) o0, (long long) XLENGTH(dst));
+          (long long) o0, (long long) n_dst);
   }
   const int nt = LENGTH(table);
   const double *t = REAL(table);
   const int *c = INTEGER(codes);
-  double *d = REAL(dst) + o0;
+  double *dd = f32 ? NULL : REAL(dst) + o0;
+  float *df = f32 ? (float *) RAW(dst) + o0 : NULL;
   for (R_xlen_t r = 0; r < ny; r++) {
     for (R_xlen_t q = 0; q < nx; q++) {
       double sum = 0.0;
       R_xlen_t n = 0;
-      for (R_xlen_t j = 0; j < by; j++) {
+      const R_xlen_t j0 = pick ? (flip ? by - 1 - by / 2 : by / 2) : 0;
+      const R_xlen_t j1 = pick ? j0 + 1 : by;
+      const R_xlen_t i0 = pick ? bx / 2 : 0, i1 = pick ? i0 + 1 : bx;
+      for (R_xlen_t j = j0; j < j1; j++) {
         const int *row = c + (r * by + j) * sw + q * bx;
-        for (R_xlen_t i = 0; i < bx; i++) {
+        for (R_xlen_t i = i0; i < i1; i++) {
           const int code = row[i];
           if (code == NA_INTEGER) continue;
           const int k = code - lo;
@@ -530,7 +545,12 @@ SEXP garry_decode_into(SEXP dst, SEXP off, SEXP codes, SEXP geo, SEXP table) {
           n++;
         }
       }
-      d[r * nx + q] = n ? sum / (double) n : NAN;
+      const double v = n ? sum / (double) n : NAN;
+      if (f32) {
+        df[r * nx + q] = (float) v;
+      } else {
+        dd[r * nx + q] = v;
+      }
     }
   }
   return dst;

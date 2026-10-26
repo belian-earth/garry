@@ -141,9 +141,19 @@ lazy_source <- function(
           "{.arg decode} and {.arg scale}/{.arg offset} do not combine."
         )
       }
+      if (is.null(block_dim)) {
+        # chunks snap to the codes' blocks, not the VRT's
+        block_dim <- gdal_grid_spec(
+          path[[1L]],
+          band = as.integer(band)
+        )$block_dim
+      }
       decode <- .decode_prepare(path, decode, nodata)
       nodata <- NULL
-      grid <- NULL
+      # a given grid describes the codes; the decoded values are f32
+      if (!is.null(grid)) {
+        grid <- .grid_retype(grid, "f32")
+      }
     }
     path <- decode$vrt
   }
@@ -155,7 +165,11 @@ lazy_source <- function(
     )
     grid <- meta$grid
     nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
-    block_dim <- meta$block_dim
+    block_dim <- if (is.null(block_dim)) {
+      meta$block_dim
+    } else {
+      as.integer(block_dim)
+    }
   } else {
     .assert_class(grid, GridSpec, "GridSpec")
     nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)

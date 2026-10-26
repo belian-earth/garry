@@ -585,6 +585,7 @@ lazy_dataset <- function(
   }
 
   dec <- NULL
+  meta_codes <- NULL
   if (!is.null(decode)) {
     if (!isFALSE(scale) || !is.null(offset)) {
       cli::cli_abort(
@@ -597,7 +598,10 @@ lazy_dataset <- function(
       )
     }
     dec <- .decode_prepare(path, decode, nodata)
+    meta_codes <- meta %||% gdal_grid_spec(path)
     meta <- gdal_grid_spec(dec$vrt)
+    # chunks snap to the codes' blocks, not the VRT's
+    meta$block_dim <- meta_codes$block_dim
   }
   if (is.null(meta)) meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path[[1L]])
@@ -667,20 +671,20 @@ lazy_dataset <- function(
   }
   g <- graph_new()
   read_band <- function(b, nm) {
+    is_mask <- !is.null(mask_asset) && nm %in% mask_asset
+    # a mask band's bits are read as stored: never scaled or decoded
+    dec_b <- if (is_mask) NULL else dec
+    m <- if (is.null(dec_b) && !is.null(meta_codes)) meta_codes else meta
     x <- lazy_source(
       path,
       band = b,
       graph = g,
-      grid = meta$grid,
-      block_dim = meta$block_dim,
+      grid = m$grid,
+      block_dim = m$block_dim,
       # a decoded band's nodata is the VRT's NaN
-      nodata = if (is.null(dec)) resolve_nd(nm, b),
-      decode = dec,
-      scale = if (is.null(mask_asset) || !nm %in% mask_asset) {
-        scale
-      } else {
-        FALSE
-      },
+      nodata = if (is.null(dec_b)) resolve_nd(nm, b),
+      decode = dec_b,
+      scale = if (is_mask) FALSE else scale,
       offset = offset,
       name = nm
     )
@@ -730,7 +734,22 @@ lazy_dataset <- function(
   }
   r <- ranges[[types]]
   codes <- seq(r[[1L]], r[[2L]])
-  file_nd <- gdal_grid_spec(path)$nodata
+  # One table serves every band, so every band must declare one nodata
+  # code (or none): a band's own code is masked on a direct read.
+  file_nd <- unique(gdal_band_nodata(path))
+  if (length(file_nd) > 1L) {
+    cli::cli_abort(c(
+      "{.arg decode} needs one nodata code for every band; {.path {path}} declares {.val {file_nd}}.",
+      "i" = "Decode bands with different codes as separate sources."
+    ))
+  }
+  file_nd <- if (is.na(file_nd)) numeric(0) else file_nd
+  if (
+    !is.null(nodata) &&
+      (length(nodata) != 1L || !is.numeric(nodata) || is.na(nodata))
+  ) {
+    cli::cli_abort("With {.arg decode}, {.arg nodata} is one code, a number.")
+  }
   if (
     !is.null(nodata) &&
       length(file_nd) == 1L &&
@@ -746,12 +765,6 @@ lazy_dataset <- function(
   if (!is.numeric(vals) || length(vals) != length(codes)) {
     cli::cli_abort("{.arg decode} must return one number per code.")
   }
-  valid <- !(codes %in% nd)
-  if (!all(is.finite(vals[valid]))) {
-    cli::cli_abort(
-      "{.arg decode} must give a finite value for every code but the nodata code."
-    )
-  }
   # the values a Float32 band holds
   table <- readBin(
     writeBin(as.numeric(vals), raw(), size = 4L),
@@ -759,6 +772,12 @@ lazy_dataset <- function(
     length(vals),
     size = 4L
   )
+  valid <- !(codes %in% nd)
+  if (!all(is.finite(table[valid]))) {
+    cli::cli_abort(
+      "{.arg decode} must give a finite Float32 value for every code but the nodata code."
+    )
+  }
   table[!valid] <- NaN
   vrt <- tempfile("garry-decode-", fileext = ".vrt")
   gdal_decode_vrt(vrt, path, r[[1L]], table, nd)

@@ -779,7 +779,7 @@ NULL
     if (
       !.same_file_bands(ps) ||
         ((shared_only || length(p1@path) > 1L) &&
-          !.bands_share_blocks(p1@path, p1@open_options))
+          !.bands_share_blocks(.source_storage(p1), p1@open_options))
     ) {
       return(NULL)
     }
@@ -814,7 +814,7 @@ NULL
   )
   if (
     !all(same_warp) || !.same_file_bands(srcs) ||
-      !.bands_share_blocks(srcs[[1L]]@path, srcs[[1L]]@open_options)
+      !.bands_share_blocks(.source_storage(srcs[[1L]]), srcs[[1L]]@open_options)
   ) {
     return(NULL)
   }
@@ -837,6 +837,12 @@ NULL
   src <- graph_get(graph, n@parents[[1L]])
   S7::S7_inherits(src, SourceNode) && length(src@band) == 1L &&
     length(src@collapsed) == 0L
+}
+
+# The files a source's bands are stored in: a decoded source's codes,
+# not the lookup-table VRT its path names.
+.source_storage <- function(n) {
+  if (length(n@decode)) n@decode$src else n@path
 }
 
 # Do a file's bands share storage blocks, so that reading one band of a

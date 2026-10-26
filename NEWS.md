@@ -7,12 +7,15 @@
   decode (for example `dequantize_aef()`) on every code, the nodata code
   becoming NaN, and `resampling = "average"` then takes the mean of the
   valid decoded values. This replaces the lookup-table VRT a caller
-  built to average decoded embeddings. Aligned reads decode the codes
-  themselves: a 30 m cube of a 64-band AEF box-year (codes 4488 x 5727
-  px) wrote in 2.55 s instead of 6.49 s through the lookup-table VRT,
-  and a 128-band OlmoEarth one in 8.5 s instead of 15.9 s. The two
-  agree to f32 rounding: 0.6% of OlmoEarth cells differ, by at most
-  6e-8 (GDAL averages in an order garry does not reproduce).
+  built to average decoded embeddings. Every read takes the codes at
+  full resolution, never an overview's resampled codes. Aligned reads,
+  south-up files included, decode the codes themselves: a 30 m cube of
+  a 64-band AEF box-year (codes 4488 x 5727 px) wrote in 2.6 s instead
+  of 6.2 s through the lookup-table VRT, and a 128-band OlmoEarth one
+  in 2.4 s instead of 12.6 s. The two agree to f32 rounding: 0.6% of
+  OlmoEarth cells differ, by at most 6e-8 (GDAL averages in an order
+  garry does not reproduce). A `mask_asset` band is read as stored, and
+  bands must share one nodata code.
 * `lazy_dataset()` reads N-D arrays such as a `(time, band, y, x)` Zarr
   array (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using
   the dimension tags GDAL puts on each band; `bands` indexes the band
