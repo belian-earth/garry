@@ -178,6 +178,18 @@ LazyDataset <- S7::new_class(
 #'   that asset's band indices; names on the indices rename the dataset
 #'   bands, e.g. `list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))`.
 #'   Assets left out read every band; `mask_asset` always reads band 1.
+#' @param decode File form: a function decoding the source's 8-bit codes
+#'   (Byte or Int8), such as [dequantize_aef()]. It is evaluated once on
+#'   every code to make a table. Each source cell's code is decoded
+#'   through the table first, the nodata code to NaN; resampling then
+#'   works on the decoded values. With `resampling = "average"` onto a
+#'   grid 3x coarser, each target cell is the mean of the valid decoded
+#'   values of its 3 x 3 source cells, the order a nonlinear code needs,
+#'   and a cell whose source cells are all nodata stays NaN. Values are
+#'   Float32. Reads go through a lookup-table VRT; the source's own grid,
+#'   a window of its pixels, or an aligned coarser grid read with
+#'   `"near"` or `"average"` read the codes and decode them directly,
+#'   2-3x faster. `NULL` (the default) reads the codes as they are.
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
@@ -231,7 +243,8 @@ lazy_dataset <- function(
   resampling = "near",
   scale = FALSE,
   offset = NULL,
-  bands = NULL
+  bands = NULL,
+  decode = NULL
 ) {
   if (is.character(sources)) {
     return(.ds_from_files(
@@ -243,10 +256,17 @@ lazy_dataset <- function(
       resampling,
       nodata,
       scale,
-      offset
+      offset,
+      decode
     ))
   }
   .assert_class(grid, GridSpec, "GridSpec")
+  if (!is.null(decode)) {
+    cli::cli_abort(c(
+      "{.arg decode} decodes a coded raster file.",
+      "i" = "Decode STAC assets with {.fn lazy_map}."
+    ))
+  }
   if (length(assets) < 1L) {
     cli::cli_abort("{.arg assets} must name at least one asset.")
   }
@@ -512,7 +532,8 @@ lazy_dataset <- function(
   resampling,
   nodata,
   scale,
-  offset
+  offset,
+  decode = NULL
 ) {
   if (!is.null(assets) && !is.null(bands)) {
     cli::cli_abort(
@@ -563,6 +584,21 @@ lazy_dataset <- function(
     paths[[1L]]
   }
 
+  dec <- NULL
+  if (!is.null(decode)) {
+    if (!isFALSE(scale) || !is.null(offset)) {
+      cli::cli_abort(
+        "{.arg decode} and {.arg scale}/{.arg offset} do not combine."
+      )
+    }
+    if (!is.null(nodata) && (length(nodata) != 1L || !is.null(names(nodata)))) {
+      cli::cli_abort(
+        "With {.arg decode}, {.arg nodata} is one code for every band."
+      )
+    }
+    dec <- .decode_prepare(path, decode, nodata)
+    meta <- gdal_grid_spec(dec$vrt)
+  }
   if (is.null(meta)) meta <- gdal_grid_spec(path)
   ds <- .gdal_handle(path[[1L]])
   nb <- ds$getRasterCount()
@@ -637,7 +673,9 @@ lazy_dataset <- function(
       graph = g,
       grid = meta$grid,
       block_dim = meta$block_dim,
-      nodata = resolve_nd(nm, b),
+      # a decoded band's nodata is the VRT's NaN
+      nodata = if (is.null(dec)) resolve_nd(nm, b),
+      decode = dec,
       scale = if (is.null(mask_asset) || !nm %in% mask_asset) {
         scale
       } else {
@@ -663,6 +701,71 @@ lazy_dataset <- function(
     nms
   )
   as_dataset(stats::setNames(layers, nms), mask_asset = mask_asset)
+}
+
+# Prepare a decode for the 8-bit codes at `path` (lazy_dataset(decode =)):
+# `fn` evaluated once on every code of the band type gives the table
+# (rounded to f32, NaN at the nodata code), written as a lookup-table
+# VRT every read path takes. `nodata` is the code to mask: the file's
+# own, or one given that matches it.
+.decode_prepare <- function(path, fn, nodata = NULL) {
+  if (!is.function(fn)) {
+    cli::cli_abort(
+      "{.arg decode} must be a function of the codes, such as {.fn dequantize_aef}."
+    )
+  }
+  if (length(path) != 1L || .gdal_is_zarr(path)) {
+    cli::cli_abort(c(
+      "{.arg decode} reads one coded raster file.",
+      "i" = "Decode a Zarr array or a multi-file source with {.fn lazy_map} instead."
+    ))
+  }
+  types <- unique(gdal_band_types(path))
+  ranges <- list(Byte = c(0L, 255L), Int8 = c(-128L, 127L))
+  if (length(types) != 1L || !types %in% names(ranges)) {
+    cli::cli_abort(c(
+      "{.arg decode} decodes 8-bit codes; {.path {path}} holds {.val {types}} bands.",
+      "i" = "Decode other types with {.fn lazy_map}."
+    ))
+  }
+  r <- ranges[[types]]
+  codes <- seq(r[[1L]], r[[2L]])
+  file_nd <- gdal_grid_spec(path)$nodata
+  if (
+    !is.null(nodata) &&
+      length(file_nd) == 1L &&
+      !identical(as.numeric(nodata), file_nd)
+  ) {
+    cli::cli_abort(c(
+      "{.arg nodata} ({nodata}) differs from the file's nodata code ({file_nd}).",
+      "i" = "A decoded read masks the file's own code; leave {.arg nodata} unset."
+    ))
+  }
+  nd <- if (is.null(nodata)) file_nd else as.numeric(nodata)
+  vals <- fn(as.numeric(codes))
+  if (!is.numeric(vals) || length(vals) != length(codes)) {
+    cli::cli_abort("{.arg decode} must return one number per code.")
+  }
+  valid <- !(codes %in% nd)
+  if (!all(is.finite(vals[valid]))) {
+    cli::cli_abort(
+      "{.arg decode} must give a finite value for every code but the nodata code."
+    )
+  }
+  # the values a Float32 band holds
+  table <- readBin(
+    writeBin(as.numeric(vals), raw(), size = 4L),
+    "numeric",
+    length(vals),
+    size = 4L
+  )
+  table[!valid] <- NaN
+  vrt <- tempfile("garry-decode-", fileext = ".vrt")
+  gdal_decode_vrt(vrt, path, r[[1L]], table, nd)
+  structure(
+    list(vrt = vrt, src = path, lo = r[[1L]], table = table),
+    class = "garry_decode"
+  )
 }
 
 # The dataset layout of an N-D array's classic view (see .gdal_band_dims()):

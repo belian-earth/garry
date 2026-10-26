@@ -76,6 +76,10 @@ Node <- S7::new_class(
 #' @param collapsed Node ids of the single-band sources a band-stack
 #'   collapse folded into this multi-band read, in band order. Length 0
 #'   for an ordinary source.
+#' @param decode For a source whose 8-bit codes are decoded at read (see
+#'   [lazy_dataset()]): the codes file (`src`), its first code (`lo`) and
+#'   the table of decoded values (`table`); `path` is then the
+#'   lookup-table VRT. Empty for an ordinary source.
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(
@@ -105,11 +109,20 @@ SourceNode <- S7::new_class(
     # Pure metadata: plan_view() reads dataset layer provenance through
     # them. Length 0 = an ordinary source.
     collapsed = S7::new_property(S7::class_integer,
-                                 default = quote(integer(0)))
+                                 default = quote(integer(0))),
+    # An integer-coded source read through a decode (lazy_dataset(decode
+    # =)): `path` is the lookup-table VRT every read takes, and `decode`
+    # holds the codes file (`src`), the first code (`lo`) and the table
+    # of decoded values (f32, NaN at the nodata code), which an aligned
+    # read applies itself (.gdal_read_decoded()). Empty = no decode.
+    decode = S7::new_property(S7::class_list, default = quote(list()))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L) {
       return("`nodata` must be length 0 (absent) or 1")
+    }
+    if (length(self@decode) && length(self@scale)) {
+      return("a decoded source takes no `scale`/`offset`")
     }
     if (length(self@scale) > 1L || length(self@offset) > 1L) {
       return("`scale`/`offset` must be length 0 (absent) or 1")

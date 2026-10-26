@@ -531,6 +531,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   data types drive the integer gate above.
 #' @param nodata The source node's sentinel (length 0 or 1). Averaging
 #'   declines unless the file declares the same value.
+#' @param decode `TRUE` for the codes behind a decoded source
+#'   (`.gdal_read_decoded()`): integer bands qualify for `"near"` and
+#'   `"average"`, the two reads that decode applies itself, and no others.
 #' @param partial `TRUE` for one source of several
 #'   ([.rio_direct_multi_spec()]): the target may reach beyond the source,
 #'   and only a nearest-neighbour read on the source's own pixels, with
@@ -546,7 +549,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   open_options = character(0),
   band = 1L,
   nodata = numeric(0),
-  partial = FALSE
+  partial = FALSE,
+  decode = FALSE
 ) {
   if (length(src_path) != 1L || length(open_options) > 0L || !length(band)) {
     return(NULL)
@@ -556,7 +560,10 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
 
-  if (partial && resamp != "NEAREST") {
+  if (
+    (partial && resamp != "NEAREST") ||
+      (decode && !resamp %in% c("NEAREST", "AVERAGE"))
+  ) {
     return(NULL)
   }
   ds <- tryCatch(.gdal_handle(src_path), error = function(e) NULL)
@@ -575,7 +582,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
       }
     }
   }
-  if (resamp != "NEAREST") {
+  if (resamp != "NEAREST" && !decode) {
     for (b in band) {
       dtn <- tryCatch(ds$getDataTypeName(b), error = function(e) NULL)
       if (is.null(dtn) || !startsWith(dtn, "Float")) {
@@ -828,6 +835,18 @@ gdal_read_window <- function(
   if (length(scale) == 1L && length(offset) == 0L) {
     offset <- 0
   }
+  if (length(decim$decode)) {
+    return(.gdal_read_decoded(
+      .gdal_handle(path, open_options),
+      band,
+      x_off,
+      y_off,
+      x_size,
+      y_size,
+      decim,
+      out
+    ))
+  }
   # A flipped direct read (a south-up source, see .rio_direct_spec()) is
   # the plain window read at the target's offset, which reverses its rows.
   if (isTRUE(decim$flip)) {
@@ -934,6 +953,70 @@ gdal_read_window <- function(
     offset,
     out
   )
+}
+
+# A decoded source's direct read (.rio_direct_spec(decode = TRUE)): the
+# window's codes read from the codes file, rows north first, and each
+# target cell decoded through the table in C: the code itself at the
+# source's resolution, the mean of the valid decoded codes of its block
+# for "average" (sum in double, as GDAL averages a Float32 band), the
+# code GDAL picks for a decimating "near". Rows go in slabs of about
+# 16 M codes, so a coarse window never holds its codes at once.
+.gdal_read_decoded <- function(
+  ds,
+  band,
+  x_off,
+  y_off,
+  x_size,
+  y_size,
+  decim,
+  out
+) {
+  d <- decim$decode
+  fx <- decim$fx
+  fy <- decim$fy
+  pick <- identical(decim$resamp, "NEAREST") && (fx > 1L || fy > 1L)
+  bx <- if (pick) 1L else fx # the block each cell averages
+  by <- if (pick) 1L else fy
+  sx <- decim$x_off + x_off * fx
+  sy <- decim$y_off + y_off * fy
+  nb <- length(band)
+  n_px <- as.numeric(x_size) * y_size
+  v <- .Call("garry_alloc_double", nb * n_px, PACKAGE = "garry")
+  slab <- max(1L, as.integer(2^24 %/% (as.numeric(x_size) * fx * fy)))
+  for (k in seq_len(nb)) {
+    r0 <- 0L
+    while (r0 < y_size) {
+      rows <- min(slab, y_size - r0)
+      codes <- if (pick) {
+        ds$read(
+          band[[k]],
+          sx,
+          sy + r0 * fy,
+          x_size * fx,
+          rows * fy,
+          x_size,
+          rows
+        )
+      } else {
+        .gdal_read_rows(ds, band[[k]], sx, sy + r0 * fy, x_size * fx, rows * fy)
+      }
+      if (!is.integer(codes)) {
+        storage.mode(codes) <- "integer"
+      }
+      .Call(
+        "garry_decode_into",
+        v,
+        (k - 1) * n_px + as.numeric(r0) * x_size,
+        codes,
+        as.numeric(c(d$lo, bx, by, x_size, rows)),
+        d$table,
+        PACKAGE = "garry"
+      )
+      r0 <- r0 + rows
+    }
+  }
+  .gdal_finish_planes(v, nb, y_size, x_size, numeric(0), numeric(0), out)
 }
 
 # Rows a multi-band read takes per slab: as many as keep half the GDAL
@@ -1737,6 +1820,75 @@ gdal_version_num <- function() {
 #' @return Character, e.g. `"GDAL 3.9.0, released ..."`.
 #' @keywords internal
 gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
+
+#' A lookup-table VRT decoding an 8-bit coded raster (adapter).
+#'
+#' Every band of `src` becomes a Float32 band whose ComplexSource maps
+#' each code through `table` (`<LUT>`), with `nodata` masked (`<NODATA>`)
+#' and NaN as the band's nodata: any GDAL read, warp or resampling of
+#' the VRT sees decoded values, and averaging averages them, the order a
+#' nonlinear code needs. The XML is written directly (no
+#' `gdalbuildvrt`, which refuses south-up sources); the geotransform,
+#' CRS and band descriptions are the source's. The read path for every
+#' source [lazy_dataset()] decodes; an aligned read applies the same
+#' table itself (`.gdal_read_decoded()`).
+#'
+#' @param vrt Output VRT path.
+#' @param src The coded raster (Byte or Int8 bands).
+#' @param lo The code of `table[[1L]]`.
+#' @param table Decoded value of each code from `lo`; NaN entries (the
+#'   nodata code) are left out of the LUT.
+#' @param nodata Length-0 or length-1 code to mask.
+#' @return `vrt`.
+#' @keywords internal
+gdal_decode_vrt <- function(vrt, src, lo, table, nodata = numeric(0)) {
+  ds <- .gdal_handle(src)
+  nx <- ds$getRasterXSize()
+  ny <- ds$getRasterYSize()
+  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
+  codes <- lo + seq_along(table) - 1L
+  ok <- !is.nan(table)
+  lut <- paste0(codes[ok], ":", num(table[ok]), collapse = ",")
+  href <- .xml_escape(if (file.exists(src)) normalizePath(src) else src)
+  nd <- if (length(nodata) == 1L) .glue("<NODATA>{num(nodata)}</NODATA>") else ""
+  bands <- vapply(
+    seq_len(ds$getRasterCount()),
+    function(b) {
+      desc <- .xml_escape(ds$getDescription(b))
+      .glue(
+        '  <VRTRasterBand dataType="Float32" band="{b}">',
+        "<Description>{desc}</Description>",
+        "<NoDataValue>nan</NoDataValue>",
+        "<ComplexSource>",
+        '<SourceFilename relativeToVRT="0">{href}</SourceFilename>',
+        "<SourceBand>{b}</SourceBand>",
+        '<SrcRect xOff="0" yOff="0" xSize="{nx}" ySize="{ny}" />',
+        '<DstRect xOff="0" yOff="0" xSize="{nx}" ySize="{ny}" />',
+        "{nd}<LUT>{lut}</LUT>",
+        "</ComplexSource></VRTRasterBand>"
+      )
+    },
+    character(1)
+  )
+  gt <- paste(num(ds$getGeoTransform()), collapse = ", ")
+  writeLines(
+    c(
+      .glue('<VRTDataset rasterXSize="{nx}" rasterYSize="{ny}">'),
+      .glue("  <SRS>{.xml_escape(ds$getProjection())}</SRS>"),
+      .glue("  <GeoTransform>{gt}</GeoTransform>"),
+      bands,
+      "</VRTDataset>"
+    ),
+    vrt
+  )
+  vrt
+}
+
+# The GDAL data type of each band of `path`.
+gdal_band_types <- function(path) {
+  ds <- .gdal_handle(path)
+  vapply(seq_len(ds$getRasterCount()), function(b) ds$getDataTypeName(b), "")
+}
 
 #' Mosaic already-grid-aligned rasters into a VRT (adapter).
 #'

@@ -11,7 +11,8 @@
   open_options = character(0),
   band = 1L,
   nodata = numeric(0),
-  partial = FALSE
+  partial = FALSE,
+  decode = FALSE
 )
 }
 \arguments{
@@ -34,6 +35,10 @@ declines unless the file declares the same value.}
 (\code{\link[=.rio_direct_multi_spec]{.rio_direct_multi_spec()}}): the target may reach beyond the source,
 and only a nearest-neighbour read on the source's own pixels, with
 the file's nodata (if any) the node's, qualifies.}
+
+\item{decode}{\code{TRUE} for the codes behind a decoded source
+(\code{.gdal_read_decoded()}): integer bands qualify for \code{"near"} and
+\code{"average"}, the two reads that decode applies itself, and no others.}
 }
 \value{
 \code{NULL}, or a list with \code{fx}, \code{fy}, \code{x_off}, \code{y_off} (the

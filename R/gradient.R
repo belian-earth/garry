@@ -276,6 +276,7 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
             open_options = ra$open_options,
             scale = ra$scale,
             offset = ra$offset,
+            decim = ra$decim,
             resampling = ra$resampling
           )
         }),
