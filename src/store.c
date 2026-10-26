@@ -487,7 +487,148 @@ SEXP garry_paste_f32(SEXP dst, SEXP src, SEXP geo) {
   return dst;
 }
 
+/* Decode a slab of codes into rows of `dst` from cell `off`, in place:
+ * `codes` holds (ny * by) rows of (nx * bx) codes, north first, read at
+ * full resolution, and each of the ny x nx target cells takes the mean
+ * of the decoded values of its by x bx block (the value itself when the
+ * block is one code), NaN where none is valid; with `pick`, the decoded
+ * value of the one code GDAL's nearest-neighbour decimation takes:
+ * column bx/2 of the block and row by/2 in the file's own row order, so
+ * row by - 1 - by/2 north first when the file is south-up (`flip`). A code decodes to table[code - lo];
+ * NA (a masked code), a code outside the table and a NaN entry (the
+ * nodata code) drop out. The sum runs in double over the block row by
+ * row, as GDAL averages a Float32 band. `dst` is doubles, or a raw f32
+ * buffer the cells go into rounded.
+ * `geo` = (lo, bx, by, nx, ny, pick, flip). */
+SEXP garry_decode_into(SEXP dst, SEXP off, SEXP codes, SEXP geo, SEXP table) {
+  if ((TYPEOF(dst) != REALSXP && TYPEOF(dst) != RAWSXP) ||
+      TYPEOF(codes) != INTSXP || TYPEOF(table) != REALSXP ||
+      TYPEOF(geo) != REALSXP) {
+    error("double or raw f32 output, integer codes, a double table and double geometry expected");
+  }
+  if (LENGTH(geo) != 7) error("decode geometry is (lo, bx, by, nx, ny, pick, flip)");
+  const double *g = REAL(geo);
+  const int lo = (int) g[0];
+  const R_xlen_t bx = (R_xlen_t) g[1], by = (R_xlen_t) g[2];
+  const R_xlen_t nx = (R_xlen_t) g[3], ny = (R_xlen_t) g[4];
+  const int pick = g[5] != 0, flip = g[6] != 0;
+  const int f32 = TYPEOF(dst) == RAWSXP;
+  const R_xlen_t n_dst = f32 ? XLENGTH(dst) / 4 : XLENGTH(dst);
+  const R_xlen_t o0 = (R_xlen_t) asReal(off);
+  const R_xlen_t sw = nx * bx;
+  if (bx < 1 || by < 1 || XLENGTH(codes) != sw * ny * by || o0 < 0 ||
+      o0 + nx * ny > n_dst) {
+    error("%lld codes do not decode to %lld x %lld cells at %lld of %lld",
+          (long long) XLENGTH(codes), (long long) nx, (long long) ny,
+          (long long) o0, (long long) n_dst);
+  }
+  const int nt = LENGTH(table);
+  const double *t = REAL(table);
+  const int *c = INTEGER(codes);
+  double *dd = f32 ? NULL : REAL(dst) + o0;
+  float *df = f32 ? (float *) RAW(dst) + o0 : NULL;
+  for (R_xlen_t r = 0; r < ny; r++) {
+    for (R_xlen_t q = 0; q < nx; q++) {
+      double sum = 0.0;
+      R_xlen_t n = 0;
+      const R_xlen_t j0 = pick ? (flip ? by - 1 - by / 2 : by / 2) : 0;
+      const R_xlen_t j1 = pick ? j0 + 1 : by;
+      const R_xlen_t i0 = pick ? bx / 2 : 0, i1 = pick ? i0 + 1 : bx;
+      for (R_xlen_t j = j0; j < j1; j++) {
+        const int *row = c + (r * by + j) * sw + q * bx;
+        for (R_xlen_t i = i0; i < i1; i++) {
+          const int code = row[i];
+          if (code == NA_INTEGER) continue;
+          const int k = code - lo;
+          if (k < 0 || k >= nt || isnan(t[k])) continue;
+          sum += t[k];
+          n++;
+        }
+      }
+      const double v = n ? sum / (double) n : NAN;
+      if (f32) {
+        df[r * nx + q] = (float) v;
+      } else {
+        dd[r * nx + q] = v;
+      }
+    }
+  }
+  return dst;
+}
+
+/* Block means of a slab of f32 band planes into rows of `dst`, in
+ * place: `src` holds nb planes of (ny * k) rows of (nx * k) values, and
+ * each of the ny x nx cells from row offset `off` of every plane of
+ * `dst` (nb planes of `n_px` cells, doubles or a raw f32 buffer) takes
+ * the mean of its k x k block's valid values, NaN where none is. With a
+ * table (codes held exactly as f32), a value is the code's decoded value
+ * table[code - lo] instead; a code outside the table, and a NaN entry,
+ * drop out. The sum runs in double over the block row by row, as
+ * garry_decode_into() sums. `geo` = (nb, k, nx, ny, n_px, lo). */
+SEXP garry_coarsen_into(SEXP dst, SEXP off, SEXP src, SEXP geo, SEXP table) {
+  if ((TYPEOF(dst) != REALSXP && TYPEOF(dst) != RAWSXP) ||
+      TYPEOF(src) != RAWSXP || TYPEOF(table) != REALSXP ||
+      TYPEOF(geo) != REALSXP) {
+    error("double or raw f32 output, raw f32 planes, a double table and double geometry expected");
+  }
+  if (LENGTH(geo) != 6) error("coarsen geometry is (nb, k, nx, ny, n_px, lo)");
+  const double *g = REAL(geo);
+  const R_xlen_t nb = (R_xlen_t) g[0], k = (R_xlen_t) g[1];
+  const R_xlen_t nx = (R_xlen_t) g[2], ny = (R_xlen_t) g[3];
+  const R_xlen_t n_px = (R_xlen_t) g[4];
+  const double lo = g[5];
+  const R_xlen_t o0 = (R_xlen_t) asReal(off);
+  const R_xlen_t fw = nx * k, fh = ny * k;
+  const int f32 = TYPEOF(dst) == RAWSXP;
+  const R_xlen_t n_dst = f32 ? XLENGTH(dst) / 4 : XLENGTH(dst);
+  if (k < 1 || XLENGTH(src) != nb * fw * fh * 4 || o0 < 0 ||
+      o0 + nx * ny > n_px || n_dst != nb * n_px) {
+    error("a %lld x %lld slab of %lld planes does not coarsen into %lld cells at %lld",
+          (long long) fw, (long long) fh, (long long) nb, (long long) n_px,
+          (long long) o0);
+  }
+  const int nt = LENGTH(table);
+  const double *t = REAL(table);
+  const float *s = (const float *) RAW(src);
+  for (R_xlen_t b = 0; b < nb; b++) {
+    const float *sp = s + b * fw * fh;
+    double *dd = f32 ? NULL : REAL(dst) + b * n_px + o0;
+    float *df = f32 ? (float *) RAW(dst) + b * n_px + o0 : NULL;
+    for (R_xlen_t r = 0; r < ny; r++) {
+      for (R_xlen_t q = 0; q < nx; q++) {
+        double sum = 0.0;
+        R_xlen_t n = 0;
+        for (R_xlen_t j = 0; j < k; j++) {
+          const float *row = sp + (r * k + j) * fw + q * k;
+          for (R_xlen_t i = 0; i < k; i++) {
+            const float x = row[i];
+            if (isnan(x)) continue;
+            double val = x;
+            if (nt) {
+              const double c = (double) x - lo;
+              if (c < 0 || c >= nt) continue;
+              val = t[(R_xlen_t) c];
+              if (isnan(val)) continue;
+            }
+            sum += val;
+            n++;
+          }
+        }
+        const double v = n ? sum / (double) n : NAN;
+        if (f32) {
+          df[r * nx + q] = (float) v;
+        } else {
+          dd[r * nx + q] = v;
+        }
+      }
+    }
+  }
+  return dst;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_coarsen_into", (DL_FUNC) &garry_coarsen_into, 5},
+  {"garry_decode_into", (DL_FUNC) &garry_decode_into, 5},
   {"garry_flip_rows", (DL_FUNC) &garry_flip_rows, 3},
   {"garry_paste_f32", (DL_FUNC) &garry_paste_f32, 3},
   {"garry_malloc_trim", (DL_FUNC) &garry_malloc_trim, 0},

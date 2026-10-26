@@ -779,7 +779,7 @@ NULL
     if (
       !.same_file_bands(ps) ||
         ((shared_only || length(p1@path) > 1L) &&
-          !.bands_share_blocks(p1@path, p1@open_options))
+          !.bands_share_blocks(.source_storage(p1), p1@open_options))
     ) {
       return(NULL)
     }
@@ -795,7 +795,8 @@ NULL
       open_options = p1@open_options,
       resampling = p1@resampling,
       scale = p1@scale,
-      offset = p1@offset
+      offset = p1@offset,
+      decode = p1@decode
     ))
   }
   if (!all(vapply(ps, .single_band_warp, logical(1), graph = graph))) {
@@ -807,13 +808,14 @@ NULL
     ps[-1L],
     function(w) {
       identical(w@resampling, w1@resampling) &&
+        identical(w@coarsen, w1@coarsen) &&
         grid_equal(w@target_grid, w1@target_grid)
     },
     logical(1)
   )
   if (
     !all(same_warp) || !.same_file_bands(srcs) ||
-      !.bands_share_blocks(srcs[[1L]]@path, srcs[[1L]]@open_options)
+      !.bands_share_blocks(.source_storage(srcs[[1L]]), srcs[[1L]]@open_options)
   ) {
     return(NULL)
   }
@@ -823,7 +825,8 @@ NULL
     grid = grid,
     target_grid = grid,
     resampling = w1@resampling,
-    bands = vapply(srcs, function(n) n@band, integer(1))
+    bands = vapply(srcs, function(n) n@band, integer(1)),
+    coarsen = w1@coarsen
   )
 }
 
@@ -836,6 +839,12 @@ NULL
   src <- graph_get(graph, n@parents[[1L]])
   S7::S7_inherits(src, SourceNode) && length(src@band) == 1L &&
     length(src@collapsed) == 0L
+}
+
+# The files a source's bands are stored in: a decoded source's codes,
+# not the lookup-table VRT its path names.
+.source_storage <- function(n) {
+  if (length(n@decode)) n@decode$src else n@path
 }
 
 # Do a file's bands share storage blocks, so that reading one band of a
@@ -962,6 +971,7 @@ NULL
       .node_parents(n)[[1L]],
       n@resampling,
       paste(n@bands, collapse = ","),
+      n@coarsen,
       sep = "\x1f"
     )
     hit <- NULL
@@ -1584,6 +1594,20 @@ plan_lazy <- function(x) {
     numeric(1)
   )
   stage_objs <- lapply(protos, function(s) {
+    # A coarsened warp read for a sink holds k^2 finer f32 cells a band
+    # for each of its own: its windows hold ram_budget_mb of them, as a
+    # chunk holds its working set (.plan_chunk_dim()). A sink's windows
+    # need not be unions of compute chunks.
+    cd <- chunk_dim
+    rpx <- read_px_of[[s$id]]
+    kc <- .stage_coarsen(graph, s)
+    if (kc > 1L && length(cons_idx[[s$id]]) == 0L) {
+      d <- s$grid@dims
+      nb <- max(1, prod(d[!names(d) %in% c("x", "y")]))
+      px <- max(1, garry_opt("ram_budget_mb") * 2^20 / (4 * kc^2 * nb))
+      cd <- rep(max(1L, as.integer(floor(sqrt(px)))), 2L)
+      rpx <- prod(as.numeric(cd))
+    }
     st <- Stage(
       id = as.integer(s$id),
       kind = s$kind,
@@ -1596,8 +1620,8 @@ plan_lazy <- function(x) {
         .stage_block(graph, protos, s),
         s$halo,
         s$kind,
-        chunk_dim,
-        read_px_of[[s$id]]
+        cd,
+        rpx
       ),
       device = if (s$kind %in% c("compute", "reduce_partial")) {
         garry_opt("device")

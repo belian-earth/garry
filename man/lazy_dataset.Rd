@@ -17,6 +17,7 @@ lazy_dataset(
   scale = FALSE,
   offset = NULL,
   bands = NULL,
+  decode = NULL,
   time = NULL
 )
 }
@@ -81,6 +82,19 @@ Table form: a list named by asset, each entry an integer vector of
 that asset's band indices; names on the indices rename the dataset
 bands, e.g. \code{list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))}.
 Assets left out read every band; \code{mask_asset} always reads band 1.}
+
+\item{decode}{File form: a function decoding the source's 8-bit codes
+(Byte or Int8), such as \code{\link[=dequantize_aef]{dequantize_aef()}}. It is evaluated once on
+every code to make a table. Each source cell's code is decoded
+through the table first, the nodata code to NaN; resampling then
+works on the decoded values. With \code{resampling = "average"} onto a
+grid 3x coarser, each target cell is the mean of the valid decoded
+values of its 3 x 3 source cells, the order a nonlinear code needs,
+and a cell whose source cells are all nodata stays NaN. Values are
+Float32. Reads go through a lookup-table VRT; the source's own grid,
+a window of its pixels, or an aligned coarser grid read with
+\code{"near"} or \code{"average"} read the codes and decode them directly,
+2-3x faster. \code{NULL} (the default) reads the codes as they are.}
 
 \item{time}{File form, N-D array: the time slices to build, selected
 by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or positions).
