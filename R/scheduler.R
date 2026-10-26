@@ -140,6 +140,48 @@ NULL
   mirai::mirai(.expr, ..., .compute = .compute)
 }
 
+# The line writer for the task log at `task_log` (a no-op without one),
+# shared by the scheduler and the read-only write route. Task-log schema
+# (locked; garry_task_report() is the reader):
+#   time,event,key,pool,slot,mb,store_mb,ready
+# launch rows carry pool/slot, the admission-priced working set and
+# store bytes, and the READY timestamp (deps satisfied) so queue-wait
+# separates from run time; rss rows sample one daemon's anon MB
+# (key = pid); model rows sample the modelled in-flight/resident MB.
+.task_log_writer <- function(task_log) {
+  if (is.null(task_log)) {
+    return(function(...) NULL)
+  }
+  if (!file.exists(task_log) || file.size(task_log) == 0) {
+    cat(
+      "time,event,key,pool,slot,mb,store_mb,ready\n",
+      file = task_log,
+      append = TRUE
+    )
+  }
+  function(
+    event,
+    key,
+    pool = "",
+    slot = "",
+    mb = "",
+    store_mb = "",
+    ready = "",
+    time = Sys.time()
+  ) {
+    cat(
+      .glue(
+        "{formatC(unclass(time), format = 'f', digits = 3)},",
+        "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"
+      ),
+      "\n",
+      sep = "",
+      file = task_log,
+      append = TRUE
+    )
+  }
+}
+
 # May a compute-pool task pinning `store_mb` launch with the store at
 # `resident` of its `budget` MB, `n_inflight` compute-pool tasks in
 # flight on `n_comp` daemons? Over budget, a kernel task (one that
@@ -2017,44 +2059,7 @@ execute_plan_mirai <- function(
   remaining <- function() n_done < n_total
   progress <- isTRUE(garry_opt("progress"))
   task_log <- garry_opt("task_log")
-  # Task-log schema (locked; garry_task_report() is the reader):
-  #   time,event,key,pool,slot,mb,store_mb,ready
-  # launch rows carry pool/slot, the admission-priced working set and
-  # store bytes, and the READY timestamp (deps satisfied) so queue-wait
-  # separates from run time; rss rows sample one daemon's anon MB
-  # (key = pid); model rows sample the modelled in-flight/resident MB.
-  log_line <- if (is.null(task_log)) {
-    function(...) NULL
-  } else {
-    if (!file.exists(task_log) || file.size(task_log) == 0) {
-      cat(
-        "time,event,key,pool,slot,mb,store_mb,ready\n",
-        file = task_log,
-        append = TRUE
-      )
-    }
-    function(
-      event,
-      key,
-      pool = "",
-      slot = "",
-      mb = "",
-      store_mb = "",
-      ready = "",
-      time = Sys.time()
-    ) {
-      cat(
-        .glue(
-          "{formatC(unclass(time), format = 'f', digits = 3)},",
-          "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"
-        ),
-        "\n",
-        sep = "",
-        file = task_log,
-        append = TRUE
-      )
-    }
-  }
+  log_line <- .task_log_writer(task_log)
   log_line("run_start", run_id) # runs share a log file: mark each one
   t_drain0 <- unclass(Sys.time()) # zero-dep tasks are ready at drain start
   n_total <- length(tasks)

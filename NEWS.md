@@ -125,6 +125,11 @@
 * The task log also records when a daemon finishes each task (`end`
   rows), and `garry_task_report()` splits the harvest lag (the result's
   return and the host noticing it) from the run time.
+* A write of a plan that only reads (`write_tif()` of a dataset, say)
+  now logs its tasks too: each read on the read pool and each write on
+  the writer daemon, with start and end times. Before, such runs left
+  no rows in the log. `garry_task_report()` adds each pool's busy
+  seconds, which show whether the readers or the writer set the pace.
 
 # garry 0.1.0
 
