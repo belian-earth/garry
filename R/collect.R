@@ -680,8 +680,9 @@ garry_last_route <- function() .garry_state$route
       inflight[[key]] <- NULL
       harvested <- TRUE
       if (inherits(h$data, c("miraiError", "errorValue"))) {
+        why <- .task_failure(h$data)
         cli::cli_abort(
-          "read task failed on daemon: {as.character(h$data)}",
+          "read task failed on daemon: {why}",
           class = c("garry_task_error", "garry_error")
         )
       }
@@ -835,7 +836,7 @@ garry_last_route <- function() .garry_state$route
   # regions; on success the close is checked below.
   on.exit(
     {
-      if (!done) {
+      if (!done && .gd_n_compute(prof) > 0L) {
         try(lapply(writes, function(w) mirai::call_mirai(w$h)), silent = TRUE)
         try(
           lapply(
@@ -949,9 +950,18 @@ garry_last_route <- function() .garry_state$route
       )
     }
   )
+  last_check <- Sys.time()
   while (length(writes)) {
-    if (!harvest()) Sys.sleep(0.002)
+    if (!harvest()) {
+      # a dead writer leaves its tasks unresolved forever
+      if (difftime(Sys.time(), last_check, units = "secs") > 1) {
+        .assert_pools_alive(prof)
+        last_check <- Sys.time()
+      }
+      Sys.sleep(0.002)
+    }
   }
+  .assert_pools_alive(prof)
   wcl <- mirai::everywhere(asNamespace("garry")$.daemon_write_close(), .compute = prof)
   failed <- unlist(Filter(is.character, lapply(wcl, function(m) m[])))
   done <- TRUE

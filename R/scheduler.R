@@ -70,6 +70,10 @@ NULL
       base$direction <- n@direction
       base$out_dtype <- n@dtype
       base$fn <- norm_fn(n@fn[[1L]])
+      # a third formal reads the axis labels (.compose: ScanNode)
+      if (length(formals(n@fn[[1L]])) >= 3L) {
+        base$labels <- n@grid@labels[[n@over]]
+      }
     }
     if (S7::S7_inherits(n, PatchNode)) {
       # A patch kernel's identity is its content hash, NEVER a
@@ -308,7 +312,21 @@ execute_plan_mirai <- function(
   for (p in comp_profs) {
     prof_slots[[p]] <- 0L
   }
-  prof_warm <- new.env(parent = emptyenv()) # "prof\x1fck" -> TRUE
+  # Compiled programs outlive a run on their daemon, and a run's warm-up
+  # need not send them again. Closures keep per-run warmth, as they are
+  # discarded on arrival anyway.
+  wire_program <- .kernel_wire_program() &&
+    all(vapply(plan@stages, function(s) identical(s@device, "cpu"), logical(1)))
+  # macOS daemons empty their caches at run start (.daemon_jit_reset)
+  keep_warm <- wire_program && !identical(Sys.info()[["sysname"]], "Darwin")
+  if (keep_warm && is.null(.garry_state$prof_warm)) {
+    .garry_state$prof_warm <- new.env(parent = emptyenv())
+  }
+  prof_warm <- if (keep_warm) {
+    .garry_state$prof_warm
+  } else {
+    new.env(parent = emptyenv()) # "prof\x1fck" -> TRUE
+  }
   prof_cold_busy <- new.env(parent = emptyenv()) # prof -> TRUE while compiling
   scan_profs <- character(0) # set after plan_has_scan
   .pw_key <- function(p, ck) paste0(p, "\x1f", ck)
@@ -783,6 +801,9 @@ execute_plan_mirai <- function(
   # Jit warm-up specs, one per compute stage: the modal
   # (full) chunk shape, compiled on every compute daemon at run start.
   warm_specs <- list()
+  # What each traced stage really produces, for the stages it feeds. The
+  # loop below walks producers first.
+  made <- new.env(parent = emptyenv())
 
   # Task insertion follows the launch-order invariant: the ready-queue
   # scan below launches pending tasks in insertion order, so sibling
@@ -830,6 +851,18 @@ execute_plan_mirai <- function(
       if (!is.null(fspec)) {
         oid <- fspec$cid
         skey <- fspec$out_key
+        if (wire_program) {
+          fspec <- .fuse_as_program(
+            fspec,
+            graph,
+            s,
+            .stage_grows_edges(
+              graph,
+              Filter(function(st) st@id == fspec$cid, plan@stages)[[1L]]
+            ),
+            made
+          )
+        }
         # Fused SINK: quantize in .apply_fuse when this fused export is
         # a cleared sink (no other consumer reads the store value).
         if (
@@ -1116,6 +1149,9 @@ execute_plan_mirai <- function(
     } else {
       # compute / reduce_partial
       in_meta <- .exec_in_meta(graph, s, plan@stages, node_stage)
+      if (wire_program) {
+        in_meta <- .stage_inputs(s, in_meta, made)
+      }
       max_set_mb <- max(
         max_set_mb,
         sum(vapply(
@@ -1132,7 +1168,13 @@ execute_plan_mirai <- function(
       need <- s@halo + s@out_pad
       # clipped to the grid, as the store and warm-up estimates are: the
       # plan-wide chunk dim can exceed a small grid
-      cd_eff <- pmin(as.numeric(cd), as.numeric(s@grid@dims[c("x", "y")]))
+      cd_eff <- as.numeric(
+        if (.stage_grows_edges(graph, s)) {
+          .modal_chunk(s@chunks)
+        } else {
+          pmin(cd, s@grid@dims[c("x", "y")])
+        }
+      )
       task_mb <- .stage_bytes_per_px(graph, s@members, s@input_nodes) *
         prod(cd_eff + 2 * need) /
         2^20
@@ -1159,13 +1201,19 @@ execute_plan_mirai <- function(
       # (.sv_grow), instead of every daemon compiling a kernel for each
       # edge shape (a robust Kalman stage: ~2.5 s a shape).
       pad_edges <- .stage_grows_edges(graph, s)
+      stage_fn <- s@fn
+      if (wire_program) {
+        pg <- .stage_as_program(graph, s, in_meta, need, pad_edges, made)
+        stage_fn <- pg$set
+        sig <- paste0(sig, "#", pg$shapes)
+      }
       # Scan kernels pre-warm too: the broadcast is TARGETED at the
       # K designated scan profiles only (the validated <= 2 concurrent
       # pre-drain compiles, daemon-exact at any pool width).
       warm_specs[[length(warm_specs) + 1L]] <- list(
         ck = sig,
         scan = has_scan,
-        fn = s@fn,
+        fn = stage_fn,
         device = s@device,
         dtypes = vapply(in_meta, function(m) m$dtype, character(1)),
         # Outer-dim product per input: a coalesced multi-band source
@@ -1179,8 +1227,8 @@ execute_plan_mirai <- function(
           },
           integer(1)
         ),
-        nr = min(cd[[2L]], s@grid@dims[["y"]]) + 2L * need,
-        nc = min(cd[[1L]], s@grid@dims[["x"]]) + 2L * need
+        nr = (if (pad_edges) .modal_chunk(s@chunks) else pmin(cd, s@grid@dims[c("x", "y")]))[[2L]] + 2L * need,
+        nc = (if (pad_edges) .modal_chunk(s@chunks) else pmin(cd, s@grid@dims[c("x", "y")]))[[1L]] + 2L * need
       )
       # Compute outputs pin store regions exactly like read windows —
       # from launch until the last consumer retires (or, for host_keep
@@ -1211,7 +1259,7 @@ execute_plan_mirai <- function(
         local({
           sid <- s@id
           jj <- j
-          fn <- s@fn
+          fn <- stage_fn
           need <- s@halo + s@out_pad
           epads <- if (length(s@export_pads)) {
             stats::setNames(
@@ -1580,7 +1628,7 @@ execute_plan_mirai <- function(
     # writes either land or fail quietly — then close the writer's
     # handles so the partial output is closed and deletable.
     on.exit(
-      {
+      if (.gd_n_compute("garry_write") > 0L) {
         try(
           for (w in wr_inflight) {
             mirai::call_mirai(w$h)
@@ -1774,6 +1822,7 @@ execute_plan_mirai <- function(
     )
   ))
   mem_last_check <- Sys.time()
+  live_last_check <- Sys.time()
   rss_excess_seen <- 0
   # Fleet anon at RUN START, plus a trailing window of unmanaged samples
   # (dask's managed / unmanaged-old / unmanaged-recent distinction).
@@ -2269,8 +2318,9 @@ execute_plan_mirai <- function(
             inflight[[k]] <- tasks[[k]]$launch(tasks[[k]]$prof, with_fn = TRUE)
             next
           }
+          why <- .task_failure(h$data)
           cli::cli_abort(
-            "task {k} failed on daemon: {as.character(h$data)}",
+            "task {k} failed on daemon: {why}",
             class = c("garry_task_error", "garry_error"),
             task = k,
             stage = task_stage_of[[k]],
@@ -2447,7 +2497,14 @@ execute_plan_mirai <- function(
       cli::cli_inform("garry: {n_done}/{n_total} tasks done, {n_inf} in flight")
       last_report <- Sys.time()
     }
-    if (!harvested) Sys.sleep(0.002)
+    if (!harvested) {
+      # a dead daemon leaves its tasks unresolved forever
+      if (difftime(Sys.time(), live_last_check, units = "secs") > 1) {
+        .assert_pools_alive(c(profiles, if (writer_on) "garry_write"))
+        live_last_check <- Sys.time()
+      }
+      Sys.sleep(0.002)
+    }
   }
 
   # Host-side: combines, then sink retrieval (mirrors execute_plan).
@@ -2460,8 +2517,17 @@ execute_plan_mirai <- function(
   # host-side retrieval begins; then the writer releases its handles.
   if (writer_on) {
     while (length(wr_inflight) > 0L) {
-      if (!harvest_writes()) Sys.sleep(0.002) else flush_drops()
+      if (harvest_writes()) {
+        flush_drops()
+        next
+      }
+      if (difftime(Sys.time(), live_last_check, units = "secs") > 1) {
+        .assert_pools_alive("garry_write")
+        live_last_check <- Sys.time()
+      }
+      Sys.sleep(0.002)
     }
+    .assert_pools_alive("garry_write")
     wcl <- mirai::everywhere(
       asNamespace("garry")$.daemon_write_close(),
       .compute = "garry_write"

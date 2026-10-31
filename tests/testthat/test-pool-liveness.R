@@ -28,6 +28,27 @@ test_that("a dead compute daemon fails the next run fast and clearly", {
   expect_no_error(garry_pool_hygiene())
 })
 
+test_that("a task whose daemon dies fails the wait instead of hanging it", {
+  # a width-1 profile has no dispatcher, so the task never resolves
+  local_pools(1, 1)
+  prof <- garry:::.comp_profiles()[[1L]]
+  h <- mirai::mirai(tools::pskill(Sys.getpid(), tools::SIGKILL), .compute = prof)
+  t0 <- Sys.time()
+  expect_error(garry:::.await_task(h, prof), "daemon")
+  expect_lt(as.numeric(difftime(Sys.time(), t0, units = "secs")), 30)
+})
+
+test_that("a reset connection reads as a lost daemon", {
+  expect_match(
+    garry:::.task_failure(structure(19L, class = "errorValue")),
+    "daemon exited"
+  )
+  expect_identical(
+    garry:::.task_failure(structure("boom", class = c("miraiError", "errorValue"))),
+    "boom"
+  )
+})
+
 test_that("a distributed run leaves the RNG stream alone", {
   local_pools(1, 1)
   x <- lazy_source(fixture_gradient_f32()) * 2

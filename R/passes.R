@@ -196,7 +196,14 @@ NULL
 # Measured: the same scalar map signed differently before and after
 # its first plan on every CI runner, splitting one kernel's jit-cache
 # key in two, while hashing the same across a whole local suite.
-.fn_identity <- function(fn) {
+.fn_identity <- function(fn, seen = new.env(parent = emptyenv())) {
+  # an array's handle is a pointer, and a list can hold one
+  if (.g_is_array(fn)) {
+    return(.g_array_identity(fn))
+  }
+  if (is.list(fn) && !is.object(fn)) {
+    return(lapply(fn, .fn_identity, seen = seen))
+  }
   if (!is.function(fn)) {
     return(fn)
   }
@@ -209,10 +216,28 @@ NULL
   if (!is.null(env) && !isNamespace(env) && !identical(env, globalenv())) {
     captures <- lapply(
       as.list(env, all.names = TRUE, sorted = TRUE),
-      .fn_identity
+      .fn_identity,
+      seen = seen
     )
   }
-  list(formals = formals(f), body = body(f), captures = captures)
+  # Globals resolve at trace time, so their values decide the program.
+  # `seen` stops at a global function that calls itself.
+  frees <- setdiff(
+    intersect(
+      codetools::findGlobals(f, merge = TRUE),
+      ls(globalenv(), all.names = TRUE)
+    ),
+    ls(seen, all.names = TRUE)
+  )
+  for (v in frees) {
+    seen[[v]] <- TRUE
+  }
+  list(
+    formals = formals(f),
+    body = body(f),
+    captures = captures,
+    globals = lapply(mget(frees, envir = globalenv()), .fn_identity, seen = seen)
+  )
 }
 
 # Rebind a user node fn onto a minimal environment holding only its
@@ -401,7 +426,7 @@ NULL
   if (!any(is_a(ScanNode)) || any(spatial)) {
     return(0L)
   }
-  cd <- pmin(s@chunks@chunk_dim, s@grid@dims[c("x", "y")])
+  cd <- .modal_chunk(s@chunks)
   rows <- max(1L, as.integer(px %/% cd[[1L]]))
   if (rows >= cd[[2L]]) 0L else rows
 }
@@ -585,6 +610,122 @@ NULL
     if (!did_merge) break
   }
   # Compact dead slots and renumber ids (inputs remapped to match).
+  live <- which(!vapply(protos, is.null, logical(1)))
+  remap <- integer(length(protos))
+  remap[live] <- seq_along(live)
+  lapply(seq_along(live), function(j) {
+    s <- protos[[live[[j]]]]
+    s$id <- j
+    s$inputs <- sort(unique(remap[s$inputs]))
+    s
+  })
+}
+
+# Fold each connected group of spatially equal compute stages into one
+# stage, so one XLA program runs a chunk's whole pipeline and nothing
+# between its stages passes through the store. A group that a non-compute
+# stage would both feed and read from stays split: a spatial reduce's
+# combine runs on the host, and folding around it would make a cycle.
+# Is folding `n_stages` compute stages over `n_chunks` chunks worth it?
+# What it saves, in seconds: about 10 ms of dispatch and store traffic
+# per task removed, and the launch sweep, 17 us per pending task after
+# each harvest (forensics section 9). What it costs: about 20 ms of trace
+# and compile per member. It must also clear a floor, as a small plan's
+# merge widens its dependency frontier for little return: predict lost
+# 35 % to that. Coarse constants, calibrated on four workloads; a sweep
+# without its quadratic term would change them.
+.merge_worth <- function(n_stages, n_chunks, n_members) {
+  tasks <- n_stages * n_chunks
+  saved_s <- (n_stages - 1) * n_chunks * 0.01 + 8.5e-6 * tasks^2
+  saved_s >= max(5, 0.02 * n_members)
+}
+
+.merge_chunk_pipelines <- function(
+  protos,
+  graph,
+  halos,
+  only_worthwhile = FALSE,
+  chunk_dim = NULL
+) {
+  n <- length(protos)
+  # As .merge_stages: a stage that needs a halo keeps its own ring and
+  # edge handling, and a sealed stage stays on its reader.
+  comp <- vapply(
+    protos,
+    function(p) {
+      p$kind == "compute" &&
+        !isTRUE(p$sealed) &&
+        .stage_halo(graph, p$members, p$input_nodes, halos) == 0L
+    },
+    logical(1)
+  )
+  root <- seq_len(n)
+  find <- function(i) {
+    while (root[[i]] != i) {
+      i <- root[[i]]
+    }
+    i
+  }
+  for (i in which(comp)) {
+    for (j in protos[[i]]$inputs) {
+      if (comp[[j]] && .spatial_equal(protos[[i]]$grid, protos[[j]]$grid)) {
+        root[[find(i)]] <- find(j)
+      }
+    }
+  }
+  ancestors <- function(ids) {
+    seen <- integer(0)
+    while (length(ids)) {
+      seen <- c(seen, ids)
+      ids <- setdiff(unique(unlist(lapply(protos[ids], `[[`, "inputs"))), seen)
+    }
+    seen
+  }
+  ids <- which(comp)
+  for (group in split(ids, vapply(ids, find, integer(1)))) {
+    if (length(group) < 2L) {
+      next
+    }
+    outside <- setdiff(
+      unique(unlist(lapply(protos[group], `[[`, "inputs"))),
+      group
+    )
+    if (length(intersect(ancestors(outside), group))) {
+      next
+    }
+    keep <- group[[length(group)]]
+    members <- sort(unique(unlist(lapply(protos[group], `[[`, "members"))))
+    input_nodes <- setdiff(
+      unique(unlist(lapply(protos[group], `[[`, "input_nodes"))),
+      members
+    )
+    if (.stage_halo(graph, members, input_nodes, halos) > 0L) {
+      next
+    }
+    if (only_worthwhile) {
+      d <- protos[[keep]]$grid@dims[c("x", "y")]
+      n_chunks <- prod(ceiling(as.numeric(d) / as.numeric(chunk_dim)))
+      if (!.merge_worth(length(group), n_chunks, length(members))) {
+        next
+      }
+    }
+    protos[[keep]]$members <- members
+    protos[[keep]]$input_nodes <- input_nodes
+    protos[[keep]]$inputs <- outside
+    protos[[keep]]$sealed <- FALSE
+    for (k in setdiff(group, keep)) {
+      protos[k] <- list(NULL)
+    }
+    for (j in seq_along(protos)) {
+      if (!is.null(protos[[j]]) && any(protos[[j]]$inputs %in% group)) {
+        protos[[j]]$inputs <- unique(replace(
+          protos[[j]]$inputs,
+          protos[[j]]$inputs %in% group,
+          keep
+        ))
+      }
+    }
+  }
   live <- which(!vapply(protos, is.null, logical(1)))
   remap <- integer(length(protos))
   remap[live] <- seq_along(live)
@@ -1362,6 +1503,23 @@ plan_lazy <- function(x) {
 
   # ---- Stage-merge pass -------------------------------------------------------
   protos <- .merge_stages(protos, graph, halos)
+  # Chunks are sized on the stages as they stand here: a whole-chunk
+  # stage's summed footprint is not one kernel's working set.
+  sized_protos <- protos
+  # "auto"'s costs are measured on CPU
+  merge_mode <- garry_opt("stage_merge")
+  if (
+    identical(merge_mode, "chunk") ||
+      (identical(merge_mode, "auto") && identical(garry_opt("device"), "cpu"))
+  ) {
+    protos <- .merge_chunk_pipelines(
+      protos,
+      graph,
+      halos,
+      only_worthwhile = identical(merge_mode, "auto"),
+      chunk_dim = .plan_chunk_dim(graph, sized_protos)
+    )
+  }
 
   # ---- Phase B: finalise -----------------------------------------------------
 
@@ -1501,7 +1659,7 @@ plan_lazy <- function(x) {
     protos[[i]]$halo <- if (length(needs)) max(0L, needs) else 0L
   }
 
-  chunk_dim <- .plan_chunk_dim(graph, protos)
+  chunk_dim <- .plan_chunk_dim(graph, sized_protos)
   read_px <- .plan_read_px(graph, protos)
   # Fusion-aware read window cap (design/placement-cost-pass.md): a
   # fused kernel executes at READ granularity, so the window must fit

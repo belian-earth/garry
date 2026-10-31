@@ -693,10 +693,29 @@ NULL
     ))
 }
 
+# The chunk shape a grid's kernels run at. Clipped to the grid, so a grid
+# narrower than a chunk has a shape of its own and every one of its
+# kernels compiles again. garry.pad_to_chunk pads it instead to the next
+# of the chunk's repeated halvings, per axis, which bounds the padding
+# below 2x an axis (design/stablehlo-kernels.md).
+.modal_chunk <- function(cg) {
+  cd <- pmin(cg@chunk_dim, cg@grid@dims[c("x", "y")])
+  if (identical(garry_opt("pad_to_chunk"), "ladder")) {
+    for (ax in 1:2) {
+      rung <- cg@chunk_dim[[ax]]
+      while (rung %/% 2L >= cd[[ax]]) {
+        rung <- rung %/% 2L
+      }
+      cd[[ax]] <- rung
+    }
+  }
+  cd
+}
+
 # The rows and columns chunk `core` (a chunk_iter() row of `cg`) lacks
 # of its grid's modal chunk, or NULL for a modal chunk.
 .chunk_grow <- function(cg, core) {
-  cd <- pmin(cg@chunk_dim, cg@grid@dims[c("x", "y")])
+  cd <- .modal_chunk(cg)
   g <- as.integer(c(cd[[2L]] - core$y_size, cd[[1L]] - core$x_size))
   if (any(g > 0L)) g
 }

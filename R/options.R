@@ -452,6 +452,18 @@
     desc = "run edge chunks on their stage's modal kernel, grown and cropped",
     check = .opt_flag()
   ),
+  # Grow them past the chunk clipped to the grid, to a shape other grids
+  # share (.modal_chunk()): a grid narrower than a chunk then reuses
+  # kernels, at the price of running its padding. Off unless a job asks:
+  # it pays where compile dominates, a many-box tail, and costs twice
+  # the time and memory where every cell is dear, an MLP predict on one
+  # grid just under the chunk.
+  pad_to_chunk = list(
+    default = "off",
+    tier = "tuning",
+    desc = "run chunks of narrow grids at a shared shape",
+    check = .opt_choice("off", "ladder")
+  ),
   # How many compute profiles are DESIGNATED for scan tasks per
   # scan-bearing plan (clamped to the pool width).
   # Scan live/retained memory is confined to this many working sets by
@@ -464,6 +476,27 @@
     tier = "tuning",
     desc = "routed mode: profiles designated for scan (cold) kernels",
     check = .opt_num(min = 1, int = TRUE)
+  ),
+  # What crosses to a compute daemon for a kernel. "closure" ships the
+  # stage's R closure and the daemon traces it; "program" traces once on
+  # the host and ships the StableHLO text, so no R closure crosses a
+  # process (design/stablehlo-kernels.md).
+  kernel_wire = list(
+    default = "program",
+    tier = "tuning",
+    desc = "kernels reach daemons as R closures or StableHLO programs",
+    check = .opt_choice("closure", "program")
+  ),
+  # "guarded" is the stage-merge pass as it stands. "chunk" also folds
+  # every chunk-aligned compute stage of a plan into one, so one XLA
+  # program runs a chunk's whole pipeline; "auto" folds a group only when
+  # the task overhead it saves outweighs the compile it costs
+  # (.merge_worth(), design/stablehlo-kernels.md).
+  stage_merge = list(
+    default = "auto",
+    tier = "tuning",
+    desc = "merge compute stages as guarded, whole-chunk, or when worthwhile",
+    check = .opt_choice("guarded", "chunk", "auto")
   ),
   # Placement decision mode for source->compute chains in the pooled
   # scheduler (design/placement-cost-pass.md): "cost" (default)

@@ -56,6 +56,136 @@ g_value_and_gradient <- function(f, wrt) {
   anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
 }
 
+# The dtype a stored value reaches a kernel as: unsigned values upload
+# through a carrier.
+.input_dtype <- function(dtype) {
+  carrier <- unname(.anvl_upload_dtype[dtype])
+  as.character(.to_anvl_dtype(if (is.na(carrier)) dtype else carrier))
+}
+
+# One key for a kernel's inputs. `dtypes` are as they reach the kernel.
+.input_key <- function(dtypes, shapes) {
+  paste(
+    unlist(Map(
+      function(d, s) paste0(d, ":", paste(s, collapse = "x")),
+      dtypes,
+      shapes
+    )),
+    collapse = ","
+  )
+}
+
+# Content identity of an array a kernel captures: its handle is a pointer.
+.g_is_array <- function(x) inherits(x, "AnvlArray")
+.g_array_identity <- function(x) {
+  list(
+    v = as.array(anvl::as_array(x)),
+    dtype = as.character(anvl::dtype(x)),
+    shape = as.integer(anvl::shape(x))
+  )
+}
+
+# Trace `fn` (list of inputs -> named list of exports) at these dtypes
+# and shapes and lower it. Closed-over arrays come back as constants,
+# leading inputs of the program, carried as R data.
+.program_build <- function(fn, dtypes, shapes) {
+  avals <- Map(
+    function(d, s) anvl::nv_aval(.input_dtype(d), shape = as.integer(s)),
+    dtypes,
+    shapes
+  )
+  graph <- anvl::trace_fn(
+    function(inputs) unname(fn(inputs)),
+    list(inputs = unname(avals)),
+    optimize = TRUE
+  )
+  low <- anvl::stablehlo(
+    graph,
+    donate_unaliased_outputs = TRUE,
+    platform = "cpu"
+  )
+  list(
+    src = stablehlo::repr(low[[1L]]),
+    constants = lapply(low[[2L]], function(k) {
+      arr <- k$aval$data
+      list(
+        v = as.array(anvl::as_array(arr)),
+        dtype = as.character(anvl::dtype(arr)),
+        shape = as.integer(anvl::shape(arr))
+      )
+    }),
+    # Fresh output buffers per call, as jit() has: they are how R counts
+    # a CPU output's memory, so gc keeps pace with it.
+    phantoms = lapply(low[[3L]], function(spec) {
+      list(dtype = as.character(spec$dtype), shape = as.integer(spec$shape))
+    }),
+    # The outputs' nesting as plain R: an RTree is a native handle and
+    # does not cross a process. A reduce_partial export nests its parts.
+    out_shape = pjrt::unflatten(graph$out_tree, as.list(seq_along(graph$outputs))),
+    out_avals = lapply(graph$outputs, function(x) {
+      list(dtype = as.character(x$aval$dtype), shape = anvl::shape(x$aval))
+    })
+  )
+}
+
+# anvl's own dispatch path: the same executable cache, buffer wrapping and
+# output accounting a jitted function has, with the compile callback
+# reading the program instead of tracing a closure.
+.program_kernel <- function(set, device = NULL) {
+  compiled <- new.env(parent = emptyenv())
+  compile <- function(key) {
+    p <- set[[key]]
+    # Never run an executable on inputs it was not built for: PJRT
+    # checks size alone, so an f32 program would read i32 bytes. The
+    # host works out every input before it traces, so this is a defect.
+    if (is.null(p)) {
+      stop(
+        "garry_no_program: inputs ", key, " met a kernel built for ",
+        paste(names(set), collapse = "; ")
+      )
+    }
+    exec <- pjrt::pjrt_compile(
+      pjrt::pjrt_program(src = p$src, format = "mlir"),
+      device = device
+    )
+    dev <- pjrt::device(exec)
+    e <- list(
+      exec = exec,
+      client = pjrt::pjrt_client(pjrt::platform(dev)),
+      device = dev,
+      out_tree = pjrt::build_tree(p$out_shape),
+      out_avals = p$out_avals,
+      const_arrays = lapply(p$constants, function(k) {
+        pjrt::pjrt_buffer(k$v, dtype = k$dtype, device = dev, shape = k$shape)
+      }),
+      phantom_specs = p$phantoms
+    )
+    compiled[[key]] <- e
+    e
+  }
+  disp <- pjrt::dispatcher(
+    max(1L, length(set)),
+    function(info) {
+      key <- .input_key(
+        vapply(info$avals, function(v) as.character(v$dtype), character(1)),
+        lapply(info$avals, `[[`, "shape")
+      )
+      compiled[[key]] %||% compile(key)
+    },
+    backend = "pjrt",
+    default_device = function() anvl::default_device("pjrt")
+  )
+  dispatch <- pjrt::dispatch
+  run <- function(inputs) dispatch(disp, list(inputs))
+  attr(run, "compile_all") <- function() {
+    for (key in setdiff(names(set), ls(compiled, all.names = TRUE))) {
+      compile(key)
+    }
+    invisible(NULL)
+  }
+  run
+}
+
 # Unsigned dtypes upload through a signed (or f64 for u64) carrier wide
 # enough for the full value range. anvl >= 0.5 can build unsigned arrays
 # from R, but the kernels are verified against the carriers, so they stay.

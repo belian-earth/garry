@@ -538,7 +538,7 @@ NULL
 # failure produces a plausible-looking composite with a hole and no
 # diagnostic.
 .gd_fetch_errs <- function(r) {
-  transport <- vapply(r, function(x) inherits(x, "miraiError"), FALSE)
+  transport <- vapply(r, function(x) inherits(x, "errorValue"), FALSE)
   caught <- vapply(
     r,
     function(x) {
@@ -547,7 +547,7 @@ NULL
     FALSE
   )
   c(
-    vapply(r[transport], conditionMessage, ""),
+    vapply(r[transport], .task_failure, ""),
     vapply(r[caught], function(x) x$err, "")
   )
 }
@@ -581,7 +581,7 @@ NULL
 .gd_warp_collect <- function(launched) {
   info <- launched$info
   progress <- isTRUE(getOption("garry.progress", FALSE))
-  r <- lapply(launched$promise, function(h) h[])
+  r <- lapply(launched$promise, .await_task, "garry_read", lost = "return")
   t <- proc.time()[["elapsed"]] - launched$t0
   if (progress) {
     ok <- Filter(function(x) is.list(x) && !is.null(x$tw), r)
@@ -904,7 +904,7 @@ NULL
   mask_bin <- tempfile("mask", tmpdir = tmp, fileext = ".bin")
   mask_p <- NULL
   if (masked) {
-    fmr <- lapply(fmask_p, function(h) h[])
+    fmr <- lapply(fmask_p, .await_task, "garry_read", lost = "return")
     .gd_check_fetch(fmr, "fmask")
     .gd_nan_fill(bin_of(spec$fmask_srcs), nx, ny)
     if (progress) {
@@ -982,7 +982,7 @@ NULL
   harvest <- function() {
     it <- inflight[[1L]]
     inflight <<- inflight[-1L]
-    v <- res_p[[it$key]][]
+    v <- .await_task(res_p[[it$key]], comp_profs)
     if (inherits(v, "miraiError")) {
       cli::cli_abort(paste0(
         "gdal-direct pipeline compute failed on band {it$bi} strip {it$si}: ",
@@ -1015,7 +1015,7 @@ NULL
     }
   }
   for (bi in seq_len(nb)) {
-    bres <- lapply(band_p[[bi]], function(h) h[])
+    bres <- lapply(band_p[[bi]], .await_task, "garry_read", lost = "return")
     .gd_check_fetch(bres, .glue("band {bi}"))
     .gd_nan_fill(bin_of(spec$band_srcs[[bi]]), nx, ny)
     if (progress) {
@@ -1025,7 +1025,7 @@ NULL
       ))
     }
     if (!mask_done) {
-      mv <- mask_p[] # the mask .bin must exist first
+      mv <- .await_task(mask_p, comp_profs) # the mask .bin must exist first
       if (inherits(mv, c("miraiError", "errorValue"))) {
         cli::cli_abort(c(
           "gdal-direct mask computation failed.",

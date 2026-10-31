@@ -314,6 +314,50 @@ NULL
   invisible(profiles)
 }
 
+# Wait for a task, but not for a daemon that has gone: a width-1 profile
+# has no dispatcher to hand a dead daemon's task back, so the task stays
+# unresolved forever. A caller with its own failure policy takes a bare
+# error value back; otherwise it is the connection, not the task, and
+# the caller would take it for a result.
+.await_task <- function(
+  h,
+  profiles,
+  lost = c("abort", "return"),
+  call = rlang::caller_env()
+) {
+  lost <- match.arg(lost)
+  last_check <- Sys.time()
+  while (mirai::unresolved(h)) {
+    if (difftime(Sys.time(), last_check, units = "secs") > 1) {
+      .assert_pools_alive(profiles, call = call)
+      last_check <- Sys.time()
+    }
+    Sys.sleep(0.002)
+  }
+  if (
+    identical(lost, "abort") &&
+      inherits(h$data, "errorValue") &&
+      !inherits(h$data, "miraiError")
+  ) {
+    why <- .task_failure(h$data)
+    cli::cli_abort(
+      "task failed on daemon: {why}",
+      class = c("garry_task_error", "garry_error"),
+      call = call
+    )
+  }
+  h$data
+}
+
+# What a failed task reports. A bare error value 19 is a reset
+# connection: the daemon died under the task.
+.task_failure <- function(x) {
+  if (!inherits(x, "miraiError") && identical(as.integer(x), 19L)) {
+    return("its daemon exited, probably killed (out of memory?)")
+  }
+  as.character(x)
+}
+
 .pool_broadcast <- function(
   expr,
   profiles = .comp_profiles(),
@@ -720,6 +764,7 @@ garry_daemons <- function(
   # compute pool is skipped on a CUDA device (its daemons drive the
   # GPU; pinning their host threads buys nothing and can starve H2D).
   .garry_state$abi_ok <- NULL # fresh pools: re-check the ABI token
+  .garry_state$prof_warm <- NULL # fresh pools hold no compiled programs
   # Fleet pids, recorded once per pool generation: the per-daemon RSS
   # poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
   # and the affinity/shaping calls mask them by global index (one pid
@@ -802,6 +847,9 @@ garry_daemons <- function(
 #' @seealso [garry_daemons()]
 #' @export
 garry_pool_hygiene <- function(deep = FALSE) {
+  if (isTRUE(deep)) {
+    .garry_state$prof_warm <- NULL
+  }
   .pool_broadcast(
     quote(asNamespace("garry")$.daemon_hygiene(deep = d)),
     profiles = c("garry_read", .comp_profiles(), "garry_write"),

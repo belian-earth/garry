@@ -14,6 +14,10 @@ NULL
 
 # Per-process cache used on daemons (jitted stage closures by stage id).
 .daemon_cache <- new.env(parent = emptyenv())
+# Kernels it holds before it empties. A compiled tail kernel keeps about
+# 2.2 MB. Too few and a pool that revisits shapes recompiles on every
+# pass: eight boxes at 14 kernels each took 36 s a pass at 64, 26 s here.
+.kernel_cache_max <- 256L
 
 # Return freed heap pages to the OS (glibc malloc_trim(0); no-op
 # elsewhere). The scan-retention spike (benchmarks/scan-retention-
@@ -134,7 +138,8 @@ NULL
 
 # Store layout ABI version: bump on any incompatible change to the raw
 # payload byte layout, region naming, or shared-value envelope.
-.garry_store_abi <- 2L # 2: sink-only integer payloads (g_quantize)
+.garry_store_abi <- 3L # 2: sink-only integer payloads (g_quantize)
+# 3: a task's kernel can be a program set
 
 #' Daemon-facing ABI token: a hash of every `.daemon_*` entry point's
 #' formals plus the store layout version.
@@ -284,12 +289,12 @@ NULL
 # modal window shape and crops the export back (.sv_grow), so every
 # window runs the one kernel.
 .apply_fuse <- function(m, fuse, store_raw = FALSE) {
-  if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
+  if (length(ls(.daemon_cache, all.names = TRUE)) > .kernel_cache_max) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   }
   jf <- .daemon_cache[[fuse$ck]]
   if (is.null(jf)) {
-    jf <- g_jit(fuse$fn)
+    jf <- .kernel_of(fuse$fn)
     .daemon_cache[[fuse$ck]] <- jf
   }
   if (!is.null(fuse$grow)) {
@@ -743,7 +748,7 @@ NULL
   wq = NULL,
   grow = NULL
 ) {
-  if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
+  if (length(ls(.daemon_cache, all.names = TRUE)) > .kernel_cache_max) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   }
   dev <- .exec_device(device)
@@ -756,7 +761,7 @@ NULL
     if (is.null(fn)) {
       stop("garry_jit_miss: stage closure not cached on this daemon")
     }
-    jf <- g_jit(fn, device = dev)
+    jf <- .kernel_of(fn, device = dev)
     .daemon_cache[[cache_key]] <- jf
   }
   inputs <- Map(
@@ -853,8 +858,13 @@ NULL
         dev <- .exec_device(sp$device %||% "cpu")
         jf <- .daemon_cache[[sp$ck]]
         if (is.null(jf)) {
-          jf <- g_jit(sp$fn, device = dev)
+          jf <- .kernel_of(sp$fn, device = dev)
           .daemon_cache[[sp$ck]] <- jf
+        }
+        # a program's warm-up is its compile: nothing is left to trace
+        if (!is.null(attr(jf, "compile_all"))) {
+          attr(jf, "compile_all")()
+          next
         }
         obs <- sp$outers %||% rep(1L, length(sp$dtypes))
         dummy <- Map(
@@ -920,7 +930,7 @@ NULL
   if (is.null(ck)) {
     return(g_jit(fn, device = dev))
   }
-  if (length(ls(.daemon_cache, all.names = TRUE)) > 64L) {
+  if (length(ls(.daemon_cache, all.names = TRUE)) > .kernel_cache_max) {
     rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   }
   jf <- .daemon_cache[[ck]]

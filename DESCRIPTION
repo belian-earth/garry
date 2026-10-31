@@ -24,7 +24,9 @@ Imports:
     methods,
     mirai,
     mori,
+    pjrt (>= 0.6.0),
     rlang,
+    stablehlo (>= 0.5.0),
     wk
 Remotes:
     hypertidy/vaster,
@@ -73,6 +75,7 @@ Collate:
     'executor.R'
     'daemon.R'
     'pools.R'
+    'program.R'
     'scheduler.R'
     'composite_direct.R'
     'dequantize.R'
