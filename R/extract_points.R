@@ -25,8 +25,8 @@ NULL
 #' only the blocks containing points. Accepts anything that function accepts
 #' (a path or a `GDALRaster`, passed through untouched) plus a garry
 #' `LazyRaster`/`LazyDataset` that is already **materialised** -- i.e. one
-#' whose graph is a bare source over local files, as [materialise()]
-#' returns.
+#' whose graph is a bare source over local files, opened without open
+#' options, as [materialise()] returns.
 #'
 #' An unmaterialised pipeline is an error, not a silent cube write. Getting
 #' pixels onto disk costs real time and space, and the cube is almost always
@@ -158,7 +158,9 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
 # nodata, scale, offset), named by dataset band; or NULL when it needs
 # computing first. A bare source graph (one SourceNode per band, no compute)
 # is exactly what materialise() hands back, so sampling its output costs
-# nothing but the read.
+# nothing but the read. A source opened with options is not a file as it
+# stands (a GTI slice is its index filtered), so pixel_extract() on its path
+# would read something else: it needs computing too.
 .px_local_sources <- function(x) {
   if (S7::S7_inherits(x, LazyRaster)) {
     cube <- .px_cube_sources(x)
@@ -182,12 +184,7 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
       return(NULL) # any compute in the graph: must materialise
     }
     n <- graph_get(b@graph, ids[[1L]])
-    if (
-      !S7::S7_inherits(n, SourceNode) ||
-        length(n@path) != 1L ||
-        length(n@band) != 1L ||
-        .gdal_is_remote(n@path)
-    ) {
+    if (!.px_plain_source(n)) {
       return(NULL)
     }
     out[[nm]] <- list(
@@ -199,6 +196,15 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
     )
   }
   out
+}
+
+# One band of one local file, as a path alone can name it.
+.px_plain_source <- function(n) {
+  S7::S7_inherits(n, SourceNode) &&
+    length(n@path) == 1L &&
+    length(n@band) == 1L &&
+    !length(n@open_options) &&
+    !.gdal_is_remote(n@path)
 }
 
 # A (band, y, x) cube on disk, as materialise() returns one: a band stack
@@ -217,15 +223,7 @@ extract_points <- function(x, xy, bands = NULL, interp = NULL, ...) {
   } else {
     return(NULL)
   }
-  ok <- vapply(
-    nodes,
-    function(s) {
-      S7::S7_inherits(s, SourceNode) && length(s@path) == 1L &&
-        length(s@band) == 1L && !.gdal_is_remote(s@path)
-    },
-    logical(1)
-  )
-  if (!all(ok)) {
+  if (!all(vapply(nodes, .px_plain_source, logical(1)))) {
     return(NULL)
   }
   labs <- x@grid@labels$band %||% paste0("b", seq_along(nodes))

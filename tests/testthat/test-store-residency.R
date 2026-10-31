@@ -11,10 +11,8 @@ test_that(".store_region_mb prices fused exports, not source windows", {
   # Element bytes come from the region dtype under the run's store
   # mode: raw keeps f32 at 4 B; f64 (raw or not) and any doubles
   # fallback are 8 B (design/f64-store.md).
-  expect_identical(garry:::.store_bytes_of("f32", TRUE), 4)
-  expect_identical(garry:::.store_bytes_of("f32", FALSE), 8)
-  expect_identical(garry:::.store_bytes_of("f64", TRUE), 8)
-  expect_identical(garry:::.store_bytes_of("f64", FALSE), 8)
+  expect_identical(garry:::.store_bytes_of("f32"), 4)
+  expect_identical(garry:::.store_bytes_of("f64"), 8)
   # A 145-band coalesced read window in raw f32...
   full <- garry:::.store_region_mb(c(256L, 256L), dims, 0L, 145, 4)
   # ...whose fused kernel exports ONE band: ~145x apart. Pricing the

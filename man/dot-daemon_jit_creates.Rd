@@ -2,7 +2,7 @@
 % Please edit documentation in R/daemon.R
 \name{.daemon_jit_creates}
 \alias{.daemon_jit_creates}
-\title{Daemon task body: pipeline JitFunctions created in this process so far.}
+\title{Daemon task body: kernels created in this process so far.}
 \usage{
 .daemon_jit_creates()
 }

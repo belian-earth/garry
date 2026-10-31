@@ -212,7 +212,6 @@ test_that("scan is a planner barrier with zero halo, full axis per chunk", {
   b <- lazy_source_stub("b.tif", graph = g)
   sc <- scan_over(lazy_stack(list(a, b)), cumsum_body, over = "t")
   node <- graph_get(sc@graph, sc@node_id)
-  expect_true(is_barrier(node))
   expect_identical(required_halo(node), 0L)
 
   # the scan joins a compute stage chunked over space only

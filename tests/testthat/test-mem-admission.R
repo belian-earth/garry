@@ -25,10 +25,8 @@ test_that("available RAM accounts for a cgroup limit when one applies", {
   }
 })
 
-test_that("cgroup headroom is NA when unlimited or unreadable", {
+test_that("cgroup headroom is a number, or NA when unlimited", {
   skip_on_os(c("windows", "mac", "solaris"))
-  # Whatever this process sits in, the helper must return a number or NA
-  # and never error -- it runs on every distributed execution.
   v <- .garry_cgroup_avail_mb()
   expect_true(is.na(v) || (is.numeric(v) && v >= 0))
 })
@@ -109,6 +107,40 @@ test_that("cgroup headroom: tightest ancestor limit, page cache counted free", {
   expect_true(is.na(.garry_cgroup_avail_mb(root, self)))
 })
 
+test_that("a cgroup file that will not read fails: it does not mean unlimited", {
+  root <- withr::local_tempdir()
+  self <- file.path(root, "self")
+  writeLines("0::/job", self)
+  d <- file.path(root, "job")
+  dir.create(d)
+  writeLines("not a number", file.path(d, "memory.max"))
+  writeLines("1", file.path(d, "memory.current"))
+  expect_error(.garry_cgroup_mem(root, self), class = "garry_memory_error")
+  unlink(file.path(d, "memory.max"))
+  dir.create(file.path(d, "memory.max")) # exists, cannot be read
+  expect_error(.garry_cgroup_mem(root, self), class = "garry_memory_error")
+  unlink(file.path(d, "memory.max"), recursive = TRUE)
+  writeLines("1000", file.path(d, "memory.max"))
+  writeLines("garbled", file.path(d, "memory.current"))
+  expect_error(.garry_cgroup_mem(root, self), class = "garry_memory_error")
+})
+
+test_that("unknown RAM warns once: every budget is off", {
+  rlang::reset_warning_verbosity("garry_ram_unknown")
+  testthat::local_mocked_bindings(
+    .garry_darwin_avail_mb = function(...) NA_real_,
+    .garry_cgroup_avail_mb = function(...) NA_real_
+  )
+  testthat::local_mocked_bindings(
+    Sys.meminfo = function(...) stop("meminfo is broken"),
+    .package = "memuse"
+  )
+  expect_warning(v <- .garry_ram_avail_mb(), class = "garry_memory_warning")
+  expect_true(is.na(v))
+  expect_no_warning(.garry_ram_avail_mb())
+  rlang::reset_warning_verbosity("garry_ram_unknown")
+})
+
 test_that("cgroup headroom: a namespaced container reads its limit at the root", {
   # Docker on cgroup v2 gives the container a private namespace: its own
   # cgroup is "0::/" and the limit files sit at the mount root.
@@ -175,4 +207,11 @@ test_that("the /dev/shm probes read statvfs as df does", {
   expect_lte(v[["used"]], v[["total"]])
   expect_identical(garry:::.garry_shm_free_mb(), v[["avail"]])
   expect_true(is.na(garry:::.garry_statvfs_mb("/no/such/dir")[["total"]]))
+})
+
+test_that("the pipeline's compute cap follows exec_ram_fraction", {
+  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1000)
+  per_task <- garry:::.gd_strip_mb(4, 100, 100)
+  withr::local_options(garry.exec_ram_fraction = 0.5)
+  expect_identical(garry:::.gd_compute_cap(4, 100, 100, 1e4L), as.integer(floor(500 / per_task)))
 })

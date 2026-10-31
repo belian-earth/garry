@@ -1,8 +1,9 @@
 # The DEFAULT distributed composite route (.cd_spec ->
 # .execute_composite_direct / the fetch-ordered pipeline): offline
 # equivalence gates against the single-threaded oracle on a local GTI
-# composite — both gd_parallel arms, the morphology (halo) variant, and
-# the gd_compute_budget scheduler fall-through. Until this file, the
+# composite: the multi-band pipeline, the single-band whole-grid kernel,
+# the morphology (halo) variant, and the single-band scheduler fall-through
+# past .gd_compute_budget. Until this file, the
 # production default composite path had no offline test at all.
 
 skip_if(!requireNamespace("garry", quietly = TRUE),
@@ -15,13 +16,19 @@ test_that("composite_direct matches the oracle on a masked multi-band composite"
   expect_false(is.null(.cd_spec(p)))          # the fast path matches this shape
   want <- collect(x, distributed = FALSE)
   expect_identical(garry_last_route(), "single")
-  for (gp in c(TRUE, FALSE)) {
-    old <- options(garry.gd_parallel = gp)
-    on.exit(options(old), add = TRUE)
-    got <- collect(x, distributed = TRUE)
-    expect_identical(garry_last_route(), "composite_direct")
-    .gg_close(got, want)
-  }
+  got <- collect(x, distributed = TRUE)
+  expect_identical(garry_last_route(), "composite_direct")
+  .gg_close(got, want)
+})
+
+test_that("a single band runs the whole-grid kernel and matches the oracle", {
+  local_pools(2, 2)
+  x <- .gg_masked_composite(single = TRUE)
+  expect_identical(.cd_spec(collect(x, plan_only = TRUE))$n_bands, 1L)
+  want <- collect(x, distributed = FALSE)
+  got <- collect(x, distributed = TRUE)
+  expect_identical(garry_last_route(), "composite_direct")
+  .gg_close(got, want)
 })
 
 test_that("composite_direct matches the oracle with morphology (halo) cleanup", {
@@ -37,19 +44,18 @@ test_that("composite_direct matches the oracle with morphology (halo) cleanup", 
   .gg_close(got, want)
 })
 
-test_that("gd_compute_budget forces the fall-through route, identically", {
+test_that(".gd_compute_budget sends a heavy single band on, identically", {
   local_pools(2, 2)
-  x <- .gg_masked_composite()
+  x <- .gg_masked_composite(single = TRUE)
   want <- collect(x, distributed = FALSE)
-  # Above the budget (with gd_parallel off), .cd_spec refuses and the
-  # multi-band composite falls through — to the reduce-decomposition
-  # path (the band StackNode is upper IR for .gd_decompose), not the
-  # bare scheduler, which route-matrix reaches via composite_direct=FALSE.
-  old <- options(garry.gd_compute_budget = 1, garry.gd_parallel = FALSE)
-  on.exit(options(old), add = TRUE)
+  # Above the budget .cd_spec refuses a single band, whose whole-grid
+  # kernel would run in the host; a multi-band pipeline needs no guard.
+  testthat::local_mocked_bindings(.gd_compute_budget = 1)
   got <- collect(x, distributed = TRUE)
-  expect_identical(garry_last_route(), "gd_reduce")   # route changed...
+  expect_identical(garry_last_route(), "scheduler")   # route changed...
   .gg_close(got, want)                                 # ...results did not
+  y <- .gg_masked_composite()
+  expect_false(is.null(.cd_spec(collect(y, plan_only = TRUE))))
 })
 
 test_that("composite_direct writes to path identically to in-memory", {
@@ -114,12 +120,38 @@ test_that("GTI sources the fast routes cannot read themselves fall through", {
   expect_true(is.na(.gti_slice_of(character(0))))
 })
 
-test_that("a tolerated dead fetch leaves an all-nodata plane, not a missing file", {
-  d <- withr::local_tempdir()
-  have <- file.path(d, "a.bin")
-  writeBin(rep(1, 6), have, size = 4L)
-  gone <- file.path(d, "b.bin")
-  .gd_nan_fill(c(have, gone), nx = 3L, ny = 2L)
-  expect_identical(readBin(have, "numeric", n = 6, size = 4L), rep(1, 6))
-  expect_true(all(is.nan(readBin(gone, "numeric", n = 6, size = 4L))))
+test_that("a failed warp is the run's failure", {
+  bad <- structure("slice warp failed: a.tif", class = c("miraiError", "errorValue"))
+  err <- expect_error(.gd_check_fetch(list(list(tw = 1), bad), "band 1"), class = "garry_read_error")
+  expect_match(conditionMessage(err), "1/2 band 1 warps failed", fixed = TRUE)
+  expect_match(conditionMessage(err), "a.tif", fixed = TRUE)
+  expect_no_error(.gd_check_fetch(list(list(tw = 1)), "band 1"))
+})
+
+test_that("a failed slice warp names its source and leaves no slice", {
+  withr::local_options(garry.read_retry = 0L)
+  bin <- withr::local_tempfile(fileext = ".bin")
+  j <- list(locs = "/nonexistent/ghost.tif", dt = 1, nodata = numeric(0), resampling = "near", bin = bin)
+  k <- list(nx = 4L, ny = 4L, gtstr = "0/10/0/40/0/-10", wkt = gdalraster::srs_to_wkt("EPSG:3857"))
+  err <- expect_error(suppressMessages(.cd_fetch_warp(j, k)), class = "garry_read_error")
+  expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
+  expect_false(file.exists(bin))
+})
+
+test_that("a composite warps onto the declared grid, to the last digit", {
+  gti <- .gg_gti(list(s1 = .gg_val(0)))
+  p <- plan_lazy(.gg_slice(gti, "s1", graph_new()))
+  g <- grid_spec("EPSG:3857",
+                 extent = c(-13627665.27123, 500010.123456, -13627065.27123, 500410.123456),
+                 dims = c(60L, 40L), dtype = "f32")
+  gt <- as.numeric(strsplit(.gd_build_jobs(p, g, tempdir())$K$gtstr, "/")[[1L]])
+  expect_identical(gt, g@transform)
+})
+
+test_that("a slice with no items fails as a read, saying so", {
+  expect_error(
+    garry:::.cd_fetch_warp(list(locs = character(0)), list(nx = 1L, ny = 1L)),
+    "no items",
+    class = "garry_read_error"
+  )
 })

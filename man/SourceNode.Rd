@@ -67,7 +67,7 @@ A \code{SourceNode}.
 }
 \description{
 Created by \code{\link[=lazy_source]{lazy_source()}}. A declared \code{nodata} on an integer source
-promotes the source's output dtype to f32 so NaN can carry nodata
-downstream; the executor rewrites \code{value == nodata} to NaN at read
-time.
+promotes the source's output dtype to the float that holds it (f32 up
+to 16 bits, else f64) so NaN can carry nodata downstream; the executor
+rewrites \code{value == nodata} to NaN at read time.
 }

@@ -7,12 +7,10 @@
 .daemon_write_close()
 }
 \value{
-\code{NULL}, invisibly.
+The close failures, named by output path (empty when all
+closed).
 }
 \description{
-Returns the close errors, named by output path (empty when all closed).
-}
-\details{
 Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

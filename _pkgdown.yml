@@ -208,7 +208,6 @@ reference:
   - ScanNode
   - WarpNode
   - StackNode
-  - FusedNode
   - PatchNode
   - graph_new
   - graph_add
@@ -221,12 +220,9 @@ reference:
   - plan_dot
   - execute_plan
   - execute_plan_mirai
-  - fusable
-  - is_barrier
   - required_halo
   - chunk_iter
   - chunk_window_with_halo
-  - cross_grid_window
 - title: internal
   desc: |
     Exported only so mirai daemons can call them across the process boundary, or as low-level plumbing. Not public API; do not depend on these.

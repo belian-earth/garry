@@ -8,9 +8,7 @@ grid_from_bbox(
   bbox,
   res,
   projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-  ellps = "WGS84",
-  buffer = 0,
-  dtype = "f32"
+  buffer = 0
 )
 }
 \arguments{
@@ -21,11 +19,7 @@ supported projections); a scalar, or \code{c(xres, yres)}.}
 
 \item{projection}{Projection family; the first is the default (see Details).}
 
-\item{ellps}{Ellipsoid for the centred projections.}
-
 \item{buffer}{Extent padding in projected units, applied before snapping.}
-
-\item{dtype}{Grid dtype.}
 }
 \value{
 A \code{GridSpec}.

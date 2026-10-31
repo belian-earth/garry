@@ -6,9 +6,9 @@ NULL
 # ---------------------------------------------------------------------------
 # Planner passes (decisions D10-D12). Run by collect(); pure functions of
 # the IR graph. Two phases:
-#   1. assignment  — every reachable node lands in a stage (fusion,
+#   1. assignment : every reachable node lands in a stage (fusion,
 #                    reduce decomposition, warp barriers);
-#   2. finalise    — per-stage exports, composed closures, halo, focal
+#   2. finalise   : per-stage exports, composed closures, halo, focal
 #                    placement check, chunking, export as Plan.
 #
 # Stage output contract: every stage closure returns a NAMED LIST keyed
@@ -16,6 +16,19 @@ NULL
 # stage tail). Consumers fetch by node id, so fusion decisions can never
 # orphan an externally-referenced member.
 # ---------------------------------------------------------------------------
+
+# A warp reads its source itself, so only a source can be warped.
+.warp_refusal <- function(call = rlang::caller_env()) {
+  .garry_error(
+    paste0(
+      "warping a computed raster is not supported: align_to() ",
+      "sources before computing on them, or materialise to disk ",
+      "first (write_tif() / materialise())."
+    ),
+    "garry_warp_unsupported_error",
+    call = call
+  )
+}
 
 # Structured, cli-formatted garry error. `msg` is taken literally (interpolated
 # once), so caller-built strings with stray braces are safe; the condition
@@ -71,17 +84,15 @@ NULL
   g_ifelse(g_count(x, dims = margins) > 0, r, NaN)
 }
 
-# Halo a node consumes from its (single) padded input: focal shifts and
-# patch kernels eat their radius ring; everything else passes padding
-# through untouched. The pad walks (runtime and static) key off this.
-.halo_consumed <- function(node) {
-  if (S7::S7_inherits(node, FocalNode)) {
-    return(node@radius)
-  }
-  if (S7::S7_inherits(node, PatchNode)) {
-    return(node@radius)
-  }
-  0L
+# A custom reducer's MLP weight matrices, empty for any other reducer.
+.mlp_weights <- function(n) {
+  w <- environment(n@fn[[1L]])$weights
+  if (is.list(w) && length(w) && all(vapply(w, is.matrix, logical(1)))) w else list()
+}
+
+# Is any of `members` a node of class `cls`?
+.has_member <- function(graph, members, cls) {
+  any(vapply(members, function(id) S7::S7_inherits(graph_get(graph, id), cls), logical(1)))
 }
 
 # Does this node make its stage a NARROW halo stage (no new external
@@ -159,6 +170,72 @@ NULL
   }
 }
 
+# The window a node's dtype is traced on: a parent's outer dims, then its
+# y and x no larger than a chunk could be. Kernels are shape-polymorphic
+# in the plane, and a chunk's shape does not exist until the plan does.
+.trace_shape <- function(grid) {
+  d <- grid@dims
+  c(.grid_outer(grid), min(d[["y"]], 4096L), min(d[["x"]], 4096L))
+}
+
+# The dtype `node` really returns over parents on these grids, so the
+# graph, every executor and every writer agree on one. `node@grid@dtype`
+# is what its inputs promote to, kept where the kernel returns that
+# dtype's carrier (.anvl_upload_dtype), and where it returns a logical,
+# which the node stores as 0/1. A node that cannot be traced here would
+# fail in its stage too, later, so the failure is raised now. The last
+# answer is kept: one fn over a dataset's bands, slices or groups meets
+# the same inputs thousands of times, and a large kernel traces for
+# seconds.
+.node_dtype <- function(node, parent_grids) {
+  pdims <- names(parent_grids[[1L]]@dims)
+  dtypes <- vapply(parent_grids, function(g) g@dtype, character(1))
+  shapes <- lapply(parent_grids, .trace_shape)
+  over <- if (!S7::S7_inherits(node, MapNode)) node@over
+  id <- list(
+    class(node)[[1L]],
+    node@fn,
+    over,
+    pdims,
+    dtypes,
+    shapes,
+    node@grid@dtype,
+    if (length(over)) node@grid@labels[[over[[1L]]]],
+    .default_dtype_tag()
+  )
+  if (identical(.garry_state$node_dtype$id, id)) {
+    return(.garry_state$node_dtype$dtype)
+  }
+  real <- tryCatch(
+    .kernel_out_dtype(
+      function(inputs) .eval_node(node, inputs, pdims),
+      dtypes,
+      shapes
+    ),
+    error = function(e) {
+      why <- conditionMessage(e)
+      reducer <- S7::S7_inherits(node, ReduceNode)
+      cli::cli_abort(
+        c(
+          "cannot work out the dtype {.arg {if (reducer) 'op' else 'fn'}} returns.",
+          "x" = "tracing it failed: {why}",
+          "i" = if (!reducer) "Fix {.arg fn}, or pass {.arg dtype} to declare its output."
+        ),
+        class = c("garry_kernel_error", "garry_error"),
+        call = NULL
+      )
+    }
+  )
+  declared <- node@grid@dtype
+  dtype <- if (real == "bool" || identical(real, .input_dtype(declared))) {
+    declared
+  } else {
+    .from_anvl_dtype(real)
+  }
+  .garry_state$node_dtype <- list(id = id, dtype = dtype)
+  dtype
+}
+
 # Trim `d` cells of padding from every side (centered slice) of the
 # LAST two (spatial) dims; leading dims (t/band cubes) pass in full.
 .trim_to_pad <- function(x, d) {
@@ -197,20 +274,37 @@ NULL
 # its first plan on every CI runner, splitting one kernel's jit-cache
 # key in two, while hashing the same across a whole local suite.
 .fn_identity <- function(fn, seen = new.env(parent = emptyenv())) {
-  # an array's handle is a pointer, and a list can hold one
+  # an array's handle is a pointer, and a list or environment can hold one
   if (.g_is_array(fn)) {
     return(.g_array_identity(fn))
   }
-  if (is.list(fn) && !is.object(fn)) {
-    return(lapply(fn, .fn_identity, seen = seen))
-  }
-  if (!is.function(fn)) {
-    return(fn)
+  if (is.list(fn)) {
+    out <- lapply(fn, .fn_identity, seen = seen)
+    attributes(out) <- attributes(fn)
+    return(out)
   }
   if (is.primitive(fn)) {
     return(list(primitive = deparse(fn)))
   }
-  f <- utils::removeSource(.slim_fn(fn))
+  if (!is.function(fn) && !is.environment(fn)) {
+    return(fn)
+  }
+  # A closure or environment can reach itself: its first visit counts its
+  # content, and a later one is a mark, which ends the walk.
+  addr <- rlang::obj_address(fn)
+  if (!is.null(seen[[addr]])) {
+    return(list(seen = TRUE))
+  }
+  seen[[addr]] <- TRUE
+  if (is.environment(fn)) {
+    named <- environmentName(fn)
+    if (nzchar(named)) {
+      return(list(env = named))
+    }
+    return(lapply(as.list(fn, all.names = TRUE, sorted = TRUE), .fn_identity, seen = seen))
+  }
+  frees <- codetools::findGlobals(fn, merge = FALSE)
+  f <- utils::removeSource(.slim_fn(fn, frees))
   env <- environment(f)
   captures <- list()
   if (!is.null(env) && !isNamespace(env) && !identical(env, globalenv())) {
@@ -221,34 +315,38 @@ NULL
     )
   }
   # Globals resolve at trace time, so their values decide the program.
-  # `seen` stops at a global function that calls itself.
-  frees <- setdiff(
-    intersect(
-      codetools::findGlobals(f, merge = TRUE),
-      ls(globalenv(), all.names = TRUE)
-    ),
-    ls(seen, all.names = TRUE)
-  )
-  for (v in frees) {
-    seen[[v]] <- TRUE
-  }
+  reads <- .global_reads(unique(as.character(unlist(frees))), env)
   list(
     formals = formals(f),
     body = body(f),
     captures = captures,
-    globals = lapply(mget(frees, envir = globalenv()), .fn_identity, seen = seen)
+    globals = lapply(mget(reads, envir = globalenv()), .fn_identity, seen = seen)
   )
+}
+
+# Which of `vars` resolve in the session's global environment from `env`:
+# those it binds that no frame on the way binds first, whether a capture
+# or a namespace.
+.global_reads <- function(vars, env) {
+  bound <- function(e) vapply(vars, exists, logical(1), envir = e, inherits = FALSE)
+  while (!identical(env, globalenv())) {
+    if (identical(env, emptyenv())) {
+      return(character(0))
+    }
+    vars <- vars[!bound(env)]
+    env <- parent.env(env)
+  }
+  vars[bound(env)]
 }
 
 # Rebind a user node fn onto a minimal environment holding only its
 # free variables (found via codetools), parented on globalenv(). Node
 # fns otherwise capture their construction environment, which typically
 # references LazyRasters and through them the ENTIRE graph: one such
-# closure serialized at ~117 MB in a 500-node plan, and every mirai
-# task ships its stage closure, so daemons accumulated a full graph
-# copy per stage (machine OOM). g_* calls resolve through globalenv()
-# (garry attached), exactly as on daemons today.
-.slim_fn <- function(fn) {
+# closure serialized at ~117 MB in a 500-node plan, which a closure kernel
+# ships to every daemon. Programs need it too, for identity. g_* calls
+# resolve through globalenv() (garry attached), as they do on a daemon.
+.slim_fn <- function(fn, frees = NULL) {
   if (!is.function(fn) || is.primitive(fn)) {
     return(fn)
   }
@@ -256,12 +354,12 @@ NULL
   if (is.null(env) || identical(env, globalenv()) || isNamespace(env)) {
     return(fn)
   }
-  g <- codetools::findGlobals(fn, merge = FALSE)
+  frees <- frees %||% codetools::findGlobals(fn, merge = FALSE)
   # Reparent onto the closure's terminal environment: a namespace when
   # the chain ends in one (serialises by reference and keeps unexported
   # helpers resolvable on daemons and in sessions where the package is
   # not attached -- e.g. garry's own factory bodies like bilateral_focal),
-  # else globalenv as before.
+  # else globalenv.
   terminal <- env
   while (
     !identical(terminal, globalenv()) &&
@@ -274,7 +372,7 @@ NULL
     terminal <- globalenv()
   }
   e <- new.env(parent = terminal)
-  for (v in unique(c(g$variables, g$functions))) {
+  for (v in unique(unlist(frees))) {
     # Copy only bindings that live BELOW globalenv/namespace boundaries
     # (true captures); package and global bindings resolve at run time.
     scope <- env
@@ -303,9 +401,9 @@ NULL
 # static mirror of this walk; keep them in lockstep.
 #
 # The closure captures per-member SPECS extracted from the graph, never
-# the graph itself: stage closures are serialized to daemons per task,
-# and a graph capture multiplies the whole plan into every payload (see
-# .slim_fn). rm() below keeps the closure environment minimal.
+# the graph itself: a closure kernel crosses to its daemons, and a graph
+# capture multiplies the whole plan into every payload (see .slim_fn).
+# rm() below keeps the closure environment minimal.
 .compose_stage_fn <- function(
   graph,
   members,
@@ -326,6 +424,8 @@ NULL
     list(
       id = id,
       node = node,
+      halo = required_halo(node),
+      dtype = node@grid@dtype,
       pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims)
     )
   })
@@ -349,22 +449,24 @@ NULL
         function(p) get(.key(p), envir = pads),
         integer(1)
       )
-      hc <- .halo_consumed(node)
-      if (hc > 0L) {
-        out_pad <- pp[[1L]] - hc
+      if (sp$halo > 0L) {
+        out_pad <- pp[[1L]] - sp$halo
       } else {
         out_pad <- min(pp)
         pv <- Map(function(v, d) .trim_to_pad(v, d - out_pad), pv, as.list(pp))
       }
+      # Every member holds its declared dtype, so a consumer reads the
+      # same value inside a stage as across a boundary, and the planner
+      # is free to place one wherever it pays.
       assign(
         .key(sp$id),
-        .eval_node(node, pv, parent_dim_names = sp$pdims),
+        .g_as_declared(.eval_node(node, pv, parent_dim_names = sp$pdims), sp$dtype),
         envir = vals
       )
       assign(.key(sp$id), as.integer(out_pad), envir = pads)
     }
     stats::setNames(
-      lapply(exports, function(e) get(.key(e), envir = vals)),
+      mget(vapply(exports, .key, character(1)), envir = vals),
       vapply(exports, .key, character(1))
     )
   }
@@ -392,22 +494,28 @@ NULL
       function(p) get(.key(p), envir = pads),
       integer(1)
     )
-    hc <- .halo_consumed(node)
+    hc <- required_halo(node)
     out <- if (hc > 0L) pp[[1L]] - hc else min(pp)
     assign(.key(id), as.integer(out), envir = pads)
   }
   vapply(exports, function(e) get(.key(e), envir = pads), integer(1))
 }
 
+# Cells per row strip of a scan stage's kernel. XLA runs a scan step as a
+# sequence of whole-plane passes over ~20 f64 planes, so on a full chunk
+# every pass streams from memory and the kernel is bandwidth-bound (on 6
+# cores it ran 2.1x faster than on 1); a strip of ~4k cells keeps each
+# step's planes in cache. hutan's SI smoother stage took 0.28 s a 480 x 480
+# chunk in 8-row strips on one core, against 0.71 s whole on one core and
+# 0.34 s on six.
+.scan_strip_px <- 4096
+
 # Rows per strip for a stage's kernel (.strip_stage_fn), or 0 for the
-# whole chunk. Only scan stages strip: XLA runs each scan step as a
-# sequence of whole-plane passes over ~20 f64 planes, which on a full
-# chunk stream from memory (see garry.scan_strip_px). Only stages that
-# are pointwise in y and x strip: no halo or output ring, no focal or
-# patch member, no reduction over x or y.
+# whole chunk. Only scan stages strip, and only those pointwise in y and
+# x: no halo or output ring, no focal or patch member, no reduction over
+# x or y.
 .stage_strip_rows <- function(graph, s) {
-  px <- garry_opt("scan_strip_px")
-  if (px <= 0 || s@kind != "compute" || s@halo + s@out_pad > 0L) {
+  if (s@kind != "compute" || s@halo + s@out_pad > 0L) {
     return(0L)
   }
   nodes <- lapply(s@members, function(id) graph_get(graph, id))
@@ -427,7 +535,7 @@ NULL
     return(0L)
   }
   cd <- .modal_chunk(s@chunks)
-  rows <- max(1L, as.integer(px %/% cd[[1L]]))
+  rows <- max(1L, as.integer(.scan_strip_px %/% cd[[1L]]))
   if (rows >= cd[[2L]]) 0L else rows
 }
 
@@ -469,11 +577,11 @@ NULL
     x <- inputs[[1L]]
     part <- switch(
       op,
-      sum = list(sum = g_sum(x, margins, nan_rm)),
+      sum = list(sum = .g_partial_sum(x, margins, nan_rm)),
       count = list(count = g_count(x, margins)),
       min = list(min = g_min(x, margins, nan_rm), count = g_count(x, margins)),
       max = list(max = g_max(x, margins, nan_rm), count = g_count(x, margins)),
-      mean = list(sum = g_sum(x, margins, nan_rm), count = g_count(x, margins))
+      mean = list(sum = .g_partial_sum(x, margins, nan_rm), count = g_count(x, margins))
     )
     stats::setNames(list(part), key)
   }
@@ -580,14 +688,8 @@ NULL
         # collapsed a 24-stage predict plan into 2 mega-stages and
         # inflated the task count 18x through the sizing passes).
         if (
-          any(vapply(
-            p$members,
-            function(m) {
-              n <- graph_get(graph, m)
-              S7::S7_inherits(n, ReduceNode) || S7::S7_inherits(n, ScanNode)
-            },
-            logical(1)
-          ))
+          .has_member(graph, p$members, ReduceNode) ||
+            .has_member(graph, p$members, ScanNode)
         ) {
           next
         }
@@ -609,7 +711,11 @@ NULL
     }
     if (!did_merge) break
   }
-  # Compact dead slots and renumber ids (inputs remapped to match).
+  .protos_compact(protos)
+}
+
+# Compact dead slots and renumber ids (inputs remapped to match).
+.protos_compact <- function(protos) {
   live <- which(!vapply(protos, is.null, logical(1)))
   remap <- integer(length(protos))
   remap[live] <- seq_along(live)
@@ -621,15 +727,10 @@ NULL
   })
 }
 
-# Fold each connected group of spatially equal compute stages into one
-# stage, so one XLA program runs a chunk's whole pipeline and nothing
-# between its stages passes through the store. A group that a non-compute
-# stage would both feed and read from stays split: a spatial reduce's
-# combine runs on the host, and folding around it would make a cycle.
 # Is folding `n_stages` compute stages over `n_chunks` chunks worth it?
 # What it saves, in seconds: about 10 ms of dispatch and store traffic
 # per task removed, and the launch sweep, 17 us per pending task after
-# each harvest (forensics section 9). What it costs: about 20 ms of trace
+# each harvest. What it costs: about 20 ms of trace
 # and compile per member. It must also clear a floor, as a small plan's
 # merge widens its dependency frontier for little return: predict lost
 # 35 % to that. Coarse constants, calibrated on four workloads; a sweep
@@ -640,13 +741,13 @@ NULL
   saved_s >= max(5, 0.02 * n_members)
 }
 
-.merge_chunk_pipelines <- function(
-  protos,
-  graph,
-  halos,
-  only_worthwhile = FALSE,
-  chunk_dim = NULL
-) {
+# Fold each connected group of spatially equal compute stages into one
+# stage where .merge_worth() says so: one XLA program then runs a chunk's
+# whole pipeline and nothing between its stages passes through the store.
+# A group that a non-compute stage would both feed and read from stays
+# split: a spatial reduce's combine runs on the host, and folding around
+# it would make a cycle.
+.merge_chunk_pipelines <- function(protos, graph, halos, chunk_dim) {
   n <- length(protos)
   # As .merge_stages: a stage that needs a halo keeps its own ring and
   # edge handling, and a sealed stage stays on its reader.
@@ -702,12 +803,10 @@ NULL
     if (.stage_halo(graph, members, input_nodes, halos) > 0L) {
       next
     }
-    if (only_worthwhile) {
-      d <- protos[[keep]]$grid@dims[c("x", "y")]
-      n_chunks <- prod(ceiling(as.numeric(d) / as.numeric(chunk_dim)))
-      if (!.merge_worth(length(group), n_chunks, length(members))) {
-        next
-      }
+    d <- protos[[keep]]$grid@dims[c("x", "y")]
+    n_chunks <- prod(ceiling(as.numeric(d) / as.numeric(chunk_dim)))
+    if (!.merge_worth(length(group), n_chunks, length(members))) {
+      next
     }
     protos[[keep]]$members <- members
     protos[[keep]]$input_nodes <- input_nodes
@@ -726,15 +825,7 @@ NULL
       }
     }
   }
-  live <- which(!vapply(protos, is.null, logical(1)))
-  remap <- integer(length(protos))
-  remap[live] <- seq_along(live)
-  lapply(seq_along(live), function(j) {
-    s <- protos[[live[[j]]]]
-    s$id <- j
-    s$inputs <- sort(unique(remap[s$inputs]))
-    s
-  })
+  .protos_compact(protos)
 }
 
 # -- Band-stack collapse (multi-band read coalescing) --------------------------
@@ -746,7 +837,7 @@ NULL
 # untouched: stage exports key on node ids, and the read value arrives
 # as the same (band, y, x) cube g_stack would have built. The win is
 # structural: one read task per (file, window) instead of one per
-# (band, window) — per-band reads of an N-band pixel-interleaved file
+# (band, window): per-band reads of an N-band pixel-interleaved file
 # decompress ~N x the window bytes, and with the read budget the task
 # count scales as bands^2 (n_src = bands x files and windows shrink by
 # bands), where the coalesced plan reads the same bytes in one task
@@ -769,7 +860,7 @@ NULL
 # (design/gdal-multiband-fanout.md).
 #
 # Skips: stacks consumed by a
-# WarpNode (the warp path takes scalar bands — warping a stack was an
+# WarpNode (the warp path takes scalar bands: warping a stack was an
 # error before this pass and stays one); parents with outer dims or
 # multi-band parents (a stack of stacks keeps its compute shape).
 # Per-band sources still referenced elsewhere stay reachable and keep
@@ -991,8 +1082,7 @@ NULL
 # Do a file's bands share storage blocks, so that reading one band of a
 # window decodes the others' bytes too? True for a Zarr array (its chunks
 # may span bands; GDAL caches the decoded chunk per handle) and a
-# pixel-interleaved file; false for a band-interleaved one, or when the
-# file cannot be opened.
+# pixel-interleaved file; false for a band-interleaved one.
 .bands_share_blocks <- function(path, open_options = character(0)) {
   # a multi-path source (e.g. one Zarr array per UTM zone): every path
   if (length(path) > 1L) {
@@ -1011,19 +1101,9 @@ NULL
   if (!is.null(hit)) {
     return(hit)
   }
-  ds <- tryCatch(.gdal_handle(path, open_options), error = function(e) NULL)
-  if (is.null(ds)) {
-    return(FALSE)
-  }
-  out <- if (identical(ds$getDriverShortName(), "Zarr")) {
-    TRUE
-  } else {
-    il <- tryCatch(
-      ds$getMetadataItem(0L, "INTERLEAVE", "IMAGE_STRUCTURE"),
-      error = function(e) ""
-    )
-    identical(toupper(il), "PIXEL")
-  }
+  ds <- .gdal_probe(path, open_options)
+  out <- identical(ds$getDriverShortName(), "Zarr") ||
+    identical(toupper(ds$getMetadataItem(0L, "INTERLEAVE", "IMAGE_STRUCTURE")), "PIXEL")
   .shares_memo[[key]] <- out
   out
 }
@@ -1087,9 +1167,6 @@ NULL
 # where duplicating cheap arithmetic to keep a fusion can be the better
 # plan.
 .dedup_warps <- function(graph, sink_ids) {
-  if (!isTRUE(garry_opt("warp_dedup"))) {
-    return(invisible(graph))
-  }
   ids <- sort(unique(unlist(lapply(unique(sink_ids), function(i) {
     .reachable(graph, i)
   }))))
@@ -1186,11 +1263,7 @@ plan_lazy <- function(x) {
         if (!S7::S7_inherits(lr, LazyRaster)) {
           cli::cli_abort("sink {i} must be a {.cls LazyRaster}")
         }
-        if (identical(graph@nodes, lr@graph@nodes)) {
-          lr@node_id
-        } else {
-          graph_import(graph, lr@graph, lr@node_id)
-        }
+        graph_import(graph, lr@graph, lr@node_id)
       },
       integer(1)
     )
@@ -1271,7 +1344,7 @@ plan_lazy <- function(x) {
   protos <- list() # id -> mutable list
   node_stage <- new.env(parent = emptyenv()) # node id -> stage id
   # Stages already consumed. An env, not a vector: the `%in%` form
-  # re-scanned an ever-growing vector once per node (O(nodes^2) — a
+  # re-scanned an ever-growing vector once per node (O(nodes^2): a
   # per-band pre-stack map arm tripled plan time at 2.5k sources).
   closed <- new.env(parent = emptyenv())
   is_closed <- function(sid) isTRUE(closed[[.key(sid)]])
@@ -1336,14 +1409,7 @@ plan_lazy <- function(x) {
           length(pn@band) > 1L ||
           length(pn@collapsed) > 0L
       ) {
-        .garry_error(
-          paste0(
-            "warping a computed raster is not supported in v1: align_to() ",
-            "sources before computing on them, or materialise to disk ",
-            "first (write_tif() / materialise())."
-          ),
-          "garry_warp_unsupported_error"
-        )
+        .warp_refusal()
       }
       node_stage[[.key(id)]] <-
         new_proto("warp", id, node@target_grid, node_stage[[.key(pin)]], pin)
@@ -1354,7 +1420,7 @@ plan_lazy <- function(x) {
       if (!all(c("x", "y") %in% node@over)) {
         .garry_error(
           paste0(
-            "reducing over a single spatial axis is not supported in v1; ",
+            "reducing over a single spatial axis is not supported; ",
             "reduce over c(\"x\", \"y\")"
           ),
           "garry_reduce_unsupported_error"
@@ -1368,7 +1434,7 @@ plan_lazy <- function(x) {
             "\" cannot be distributed over spatial ",
             "chunks; algebraic ops (",
             paste(.algebraic_ops, collapse = ", "),
-            ") only (D12). median remains available over t/band."
+            ") only. median remains available over t/band."
           ),
           "garry_reduce_unsupported_error"
         )
@@ -1420,7 +1486,7 @@ plan_lazy <- function(x) {
           # placement restriction. This is also what keeps source-fed
           # kernel chains single-input/single-export for
           # compute-on-read.
-          # Weighted (differentiable) kernels are EXEMPT — see the
+          # Weighted (differentiable) kernels are EXEMPT: see the
           # has_focal setters: the v1 gradient tape requires the
           # whole loss pipeline in one compute stage.
           node_stage[[.key(id)]] <-
@@ -1505,20 +1571,13 @@ plan_lazy <- function(x) {
   protos <- .merge_stages(protos, graph, halos)
   # Chunks are sized on the stages as they stand here: a whole-chunk
   # stage's summed footprint is not one kernel's working set.
-  sized_protos <- protos
+  chunk_dim <- .plan_chunk_dim(graph, protos)
   # "auto"'s costs are measured on CPU
-  merge_mode <- garry_opt("stage_merge")
   if (
-    identical(merge_mode, "chunk") ||
-      (identical(merge_mode, "auto") && identical(garry_opt("device"), "cpu"))
+    identical(garry_opt("stage_merge"), "auto") &&
+      identical(garry_opt("device"), "cpu")
   ) {
-    protos <- .merge_chunk_pipelines(
-      protos,
-      graph,
-      halos,
-      only_worthwhile = identical(merge_mode, "auto"),
-      chunk_dim = .plan_chunk_dim(graph, sized_protos)
-    )
+    protos <- .merge_chunk_pipelines(protos, graph, halos, chunk_dim)
   }
 
   # ---- Phase B: finalise -----------------------------------------------------
@@ -1576,7 +1635,7 @@ plan_lazy <- function(x) {
   # D22: propagate output padding backwards over the stage DAG. A stage
   # whose consumer needs `halo + out_pad` cells computes its chunks
   # enlarged by that ring (recompute, not exchange:
-  # design/halo-propagation.md). Fixpoint iteration — stage ids are
+  # design/halo-propagation.md). Fixpoint iteration: stage ids are
   # creation-ordered, not topological, and the DAG is small.
   repeat {
     changed <- FALSE
@@ -1606,10 +1665,20 @@ plan_lazy <- function(x) {
       .garry_error(
         paste0(
           "a focal window cannot follow a spatial reduction: the reduced ",
-          "value has no neighbourhood to recompute (D22). Materialise ",
+          "value has no neighbourhood to recompute. Materialise ",
           "first or restructure the pipeline."
         ),
         "garry_focal_placement_error"
+      )
+    }
+    if (s$kind == "reduce_combine" && length(cons_idx[[s$id]])) {
+      .garry_error(
+        paste0(
+          "a spatial reduction cannot feed further computation: its value ",
+          "is combined on the host after every chunk has run. collect() ",
+          "it and use the number."
+        ),
+        "garry_reduce_unsupported_error"
       )
     }
   }
@@ -1659,14 +1728,13 @@ plan_lazy <- function(x) {
     protos[[i]]$halo <- if (length(needs)) max(0L, needs) else 0L
   }
 
-  chunk_dim <- .plan_chunk_dim(graph, sized_protos)
   read_px <- .plan_read_px(graph, protos)
   # Fusion-aware read window cap (design/placement-cost-pass.md): a
   # fused kernel executes at READ granularity, so the window must fit
   # one reader's fused working set (input planes + activation cubes)
   # or the placement pass refuses fusion at execute time regardless of
   # its merit. For a source whose sole consumer is a fusable-shaped
-  # chain, cap the window at fuse_reader_mb / act bytes-per-px. Only
+  # chain, cap the window at .fuse_reader_mb / act bytes-per-px. Only
   # under placement = "cost" and cpu device: rules mode never fuses
   # wide kernels, and shrinking its windows would only add read tasks.
   fuse_px_cap <- function(i) {
@@ -1688,7 +1756,7 @@ plan_lazy <- function(x) {
     if (
       C$kind != "compute" ||
         length(C$inputs) != 1L ||
-        length(C$exports %||% integer(0)) != 1L
+        length(C$exports) != 1L
     ) {
       return(Inf)
     }
@@ -1696,7 +1764,7 @@ plan_lazy <- function(x) {
     act <- .stage_fuse_act_bytes_px(graph, C$members, nb)
     max(
       garry_opt("chunk_target_px"),
-      floor(garry_opt("fuse_reader_mb") * 2^20 / act)
+      floor(.fuse_reader_mb * 2^20 / act)
     )
   }
   # Per-stage read window target: a source/warp stage is budgeted by
@@ -1731,8 +1799,7 @@ plan_lazy <- function(x) {
         ) {
           return(prod(as.numeric(chunk_dim)))
         }
-        d <- protos[[i]]$grid@dims
-        nb <- max(1, prod(d[!names(d) %in% c("x", "y")]))
+        nb <- .grid_planes(protos[[i]]$grid)
         return(min(
           read_px,
           max(1, garry_opt("read_budget_mb") * 2^20 / (2 * 4 * nb))
@@ -1760,8 +1827,7 @@ plan_lazy <- function(x) {
     rpx <- read_px_of[[s$id]]
     kc <- .stage_coarsen(graph, s)
     if (kc > 1L && length(cons_idx[[s$id]]) == 0L) {
-      d <- s$grid@dims
-      nb <- max(1, prod(d[!names(d) %in% c("x", "y")]))
+      nb <- .grid_planes(s$grid)
       px <- max(1, garry_opt("ram_budget_mb") * 2^20 / (4 * kc^2 * nb))
       cd <- rep(max(1L, as.integer(floor(sqrt(px)))), 2L)
       rpx <- prod(as.numeric(cd))
@@ -1788,9 +1854,9 @@ plan_lazy <- function(x) {
       },
       inputs = as.integer(s$inputs),
       input_nodes = as.integer(s$input_nodes),
-      exports = as.integer(s$exports %||% integer(0)),
-      out_pad = as.integer(s$out_pad %||% 0L),
-      export_pads = as.integer(s$export_pads %||% integer(0))
+      exports = as.integer(s$exports),
+      out_pad = as.integer(s$out_pad),
+      export_pads = as.integer(s$export_pads)
     )
     rows <- .stage_strip_rows(graph, st)
     if (rows > 0L) {
@@ -1836,7 +1902,7 @@ plan_lazy <- function(x) {
 # members that read stage inputs. `halos` is an optional precomputed
 # required_halo lookup (named by node id); when every member's own
 # requirement is zero the propagation is all-zero and the O(members^2)
-# consumer scan is skipped — the common case, and the merge pass calls
+# consumer scan is skipped: the common case, and the merge pass calls
 # this once per attempted merge on an ever-growing member list.
 .stage_halo <- function(graph, members, input_nodes, halos = NULL) {
   req <- if (is.null(halos)) {
@@ -1895,15 +1961,12 @@ plan_lazy <- function(x) {
 # 110 inputs (~1.5 KB/px). An estimate, not a bound. Shared by the
 # chunking pass (worst stage caps chunk size) and the pooled
 # scheduler's compute-budget balancer (a mask chunk is ~30 B/px, a
-# stacked median ~1.3 KB/px — the budget is what lets many small
+# stacked median ~1.3 KB/px: the budget is what lets many small
 # tasks and few big ones share the pool safely).
 .stage_bytes_per_px <- function(graph, members, input_nodes) {
   outer_max <- max(vapply(
     members,
-    function(id) {
-      d <- graph_get(graph, id)@grid@dims
-      prod(d[!names(d) %in% c("x", "y")])
-    },
+    function(id) .node_outer_nb(graph, id),
     numeric(1)
   ))
   # Inputs price their OUTER dims, not just their count: one coalesced
@@ -1913,10 +1976,7 @@ plan_lazy <- function(x) {
   } else {
     sum(vapply(
       input_nodes,
-      function(nid) {
-        d <- .node_grid(graph_get(graph, nid))@dims
-        max(1, prod(d[!names(d) %in% c("x", "y")]))
-      },
+      function(nid) .node_outer_nb(graph, nid),
       numeric(1)
     ))
   }
@@ -1937,9 +1997,8 @@ plan_lazy <- function(x) {
         if (!S7::S7_inherits(n, ScanNode)) {
           return(0)
         }
-        d <- .node_grid(n)@dims
         cubes <- if (identical(n@direction, "bidir")) 20 else 7
-        8 * cubes * max(1, prod(d[!names(d) %in% c("x", "y")]))
+        8 * cubes * .grid_planes(.node_grid(n))
       },
       numeric(1)
     )
@@ -1970,7 +2029,7 @@ plan_lazy <- function(x) {
 # reducer's layer matrices live in its closure environment, which
 # custom bodies keep (.slim_fn exemption), so matmul flops are
 # recoverable as 2 * sum(nrow x ncol). A custom body without
-# recognisable weights — or any scan — returns NA: unknown compute
+# recognisable weights: or any scan: returns NA: unknown compute
 # cost, which the placement pass treats as never-fuse-uncapped.
 .stage_flops_per_px <- function(graph, members) {
   sum(vapply(
@@ -1994,11 +2053,8 @@ plan_lazy <- function(x) {
         if (!length(n@fn)) {
           return(NA_real_)
         }
-        w <- tryCatch(
-          get("weights", envir = environment(n@fn[[1L]]), inherits = FALSE),
-          error = function(e) NULL
-        )
-        if (is.list(w) && length(w) && all(vapply(w, is.matrix, logical(1)))) {
+        w <- .mlp_weights(n)
+        if (length(w)) {
           return(
             2 *
               sum(vapply(
@@ -2022,7 +2078,7 @@ plan_lazy <- function(x) {
 # fused on a whole read window, in bytes: the input planes plus the
 # widest pair of adjacent live layers of an introspected matmul chain
 # (for elementwise/focal kernels just the input and output planes).
-# A fused kernel executes at READ granularity — no chunking — so this
+# A fused kernel executes at READ granularity: no chunking: so this
 # times the window pixel count is what one reader's XLA client holds
 # live; the placement pass refuses fusion when that does not fit
 # (measured: the 64->256->256->1 AEF MLP at ~2 KB/px ran a 4.2 Mpx
@@ -2044,11 +2100,8 @@ plan_lazy <- function(x) {
         identical(n@op, "custom") &&
         length(n@fn)
     ) {
-      w <- tryCatch(
-        get("weights", envir = environment(n@fn[[1L]]), inherits = FALSE),
-        error = function(e) NULL
-      )
-      if (is.list(w) && length(w) && all(vapply(w, is.matrix, logical(1)))) {
+      w <- .mlp_weights(n)
+      if (length(w)) {
         maxw <- max(maxw, 2 * max(vapply(w, nrow, numeric(1))))
       }
     }
@@ -2089,15 +2142,7 @@ plan_lazy <- function(x) {
   # An explicitly set chunk_target_px still wins (tests, tuning).
   has_patch <- any(vapply(
     protos,
-    function(s) {
-      any(vapply(
-        s$members,
-        function(id) {
-          S7::S7_inherits(graph_get(graph, id), PatchNode)
-        },
-        logical(1)
-      ))
-    },
+    function(s) .has_member(graph, s$members, PatchNode),
     logical(1)
   ))
   if (has_patch && is.null(getOption("garry.chunk_target_px"))) {
@@ -2141,7 +2186,7 @@ plan_lazy <- function(x) {
 # a 145-band MLP predict reads in windows ~140x smaller and holds the
 # same bytes. The set is priced in BYTES per pixel (4 B x each input's
 # outer-dim product), so one coalesced 145-band source input sizes the
-# window exactly as 145 per-band inputs did — residency is identical,
+# window exactly as 145 per-band inputs did: residency is identical,
 # only the task and region count differ.
 .plan_read_px <- function(graph, protos) {
   set_bpx <- vapply(
@@ -2154,10 +2199,8 @@ plan_lazy <- function(x) {
         s$input_nodes,
         function(nid) {
           g <- .node_grid(graph_get(graph, nid))
-          d <- g@dims
           # true element size: f64 inputs pin twice the bytes (L4)
-          (if (identical(g@dtype, "f64")) 8 else 4) *
-            max(1, prod(d[!names(d) %in% c("x", "y")]))
+          (if (identical(g@dtype, "f64")) 8 else 4) * .grid_planes(g)
         },
         numeric(1)
       ))
@@ -2174,7 +2217,7 @@ plan_lazy <- function(x) {
   halo,
   kind,
   chunk_dim,
-  read_px = garry_opt("read_target_px")
+  read_px
 ) {
   if (kind == "reduce_combine") {
     return(ChunkGrid(

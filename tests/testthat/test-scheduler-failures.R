@@ -41,7 +41,7 @@ test_that("a failing kernel aborts classed and leaves a clean store", {
   f <- fixture_gradient_f32()
   pids <- .sf_pids()
   before <- .sf_shm(pids)
-  bomb <- lazy_map(lazy_source(f), fn = function(v) stop("kernel bomb"))
+  bomb <- lazy_map(lazy_source(f), fn = function(v) stop("kernel bomb"), dtype = "f32")
   err <- expect_error(
     suppressWarnings(collect(bomb, distributed = TRUE)),
     class = "garry_task_error")
@@ -84,4 +84,15 @@ test_that("a daemon dying mid-drain aborts classed; pools are rebuildable", {
   got <- collect(lazy_source(f) + 1, distributed = TRUE)
   want <- collect(lazy_source(f) + 1, distributed = FALSE)
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
+})
+
+test_that("a deadlock names what is blocked and what is holding it", {
+  err <- expect_error(
+    garry:::.scheduler_deadlock(3L, "s4_c2", "comp", 512, 400, 1024),
+    class = "garry_scheduler_error"
+  )
+  msg <- conditionMessage(err)
+  for (want in c("3 tasks", "s4_c2", "comp", "512", "400", "1024", "garry.read_budget_mb")) {
+    expect_match(msg, want, fixed = TRUE)
+  }
 })

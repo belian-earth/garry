@@ -81,7 +81,7 @@ test_that("a uniform plan re-masks a pool a mixed scan plan left behind", {
   on.exit(for (n in names(old)) assign(n, old[[n]], envir = st), add = TRUE)
   calls <- 0L
   local_mocked_bindings(
-    .pool_affinity_apply = function(profile, n, k = NULL, pids = NULL) {
+    .pool_affinity_apply = function(pids, k = NULL) {
       calls <<- calls + 1L
       k
     },
@@ -89,12 +89,34 @@ test_that("a uniform plan re-masks a pool a mixed scan plan left behind", {
   )
   assign("comp_pids", 1:4, envir = st)
   assign("comp_threads", 2L, envir = st)
-  garry:::.comp_pool_shape(4L, TRUE, n_scan = 1L) # mixed
+  garry:::.comp_pool_shape(4L, 1L) # mixed
   expect_true(st$comp_mixed)
   calls <- 0L
-  garry:::.comp_pool_shape(4L, FALSE) # uniform, same width as the narrow masks
+  garry:::.comp_pool_shape(4L) # uniform, same width as the narrow masks
   expect_identical(calls, 1L)
   expect_false(st$comp_mixed)
-  garry:::.comp_pool_shape(4L, FALSE) # now settled: no re-mask
+  garry:::.comp_pool_shape(4L) # now settled: no re-mask
   expect_identical(calls, 1L)
+})
+
+test_that("a mask that cannot be set says so", {
+  skip_if(garry:::.garry_cores()$logical <= 2L, "needs more than 2 CPUs")
+  bin <- withr::local_tempdir()
+  fake <- file.path(bin, "taskset")
+  writeLines(c("#!/bin/sh", "echo 'CPU not allowed' >&2", "exit 1"), fake)
+  Sys.chmod(fake, "755")
+  withr::local_envvar(PATH = bin)
+  err <- expect_warning(
+    v <- garry:::.pool_affinity_apply(Sys.getpid(), k = 2L),
+    class = "garry_affinity_warning"
+  )
+  expect_null(v)
+  expect_match(conditionMessage(err), "CPU not allowed", fixed = TRUE)
+  unlink(fake)
+  expect_warning(
+    v <- garry:::.pool_affinity_apply(Sys.getpid(), k = 2L),
+    "not installed",
+    class = "garry_affinity_warning"
+  )
+  expect_null(v)
 })

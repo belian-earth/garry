@@ -7,8 +7,8 @@ NULL
 #
 # A Stage is one schedulable unit: a set of composed IR nodes, ONE closure
 # built from the garry op vocabulary, a halo, a chunk grid, and its input
-# stages. The same closure runs under the pure-R oracle (Phase 3 tests)
-# and under anvl jit() (Phase 5) — that equivalence is the point.
+# stages. The same closure runs under the pure-R oracle and under anvl
+# jit(): that equivalence is the point.
 #
 # Calling conventions by kind:
 # - "source_read":    fn is identity; the executor reads the (halo-padded)
@@ -19,7 +19,7 @@ NULL
 # - "reduce_partial": fn(inputs) -> named list of per-chunk partials.
 # - "reduce_combine": fn(partials) with `partials` a list over chunks of
 #                     the partial lists; returns the final array/scalar.
-# - "warp":           executed by GDAL (Phase 4b); fn is identity.
+# - "warp":           executed by GDAL; fn is identity.
 #
 # Halo contract (D14, generalised by D22): stage inputs arrive padded to
 # exactly `halo + out_pad` cells per side; cells outside the raster are
@@ -58,7 +58,7 @@ NULL
 #'   each export value carries (post-focal exports carry less than
 #'   pre-focal ones). Empty means all zero.
 #' @param strip_rows Rows per strip when `fn` runs a compute stage's
-#'   members over row strips of each chunk (see `garry.scan_strip_px`);
+#'   members over row strips of each chunk (`.scan_strip_px` cells each);
 #'   0 runs the whole chunk at once.
 #' @return A `Stage`.
 #' @export

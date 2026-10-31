@@ -4,14 +4,12 @@
 \alias{stage_raw_cube}
 \title{Stage a GDAL raster as a raw-BSQ cube (\code{.bin} + sibling \code{.vrt}).}
 \usage{
-stage_raw_cube(src, dst_vrt, slab_rows = 512L)
+stage_raw_cube(src, dst_vrt)
 }
 \arguments{
 \item{src}{Source path readable by GDAL.}
 
 \item{dst_vrt}{Destination \code{.vrt} path (the \code{.bin} lands beside it).}
-
-\item{slab_rows}{Rows per read/write slab (memory bound).}
 }
 \value{
 \code{dst_vrt}, invisibly.

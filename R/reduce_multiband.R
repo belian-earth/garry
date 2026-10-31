@@ -16,10 +16,13 @@
 # can never be selected. A pixel with no valid timestep returns NaN.
 # ---------------------------------------------------------------------------
 
+# Distance regulariser: guards a Weiszfeld weight at zero distance.
+.mb_eps <- 1e-7
+
 # Shared prelude: validate the cube, zero-fill NaN, per-timestep bad
 # mask, and the Weiszfeld iteration. Returns everything the two
 # reducers need.
-.mb_weiszfeld <- function(x, dims, iters, eps) {
+.mb_weiszfeld <- function(x, dims, iters) {
   td <- as.integer(dims)
   sh <- if (.g_traced(x)) .g_shape(x) else dim(x)
   if (length(sh) != 4L || !identical(td, 2L)) {
@@ -41,7 +44,7 @@
   for (k in seq_len(iters)) {
     mf <- g_expand(m, 2L, T_) # (band,t,y,x)
     d2 <- g_sum((x - mf) * (x - mf), dims = 1L) # (t,y,x), NaN at masked t
-    w <- g_ifelse(badt > 0, 0, 1 / (sqrt(d2) + eps)) # (t,y,x)
+    w <- g_ifelse(badt > 0, 0, 1 / (sqrt(d2) + .mb_eps)) # (t,y,x)
     num <- g_sum(g_expand(w, 1L, B) * x0, dims = td) # (B,y,x)
     den <- g_sum(w, dims = 1L) # (y,x)
     m <- num / g_expand(den, 1L, B) # all-masked: 0/0 = NaN
@@ -69,22 +72,17 @@
 #' axis survives.
 #'
 #' @param iters Weiszfeld iterations (fixed, unrolled).
-#' @param eps Distance regulariser (guards the weight at zero distance).
 #' @return A reducer `fn(x, dims)` for [reduce_over()].
 #' @seealso [medoid()], [reduce_over()]; [band_project()] and
 #'   [mlp_project()] for projections over the surviving band axis.
 #' @export
-geomedian <- function(iters = 12L, eps = 1e-7) {
+geomedian <- function(iters = 12L) {
   iters <- as.integer(iters)
   if (length(iters) != 1L || is.na(iters) || iters < 1L) {
     cli::cli_abort("{.arg iters} must be a positive integer")
   }
-  if (!is.numeric(eps) || length(eps) != 1L || !is.finite(eps) || eps <= 0) {
-    cli::cli_abort("{.arg eps} must be a finite positive scalar")
-  }
   force(iters)
-  force(eps)
-  function(x, dims) .mb_weiszfeld(x, dims, iters, eps)$m
+  function(x, dims) .mb_weiszfeld(x, dims, iters)$m
 }
 
 #' Medoid reducer over time (multivariate).
@@ -105,18 +103,14 @@ geomedian <- function(iters = 12L, eps = 1e-7) {
 #' @seealso [geomedian()], [reduce_over()]; [band_project()] and
 #'   [mlp_project()] for projections over the surviving band axis.
 #' @export
-medoid <- function(iters = 12L, eps = 1e-7) {
+medoid <- function(iters = 12L) {
   iters <- as.integer(iters)
   if (length(iters) != 1L || is.na(iters) || iters < 1L) {
     cli::cli_abort("{.arg iters} must be a positive integer")
   }
-  if (!is.numeric(eps) || length(eps) != 1L || !is.finite(eps) || eps <= 0) {
-    cli::cli_abort("{.arg eps} must be a finite positive scalar")
-  }
   force(iters)
-  force(eps)
   function(x, dims) {
-    p <- .mb_weiszfeld(x, dims, iters, eps)
+    p <- .mb_weiszfeld(x, dims, iters)
     mf <- g_expand(p$m, 2L, p$T_) # (band,t,y,x)
     d2 <- g_sum((x - mf) * (x - mf), dims = 1L) # (t,y,x)
     d <- g_ifelse(p$badt > 0, Inf, sqrt(d2)) # masked never wins

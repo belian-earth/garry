@@ -69,13 +69,14 @@ test_that("the planner strips scan stages only", {
       logical(1)
     )
   }
-  withr::local_options(garry.scan_strip_px = 180)
+  testthat::local_mocked_bindings(.scan_strip_px = 180)
   p <- collect(sm$mean, plan_only = TRUE)
   rows <- vapply(p@stages, function(s) s@strip_rows, integer(1))
   expect_true(any(has_scan(p)))
   expect_true(all(rows[!has_scan(p)] == 0L))
   expect_true(all(rows[has_scan(p)] == 3L)) # 180 cells over a 60-wide chunk
-  withr::local_options(garry.scan_strip_px = 0)
+  # a strip wider than the chunk is the whole chunk
+  testthat::local_mocked_bindings(.scan_strip_px = 1e9)
   p0 <- collect(sm$mean, plan_only = TRUE)
   expect_true(all(
     vapply(p0@stages, function(s) s@strip_rows, integer(1)) == 0L
@@ -92,18 +93,16 @@ test_that("stripped scan stages equal whole chunks, in process and on daemons", 
   stk <- .strip_stack()
   sm <- kalman_smooth(stk, 1, 0.1, 1.4, robust_iters = 1L)
   run <- function(px, chunk_px, distributed) {
-    withr::local_options(
-      garry.scan_strip_px = px,
-      garry.chunk_target_px = chunk_px
-    )
+    withr::local_options(garry.chunk_target_px = chunk_px)
+    testthat::local_mocked_bindings(.scan_strip_px = px)
     lapply(sm, collect, distributed = distributed)
   }
-  whole <- run(0, 1e6, FALSE)
+  whole <- run(1e9, 1e6, FALSE)
   # one chunk in 3-row strips (13 strips and a padded 14th), then
   # several chunks, each with its own padded strip
   expect_identical(run(180, 1e6, FALSE), whole)
   expect_identical(run(180, 600, FALSE), whole)
   local_pools(2, 2)
-  expect_identical(run(180, 600, TRUE), run(0, 600, TRUE))
+  expect_identical(run(180, 600, TRUE), run(1e9, 600, TRUE))
   expect_equal(run(180, 600, TRUE), whole, tolerance = 1e-6, ignore_attr = TRUE)
 })

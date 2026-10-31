@@ -4,12 +4,10 @@
 \alias{geomedian}
 \title{Geometric median reducer over time (multivariate).}
 \usage{
-geomedian(iters = 12L, eps = 1e-07)
+geomedian(iters = 12L)
 }
 \arguments{
 \item{iters}{Weiszfeld iterations (fixed, unrolled).}
-
-\item{eps}{Distance regulariser (guards the weight at zero distance).}
 }
 \value{
 A reducer \code{fn(x, dims)} for \code{\link[=reduce_over]{reduce_over()}}.

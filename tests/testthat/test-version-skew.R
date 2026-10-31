@@ -28,3 +28,33 @@ test_that("a skewed token aborts classed, naming both hashes", {
                       class = "garry_version_skew_error")
   expect_match(conditionMessage(err), "deadbeef-host-token")
 })
+
+test_that("a daemon that cannot answer says why, and is not called skewed", {
+  local_pools(1, 1)
+  mirai::everywhere({
+    ns <- asNamespace("garry")
+    unlockBinding(".garry_abi_token", ns)
+    assign(".garry_abi_token", function() stop("package garry is broken here"), envir = ns)
+  }, .compute = "garry_write")
+  err <- expect_error(
+    garry:::.garry_abi_check("garry_write"),
+    class = "garry_version_skew_error"
+  )
+  expect_match(conditionMessage(err), "package garry is broken here", fixed = TRUE)
+})
+
+test_that("every cross-process entry point is in the ABI token", {
+  r_dir <- testthat::test_path("..", "..", "R")
+  skip_if(!dir.exists(r_dir), "package sources not available")
+  code <- unlist(lapply(
+    list.files(r_dir, pattern = "\\.R$", full.names = TRUE),
+    readLines,
+    warn = FALSE
+  ))
+  code <- sub("^\\s*#.*$", "", code) # roxygen and comments
+  m <- regmatches(code, gregexpr('asNamespace\\("garry"\\)\\$[.A-Za-z_]+', code))
+  called <- unique(sub(".*\\$", "", unlist(m)))
+  called <- called[!grepl("^\\.daemon_", called) & called != ".garry_abi_token"]
+  expect_gt(length(called), 0L)
+  expect_setequal(called, garry:::.garry_abi_extra)
+})

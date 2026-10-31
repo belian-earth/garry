@@ -40,8 +40,9 @@ test_that("shrink_footprint erodes nodata boundaries by the radius", {
 test_that("shrink_footprint validates radius", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
-  expect_error(shrink_footprint(a, radius = 0), "positive")
-  expect_error(shrink_footprint(a, radius = c(1, 2)), "positive")
+  expect_error(shrink_footprint(a, radius = 0), "whole number")
+  expect_error(shrink_footprint(a, radius = 1.9), "whole number")
+  expect_error(shrink_footprint(a, radius = c(1, 2)), "whole number")
 })
 
 test_that("boundary = 'keep' erodes real nodata only and keeps the frame", {

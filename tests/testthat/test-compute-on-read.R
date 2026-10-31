@@ -53,13 +53,8 @@ test_that("source-fed kernel chains execute on their read tasks", {
   old <- options(garry.chunk_target_px = 400, garry.task_log = tlog,
                  garry.placement = "rules")
   on.exit(options(old), add = TRUE)
-  for (st in "mori") {
-    old_st <- options(garry.store = st)
-    dist <- execute_plan_mirai(p)
-    options(old_st)
-    expect_equal(dist, single, tolerance = 1e-12,
-                 label = paste("compute-on-read", st))
-  }
+  dist <- execute_plan_mirai(p)
+  expect_equal(dist, single, tolerance = 1e-12, label = "compute-on-read")
 
   # the fused stage never got chunk tasks of its own
   tl <- read.csv(tlog)

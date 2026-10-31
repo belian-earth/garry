@@ -51,9 +51,9 @@ Node <- S7::new_class(
 #' A GDAL-readable source: path + band + optional nodata sentinel.
 #'
 #' Created by [lazy_source()]. A declared `nodata` on an integer source
-#' promotes the source's output dtype to f32 so NaN can carry nodata
-#' downstream; the executor rewrites `value == nodata` to NaN at read
-#' time.
+#' promotes the source's output dtype to the float that holds it (f32 up
+#' to 16 bits, else f64) so NaN can carry nodata downstream; the executor
+#' rewrites `value == nodata` to NaN at read time.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -145,19 +145,21 @@ SourceNode <- S7::new_class(
 #'   Pure metadata: never read by the planner or executors; surfaced by
 #'   [plan_draw()] and [plan_view()].
 #' @param fn Elementwise R function.
+#' @param dtype Length-0 (the dtype `fn` was traced to return) or length-1
+#'   dtype named by the caller of [lazy_map()].
 #' @return A `MapNode`.
 #' @export
 MapNode <- S7::new_class(
   "MapNode",
   parent = Node,
   properties = list(
-    fn = S7::class_function
+    fn = S7::class_function,
+    dtype = S7::class_character
   )
 )
 
-#' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
-#' "nodata", the only policy: cells beyond the raster edge are NaN.
-#' Created by [focal_map()] and [focal_kernel()].
+#' Focal (stencil) op. `radius` is the halo in pixels; cells beyond the
+#' raster edge are NaN. Created by [focal_map()] and [focal_kernel()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -167,7 +169,6 @@ MapNode <- S7::new_class(
 #'   [plan_draw()] and [plan_view()].
 #' @param fn Neighbourhood function (over the list of shifted arrays).
 #' @param radius Halo radius in pixels.
-#' @param boundary Boundary policy: `"nodata"`.
 #' @param weights Optional linear kernel, flattened row-major over
 #'   (dy, dx), length (2*radius+1)^2. When present the op is the
 #'   weighted sum and is differentiable wrt the weights.
@@ -179,13 +180,9 @@ FocalNode <- S7::new_class(
   properties = list(
     fn = S7::class_function,
     radius = S7::class_integer,
-    boundary = S7::class_character,
     weights = S7::class_numeric
   ),
   validator = function(self) {
-    if (!identical(self@boundary, "nodata")) {
-      return("`boundary` must be \"nodata\"")
-    }
     if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 0L) {
       return("`radius` must be a single non-negative integer")
     }
@@ -376,29 +373,6 @@ StackNode <- S7::new_class(
   parent = Node,
   properties = list(
     along = S7::class_character
-  )
-)
-
-#' Output of the composition pass. Holds a composed R function assembled
-#' from its members; ready for `anvl::jit()` at execution time.
-#'
-#' @param id Integer node id (assigned by `graph_add()`).
-#' @param parents Integer ids of parent nodes (may be empty).
-#' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
-#'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [plan_draw()] and [plan_view()].
-#' @param fn Composed stage function.
-#' @param members Ids of the absorbed nodes.
-#' @param halo Combined halo radius of the members.
-#' @return A `FusedNode`.
-FusedNode <- S7::new_class(
-  "FusedNode",
-  parent = Node,
-  properties = list(
-    fn = S7::class_function,
-    members = S7::class_integer, # ids of absorbed nodes
-    halo = S7::class_integer
   )
 )
 

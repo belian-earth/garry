@@ -31,7 +31,7 @@ test_that("sources of different dtypes never share a program", {
   .kp_same(lazy_map(lazy_source(.kp_tif(.kp_vals(), "Int16")), fn = fn, dtype = "f32"))
 })
 
-test_that("a map that returns another dtype than it declares still runs", {
+test_that("a float map over integers feeds the stages after it", {
   local_pools(2, 1)
   src <- lazy_source(.kp_tif(.kp_vals(), "UInt16"))
   y <- lazy_map(src, fn = function(v) v * 1e-4)
@@ -52,8 +52,9 @@ test_that("a global a kernel reads is part of its identity", {
   withr::defer(rm("garry_kp_k", envir = globalenv()))
   assign("garry_kp_k", 2, envir = globalenv())
   x <- lazy_map(lazy_source(f), fn = fn, dtype = "f32")
-  a <- tryCatch(collect(x, distributed = TRUE), error = function(e) NULL)
-  skip_if(is.null(a), "globals do not reach daemons")
+  # a closure resolves its globals on the daemon, where this one is absent
+  skip_if(identical(garry_opt("kernel_wire"), "closure"), "globals do not reach daemons")
+  a <- collect(x, distributed = TRUE)
   assign("garry_kp_k", 3, envir = globalenv())
   x <- lazy_map(lazy_source(f), fn = fn, dtype = "f32")
   b <- collect(x, distributed = TRUE)
@@ -74,6 +75,170 @@ test_that("kernels capturing different arrays never share a program", {
   b <- collect(mk(3), distributed = TRUE)
   expect_equal(unclass(b) / unclass(a), matrix(1.5, nrow(a), ncol(a)),
                tolerance = 1e-6, ignore_attr = TRUE)
+})
+
+test_that("a fused integer kernel comes back as integers", {
+  local_pools(2, 1)
+  for (ty in c("UInt16", "Int16", "Int32")) {
+    .kp_same(lazy_map(lazy_source(.kp_tif(.kp_vals(), ty)), fn = function(v) v + 1L))
+  }
+})
+
+test_that("a declared dtype holds inside a stage as it does across one", {
+  a <- lazy_map(lazy_source(.kp_tif(rep(5, 4096))), fn = function(v) v / 3, dtype = "i16")
+  expect_equal(unique(as.vector(collect(a * 2L, distributed = FALSE))), 2)
+})
+
+test_that("a logical map feeds a select in the next map", {
+  a <- lazy_map(lazy_source(.kp_tif(rep(5, 4096))), fn = function(v) v > 0)
+  b <- lazy_map(a, fn = function(m) g_ifelse(m, 2, 3))
+  expect_equal(unique(as.vector(collect(b, distributed = FALSE))), 2)
+})
+
+test_that("arrays held in a classed list or an environment are identity", {
+  arr <- function(k) anvl::nv_array(array(k, c(64L, 64L)), dtype = "f32")
+  in_list <- function(k) {
+    m <- structure(list(w = arr(k)), class = "garry_kp_model")
+    function(v) v * m$w
+  }
+  in_env <- function(k) {
+    e <- new.env()
+    e$w <- arr(k)
+    e$self <- e
+    function(v) v * e$w
+  }
+  # an array's handle hashes alike across collections of its buffer, so
+  # only its content can tell two apart
+  for (mk in list(in_list, in_env)) {
+    ids <- vapply(1:6, function(k) {
+      id <- rlang::hash(garry:::.fn_identity(mk(k)))
+      gc()
+      id
+    }, character(1))
+    expect_equal(anyDuplicated(ids), 0L)
+    expect_identical(ids[[3L]], rlang::hash(garry:::.fn_identity(mk(3))))
+  }
+})
+
+test_that("a kernel that calls itself has an identity", {
+  mk <- function(k) {
+    f <- function(v, n) if (n == 0) v + k else f(v + 1, n - 1)
+    function(v) f(v, 3)
+  }
+  expect_identical(
+    rlang::hash(garry:::.fn_identity(mk(1))),
+    rlang::hash(garry:::.fn_identity(mk(1)))
+  )
+  expect_false(identical(
+    rlang::hash(garry:::.fn_identity(mk(1))),
+    rlang::hash(garry:::.fn_identity(mk(2)))
+  ))
+  x <- lazy_map(lazy_source(.kp_tif(rep(5, 4096))), fn = mk(1), dtype = "f32")
+  expect_equal(unique(as.vector(collect(x, distributed = FALSE))), 9)
+})
+
+test_that("identity holds what a kernel reads from the session, not all it could", {
+  bare <- function(v) v
+  expect_length(garry:::.fn_identity(bare)$globals, 0L)
+  on_global <- function(v) v * garry_kp_scale
+  environment(on_global) <- globalenv()
+  assign("garry_kp_scale", 2, envir = globalenv())
+  assign("garry_kp_dt", 1, envir = globalenv())
+  withr::defer(rm("garry_kp_scale", "garry_kp_dt", envir = globalenv()))
+  mk <- function() {
+    garry_kp_dt <- "f32"
+    function(v) g_cast(v, garry_kp_dt)
+  }
+  captured <- mk()
+  a <- rlang::hash(garry:::.fn_identity(captured))
+  assign("garry_kp_dt", 2, envir = globalenv())
+  expect_identical(rlang::hash(garry:::.fn_identity(captured)), a)
+  # a name a namespace resolves before the session does
+  ns_fn <- function(v) g_max(v, 1L)
+  environment(ns_fn) <- new.env(parent = asNamespace("garry"))
+  b <- rlang::hash(garry:::.fn_identity(ns_fn))
+  assign("g_max", function(...) 1, envir = globalenv())
+  withr::defer(rm("g_max", envir = globalenv()))
+  expect_identical(rlang::hash(garry:::.fn_identity(ns_fn)), b)
+  # and a global it really reads still counts
+  g <- rlang::hash(garry:::.fn_identity(on_global))
+  assign("garry_kp_scale", 3, envir = globalenv())
+  expect_false(identical(rlang::hash(garry:::.fn_identity(on_global)), g))
+})
+
+test_that("a kernel with very many inputs stays addressable", {
+  n <- 1500L
+  sets <- list(rep(list(c(8L, 8L)), n))
+  dtypes <- rep("f32", n)
+  tag <- garry:::.program_tag(dtypes, sets)
+  expect_lt(nchar(tag), 100L)
+  set <- garry:::.program_set(
+    paste0("kp-wide", tag),
+    function(inputs) list(inputs[[1L]] * 2),
+    dtypes,
+    sets
+  )
+  run <- garry:::.kernel_of(set)
+  x <- g_upload(matrix(1, 8, 8), "f32")
+  expect_equal(as.numeric(g_download(run(rep(list(x), n))[[1L]])), rep(2, 64))
+})
+
+test_that("an integer stage's edge ring holds 0, not NaN, at every width", {
+  f <- .kp_tif(rep(5, 4096))
+  for (dt in c("i64", "u32", "i32")) {
+    g <- graph_new()
+    maps <- lapply(1:2, function(b) {
+      lazy_map(lazy_source(f, graph = g), fn = function(x) g_cast(x, dt))
+    })
+    b <- lazy_map(
+      lazy_stack(maps, along = "band"),
+      fn = function(v) g_cast(v, "f32"),
+      dtype = "f32"
+    )
+    x <- focal_map(b, radius = 1L, fn = function(sh) Reduce(`+`, sh))
+    v <- collect(x, distributed = FALSE)
+    expect_equal(range(v), c(20, 45))
+  }
+})
+
+test_that("a set holds each constant once, and a kernel drops its R copy", {
+  w <- anvl::nv_array(rep(1, 8L), dtype = "f32")
+  u <- anvl::nv_array(rep(2, 8L), dtype = "f32")
+  fn <- function(inputs) list(inputs[[1L]] + g_sum(w) + g_sum(u))
+  set <- garry:::.program_set(
+    "kp-constants", fn, "f32", list(list(c(4L, 4L)), list(c(4L, 8L)))
+  )
+  expect_length(attr(set, "constants"), 2L)
+  run <- garry:::.kernel_of(set)
+  a <- run(list(g_upload(matrix(1, 4, 4), "f32")))
+  b <- run(list(g_upload(matrix(1, 4, 8), "f32")))
+  expect_equal(as.numeric(g_download(a[[1L]])), rep(25, 16))
+  expect_equal(as.numeric(g_download(b[[1L]])), rep(25, 32))
+  e <- environment(run)
+  expect_length(Filter(Negate(is.null), e$pool), 0L)
+})
+
+test_that("constants made while tracing cross as bytes, whatever their dtype", {
+  fn <- function(inputs) {
+    k <- anvl::nv_array(c(1, 2, 3, 4), dtype = "f32")
+    m <- anvl::nv_array(c(TRUE, FALSE, TRUE, TRUE), dtype = "bool")
+    i <- anvl::nv_array(1:4, dtype = "i32")
+    list(g_ifelse(m, k, 0) + g_cast(i, "f32") + inputs[[1L]])
+  }
+  set <- garry:::.program_set("kp-plain", fn, "f32", list(list(4L)))
+  run <- garry:::.kernel_of(set)
+  got <- run(list(g_upload(c(10, 10, 10, 10), "f32")))[[1L]]
+  expect_equal(as.numeric(g_download(got)), c(12, 12, 16, 18))
+})
+
+test_that("warming a kernel compiles its first shape alone", {
+  set <- garry:::.program_set(
+    "kp-warm", function(inputs) list(inputs[[1L]] * 2), "f32",
+    list(list(c(4L, 4L)), list(c(4L, 8L)), list(c(8L, 4L)))
+  )
+  run <- garry:::.kernel_of(set)
+  attr(run, "warm")()
+  expect_equal(sum(!vapply(environment(run)$compiled, is.null, logical(1))), 1L)
 })
 
 test_that("a cube's outer dims keep their rank, size-one dims included", {
@@ -121,8 +286,10 @@ test_that("a kernel refuses inputs it was not built for", {
     as.numeric(g_download(run(list(g_upload(matrix(1, 4, 4), "f32")))[[1L]])),
     rep(2, 16)
   )
-  expect_error(run(list(g_upload(matrix(1, 4, 4), "u16"))), "garry_no_program")
-  expect_error(run(list(g_upload(matrix(1, 5, 5), "f32"))), "garry_no_program")
+  err <- expect_error(run(list(g_upload(matrix(1, 4, 4), "u16"))), class = "garry_no_program_error")
+  expect_match(conditionMessage(err), "i32:4x4", fixed = TRUE)
+  expect_match(conditionMessage(err), "garry.kernel_wire", fixed = TRUE)
+  expect_error(run(list(g_upload(matrix(1, 5, 5), "f32"))), class = "garry_no_program_error")
 })
 
 test_that("identity follows globals, recursive ones included", {
@@ -147,5 +314,8 @@ test_that("a deep hygiene pass forgets which kernels daemons hold", {
 })
 
 test_that("a read lost to a dead connection is a failed read, not data", {
-  expect_length(garry:::.gd_fetch_errs(list(structure(19L, class = "errorValue"))), 1L)
+  expect_error(
+    garry:::.gd_check_fetch(list(structure(19L, class = "errorValue")), "source"),
+    "daemon exited"
+  )
 })

@@ -384,7 +384,7 @@ Resolution:
 - Content-addressed kernel cache: host ships a `ck` (hash of slimmed
   F/op/nan_rm/affine/masked/device; mask kernel: chain sig + halo +
   dims) and the daemon get-or-creates the JitFunction in
-  `.daemon_cache` (`.gd_cached_jit`); `.gd_lean_fn` rebuilds one
+  `.daemon_cache` (`.daemon_kernel`); `.gd_lean_fn` rebuilds one
   canonical closure for both the real task and the warm.
 - Strip decomposition: band medians split into equal-height row
   strips (`.gd_strip_bounds`, <=2 shapes; `gd_strips` option, auto =

@@ -27,17 +27,11 @@ test_that("pooled distributed == single-threaded; pools stay lean", {
       reduce_over(a * 2, "mean", c("x", "y"), nan_rm = TRUE)
     })
   )
-  stores <- "mori"
   for (nm in names(pipelines)) {
     p <- plan_lazy(pipelines[[nm]])
     single <- execute_plan(p)
-    for (st in stores) {
-      old_st <- options(garry.store = st)
-      dist <- execute_plan_mirai(p)
-      options(old_st)
-      expect_equal(dist, single, tolerance = 1e-12,
-                   label = paste("pooled", nm, st))
-    }
+    dist <- execute_plan_mirai(p)
+    expect_equal(dist, single, tolerance = 1e-12, label = paste("pooled", nm))
   }
 
   # (Read daemons stay anvl-free: compute tasks never spill onto them.)

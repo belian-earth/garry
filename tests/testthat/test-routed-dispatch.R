@@ -22,7 +22,7 @@ test_that("routed pools create N width-1 profiles and tear down clean", {
   expect_identical(garry:::.comp_profiles(), "garry_comp_1")
   expect_identical(garry:::.gd_n_compute("garry_comp_3"), 0L)
   garry_daemons(0, 0, gdal_config = FALSE)
-  expect_identical(garry:::.comp_profiles(), "garry_compute")
+  expect_identical(garry:::.comp_profiles(), character(0))
   expect_false(garry_daemons_set())
 })
 

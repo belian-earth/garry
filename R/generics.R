@@ -25,37 +25,7 @@ S7::method(required_halo, ReduceNode) <- function(node) 0L
 S7::method(required_halo, ScanNode) <- function(node) 0L
 S7::method(required_halo, WarpNode) <- function(node) 0L
 S7::method(required_halo, StackNode) <- function(node) 0L
-S7::method(required_halo, FusedNode) <- function(node) node@halo
 S7::method(required_halo, PatchNode) <- function(node) node@radius
-
-#' Can this node be composed with fusable neighbours into a single kernel?
-#'
-#' Part of the extension API for authors of new node classes; not
-#' needed for ordinary use of the package.
-#'
-#' @param node An intermediate representation (IR) `Node`.
-#' @param ... Passed to methods.
-#' @return `TRUE` or `FALSE`.
-fusable <- S7::new_generic("fusable", "node")
-S7::method(fusable, MapNode) <- function(node) TRUE
-S7::method(fusable, FocalNode) <- function(node) TRUE
-S7::method(fusable, StackNode) <- function(node) TRUE
-S7::method(fusable, PatchNode) <- function(node) TRUE
-S7::method(fusable, Node) <- function(node) FALSE # default: barrier
-
-#' Does this node force a stage boundary?
-#'
-#' Part of the extension API for authors of new node classes; not
-#' needed for ordinary use of the package.
-#'
-#' @param node An intermediate representation (IR) `Node`.
-#' @param ... Passed to methods.
-#' @return `TRUE` or `FALSE`.
-is_barrier <- S7::new_generic("is_barrier", "node")
-S7::method(is_barrier, ReduceNode) <- function(node) TRUE
-S7::method(is_barrier, ScanNode) <- function(node) TRUE
-S7::method(is_barrier, WarpNode) <- function(node) TRUE
-S7::method(is_barrier, Node) <- function(node) FALSE
 
 #' Compute the output grid given this node and its parents' grids.
 #'
@@ -96,7 +66,7 @@ S7::method(output_grid, StackNode) <- function(node, parent_grids) {
   # follow it, so dims order here mirrors .dim_layout(): stacking
   # (t, y, x) cubes along "band" yields a (band, t, y, x) cube whose
   # grid is (x, y, band, t). Parent labels (slice dates) carry through.
-  extras <- pg@dims[setdiff(names(pg@dims), c("x", "y"))]
+  extras <- .grid_outer(pg)
   dims <- c(
     pg@dims[c("x", "y")],
     stats::setNames(length(parent_grids), node@along),
@@ -110,9 +80,6 @@ S7::method(output_grid, StackNode) <- function(node, parent_grids) {
     dtype = dtype,
     labels = pg@labels
   )
-}
-S7::method(output_grid, FusedNode) <- function(node, parent_grids) {
-  parent_grids[[1L]]
 }
 S7::method(output_grid, WarpNode) <- function(node, parent_grids) {
   node@target_grid
@@ -147,17 +114,19 @@ S7::method(output_grid, PatchNode) <- function(node, parent_grids) {
 }
 
 # Output dtype of a reduction (decision D7/D12): float-producing ops
-# promote integers to f32; count is i32; a sum widens 8- and 16-bit
-# integers to i32 and u32 to i64, as g_sum() accumulates them; the
-# extremes keep their input dtype.
-.reduce_dtype <- function(op, dtype) {
+# promote integers to f32; count is i32; the extremes keep their input
+# dtype. A sum widens as g_sum() accumulates: 8- and 16-bit integers to
+# i32, 32-bit integers to i64. Over x or y a sum runs across a whole
+# raster, not a short stack, so 8- and 16-bit integers take i64 too.
+.reduce_dtype <- function(op, dtype, over = character(0)) {
+  narrow <- dtype %in% c("i8", "i16", "u8", "u16")
   if (op %in% c("mean", "median")) {
     if (.dtype_family(dtype) == "float") dtype else "f32"
   } else if (op == "count") {
     "i32"
-  } else if (op == "sum" && dtype %in% c("i8", "i16", "u8", "u16")) {
+  } else if (op == "sum" && narrow && !any(over %in% c("x", "y"))) {
     "i32"
-  } else if (op == "sum" && dtype == "u32") {
+  } else if (op == "sum" && (narrow || dtype %in% c("i32", "u32"))) {
     "i64"
   } else {
     dtype
@@ -183,7 +152,7 @@ S7::method(output_grid, PatchNode) <- function(node, parent_grids) {
     gt[6L] <- gt[6L] * dims[["y"]]
     dims[["y"]] <- 1L
   }
-  drop_dims <- setdiff(intersect(over, c("t", "band")), character(0))
+  drop_dims <- intersect(over, c("t", "band"))
   dims <- dims[!names(dims) %in% drop_dims]
 
   GridSpec(
@@ -191,7 +160,7 @@ S7::method(output_grid, PatchNode) <- function(node, parent_grids) {
     transform = gt,
     extent = pg@extent,
     dims = dims,
-    dtype = .reduce_dtype(op, pg@dtype),
+    dtype = .reduce_dtype(op, pg@dtype, over),
     labels = pg@labels[names(pg@labels) %in% names(dims)]
   )
 }

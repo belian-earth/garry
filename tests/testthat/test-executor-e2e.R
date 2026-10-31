@@ -62,18 +62,25 @@ test_that("scalar reduction sinks return scalars", {
   expect_equal(got, max(m), tolerance = 1e-3)   # f32 rounding on 4060
 })
 
-test_that("read_fail = 'nodata' turns a dead source into NaN, not an abort", {
+test_that("a failed read aborts, naming the file and the cause", {
   f <- fixture_gradient_f32()
   meta <- gdal_grid_spec(f)
   ghost <- lazy_source(file.path(tempdir(), "garry-gone.tif"),
                        grid = meta$grid, block_dim = meta$block_dim)
-  old <- options(garry.read_fail = "nodata", garry.read_retry = 0L)
-  on.exit(options(old))
-  got <- suppressWarnings(collect(ghost + 1))
-  expect_true(all(is.nan(got)))
-  expect_identical(dim(got), unname(meta$grid@dims[c("y", "x")]))
+  withr::local_options(garry.read_retry = 0L)
+  err <- expect_error(suppressMessages(collect(ghost + 1)), class = "garry_read_error")
+  expect_match(conditionMessage(err), "garry-gone.tif", fixed = TRUE)
+  expect_match(conditionMessage(err), "No such file", fixed = TRUE)
+})
 
-  # default remains a hard error
-  options(garry.read_fail = "error")
-  suppressWarnings(expect_error(collect(ghost + 1)))
+test_that("collect() takes distributed as one flag", {
+  x <- lazy_source(fixture_gradient_f32())
+  expect_error(collect(x, distributed = "no"), "distributed", fixed = TRUE)
+  expect_error(collect(x, distributed = NA), "distributed", fixed = TRUE)
+})
+
+test_that("a result past one outer dim says what to do", {
+  err <- expect_error(garry:::.exec_rank_check(2L), class = "garry_plan_error")
+  expect_match(conditionMessage(err), "reduce_over", fixed = TRUE)
+  expect_no_error(garry:::.exec_rank_check(1L))
 })

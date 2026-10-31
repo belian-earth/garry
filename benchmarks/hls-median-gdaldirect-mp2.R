@@ -65,9 +65,8 @@ t_all <- system.time({
   r <- mirai_map(jobs, function(j, target, tex, tcrs, nx, ny, gtstr, wkt) {
     d <- tempfile("s"); dir.create(d)
     lf <- file.path(d, sprintf("i%02d.tif", seq_along(j$locs)))
-    tf <- system.time(for (k in seq_along(j$locs)) tryCatch(
-      garry:::gdal_fetch_window(j$locs[k], lf[k], tex, tcrs),
-      error=function(e) garry:::gdal_nodata_window(lf[k], tex, tcrs, 255)))[["elapsed"]]
+    tf <- system.time(for (k in seq_along(j$locs))
+      garry:::gdal_fetch_window(j$locs[k], lf[k], tex, tcrs))[["elapsed"]]
     tw <- system.time({
     ent <- data.frame(location=lf, datetime=j$dt,
                       xmin=j$bb[,1], ymin=j$bb[,2], xmax=j$bb[,3], ymax=j$bb[,4])
@@ -85,7 +84,7 @@ t_all <- system.time({
     unlink(d, recursive=TRUE)
     })[["elapsed"]]
     c(tf, tw)
-  }, .args=list(target=target, tex=tex, tcrs=tcrs, nx=nx, ny=ny, gtstr=gtstr, wkt=wkt))[]
+  }, .args=list(target=target, tex=tex, tcrs=tcrs, nx=nx, ny=ny, gtstr=gtstr, wkt=wkt))[.stop]
   cat(sprintf("[mp2] per-task sums: fetch=%.1fs warp=%.1fs\n",
               sum(vapply(r, `[`, 0, 1L)), sum(vapply(r, `[`, 0, 2L))))
 

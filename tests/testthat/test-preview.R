@@ -66,6 +66,32 @@ test_that("preview() dispatches over array, path, and lazy objects", {
   expect_error(preview(out, bands = 1), NA)            # file path front door
 })
 
+test_that("a coarse re-plan keeps every property but the grid", {
+  g <- graph_new()
+  x <- lazy_source(fixture_gradient_f32(), graph = g)
+  f <- garry:::.with_role(focal_map(x, radius = 1L, fn = function(sh) sh[[1L]]), "mask")
+  m <- lazy_map(f, fn = function(v) v * 2, dtype = "f64")
+  cg <- .coarsen_grid(m@grid, 2)
+  ng <- graph_new()
+  ids <- integer(0)
+  for (i in .topo_order(g, .reachable(g, m@node_id))) {
+    n <- graph_get(g, i)
+    ps <- ids[as.character(n@parents)]
+    id <- .coarsen_node(ng, n, as.integer(ps), cg)
+    ids[as.character(i)] <- id
+    got <- S7::props(graph_get(ng, id))
+    want <- S7::props(n)
+    drop <- c("id", "parents", "grid", "open_options")
+    expect_equal(got[setdiff(names(got), drop)], want[setdiff(names(want), drop)])
+  }
+})
+
+test_that("a preview that must read at full resolution says so", {
+  x <- lazy_source(fixture_gradient_f32())
+  expect_message(got <- .pv_collect(x, 8L), "full resolution")
+  expect_identical(got$grid, x@grid)
+})
+
 test_that("preview() rejects unsupported input", {
   expect_error(preview(list(1, 2, 3)), "LazyRaster")
 })

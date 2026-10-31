@@ -52,6 +52,9 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   wspec = NULL
 ) {
   .garry_opt_check()
+  if (!rlang::is_bool(distributed)) {
+    cli::cli_abort("{.arg distributed} must be {.code TRUE} or {.code FALSE}.")
+  }
   if (!is.null(path)) {
     .check_write_path(x, path)
   }
@@ -82,9 +85,11 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   if (plan_only) {
     return(p)
   }
-  # Multi-export v1 (design/multi-export-collect.md): several sinks share
-  # ONE single-threaded execution; the distributed scheduler learns
-  # multi-sink next.
+  if (!is.null(path)) {
+    .check_sink_nodata(p, nodata, wspec$dtype)
+  }
+  # Multi-export (design/multi-export-collect.md): several sinks share
+  # one execution, on either executor.
   if (length(p@sinks) > 1L) {
     .garry_state$route <- if (distributed) "scheduler" else "single"
     res <- if (distributed) {
@@ -392,7 +397,7 @@ garry_last_route <- function() .garry_state$route
       as.integer(nbands)
     ),
     srs = .canon_crs(grid@crs),
-    datatype = unname(.gdal_dtype_rev[[grid@dtype]] %||% grid@dtype)
+    datatype = unname(.gdal_dtype_rev[grid@dtype]) %|NA|% grid@dtype
   )
   if (length(band_names) == nbands && nbands > 1L) {
     out$band_names <- as.character(band_names)
@@ -451,14 +456,46 @@ garry_last_route <- function() .garry_state$route
   invisible(path)
 }
 
-# Dtypes f32 holds exactly: the read-only path moves values as f32, which
-# is what the compute path does with them too.
-.read_only_dtypes <- c("f32", "u8", "i8", "u16", "i16", "pred")
+# A written sentinel must be a value its bands hold. GDAL clamps or rounds
+# any other when NaN is demoted to it, so a hole becomes valid data while
+# the band declares a value no cell has. `dtype` is the write's override;
+# without one each sink writes its own dtype. A predicate sink has no file
+# dtype, and its write refuses it by name.
+.check_sink_nodata <- function(p, nodata, dtype = NULL, call = rlang::caller_env()) {
+  if (is.null(nodata)) {
+    return(invisible(NULL))
+  }
+  if (!is.numeric(nodata) || length(nodata) != 1L || is.infinite(nodata) ||
+      (is.na(nodata) && !is.nan(nodata))) {
+    cli::cli_abort(
+      "{.arg nodata} must be a single number (or NaN for a float output).",
+      class = c("garry_write_error", "garry_error"),
+      call = call
+    )
+  }
+  dtypes <- dtype %||% if (length(p@sinks)) {
+    unique(vapply(p@sinks, function(id) graph_get(p@graph, id)@grid@dtype, ""))
+  } else {
+    p@stages[[p@sink]]@grid@dtype
+  }
+  misfit <- Filter(function(dt) !.dtype_holds(dt, nodata), setdiff(dtypes, "pred"))
+  if (length(misfit)) {
+    dt <- misfit[[1L]]
+    cli::cli_abort(c(
+      "{.arg nodata} ({nodata}) does not fit output dtype {.val {dt}}.",
+      "i" = if (.dtype_family(dt) != "float") {
+        "An integer band holds whole numbers in its range, and no NaN."
+      }
+    ), class = c("garry_write_error", "garry_error"), call = call)
+  }
+  invisible(NULL)
+}
 
 # A read-only plan: NULL unless every layer of the sink is a source
-# (single- or multi-band) or a warp of one, read by its own source_read/
-# warp stage with no halo, and (distributed) none the scheduler would
-# fetch. Otherwise its read stages, the layers each
+# (single- or multi-band) or a warp of one at a dtype f32 holds exactly
+# (the path moves values as f32, as the compute path does), read by its
+# own source_read/warp stage with no halo, and (distributed) none the
+# scheduler would fetch. Otherwise its read stages, the layers each
 # contributes (`nb`) and the layer each starts at (`k0`).
 .read_only_spec <- function(p, distributed = FALSE) {
   if (!isTRUE(garry_opt("read_only")) || length(p@sinks) > 1L) {
@@ -477,7 +514,7 @@ garry_last_route <- function() .garry_state$route
       return(NULL)
     }
     if (!setequal(names(n@grid@dims), dims) ||
-        !n@grid@dtype %in% .read_only_dtypes) {
+        !n@grid@dtype %in% .f32_exact_dtypes) {
       return(NULL)
     }
     for (s in p@stages) {
@@ -529,7 +566,7 @@ garry_last_route <- function() .garry_state$route
 .read_only_each <- function(p, spec, emit, distributed = FALSE, ...) {
   graph <- p@graph
   ra <- lapply(spec$read_stage, function(s) .stage_read_args(graph, s))
-  if (distributed && .gd_n_compute("garry_read") > 0L) {
+  if (distributed) {
     return(.read_only_each_pool(spec, ra, emit, ...))
   }
   .with_gdal_threads(unique(unlist(lapply(ra, `[[`, "path"))))
@@ -538,19 +575,7 @@ garry_last_route <- function() .garry_state$route
     a <- ra[[k]]
     it <- chunk_iter(s@chunks)
     for (j in seq_len(nrow(it))) {
-      v <- .exec_read_padded(
-        a$path,
-        a$band,
-        a$nodata,
-        s@chunks,
-        it[j, ],
-        open_options = a$open_options,
-        out = "raw_f32",
-        scale = a$scale,
-        offset = a$offset,
-        decim = a$decim,
-        resampling = a$resampling
-      )
+      v <- .exec_read_padded(a, s@chunks, it[j, ], out = "raw_f32")
       emit(v, it$y_off[[j]], it$x_off[[j]], k)
     }
   }
@@ -564,61 +589,42 @@ garry_last_route <- function() .garry_state$route
   spec,
   ra,
   emit,
-  backlog = function() 0L,
+  backlog = function(n) 0L,
   poll = function() FALSE,
   task = NULL,
   cap = NULL,
-  run = NULL,
-  host_end = TRUE,
-  widths = NULL
+  tl = NULL,
+  watch = NULL
 ) {
   prof <- "garry_read"
   .assert_pools_alive(prof)
   .garry_abi_check(prof)
-  # read policy is resolved host-side: daemons don't inherit options
-  .pool_broadcast(
-    quote({
-      suppressMessages(library(garry))
-      options(
-        garry.read_fail = rf,
-        garry.read_retry = rr,
-        garry.warp_exact = we
-      )
-      asNamespace("garry")$.gdal_zarr_release()
-    }),
-    profiles = prof,
-    rf = garry_opt("read_fail"),
-    rr = garry_opt("read_retry"),
-    we = garry_opt("warp_exact")
-  )
+  .daemons_run_start(prof)
   todo <- do.call(rbind, lapply(seq_along(spec$read_stage), function(k) {
     data.frame(k = k, j = seq_len(nrow(chunk_iter(spec$read_stage[[k]]@chunks))))
   }))
   its <- lapply(spec$read_stage, function(s) chunk_iter(s@chunks))
-  cap <- cap %||% max(2L * .gd_n_compute(prof), 2L)
+  cap <- cap %||% max(.daemon_depth * .gd_n_compute(prof), .daemon_depth)
   # The scheduler's task-log rows, read tasks keyed as its chunk reads
   # are: each read is ready at the start, and the daemon's own start and
   # end times separate its run time from its wait behind the daemon's
-  # last read. A caller with a tail of its own logs `host_end` itself.
-  task_log <- garry_opt("task_log")
-  log_line <- .task_log_writer(task_log)
-  timed <- !is.null(task_log)
-  log_line("run_start", run %||% .garry_run_id())
-  log_line("pool", "read", mb = .gd_n_compute(prof))
-  for (nm in names(widths)) {
-    log_line("pool", nm, mb = widths[[nm]])
+  # last read. A caller with a tail of its own opens the log and logs
+  # `host_end` itself.
+  if (is.null(tl)) {
+    tl <- .task_log_open(.garry_run_id(), c(read = .gd_n_compute(prof)))
+    on.exit(tl$line("host_end", "-"), add = TRUE)
   }
-  if (host_end) {
-    on.exit(log_line("host_end", "-"), add = TRUE)
-  }
+  log_line <- tl$line
+  timed <- tl$timed
   t_ready <- formatC(unclass(Sys.time()), format = "f", digits = 3)
   key_of <- function(i) {
     .glue("s{spec$read_stage[[todo$k[[i]]]]@id}_c{todo$j[[i]]}")
   }
-  mem_last <- Sys.time()
   inflight <- list()
   next_i <- 1L
-  last_check <- Sys.time()
+  # a dead daemon's task never resolves: `watch` adds the pools a caller's
+  # own tasks wait on, whose backlog can stop these reads
+  idle <- .idle_step(c(prof, watch))
   launch <- function(i) {
     k <- todo$k[[i]]
     a <- ra[[k]]
@@ -637,29 +643,10 @@ garry_last_route <- function() .garry_state$route
       return(task(i, a, spec$read_stage[[k]]@chunks, core, timed))
     }
     .task_mirai(
-      quote(asNamespace("garry")$.exec_read_padded(
-        path,
-        band,
-        nodata,
-        cg,
-        core,
-        open_options = oo,
-        out = "raw_f32",
-        scale = sc,
-        offset = of,
-        decim = dcm,
-        resampling = rsm
-      )),
-      path = a$path,
-      band = a$band,
-      nodata = a$nodata,
+      quote(asNamespace("garry")$.exec_read_padded(a, cg, core, out = "raw_f32")),
+      a = a,
       cg = spec$read_stage[[k]]@chunks,
       core = core,
-      oo = a$open_options,
-      sc = a$scale,
-      of = a$offset,
-      dcm = a$decim,
-      rsm = a$resampling,
       .compute = prof,
       .timed = timed
     )
@@ -667,7 +654,10 @@ garry_last_route <- function() .garry_state$route
   while (next_i <= nrow(todo) || length(inflight)) {
     # `backlog()` (queued writes) shares the cap: chunks waiting to be
     # written hold host memory just as reads in flight do
-    while (next_i <= nrow(todo) && length(inflight) + backlog() < cap) {
+    while (
+      next_i <= nrow(todo) &&
+        length(inflight) + backlog(length(inflight)) < cap
+    ) {
       inflight[[as.character(next_i)]] <- launch(next_i)
       next_i <- next_i + 1L
     }
@@ -679,37 +669,17 @@ garry_last_route <- function() .garry_state$route
       }
       inflight[[key]] <- NULL
       harvested <- TRUE
-      if (inherits(h$data, c("miraiError", "errorValue"))) {
-        why <- .task_failure(h$data)
-        cli::cli_abort(
-          "read task failed on daemon: {why}",
-          class = c("garry_task_error", "garry_error")
-        )
+      if (inherits(h$data, "errorValue")) {
+        .task_abort("read task failed on daemon", h$data)
       }
       i <- as.integer(key)
       k <- todo$k[[i]]
       core <- its[[k]][todo$j[[i]], ]
-      res <- h$data
-      if (inherits(res, "garry_timed")) {
-        log_line("start", key_of(i), time = .POSIXct(res$t0))
-        log_line("end", key_of(i), time = .POSIXct(res$t1))
-        log_line("done", key_of(i))
-        res <- res$v
-      }
-      emit(res, core$y_off, core$x_off, k)
+      emit(.task_landed(log_line, key_of(i), h$data), core$y_off, core$x_off, k)
     }
-    # memory on the scheduler's clock: the readers pin shared regions
-    if (timed && difftime(Sys.time(), mem_last, units = "secs") >= 5) {
-      .task_log_memory(log_line)
-      mem_last <- Sys.time()
-    }
+    tl$tick() # the readers pin shared regions
     if (!harvested) {
-      # a dead read daemon leaves its task unresolved forever
-      if (difftime(Sys.time(), last_check, units = "secs") > 1) {
-        .assert_pools_alive(prof)
-        last_check <- Sys.time()
-      }
-      Sys.sleep(0.002)
+      idle()
     }
   }
   log_line("drain_end", "-")
@@ -746,34 +716,20 @@ garry_last_route <- function() .garry_state$route
 # The read-only write: each chunk goes from the read straight to its
 # bands of the output, through the sink write's quantizer. With pools,
 # the writer daemon writes as the read pool reads, so compression never
-# stalls the host's read loop; quantized writes stay on the host, where
-# the device quantizer is.
+# stalls the host's read loop, and a dead writer fails the write;
+# quantized writes stay on the host, where the device quantizer is.
 .write_read_only <- function(p, spec, path, nodata, band_names, wspec, distributed = FALSE) {
   sink <- p@stages[[p@sink]]
-  nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
-  ds <- gdal_create_output(
-    path,
-    sink@grid,
-    nodata = nodata,
-    band_names = band_names,
-    dtype = wspec$dtype,
-    options = wspec$options,
-    scale = wspec$scale %||% numeric(0),
-    offset = wspec$offset %||% numeric(0)
-  )
+  nodata <- as.numeric(nodata)
+  ds <- .sink_output(path, sink@grid, nodata, band_names, wspec)
   wdt <- wspec$dtype %||% sink@grid@dtype
   wq <- .exec_wq(wspec, nodata)
-  if (
-    distributed &&
-      is.null(wq) &&
-      .gd_n_compute("garry_read") > 0L &&
-      .gd_n_compute("garry_write") > 0L
-  ) {
-    ds$close()
-    .write_read_only_pool(p, spec, path, nodata, wdt, distributed)
+  if (distributed && is.null(wq)) {
+    gdal_close_output(ds, path)
+    .write_read_only_pool(p, spec, path, nodata, wdt)
     return(invisible(path))
   }
-  on.exit(ds$close(), add = TRUE)
+  on.exit(try(ds$close(), silent = TRUE), add = TRUE)
   .read_only_each(p, spec, function(v, y_off, x_off, k) {
     v <- .exec_quantize_value(v, wq)
     for (b in seq_len(spec$nb[[k]])) {
@@ -789,7 +745,7 @@ garry_last_route <- function() .garry_state$route
       )
     }
   }, distributed = distributed)
-  invisible(path)
+  gdal_close_output(ds, path)
 }
 
 # Stream a read-only plan to the writer daemon. Each read task also
@@ -797,7 +753,7 @@ garry_last_route <- function() .garry_state$route
 # pinned on the reader); the host hands the region NAME to the writer
 # and, once written, has the read pool drop it. Payloads never pass
 # through the host, and the writer only writes, overlapping the reads.
-.write_read_only_pool <- function(p, spec, path, nodata, dtype, distributed) {
+.write_read_only_pool <- function(p, spec, path, nodata, dtype) {
   prof <- "garry_write"
   .assert_pools_alive(prof)
   .garry_abi_check(prof)
@@ -806,47 +762,34 @@ garry_last_route <- function() .garry_state$route
   pending <- character(0) # written regions not yet dropped
   pending_mb <- 0
   live_mb <- 0 # shared memory pinned on the readers
-  budget_mb <- garry_opt("read_budget_mb")
   done <- FALSE
   # Writes log as tasks of their own pool (keys w<leaf>_c<n>), so a log
   # shows whether the readers or the writer set the pace.
-  task_log <- garry_opt("task_log")
-  log_line <- .task_log_writer(task_log)
-  timed <- !is.null(task_log)
+  n_read <- .gd_n_compute("garry_read")
+  tl <- .task_log_open(run, c(read = n_read, write = 1L))
   n_write <- 0L
   # the write tail is this run's host tail, logged however the run ends
-  on.exit(log_line("host_end", "-"), add = TRUE)
+  on.exit(tl$line("host_end", "-"), add = TRUE)
   # A drop is a broadcast to every reader, which waits for each one's
   # current read: drop in large batches (a quarter of the read budget),
   # not per write. The rest go at the end.
   drop <- function(regs) {
     if (length(regs)) {
-      try(
-        mirai::everywhere(
-          asNamespace("garry")$.daemon_shm_drop(regs),
-          regs = regs,
-          .compute = "garry_read"
-        ),
-        silent = TRUE
+      mirai::everywhere(
+        asNamespace("garry")$.daemon_shm_drop(regs),
+        regs = regs,
+        .compute = "garry_read"
       )
     }
   }
   # Whatever happens, wait out the writes, close the writer's handles
-  # (a failed run leaves a closed, deletable file) and drop this run's
-  # regions; on success the close is checked below.
+  # and drop this run's regions; on success the close is checked below.
   on.exit(
     {
-      if (!done && .gd_n_compute(prof) > 0L) {
-        try(lapply(writes, function(w) mirai::call_mirai(w$h)), silent = TRUE)
-        try(
-          lapply(
-            mirai::everywhere(asNamespace("garry")$.daemon_write_close(), .compute = prof),
-            function(m) m[]
-          ),
-          silent = TRUE
-        )
+      if (!done) {
+        .writer_settle(writes)
       }
-      drop(c(pending, vapply(writes, `[[`, character(1), "reg")))
+      try(drop(c(pending, vapply(writes, `[[`, character(1), "reg"))), silent = TRUE)
     },
     add = TRUE
   )
@@ -857,33 +800,59 @@ garry_last_route <- function() .garry_state$route
       if (mirai::unresolved(w$h)) {
         next
       }
-      if (inherits(w$h$data, c("miraiError", "errorValue"))) {
-        cli::cli_abort(
-          "write failed on the writer daemon: {as.character(w$h$data)}",
-          class = c("garry_write_error", "garry_error")
-        )
+      if (inherits(w$h$data, "errorValue")) {
+        .task_abort("write failed on the writer daemon", w$h$data, "garry_write_error")
       }
-      if (inherits(w$h$data, "garry_timed")) {
-        log_line("start", w$key, time = .POSIXct(w$h$data$t0))
-        log_line("end", w$key, time = .POSIXct(w$h$data$t1))
-        log_line("done", w$key)
-      }
+      .task_landed(tl$line, w$key, w$h$data)
       writes[[key]] <<- NULL
       pending <<- c(pending, w$reg)
       pending_mb <<- pending_mb + w$mb
       any <- TRUE
     }
     if (pending_mb >= 0.25 * budget_mb) {
-      drop(pending)
-      live_mb <<- live_mb - pending_mb
-      pending <<- character(0)
-      pending_mb <<- 0
+      flush()
+    }
+    if (difftime(Sys.time(), budget_t, units = "secs") >= 5) {
+      refresh_budget()
     }
     any
   }
-  # Reads in flight: two a reader, held back while the pinned regions
-  # fill half the read budget (planes are doubles, 8 B a cell).
-  n_read <- .gd_n_compute("garry_read")
+  flush <- function() {
+    drop(pending)
+    live_mb <<- live_mb - pending_mb
+    pending <<- character(0)
+    pending_mb <<- 0
+  }
+  # The read budget, as the scheduler's: inside what RAM, /dev/shm and
+  # the cgroup allow now, on the same clock, and never below a region
+  # (planes are doubles, 8 B a cell).
+  budget_cfg <- garry_opt("read_budget_mb")
+  budget_mb <- budget_cfg
+  region_mb <- max(vapply(
+    seq_along(spec$read_stage),
+    function(k) {
+      s <- spec$read_stage[[k]]
+      .store_region_mb(s@chunks@chunk_dim, s@grid@dims, 0L, spec$nb[[k]], 8)
+    },
+    numeric(1)
+  ))
+  refresh_budget <- function() {
+    b <- .store_budget(budget_cfg, region_mb, live_mb, garry_opt("exec_ram_fraction"))
+    budget_t <<- Sys.time()
+    if (is.null(b)) {
+      return(invisible(NULL))
+    }
+    budget_mb <<- b$read
+    if (b$tight) {
+      flush()
+    }
+  }
+  budget_t <- Sys.time()
+  refresh_budget()
+  # Reads in flight: two a reader, each priced from launch as the
+  # scheduler prices its reads, so a tight budget binds before they land.
+  # The first read always goes, or a store that fills would stop its own
+  # drain.
   cap <- max(2L * n_read, 2L)
   .read_only_each(
     p,
@@ -891,26 +860,14 @@ garry_last_route <- function() .garry_state$route
     function(w, y_off, x_off, k) {
       live_mb <<- live_mb + w$mb
       n_write <<- n_write + 1L
-      wkey <- ""
-      if (timed) {
-        wkey <- .glue("w{spec$read_stage[[k]]@id}_c{n_write}")
-        # ready now, as its read has landed: taken before the launch
-        # row's own time, which log_line() reads first
-        t_ready <- formatC(unclass(Sys.time()), format = "f", digits = 3)
-        log_line(
-          "launch",
-          wkey,
-          pool = "write",
-          slot = "write",
-          mb = round(w$mb, 1),
-          ready = t_ready
-        )
-      }
+      key <- paste0("w", spec$read_stage[[k]]@id, "_c", n_write)
       writes[[w$reg]] <<- list(
         reg = w$reg,
         mb = w$mb,
-        key = wkey,
-        h = .task_mirai(
+        key = key,
+        h = .task_launch(
+          tl,
+          key,
           quote(asNamespace("garry")$.daemon_write_shared(path, xo, yo, w, b0)),
           path = path,
           xo = x_off,
@@ -918,17 +875,19 @@ garry_last_route <- function() .garry_state$route
           w = w,
           b0 = spec$k0[[k]],
           .compute = prof,
-          .timed = timed
+          .pool = "write",
+          .mb = w$mb
         )
       )
     },
-    distributed = distributed,
-    backlog = function() if (live_mb >= 0.5 * budget_mb) cap else length(writes),
+    distributed = TRUE,
+    backlog = function(n) {
+      if (n > 0L && live_mb + (n + 1L) * region_mb > budget_mb) cap else length(writes)
+    },
     poll = harvest,
     cap = cap,
-    run = run,
-    host_end = FALSE,
-    widths = c(write = 1),
+    tl = tl,
+    watch = prof,
     task = function(i, a, cg, core, timed) {
       .task_mirai(
         quote(asNamespace("garry")$.daemon_read_for_write(
@@ -950,26 +909,13 @@ garry_last_route <- function() .garry_state$route
       )
     }
   )
-  last_check <- Sys.time()
+  idle <- .idle_step(prof)
   while (length(writes)) {
     if (!harvest()) {
-      # a dead writer leaves its tasks unresolved forever
-      if (difftime(Sys.time(), last_check, units = "secs") > 1) {
-        .assert_pools_alive(prof)
-        last_check <- Sys.time()
-      }
-      Sys.sleep(0.002)
+      idle()
     }
   }
-  .assert_pools_alive(prof)
-  wcl <- mirai::everywhere(asNamespace("garry")$.daemon_write_close(), .compute = prof)
-  failed <- unlist(Filter(is.character, lapply(wcl, function(m) m[])))
   done <- TRUE
-  if (length(failed)) {
-    .garry_error(
-      paste0("closing output ", names(failed)[[1L]], " failed (the file is incomplete): ", failed[[1L]]),
-      "garry_write_error"
-    )
-  }
+  .writer_close()
   invisible(path)
 }

@@ -29,7 +29,7 @@ NULL
 # file band per element of its single outer axis, stacked back along that
 # axis with its labels.
 .mat_reopen <- function(path, grid) {
-  outer <- grid@dims[setdiff(names(grid@dims), c("x", "y"))]
+  outer <- .grid_outer(grid)
   if (!length(outer)) {
     return(lazy_source(path))
   }

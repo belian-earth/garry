@@ -1,9 +1,8 @@
-# General warp-on-read executor (.gd_spec / .execute_gd_general): the single
-# path for any warp-on-read-eligible plan. It warps every GTI source and
-# compiles the WHOLE reachable IR into one jit, so derived bands, band math,
-# focal, and nested reduce -> map -> reduce all run fused -- and byte-identically
-# to the general scheduler (execute_plan_mirai), for any shape .cd_spec (the
-# composite fast path) does not match.
+# Warp-on-read plans the composite fast path (.cd_spec) does not match: the
+# reduce decomposition (.gd_decompose, .execute_gd_reduce) must agree with the
+# general scheduler (execute_plan_mirai) and, byte for byte, with the WHOLE
+# reachable IR compiled into one kernel, on derived bands, band math, focal,
+# and nested reduce -> map -> reduce.
 
 
 # GTI fixtures (.gg_grid / .gg_gti / .gg_slice / .gg_val) and the strict
@@ -21,12 +20,38 @@
                                        .gg_slice(gB, "s2", g))), "median", "t"))
 }
 
+# The oracle: every source warped, the whole IR replayed in one kernel.
+.gg_whole_ir <- function(plan, gspec) {
+  ny <- gspec$grid@dims[["y"]]
+  nx <- gspec$grid@dims[["x"]]
+  tmp <- .gd_tmp()
+  on.exit(unlink(tmp, recursive = TRUE), add = TRUE)
+  info <- .gd_warp_sources(plan, gspec$grid, tmp, .gd_log_open())
+  dev <- .exec_device(gspec$device)
+  h <- gspec$halo
+  inputs <- lapply(gspec$input_nodes, function(id) {
+    a <- g_upload_raw(
+      readBin(info[[as.character(id)]]$bin, "raw", n = as.numeric(ny) * nx * 4),
+      "f32",
+      c(ny, nx),
+      device = dev
+    )
+    n <- graph_get(plan@graph, id)
+    if (length(n@scale) == 1L) {
+      a <- a * n@scale + n@offset
+    }
+    if (h > 0L) g_pad(a, h, NaN) else a # radius-cell NaN edge boundary
+  })
+  res <- g_download(.gd_host_kernel(plan@graph, gspec, dev)(inputs))[[1L]]
+  .gd_write_stack(res, gspec$grid, NULL, NULL, NULL, NULL)
+}
+
 .gg_equal <- function(x) {
   p <- plan_lazy(x)
   gsp <- .gd_spec(p)
   expect_false(is.null(gsp))                          # takes the general path
   expect_true(is.null(.cd_spec(p)))                   # NOT the composite fast path
-  gen   <- .execute_gd_general(p, gsp)
+  gen   <- .gg_whole_ir(p, gsp)
   sched <- execute_plan_mirai(p)
   ok <- !is.nan(as.numeric(sched))
   expect_equal(as.numeric(gen)[ok], as.numeric(sched)[ok], tolerance = 1e-5)

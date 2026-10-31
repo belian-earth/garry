@@ -4,7 +4,7 @@
 \alias{g_scan}
 \title{Scan: carry state along dim 1, emitting per-step outputs.}
 \usage{
-g_scan(init, body, xs = NULL, length = NULL, reverse = FALSE)
+g_scan(init, body, xs, reverse = FALSE)
 }
 \arguments{
 \item{init}{Initial carry: array or (nested) named list of arrays.}
@@ -12,10 +12,7 @@ g_scan(init, body, xs = NULL, length = NULL, reverse = FALSE)
 \item{body}{Step function \verb{function(carry, x) -> list(carry, out)};
 \code{out} may be an array, a (nested) list, or \code{NULL}.}
 
-\item{xs}{Per-step inputs sliced along dim 1 (array, nested list, or
-NULL).}
-
-\item{length}{Static trip count; required when \code{xs} is NULL.}
+\item{xs}{Per-step inputs sliced along dim 1 (array or nested list).}
 
 \item{reverse}{Run steps in reverse order?}
 }

@@ -11,7 +11,8 @@ lazy_map(..., fn, dtype = NULL, bands = NULL)
 
 \item{fn}{Function of as many arrays as there are inputs.}
 
-\item{dtype}{Optional output dtype override.}
+\item{dtype}{Optional output dtype. Given, \code{fn} is not traced when the
+raster is built, so a kernel that only traces at chunk time can use it.}
 
 \item{bands}{\code{LazyDataset} only: bands to map over (default: all value bands).}
 }
@@ -27,9 +28,12 @@ grid (\code{\link[=align_to]{align_to()}} first otherwise); rasters on different
 automatically.
 }
 \details{
-The output dtype defaults to the promoted input dtype; pass
-\code{dtype} when \code{fn} changes the value domain, e.g. \code{"f32"} for a mask
-that introduces NaN over an integer band.
+The output dtype is the dtype \code{fn} returns, found by tracing it on
+abstract inputs (nothing runs and nothing compiles). \code{dtype} overrides
+it: the kernel's output is cast to \code{dtype}, which truncates a float to
+an integer dtype, and everything downstream reads the cast value. A
+kernel returning a logical stores 0/1 at the promoted input dtype, and
+\code{\link[=g_ifelse]{g_ifelse()}} reads such a mask with nonzero as true.
 
 Over a \code{LazyDataset}, \code{fn} is applied to every value band (a single dataset
 input only); \code{bands} restricts which bands, and non-selected bands pass

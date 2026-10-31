@@ -171,7 +171,7 @@ Tooltips surface the metadata the plan still carries:
   `lazy_dataset()`, or via `lazy_source(name = )`;
 - the band a stage computes, and for a derivation, the bands it reads;
 - op parameters: reducer and axis (`median over t, nan_rm`), focal
-  radius and boundary, scan axis and direction, read scale/offset;
+  radius, scan axis and direction, read scale/offset;
 - the stage's fused IR members, halo, device, and output grid.
 
 ## Tuning the layout

@@ -3,7 +3,7 @@
 NULL
 
 # ---------------------------------------------------------------------------
-# Kernels as programs (design/stablehlo-kernels.md, a spike). Every garry
+# Kernels as programs (design/stablehlo-kernels.md). Every garry
 # kernel is anvl, so it lowers to StableHLO: the host traces a kernel once
 # per input shape and a daemon compiles the text. Nothing about the
 # closure, the graph or the caller's frames crosses a process, and the
@@ -11,7 +11,9 @@ NULL
 #
 # A program SET is one kernel over the input shapes its tasks will meet:
 # a named list (shape key -> list(src, constants)) of class
-# garry_programs. A daemon compiles a shape the first time it meets it.
+# garry_programs, whose `constants` attribute holds each constant once;
+# a program's `constants` index it. A daemon compiles a shape the first
+# time it meets it.
 # ---------------------------------------------------------------------------
 
 .kernel_wire_program <- function() {
@@ -36,21 +38,14 @@ NULL
   if (!is.null(hit)) {
     return(hit)
   }
-  t0 <- proc.time()[["elapsed"]]
   wire <- vapply(dtypes, .input_dtype, character(1))
-  set <- structure(
-    stats::setNames(
-      lapply(shape_sets, function(sh) .program_build(fn, dtypes, sh)),
-      vapply(shape_sets, function(sh) .input_key(wire, sh), character(1))
-    ),
-    class = "garry_programs"
-  )
-  .garry_state$trace_s <- (.garry_state$trace_s %||% 0) +
-    proc.time()[["elapsed"]] - t0
-  attr(set, "mb") <- as.numeric(utils::object.size(unclass(set))) / 2^20
+  set <- .program_pool(stats::setNames(
+    lapply(shape_sets, function(sh) .program_build(fn, dtypes, sh)),
+    vapply(shape_sets, function(sh) .input_key(wire, sh), character(1))
+  ))
   memo[[key]] <- set
   .garry_state$program_order <- c(.garry_state$program_order, key)
-  held <- function(k) attr(memo[[k]], "mb") %||% 0
+  held <- function(k) attr(memo[[k]], "mb")
   while (
     length(.garry_state$program_order) > 1L &&
       sum(vapply(.garry_state$program_order, held, numeric(1))) >
@@ -62,82 +57,74 @@ NULL
   set
 }
 
+# A set from its programs: a constant the shapes share is held once, as a
+# weight-carrying kernel keeps its weights at every shape.
+.program_pool <- function(programs) {
+  pool <- list()
+  seen <- character(0)
+  for (i in seq_along(programs)) {
+    programs[[i]]$constants <- vapply(
+      programs[[i]]$constants,
+      function(k) {
+        h <- rlang::hash(k)
+        at <- match(h, seen)
+        if (is.na(at)) {
+          pool[[length(pool) + 1L]] <<- k
+          seen[[length(seen) + 1L]] <<- h
+          at <- length(pool)
+        }
+        at
+      },
+      integer(1)
+    )
+  }
+  structure(
+    programs,
+    class = "garry_programs",
+    constants = pool,
+    mb = as.numeric(utils::object.size(programs) + utils::object.size(pool)) / 2^20
+  )
+}
+
 # What a set's inputs and anvl's default dtypes pin down: both decide the
-# program, and neither is in a stage's kernel signature.
+# program, and neither is in a stage's kernel signature. A hash, so a wide
+# stage's key stays short: a key names an R environment entry.
 .program_tag <- function(dtypes, shape_sets) {
   wire <- vapply(dtypes, .input_dtype, character(1))
-  paste0(
-    paste(
-      vapply(shape_sets, function(sh) .input_key(wire, sh), character(1)),
-      collapse = ";"
-    ),
-    "#",
-    paste(unlist(getOption("anvl.default_dtypes")), collapse = ",")
-  )
+  rlang::hash(list(
+    lapply(shape_sets, function(sh) .input_key(wire, sh)),
+    .default_dtype_tag()
+  ))
 }
 
-# The dtype a stage input reaches its kernel as. The store keeps a float
-# export raw, as the kernel made it, whatever the graph declares
-# (.sv_download_exports, .sv_upload): lazy_map() declares its input's
-# dtype unless told otherwise. Anything else returns as R data and
-# uploads at the declared dtype.
-.stored_dtype <- function(made, declared) {
-  if (
-    !is.null(made) &&
-      made$dtype %in% c("f32", "f64") &&
-      length(made$shape) >= 2L
-  ) {
-    made$dtype
-  } else {
-    declared
-  }
+# anvl's default dtypes: part of what a kernel traces to, and no part of
+# its signature.
+.default_dtype_tag <- function() {
+  paste(unlist(getOption("anvl.default_dtypes")), collapse = ",")
 }
 
-# `in_meta` with each input's dtype as it will arrive. `made` holds what
-# the stages upstream really produce, from their traces.
-.stage_inputs <- function(s, in_meta, made) {
-  Map(
-    function(m, nid) {
-      m$dtype <- .stored_dtype(made[[.key(nid)]], m$dtype)
-      m
-    },
-    in_meta,
-    s@input_nodes
-  )
-}
-
-# Note what a traced set produces, by export. A nested export is a
-# reduce_partial's, which no kernel consumes.
-.note_outputs <- function(made, keys, set) {
-  p <- unclass(set)[[1L]]
-  for (i in seq_along(keys)) {
-    leaf <- p$out_shape[[i]]
-    if (!is.list(leaf)) {
-      made[[keys[[i]]]] <- p$out_avals[[leaf]]
-    }
-  }
-  invisible(NULL)
-}
-
-# The input shapes a stage's tasks meet: the modal chunk when edges grow
-# to it, else every distinct chunk shape. A producer's outer dims come
-# from its trace; a read has them from its grid, flat when they multiply
-# to one.
-.stage_shape_sets <- function(graph, s, need, grows, made) {
-  outers <- lapply(s@input_nodes, function(nid) {
-    real <- made[[.key(nid)]]
-    if (!is.null(real)) {
-      return(utils::head(as.integer(real$shape), -2L))
-    }
-    d <- .node_grid(graph_get(graph, nid))@dims
-    ob <- as.integer(d[!names(d) %in% c("x", "y")])
-    if (prod(ob) > 1L) ob else integer(0)
-  })
-  it <- unique(chunk_iter(s@chunks)[, c("y_size", "x_size"), drop = FALSE])
+# The window shapes of a chunk grid's tasks: the modal chunk when edges
+# grow to it, else every distinct chunk shape, modal first.
+.window_shapes <- function(cg, grows) {
   if (grows) {
-    cd <- .modal_chunk(s@chunks)
-    it <- data.frame(y_size = cd[[2L]], x_size = cd[[1L]])
+    cd <- .modal_chunk(cg)
+    return(data.frame(y_size = cd[[2L]], x_size = cd[[1L]]))
   }
+  unique(chunk_iter(cg)[, c("y_size", "x_size"), drop = FALSE])
+}
+
+# The input shapes a stage's tasks meet. Outer dims are the input's grid
+# dims, size-one axes included, except that a read drops them when they
+# multiply to one.
+.stage_shape_sets <- function(graph, s, need, grows) {
+  outers <- lapply(s@input_nodes, function(nid) {
+    n <- graph_get(graph, nid)
+    d <- .node_grid(n)@dims
+    ob <- as.integer(d[!names(d) %in% c("x", "y")])
+    read <- S7::S7_inherits(n, SourceNode) || S7::S7_inherits(n, WarpNode)
+    if (prod(ob) > 1L || !read) ob else integer(0)
+  })
+  it <- .window_shapes(s@chunks, grows)
   lapply(seq_len(nrow(it)), function(i) {
     nr <- it$y_size[[i]] + 2L * need
     nc <- it$x_size[[i]] + 2L * need
@@ -163,36 +150,22 @@ NULL
   )
 }
 
-# A compute stage's program set, and a key for its inputs. Notes what it
-# produces for the stages downstream.
-.stage_as_program <- function(graph, s, in_meta, need, grows, made) {
-  sets <- .stage_shape_sets(graph, s, need, grows, made)
+# A compute stage's program set under `sig` (its kernel signature), and
+# the key that names it.
+.stage_as_program <- function(graph, s, sig, in_meta, need, grows) {
+  sets <- .stage_shape_sets(graph, s, need, grows)
   dtypes <- vapply(in_meta, function(m) m$dtype, character(1))
-  shapes <- .program_tag(dtypes, sets)
-  set <- .trace_kernel(
-    paste0(.stage_kernel_sig(graph, s), "#", shapes),
-    s@fn,
-    dtypes,
-    sets,
-    s@id
-  )
-  .note_outputs(made, vapply(s@exports, .key, character(1)), set)
-  list(set = set, shapes = shapes)
+  key <- paste0(sig, "#", .program_tag(dtypes, sets))
+  list(set = .trace_kernel(key, s@fn, dtypes, sets, s@id), key = key)
 }
 
 # A fused read's spec with its kernel as a program set: one shape per read
 # window, and per row-tile height where the kernel runs in tiles.
-.fuse_as_program <- function(fspec, graph, src, grows, made) {
-  cd <- .modal_chunk(src@chunks)
+.fuse_as_program <- function(fspec, graph, src, grows) {
   halo <- src@chunks@halo
   nb <- .node_outer_nb(graph, src@members[[1L]])
-  wins <- unique(
-    chunk_iter(src@chunks)[, c("y_size", "x_size"), drop = FALSE]
-  )
-  if (grows) {
-    wins <- data.frame(y_size = cd[[2L]], x_size = cd[[1L]])
-  }
-  tiles <- as.integer(fspec$tiles %||% 1L)
+  wins <- .window_shapes(src@chunks, grows)
+  tiles <- as.integer(fspec$tiles)
   sets <- list()
   for (i in seq_len(nrow(wins))) {
     ny <- wins$y_size[[i]] + 2L * halo
@@ -205,9 +178,7 @@ NULL
     }
   }
   key <- paste0(fspec$ck, "#", .program_tag(fspec$dtype, sets))
-  set <- .trace_kernel(key, fspec$fn, fspec$dtype, sets, src@id)
-  .note_outputs(made, fspec$out_key, set)
-  fspec$fn <- set
+  fspec$fn <- .trace_kernel(key, fspec$fn, fspec$dtype, sets, src@id)
   fspec$ck <- key
   fspec
 }

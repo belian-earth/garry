@@ -118,14 +118,14 @@ NULL
   }
 }
 
-# Validate the plan shape for v1 differentiation; returns the pieces.
+# Validate the plan shape for differentiation; returns the pieces.
 .grad_validate <- function(plan, wrt) {
   kinds <- vapply(plan@stages, function(s) s@kind, character(1))
   if (any(kinds == "warp")) {
     .garry_error(
       paste0(
         "the loss pipeline contains a warp: GDAL resampling is outside ",
-        "the gradient tape (D15). align_to() inputs, materialise, then fit."
+        "the gradient tape. align_to() inputs, materialise, then fit."
       ),
       "garry_grad_unsupported_error"
     )
@@ -136,7 +136,7 @@ NULL
   ) {
     .garry_error(
       paste0(
-        "v1 differentiates pipelines of shape sources -> maps -> ",
+        "garry differentiates pipelines of shape sources -> maps -> ",
         "focal_kernel -> maps -> reduce(sum|mean over x, y) only"
       ),
       "garry_grad_unsupported_error"
@@ -171,7 +171,7 @@ NULL
     }
     if (S7::S7_inherits(node, ReduceNode)) {
       .garry_error(
-        "chunk-local reductions on the gradient tape are not supported in v1",
+        "chunk-local reductions on the gradient tape are not supported",
         "garry_grad_unsupported_error"
       )
     }
@@ -264,24 +264,7 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
   w_up <- g_upload(w, "f32")
   for (j in seq_len(nrow(it))) {
     inputs <- lapply(src_meta, function(meta) {
-      g_upload(
-        do.call(.exec_read_padded, {
-          ra <- .source_read_args(meta$node)
-          list(
-            ra$path,
-            ra$band,
-            ra$nodata,
-            meta$chunks,
-            it[j, ],
-            open_options = ra$open_options,
-            scale = ra$scale,
-            offset = ra$offset,
-            decim = ra$decim,
-            resampling = ra$resampling
-          )
-        }),
-        meta$dtype
-      )
+      g_upload(.exec_read_padded(.source_read_args(meta$node), meta$chunks, it[j, ]), meta$dtype)
     })
     r <- vg(w_up, inputs)
     S <- S + g_download(r$value)

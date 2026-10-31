@@ -8,6 +8,21 @@
   outer(seq_len(ny), seq_len(nx), function(r, c2) r * 100 + c2)  # [y, x]
 }
 
+# A small one-band tile, `vals` recycled over its cells in row order.
+fixture_tile <- function(vals = 1, type = "Float32", nodata = NULL,
+                         gt = c(0, 10, 0, 40, 0, -10), nx = 4L, ny = 4L,
+                         crs = "EPSG:3857", scale = NULL) {
+  f <- tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, nx, ny, 1L, type, return_obj = TRUE)
+  ds$setGeoTransform(gt)
+  ds$setProjection(gdalraster::srs_to_wkt(crs))
+  ds$write(1L, 0L, 0L, nx, ny, as.numeric(rep_len(vals, nx * ny)))
+  if (!is.null(nodata)) ds$setNoDataValue(1L, nodata)
+  if (!is.null(scale)) ds$setScale(1L, scale)
+  ds$close()
+  f
+}
+
 # f32, EPSG:32632, 10 m pixels, 60 wide x 40 tall.
 fixture_gradient_f32 <- function() {
   if (!is.null(.fixture_env$grad)) return(.fixture_env$grad)

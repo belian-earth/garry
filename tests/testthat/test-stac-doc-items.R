@@ -25,6 +25,32 @@
   f
 }
 
+test_that("stac_drop_duplicates dates a range-only item by its start", {
+  skip_if_not_installed("rstac")
+  yr <- function(id, y) {
+    list(id = id, bbox = c(0, 0, 1, 1), assets = list(),
+         properties = list(datetime = NULL,
+                           start_datetime = sprintf("%d-01-01T00:00:00Z", y),
+                           end_datetime = sprintf("%d-12-31T23:59:59Z", y)))
+  }
+  its <- .di_items(list(yr("a", 2021), yr("b", 2022), yr("b2", 2022)))
+  ids <- vapply(stac_drop_duplicates(its)$features, `[[`, "", "id")
+  expect_identical(ids, c("a", "b"))
+})
+
+test_that("a missing asset warns on every path", {
+  skip_if_not_installed("rstac")
+  it <- .di_items(list(.di_feat("a", 1, c(0, 0, 1, 1), "asc", list(red = "r.tif", nir = "n.tif"))))
+  expect_warning(stac_filter_assets(it, c("red", "nirr")), "nirr")
+  tbl <- stac_sources(it)
+  expect_warning(got <- stac_filter_assets(tbl, c("red", "nirr")), "nirr")
+  expect_identical(got$asset, "red")
+  expect_warning(got <- stac_sources(it, assets = c("red", "nirr")), "nirr")
+  expect_identical(got$asset, "red")
+  expect_no_warning(stac_filter_assets(tbl, c("red", "nir")))
+  expect_no_warning(stac_sources(it, assets = c("red", "nir")))
+})
+
 test_that("cloud/coverage/orbit filters compose on a doc_items", {
   skip_if_not_installed("rstac")
   its <- .di_items(list(

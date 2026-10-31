@@ -63,9 +63,8 @@ t_all <- system.time({
       for (i in seq_len(nrow(e))) jobs[[length(jobs)+1]] <-
         list(loc=e$location[i], dst=dst[i], ex=target@extent, cr=target@crs)
       metas[[a]]$entries$location <- dst }
-    mirai_map(jobs, function(j) tryCatch(
-        garry:::gdal_fetch_window(j$loc, j$dst, j$ex, j$cr),
-        error=function(e){garry:::gdal_nodata_window(j$dst,j$ex,j$cr,255);TRUE}))[]
+    mirai_map(jobs, function(j)
+        garry:::gdal_fetch_window(j$loc, j$dst, j$ex, j$cr))[.stop]
     lidx <- lapply(assets, function(a){p<-file.path(tmp,sprintf("%s.fgb",a))
       gti_index_create(metas[[a]]$entries, p, crs=metas[[a]]$crs); p}); names(lidx)<-assets
   })[["elapsed"]]

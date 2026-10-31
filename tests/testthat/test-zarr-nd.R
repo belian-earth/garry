@@ -152,10 +152,10 @@ test_that("Zarr connection strings count as remote and get the vsicurl prefix", 
   expect_false(.gdal_is_zarr("/data/a.tif"))
 })
 
-test_that("a Zarr handle is closed once its reads pass garry.zarr_handle_mb", {
+test_that("a Zarr handle is closed once its reads pass its budget", {
   skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
-  withr::local_options(garry.zarr_handle_mb = 600 / 2^20) # 600 bytes
+  testthat::local_mocked_bindings(.gdal_zarr_handle_mb = 600 / 2^20) # 600 bytes
   .gdal_handle_drop(fx$path)
   key <- .gdal_href(fx$path)
   a <- gdal_read_window(fx$path, 1L, 0L, 0L, 20L, 20L) # 400 bytes: kept
@@ -317,7 +317,8 @@ test_that("Zarr sources with different time coordinates are refused", {
 test_that("a Zarr handle's byte count goes with the handle on eviction", {
   skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
-  withr::local_options(garry.handle_cache_max = 1L)
+  old <- .gdal_handle_cap(1L)
+  on.exit(.gdal_handle_cap(old), add = TRUE)
   .gdal_handle_drop(fx$path)
   key <- .gdal_href(fx$path)
   invisible(gdal_read_window(fx$path, 1L, 0L, 0L, 20L, 20L))
@@ -338,4 +339,23 @@ test_that("a multi-band window warp returns the same cube in either form", {
   expect_equal(.sv_materialise(r), m, tolerance = 1e-6)
   rs <- do.call(gdal_warp_window, c(args, out = "raw_f32", scale = 2, offset = 1))
   expect_equal(.sv_materialise(rs), m * 2 + 1, tolerance = 1e-5)
+})
+
+test_that("a failed Zarr warp reports GDAL's cause, not the wrapper's words", {
+  skip_if_not_installed("jsonlite")
+  fx <- fixture_zarr_nd()
+  grid <- lazy_dataset(fx$path)@bands[[1L]][[1L]]@grid
+  n <- 0L
+  testthat::local_mocked_bindings(
+    gdal_warp_to_buffer = function(...) {
+      n <<- n + 1L
+      stop(if (n == 1L) "warp raster failed" else "HTTP 403 on a shard")
+    },
+    .package = "garry"
+  )
+  expect_error(
+    garry:::gdal_warp_window(fx$path, 1L, grid, 0L, 0L, 8L, 8L, out = "raw_f32"),
+    "HTTP 403 on a shard",
+    fixed = TRUE
+  )
 })

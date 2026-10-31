@@ -48,7 +48,7 @@ build_scan <- function(hyp, output) {
 }
 
 comp_pid <- function() vapply(
-  mirai::everywhere(Sys.getpid(), .compute = "garry_compute"),
+  mirai::everywhere(Sys.getpid(), .compute = "garry_comp_1"),
   function(m) m[], integer(1))[[1L]]
 
 anon_mb <- function(pid) {
@@ -104,7 +104,7 @@ invisible(lapply(mirai::everywhere({
   e <- garry:::.daemon_cache
   rm(list = ls(e), envir = e)
   gc()
-}, .compute = "garry_compute"), function(m) m[]))
+}, .compute = "garry_comp_1"), function(m) m[]))
 Sys.sleep(2); mark("E2 after .daemon_cache eviction + gc")
 
 # -- E3: malloc_trim(0) -----------------------------------------------------
@@ -113,7 +113,7 @@ trim_ok <- tryCatch({
     Rcpp::cppFunction("void mtrim() { malloc_trim(0); }",
                       includes = "#include <malloc.h>")
     mtrim()
-  }, .compute = "garry_compute"), function(m) m[]))
+  }, .compute = "garry_comp_1"), function(m) m[]))
   TRUE
 }, error = function(e) { cat("E3 unavailable:", conditionMessage(e), "\n"); FALSE })
 if (trim_ok) { Sys.sleep(2); mark("E3 after malloc_trim(0)") }

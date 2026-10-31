@@ -12,7 +12,6 @@ kalman_llt(
   robust_iters = 0L,
   robust_threshold = 3,
   robust_inflation = 100,
-  kappa = 1e+07,
   dtype = "f32"
 )
 }
@@ -32,8 +31,6 @@ Each pass inflates the level noise at years whose smoothed-level
 innovation exceeds \code{robust_threshold} MADs by \code{robust_inflation}.}
 
 \item{robust_threshold, robust_inflation}{Robust loop constants.}
-
-\item{kappa}{Diffuse-initialisation variance.}
 
 \item{dtype}{Output dtype the body casts to (align with
 \code{scan_over(dtype = )}; default \code{"f32"}).}

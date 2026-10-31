@@ -4,7 +4,7 @@
 \alias{gdal_mosaic_vrt}
 \title{Mosaic already-grid-aligned rasters into a VRT (adapter).}
 \usage{
-gdal_mosaic_vrt(dst, files, te = NULL, ts = NULL, vrtnodata = NULL)
+gdal_mosaic_vrt(dst, files)
 }
 \arguments{
 \item{dst}{Output VRT path.}
@@ -27,8 +27,10 @@ north-south pixel size; every AEF tile, seen 2026-09-25) or a tile
 in the neighbouring UTM zone (ESD tiles on the MGRS grid, which
 overlaps a zone boundary). A skipped tile would be a hole, or with
 every tile skipped no mosaic at all, so a build that lost a source is
-an error here. Sources like that do not belong in a mosaic: the file
-form of \code{\link[=lazy_dataset]{lazy_dataset()}} keeps them as a multi-path source node and
-the warper reads them together (\code{gdal_warp_window()}).
+an error here. It also averages unequal resolutions and places a tile
+off the first one's pixels by resampling. Sources like these do not
+belong in a mosaic (\code{.mosaicable()}): the file form of \code{\link[=lazy_dataset]{lazy_dataset()}}
+keeps them as a multi-path source node and the warper reads them
+together (\code{gdal_warp_window()}).
 }
 \keyword{internal}

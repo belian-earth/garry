@@ -20,7 +20,6 @@ NULL
   patch = "magenta",
   stack = "cyan",
   warp = "red",
-  fused = "grey",
   mask = "red",
   math = "green",
   derive = "green",
@@ -35,7 +34,6 @@ NULL
   patch = "\u229e",
   stack = "\u2b1a",
   warp = "\u2192",
-  fused = "\u25a3",
   mask = "\u2715",
   math = "\u00b1",
   derive = "\u2295",
@@ -50,7 +48,6 @@ NULL
   patch = "%",
   stack = "=",
   warp = "~",
-  fused = "@",
   mask = "x",
   math = "+",
   derive = "+",
@@ -93,8 +90,6 @@ NULL
     "stack"
   } else if (S7::S7_inherits(node, WarpNode)) {
     "warp"
-  } else if (S7::S7_inherits(node, FusedNode)) {
-    "fused"
   } else {
     "node"
   }
@@ -128,7 +123,6 @@ NULL
     patch = glue::glue("patch  r={node@radius}"),
     stack = glue::glue("stack  along {node@along}"),
     warp = "warp",
-    fused = "fused",
     "node"
   )
   .style(k, body)
@@ -167,13 +161,12 @@ NULL
   out
 }
 
-.tree_sig <- function(n) n$sig
 
 .collapse_children <- function(kids) {
   if (!length(kids)) {
     return(kids)
   }
-  sigs <- vapply(kids, .tree_sig, character(1))
+  sigs <- vapply(kids, `[[`, character(1), "sig")
   keep <- !duplicated(sigs)
   counts <- as.integer(table(sigs)[sigs[keep]])
   Map(
@@ -400,6 +393,7 @@ S7::method(print, LazyDatasetGroups) <- function(x, ...) {
   if (length(m) == 1L && nzchar(m)) {
     return(paste0("EPSG:", sub('.*?([0-9]+).*', "\\1", m)))
   }
+  # only a label: a CRS PROJ cannot name falls through to its method
   nm <- tryCatch(gdalraster::srs_get_name(crs), error = function(e) "")
   if (length(nm) == 1L && nzchar(nm) && !identical(tolower(nm), "unknown")) {
     return(nm)

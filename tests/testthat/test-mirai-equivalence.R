@@ -37,24 +37,18 @@ test_that("distributed == single-threaded across pipeline shapes", {
     })
   )
 
-  stores <- "mori"
   for (nm in names(pipelines)) {
     p <- plan_lazy(pipelines[[nm]])
     single <- execute_plan(p)
-    for (st in stores) {
-      old_st <- options(garry.store = st)
-      dist <- execute_plan_mirai(p)
-      options(old_st)
-      expect_equal(dist, single, tolerance = 1e-12,
-                   label = paste(nm, st))
-    }
+    dist <- execute_plan_mirai(p)
+    expect_equal(dist, single, tolerance = 1e-12, label = nm)
   }
 })
 
-test_that("mori store matches rds store on the benchmark shape", {
-  # Coarse whole-window reads + zero-copy consumer slicing (the mori
-  # path skips the producer-side split entirely), per-band fused
-  # stages, band-stack join, multiband write sink.
+test_that("the benchmark shape writes what the single-process route computes", {
+  # Coarse whole-window reads + zero-copy consumer slicing (the store
+  # skips the producer-side split entirely), per-band fused stages,
+  # band-stack join, multiband write sink.
   skip_if(!requireNamespace("garry", quietly = TRUE))
   local_pools(2, 2)
   old <- options(garry.chunk_target_px = 400, garry.read_target_px = 4e3)
@@ -71,17 +65,12 @@ test_that("mori store matches rds store on the benchmark shape", {
   out <- lazy_stack(list(composite_of(4), composite_of(8)),
                     along = "band")
   p <- plan_lazy(out)
-
-  run_with <- function(st, path) {
-    old_st <- options(garry.store = st)
-    on.exit(options(old_st), add = TRUE)
-    execute_plan_mirai(p, path = path, nodata = -9999)
-    lapply(1:2, function(b)
-      gdal_read_window(path, b, 0L, 0L, 60L, 40L))
-  }
-  v_rds <- run_with("rds", file.path(tempdir(), "eq-rds.tif"))
-  v_shm <- run_with("mori", file.path(tempdir(), "eq-shm.tif"))
-  expect_equal(v_shm, v_rds, tolerance = 1e-12)
+  path <- withr::local_tempfile(fileext = ".tif")
+  execute_plan_mirai(p, path = path, nodata = -9999)
+  got <- lapply(1:2, function(b) gdal_read_window(path, b, 0L, 0L, 60L, 40L, nodata = -9999))
+  want <- execute_plan(p)
+  expect_equal(unname(got[[1L]]), want[1L, , ], tolerance = 1e-6, ignore_attr = TRUE)
+  expect_equal(unname(got[[2L]]), want[2L, , ], tolerance = 1e-6, ignore_attr = TRUE)
 })
 
 test_that("distributed warp pipeline and write sink match", {

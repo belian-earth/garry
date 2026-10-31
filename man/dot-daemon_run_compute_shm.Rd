@@ -15,7 +15,6 @@ inputs.}
   reg_key,
   out_keys = NULL,
   device = "cpu",
-  store_raw = FALSE,
   edge = NULL,
   wq = NULL,
   grow = NULL
@@ -24,7 +23,8 @@ inputs.}
 \arguments{
 \item{cache_key}{Per-run jit cache key.}
 
-\item{fn}{Stage closure; \code{in_vals}/\code{in_keys}/\code{trims}/\code{dtypes}
+\item{fn}{Stage kernel (a closure or a program set), NULL on a key-only
+launch; \code{in_vals}/\code{in_keys}/\code{trims}/\code{dtypes}
 describe the inputs (\code{in_keys} name the element to extract from
 each shared value: the node key, or a part name for coarse
 reads); \code{reg_key} the daemon registry slot for the result.

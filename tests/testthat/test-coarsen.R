@@ -269,7 +269,6 @@ test_that("coarsen refuses what it cannot average", {
   expect_error(coarsen(x, 0), "whole number")
   expect_error(coarsen(x, 2.5), "whole number")
   expect_error(coarsen(x, 7L), "does not divide")
-  expect_error(coarsen(x, 2L, fun = "max"), "mean")
   bil <- lazy_dataset(.ctiles()[[1L]], .c10(), resampling = "bilinear")
   expect_error(coarsen(bil, 3L), "nearest-neighbour")
   expect_error(

@@ -85,7 +85,7 @@ test_that("a focal over integer data without nodata has NaN edges", {
   }
   # other consumers of the same source still read integers
   expect_identical((x * 2L)@grid@dtype, "i16")
-  expect_error(focal_map(x, radius = -1, fn = identity), "non-negative")
+  expect_error(focal_map(x, radius = -1, fn = identity), "whole number")
 })
 
 test_that("comparisons keep nodata as nodata", {
@@ -101,4 +101,64 @@ test_that("comparisons keep nodata as nodata", {
   st <- lazy_stack(list(x, x))
   frac <- collect(reduce_over(st > 50, "mean", "t"))
   expect_identical(is.nan(frac), is.nan(v))
+})
+
+test_that("a given nodata replaces the file's own on every read", {
+  f <- fixture_tile(c(0, 5, 7, 7), nodata = 0) # the file calls 0 nodata
+  x <- lazy_source(f, nodata = 5)
+  m <- collect(x, distributed = FALSE)
+  expect_true(all(m[, 1L] == 0) && all(m[, 3:4] == 7))
+  expect_true(all(is.nan(m[, 2L])))
+  # the warper and a direct read agree
+  wide <- grid_spec("EPSG:3857", extent = c(0, 0, 80, 40), dims = c(8L, 4L))
+  w <- collect(align_to(x, wide), distributed = FALSE)
+  expect_identical(as.numeric(w[, 1:4]), as.numeric(m))
+  expect_true(all(is.nan(w[, 5:8])))
+  crop <- grid_spec("EPSG:3857", extent = c(0, 0, 20, 40), dims = c(2L, 4L))
+  expect_identical(as.numeric(collect(align_to(x, crop), distributed = FALSE)),
+                   as.numeric(m[, 1:2]))
+  expect_equal(as.numeric(extract_points(x, cbind(5, 35))), 0)
+  # so do the file form, and a band of it the override leaves alone
+  expect_equal(collect(lazy_dataset(f, nodata = 5), distributed = FALSE), m,
+               ignore_attr = TRUE)
+  two <- tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", two, 4L, 4L, 2L, "Float32", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 40, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  for (b in 1:2) {
+    ds$write(b, 0L, 0L, 4L, 4L, rep_len(c(0, 5, 7, 7), 16L))
+    ds$setNoDataValue(b, 0)
+    ds$setDescription(b, c("this", "other")[[b]])
+  }
+  ds$close()
+  kept <- lazy_dataset(two, nodata = c(other = 5))
+  this <- collect(kept$this, distributed = FALSE)
+  other <- collect(kept$other, distributed = FALSE)
+  expect_true(all(is.nan(this[, 1L])) && all(this[, 2L] == 5))
+  expect_true(all(other[, 1L] == 0) && all(is.nan(other[, 2L])))
+  # a key that names no band is refused, not read as no sentinel at all
+  expect_error(lazy_dataset(two, nodata = c(othr = 5)), "othr",
+               class = "garry_source_error")
+  # a band of the file a selection leaves out is no typo
+  expect_identical(names(lazy_dataset(two, bands = 1L, nodata = c(other = 5))), "this")
+  # a declared sentinel given again changes nothing
+  same <- lazy_source(f, nodata = 0)
+  expect_identical(graph_get(same@graph, same@node_id)@path, f)
+  # the file's scale survives the replacement
+  sc <- fixture_tile(c(0, 5, 7, 7), nodata = 0, scale = 0.5)
+  v <- collect(lazy_dataset(sc, nodata = 5, scale = TRUE), distributed = FALSE)
+  expect_true(all(v[, 1L] == 0) && all(v[, 3L] == 3.5))
+})
+
+test_that("a given nodata keeps tiles apart, so a gap stays nodata", {
+  a <- fixture_tile(c(0, 5, 7, 7), nodata = 0)
+  b <- fixture_tile(c(0, 5, 7, 7), nodata = 0, gt = c(80, 10, 0, 40, 0, -10))
+  ds <- lazy_dataset(c(a, b), nodata = 5)
+  m <- collect(ds, distributed = FALSE)
+  expect_true(all(m[, c(1L, 9L)] == 0))             # the tiles' 0 is data
+  expect_true(all(is.nan(m[, c(2L, 10L)])))         # their 5 is not
+  expect_true(all(is.nan(m[, 5:8])))                # nor is the gap
+  # a sentinel the tiles declare keeps the mosaic
+  same <- lazy_dataset(c(a, b), nodata = 0)[[1L]]
+  expect_length(graph_get(same@graph, same@node_id)@path, 1L)
 })

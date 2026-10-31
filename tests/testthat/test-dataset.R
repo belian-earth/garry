@@ -158,10 +158,10 @@ test_that("dataset + dataset combines shared value bands slice by slice", {
   f <- fixture_gradient_f32()
   a <- ds_fixture(f)                                      # V1, V2, Q
   g <- graph_new(); s <- function() lazy_source(f, graph = g)
-  b <- as_dataset(list(V1 = list(s() * 10, s() * 20)))   # only V1 in common
+  b <- as_dataset(list(V1 = list(s() * 10, s() * 20)))
 
-  summed <- a + b
-  expect_identical(names(summed@bands), "V1")            # intersection of value bands
+  summed <- a["V1"] + b
+  expect_identical(names(summed@bands), "V1")
   expect_length(summed@mask_asset, 0L)
   got <- collect(reduce_over(summed, "mean", "t"))
 
@@ -246,6 +246,42 @@ test_that("lazy_dataset threads resampling to value bands, keeps the mask near",
   expect_identical(rs_of(lazy_dataset(src, grid, assets = "V"), "V"), "near")
   expect_error(lazy_dataset(src, grid, assets = "V", resampling = "bogus"),
                "Invalid")
+})
+
+test_that("a named per-band argument must name a band or asset", {
+  src  <- stac_sources(.ds_fake_items(), assets = c("V", "Q"))
+  grid <- gdal_grid_spec(src$location[src$asset == "V"][[1]])$grid
+  typo <- function(...) {
+    expect_error(lazy_dataset(src, grid, assets = "V", ...),
+                 class = "garry_source_error")
+  }
+  typo(nodata = c(V_typo = 10))
+  typo(scale = c(V_typo = 0.5))
+  typo(scale = 0.5, offset = c(V_typo = 1))
+  typo(resampling = c(V_typo = "bilinear"))
+  expect_error(lazy_dataset(src, grid, assets = "V", nodata = c(V_typo = 10)),
+               "V_typo")
+  # an asset of the source this call leaves out is no typo
+  ds <- lazy_dataset(src, grid, assets = "V", nodata = c(V = 10, Q = 0))
+  v <- ds@bands$V[[1]]
+  expect_identical(graph_get(v@graph, v@node_id)@nodata, 10)
+})
+
+test_that("several values need names to reach their bands", {
+  f <- system.file("extdata", "garry-example.tif", package = "garry")
+  src  <- stac_sources(.ds_fake_items(), assets = c("V", "Q"))
+  grid <- gdal_grid_spec(src$location[src$asset == "V"][[1]])$grid
+  for (make in list(
+    function(...) lazy_dataset(f, ...),
+    function(...) lazy_dataset(src, grid, assets = c("V", "Q"), ...)
+  )) {
+    expect_error(make(scale = c(0.1, 0.2)), class = "garry_source_error")
+    expect_error(make(scale = 0.1, offset = c(1, 2)), class = "garry_source_error")
+    expect_error(make(resampling = c("near", "bilinear")), class = "garry_source_error")
+    expect_error(make(nodata = c(1, 2)), class = "garry_source_error")
+    expect_error(make(scale = c(0.1, nope = 0.2)), class = "garry_source_error")
+    expect_error(make(nodata = c(a = 1, a = 2)), class = "garry_source_error")
+  }
 })
 
 test_that("resampling actually rescales the warp-on-read (near vs average)", {
@@ -398,4 +434,61 @@ test_that("as_dataset and lazy_map refuse non-raster input clearly", {
   expect_error(lazy_map(5, fn = identity), "LazyRaster")
   other <- lazy_source(fixture_3857_f64())
   expect_error(as_dataset(list(a = lazy_source(f), b = other)), "not on the first band's grid")
+})
+
+test_that("a tile index masks its tiles' own sentinel and will not warp past it", {
+  b <- gdalraster::transform_bounds(c(0, 0, 40, 40), "EPSG:3857", "EPSG:4326")
+  items <- list(features = list(list(
+    id = "a", bbox = as.list(b),
+    properties = list(datetime = "2023-01-05T01:00:00Z", `eo:cloud_cover` = 10),
+    assets = list(V = list(href = fixture_tile(c(0, 5, 7, 7), nodata = 0)))
+  )))
+  src <- stac_sources(items, assets = "V")
+  g <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(4L, 4L), dtype = "f32")
+  ds <- lazy_dataset(src, g, assets = "V", nodata = 5)
+  m <- collect(ds, distributed = FALSE)
+  expect_true(all(is.nan(m[, 1:2])) && all(m[, 3:4] == 7))
+  half <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(2L, 2L))
+  expect_error(collect(align_to(ds@bands$V[[1L]], half), distributed = FALSE),
+               class = "garry_source_error")
+  # the sentinel they declare warps as ever
+  same <- lazy_dataset(src, g, assets = "V", nodata = 0)
+  w <- collect(align_to(same@bands$V[[1L]], half), distributed = FALSE)
+  expect_identical(dim(w), c(2L, 2L))
+})
+
+test_that("dataset arithmetic refuses value bands only one side has", {
+  f <- fixture_gradient_f32()
+  a <- ds_fixture(f)
+  g <- graph_new()
+  b <- as_dataset(list(V1 = list(s1 = lazy_source(f, graph = g), s2 = lazy_source(f, graph = g))))
+  err <- expect_error(a + b, class = "garry_source_error")
+  expect_match(conditionMessage(err), "V2", fixed = TRUE)
+  expect_no_error(a["V1"] + b) # select what the two share
+})
+
+test_that("apply_mask takes whole radii and names the argument", {
+  ds <- lazy_dataset(system.file("extdata", "garry-example.tif", package = "garry"))
+  expect_error(apply_mask(ds, from = "qa", where = 2, open = 1.5), "open")
+  expect_error(apply_mask(ds, from = "qa", where = 2, dilate = -1), "dilate")
+})
+
+test_that("file-form bands are whole positions", {
+  f <- system.file("extdata", "garry-example.tif", package = "garry")
+  expect_error(lazy_dataset(f, bands = 1.5), "whole")
+})
+
+test_that("the file form refuses what it would ignore", {
+  f <- system.file("extdata", "garry-example.tif", package = "garry")
+  expect_error(lazy_dataset(f, granularity = "month"), "granularity", fixed = TRUE)
+  expect_error(lazy_dataset(f, bands = c(1, 1)), "each once", fixed = TRUE)
+  expect_error(lazy_dataset(f, bands = 1.7), "whole position", fixed = TRUE)
+  expect_error(lazy_source(f, band = 1.7), "whole band numbers", fixed = TRUE)
+  nms <- names(lazy_dataset(f))
+  expect_error(lazy_dataset(f, mask_asset = nms[1:2]), "one selected band", fixed = TRUE)
+})
+
+test_that("stac_time_slices refuses a longitude only solar_day reads", {
+  tbl <- data.frame(datetime = "2023-06-01T00:00:00Z", xmin = 0, xmax = 1)
+  expect_error(stac_time_slices(tbl, "day", lon = 170), "solar_day", fixed = TRUE)
 })

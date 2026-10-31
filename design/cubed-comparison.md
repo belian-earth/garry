@@ -184,7 +184,7 @@ Every code change below must pass the general-improvement rule: A/B wall and phy
 - *From Cubed:* `make_fused_function` composes unchanged per-op functions inside one task, and intermediates stay in process.
 - *For garry:* a chain task that fetches k kernels by cache key, runs them in order for one chunk, passes device buffers between them, and writes only values leaving the chain. `.daemon_run_compute_shm` already holds the pieces: cache lookup, upload, call, download. Tasks fall from stages x chunks to chains x chunks (inference). The cost is no cross-stage XLA optimisation. Chains should stop where a late input would hold the chain back, and scan stages keep their confinement.
 - *Ethos:* fits; it changes scheduling granularity only.
-- *Test:* `tail-fixture.R` in three arms: split, `stage_merge = "chunk"`, chain. Compare tasks, wall, drain, compute busy, shm peak and compile count.
+- *Test:* `tail-fixture.R` in three arms: split, `stage_merge = "auto"` where it folds the group, chain. Compare tasks, wall, drain, compute busy, shm peak and compile count.
 
 **3. A static per-chunk live set and chunk-level reservation.**
 - *Problem:* the ready-set sweep removed an accidental throttle and failed 2 of 2 at 6 daemons and 7 GB, because the store escape let outputs outrun consumers (`reports/garry-audit.md` section 7a). Escape hatches make the store's overshoot unknowable in advance.
@@ -194,8 +194,8 @@ Every code change below must pass the general-improvement rule: A/B wall and phy
 - *Test:* the audit's failing arm, 6 daemons at 7 GB with the ready set: pass is 2 of 2 complete, wall no worse than the old sweep, and physical shm peak within the computed bound. Then the 8 GB arm, where shm rose from 1,438 to 2,369 MB.
 
 **4. A strip-aware chunk cap.**
-- *Problem:* the worst stage caps the whole tiling. `scan_px` charges 20 cubes over the full chunk, and `.plan_chunk_dim` runs before `.stage_strip_rows`. A stripped scan runs strips in sequence inside one program (`.g_map_row_strips`), so body state should be live for one strip at a time, plus the exports (inference). Strips were added for cache bandwidth, and no memory effect has been measured (`options.R`, `scan_strip_px`).
-- *From Cubed:* an op's cost is its own and does not change other arrays' chunks. `fuse_tile_mb` already separates kernel working set from window size for fused reads; this applies the same principle to scans.
+- *Problem:* the worst stage caps the whole tiling. `scan_px` charges 20 cubes over the full chunk, and `.plan_chunk_dim` runs before `.stage_strip_rows`. A stripped scan runs strips in sequence inside one program (`.g_map_row_strips`), so body state should be live for one strip at a time, plus the exports (inference). Strips were added for cache bandwidth, and no memory effect has been measured (`.scan_strip_px`, `passes.R`).
+- *From Cubed:* an op's cost is its own and does not change other arrays' chunks. `ram_budget_mb` already separates kernel working set from window size for fused reads; this applies the same principle to scans.
 - *For garry:* if measured peak tracks strips, charge body state per strip. A 512 chunk moving to the 1e6 px ceiling gives 3.8x fewer chunks, and the tail fit's T squared term (`reports/garry-audit.md` section 4) falls about 14x (inference, and other stages may still bind).
 - *Ethos:* fits.
 - *Test:* with idea 1, measure a bidirectional scan at 512 and 1024, strips on and off. Only then A/B `tail-fixture.R`, raising `garry.ram_budget_mb` so the cap moves. Note `strip_rows` is part of the kernel key.

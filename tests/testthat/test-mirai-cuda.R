@@ -58,11 +58,6 @@ test_that("a full plan on garry.device='cuda' matches the CPU result
   expect_true(all(vapply(p@stages, function(s)
     s@kind %in% c("source_read", "warp", "reduce_combine") ||
       s@device == "cuda", logical(1))))
-  for (st in "mori") {
-    old_st <- options(garry.store = st)
-    gpu <- execute_plan_mirai(p)
-    options(old_st)
-    expect_equal(gpu, cpu, tolerance = 1e-6, label = paste("cuda", st),
-                 ignore_attr = "gis")
-  }
+  gpu <- execute_plan_mirai(p)
+  expect_equal(gpu, cpu, tolerance = 1e-6, label = "cuda", ignore_attr = "gis")
 })

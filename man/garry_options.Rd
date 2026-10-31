@@ -14,8 +14,8 @@ A data.frame with columns \code{option}, \code{tier}, \code{default},
 \description{
 The registry surface for the flat \verb{garry.*} option namespace: one row
 per option with its tier (\code{user} day-one switches, \code{tuning}
-budgets/targets, \code{calibration} cost-model constants), package
-default, current session value and a one-line description. Values are
+budgets/targets), package default, current session value and a
+one-line description. Values are
 validated against the same registry when execution starts.
 }
 \seealso{

@@ -4,7 +4,7 @@ NULL
 
 # ---------------------------------------------------------------------------
 # Daemon-side code: every function that executes IN a mirai daemon
-# process, addressed cross-process via `garry::` — the .daemon_*
+# process, addressed cross-process via `garry::`: the .daemon_*
 # family, the composite-direct task bodies, memory hygiene, and the
 # ABI token that guards host/daemon namespace skew. Keeping every
 # cross-process entry point in one file is what keeps the ABI
@@ -12,18 +12,49 @@ NULL
 # body the skew check covers.
 # ---------------------------------------------------------------------------
 
-# Per-process cache used on daemons (jitted stage closures by stage id).
+# This process's kernels by content key, filled through .daemon_kernel()
+# alone: on a daemon, and on the host for its own kernels.
 .daemon_cache <- new.env(parent = emptyenv())
 # Kernels it holds before it empties. A compiled tail kernel keeps about
 # 2.2 MB. Too few and a pool that revisits shapes recompiles on every
 # pass: eight boxes at 14 kernels each took 36 s a pass at 64, 26 s here.
 .kernel_cache_max <- 256L
+# Kernels created in this process (tests + progress lines).
+.kernel_stats <- new.env(parent = emptyenv())
+
+# Get or create the kernel under content key `ck`. A JitFunction's
+# dispatcher cache is keyed on input shapes alone, never the function, so
+# a kernel built per task recompiles every time; one kept under a key
+# for all it closes over shares one dispatcher across tasks and runs.
+# `fn` is NULL for a key-only launch: the host sends the key alone for a
+# kernel it knows this daemon holds, as the kernel costs MBs a task. A
+# miss then asks the host to resend the task with it.
+.daemon_kernel <- function(ck, fn, dev = NULL) {
+  jf <- .daemon_cache[[ck]]
+  if (!is.null(jf)) {
+    return(jf)
+  }
+  if (is.null(fn)) {
+    cli::cli_abort(
+      "garry_jit_miss: stage closure not cached on this daemon",
+      class = c("garry_jit_miss", "garry_error"),
+      call = NULL
+    )
+  }
+  if (length(.daemon_cache) >= .kernel_cache_max) {
+    .exec_jit_clear()
+  }
+  jf <- .kernel_of(fn, device = dev)
+  .daemon_cache[[ck]] <- jf
+  .kernel_stats$creates <- (.kernel_stats$creates %||% 0L) + 1L
+  jf
+}
 
 # Return freed heap pages to the OS (glibc malloc_trim(0); no-op
 # elsewhere). The scan-retention spike (benchmarks/scan-retention-
 # spike.R, 2026-08-01) measured a scan daemon standing at 904 MB of
 # which 475 MB was trimmable glibc arena and 72 MB evictable jit
-# handles — the "retained scan working set" that walls off wide scan
+# handles: the "retained scan working set" that walls off wide scan
 # pools is mostly memory nobody holds. Called after every compute/write
 # task (µs-cheap) and by .daemon_hygiene.
 .garry_malloc_trim <- function() {
@@ -35,7 +66,7 @@ NULL
 # fleet) whatever it frees, and it was running after EVERY task: on a
 # 2 M pixel band read that was two thirds of the task (issue #25's
 # drain). Bodies report their transient bytes here instead; the
-# gc + malloc_trim pass runs once `garry.daemon_gc_mb` of them have
+# gc + malloc_trim pass runs once `.daemon_gc_budget_mb` of them have
 # accumulated, so big tasks (device buffers, chunk payloads) still
 # clean up every time and small ones amortise.
 #
@@ -45,14 +76,15 @@ NULL
 # a fifth of its busy time). A minor gc leaves what an automatic gc
 # promoted mid-task, such as a big task's inputs held by device
 # buffers, so the pass is full once `.daemon_gc_full_factor` x
-# garry.daemon_gc_mb of transients (512 MB by default) have passed
-# since the last full one. That bounds what a daemon holds back; on the
-# SI tail minor passes settled ~110 MB above the full-gc footprint.
+# `.daemon_gc_budget_mb` of transients (512 MB) have passed since the
+# last full one. That bounds what a daemon holds back; on the SI tail
+# minor passes settled ~110 MB above the full-gc footprint.
 .daemon_gc_state <- new.env(parent = emptyenv())
+.daemon_gc_budget_mb <- 128
 .daemon_gc_full_factor <- 4
 
 .daemon_gc_after <- function(bytes) {
-  budget <- garry_opt("daemon_gc_mb") * 2^20
+  budget <- .daemon_gc_budget_mb * 2^20
   acc <- (.daemon_gc_state$bytes %||% 0) + bytes
   if (acc < budget) {
     .daemon_gc_state$bytes <- acc
@@ -86,26 +118,30 @@ NULL
   0
 }
 
-#' Daemon task body: memory hygiene — trim arenas, optionally evict the
+#' Daemon task body: memory hygiene: trim arenas, optionally evict the
 #' jit cache.
 #'
 #' `deep = TRUE` additionally clears the jit cache (forces recompiles:
-#' ~1 s for map kernels, ~20 s for scans) — reserve it for memory
+#' ~1 s for map kernels, ~20 s for scans): reserve it for memory
 #' pressure; the default trim-only pass costs microseconds and gives
 #' back what glibc is hoarding. Every pass also closes cached Zarr
 #' handles, whose decoded chunks no trim can return.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param deep Also evict the jit cache?
+#' @param trim Also collect and trim? About 10 ms a daemon, which a run
+#'   that only reads has no need of.
 #' @return `TRUE` if the trim ran (glibc), invisibly.
 #' @keywords internal
-.daemon_hygiene <- function(deep = FALSE) {
+.daemon_hygiene <- function(deep = FALSE, trim = TRUE) {
   if (isTRUE(deep)) {
-    e <- .daemon_cache
-    rm(list = ls(e, all.names = TRUE), envir = e)
+    .exec_jit_clear()
   }
   .gdal_zarr_release()
   .daemon_jit_reset()
+  if (!trim) {
+    return(invisible(FALSE))
+  }
   gc(FALSE)
   invisible(.garry_malloc_trim())
 }
@@ -114,7 +150,7 @@ NULL
 #'
 #' Reusing a daemon's cached JitFunction across RUNS stalls on macOS:
 #' the same family as the host-cache slowdown gated in
-#' `.exec_cached_jit` (test-kernel-cache tripwire, run 33505350958)
+#' `.host_kernel` (test-kernel-cache tripwire, run 33505350958)
 #' and the fused-on-reader hang (test-compute-on-read). It surfaced on
 #' the daemons once kernel signatures became stable across plans
 #' (`.fn_identity`, 2026-09-07): the macOS check went from a 37 min
@@ -128,18 +164,33 @@ NULL
 #' @return `TRUE` if the cache was cleared, invisibly.
 #' @keywords internal
 .daemon_jit_reset <- function() {
-  if (!identical(Sys.info()[["sysname"]], "Darwin")) {
+  if (.kernels_outlive_runs()) {
     return(invisible(FALSE))
   }
-  e <- .daemon_cache
-  rm(list = ls(e, all.names = TRUE), envir = e)
+  .exec_jit_clear()
   invisible(TRUE)
 }
 
 # Store layout ABI version: bump on any incompatible change to the raw
 # payload byte layout, region naming, or shared-value envelope.
-.garry_store_abi <- 3L # 2: sink-only integer payloads (g_quantize)
+.garry_store_abi <- 4L # 2: sink-only integer payloads (g_quantize)
 # 3: a task's kernel can be a program set
+# 4: a program set holds its constants once, as raw bytes
+
+# Every cross-process entry point must be in the token: the .daemon_*
+# family by pattern, plus these, invoked on daemons through
+# asNamespace("garry") under other names (deep review 2026-08-02: they
+# escaped the hash, so .gd_daemon_prep's skew check passed under skew).
+.garry_abi_extra <- c(
+  ".cd_fetch_warp",
+  ".exec_read_padded",
+  ".gd_compute_mask",
+  ".gd_compute_masked_band",
+  ".gd_warm_pipeline",
+  ".gdal_cache_cap",
+  ".gdal_handle_cap",
+  ".http_auth_apply"
+)
 
 #' Daemon-facing ABI token: a hash of every `.daemon_*` entry point's
 #' formals plus the store layout version.
@@ -156,26 +207,8 @@ NULL
 #' @keywords internal
 .garry_abi_token <- function() {
   ns <- asNamespace("garry")
-  # Every cross-process entry point must be enrolled: the .daemon_*
-  # family by pattern, plus composite_direct's task bodies, which are
-  # invoked on daemons through asNamespace("garry") but named .cd_*/.gd_* (deep review
-  # 2026-08-02: they previously escaped the hash, so .gd_daemon_prep's
-  # skew check passed under skew).
-  nms <- sort(c(
-    ls(ns, all.names = TRUE, pattern = "^\\.daemon_"),
-    ".cd_fetch_warp",
-    ".gd_warm",
-    ".gd_warm_pipeline",
-    ".gd_compute_mask",
-    ".gd_compute_masked_band"
-  ))
-  nms <- nms[vapply(
-    nms,
-    function(n) {
-      exists(n, envir = ns) && is.function(get(n, envir = ns))
-    },
-    logical(1)
-  )]
+  nms <- sort(c(ls(ns, all.names = TRUE, pattern = "^\\.daemon_"), .garry_abi_extra))
+  nms <- nms[vapply(nms, function(n) is.function(ns[[n]]), logical(1))]
   rlang::hash(list(
     store = .garry_store_abi,
     formals = stats::setNames(
@@ -197,20 +230,22 @@ NULL
   # Ask every pool at once: the first ask loads garry on a fresh daemon
   # (about a second), and serially that was 6 s of a first collect().
   asks <- lapply(profiles, function(p) {
-    tryCatch(
-      mirai::mirai(asNamespace("garry")$.garry_abi_token(), .compute = p),
-      error = function(e) NULL
-    )
+    mirai::mirai(asNamespace("garry")$.garry_abi_token(), .compute = p)
   })
   for (i in seq_along(profiles)) {
     p <- profiles[[i]]
-    d <- if (is.null(asks[[i]])) {
-      NA_character_
-    } else {
-      tryCatch(asks[[i]][], error = function(e) NA_character_)
-    }
-    if (inherits(d, "miraiError") || !is.character(d)) {
-      d <- NA_character_
+    d <- .await_task(asks[[i]], p)
+    if (inherits(d, "miraiError")) {
+      why <- .task_failure(d)
+      cli::cli_abort(
+        c(
+          "the daemons of pool {.val {p}} could not load garry.",
+          "x" = "{why}",
+          "i" = "Check the garry they load, then restart the pools ({.fn garry_daemons})."
+        ),
+        class = c("garry_version_skew_error", "garry_error"),
+        call = NULL
+      )
     }
     if (!identical(d, host)) {
       .garry_error(
@@ -220,7 +255,7 @@ NULL
           "' (host ",
           host,
           ", daemon ",
-          if (is.na(d)) "unknown/pre-token" else d,
+          d,
           "): ",
           "the daemons run the installed garry, the host a different tree. ",
           "Run devtools::install() and restart the pools (garry_daemons())."
@@ -236,7 +271,7 @@ NULL
 # Daemon-side registry pinning mori shared-memory regions. A region
 # lives only while its creator holds a reference (mori unlinks on GC),
 # and task locals die with the task, so every share() lands here until
-# the host clears the run (see `garry.store`).
+# the host clears the run.
 .daemon_shm <- new.env(parent = emptyenv())
 
 #' Daemon task body: release all pinned shared-memory regions.
@@ -269,12 +304,13 @@ NULL
 
 # -- Worker-side task bodies (run on daemons) ---------------------------------
 
-# Compute-on-read (phase 12b): apply a fused single-consumer stage
-# kernel to the whole padded read window, once, on the daemon that
-# read it. `fuse` is list(ck, fn, dtype, out_key, tiles): jit cache
-# key (content-addressed), stage closure, upload dtype, export node
-# key, row-tile count. Returns the kernel's single export (pad
-# consumed: core-sized).
+# Compute-on-read: apply a fused single-consumer stage kernel to the
+# whole padded read window, once, on the daemon that read it. `fuse` is
+# list(ck, fn, dtype, out_key, tiles, out_pad, out_dtype, grow, wq): jit
+# cache key (content-addressed), kernel, upload dtype, export node key,
+# row-tile count, the export's ring and dtype, and the edge growth and
+# write quantization where they apply. Returns the kernel's single
+# export (pad consumed: core-sized).
 #
 # Tiled execution (`tiles > 1`, pointwise chains only, decided by
 # placement's .fuse_tiles): the window is uploaded once, the kernel
@@ -288,26 +324,18 @@ NULL
 # `fuse$grow` = c(rows, cols) grows an edge read window to the stage's
 # modal window shape and crops the export back (.sv_grow), so every
 # window runs the one kernel.
-.apply_fuse <- function(m, fuse, store_raw = FALSE) {
-  if (length(ls(.daemon_cache, all.names = TRUE)) > .kernel_cache_max) {
-    rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
-  }
-  jf <- .daemon_cache[[fuse$ck]]
-  if (is.null(jf)) {
-    jf <- .kernel_of(fuse$fn)
-    .daemon_cache[[fuse$ck]] <- jf
-  }
+.apply_fuse <- function(m, fuse) {
+  jf <- .daemon_kernel(fuse$ck, fuse$fn)
   if (!is.null(fuse$grow)) {
-    m <- .sv_grow(m, fuse$grow)
+    m <- .sv_grow(m, fuse$grow, fuse$dtype)
   }
   up <- if (.sv_is(m)) {
     g_upload_raw(m, "f32", .sv_dim(m))
   } else {
     g_upload(m, fuse$dtype)
   }
-  tiles <- as.integer(fuse$tiles %||% 1L)
-  if (tiles > 1L) {
-    out_dev <- .apply_fuse_tiled(jf, up, tiles)
+  if (fuse$tiles > 1L) {
+    out_dev <- .apply_fuse_tiled(jf, up, fuse$tiles)
     res <- NULL
   } else {
     res <- jf(list(up))
@@ -326,16 +354,12 @@ NULL
       fuse$wq$dtype
     )
   }
-  # f32/f64 kernel outputs become raw store payloads directly off the
-  # device (D19; f64 per design/f64-store.md); quantized sink outputs
-  # ride the same raw path as integer payloads.
-  out <- if (
-    store_raw &&
-      .g_dtype(out_dev) %in% c("f32", "f64", "u8", "i8", "i16", "u16", "i32")
-  ) {
-    g_download_raw(out_dev)
+  # A quantized sink is only ever written, as raw digital numbers; any
+  # other export is a store value, as a compute stage's is.
+  out <- if (is.null(fuse$wq)) {
+    .sv_download_exports(list(out_dev))[[1L]]
   } else {
-    g_download(out_dev)
+    g_download_raw(out_dev)
   }
   if (!is.null(fuse$grow)) {
     out <- .sv_crop(out, fuse$grow)
@@ -377,63 +401,41 @@ NULL
 
 #' Daemon task body: read one source window into shared memory.
 #'
-#' The mori-store counterpart of `.daemon_run_source` and
-#' `.daemon_run_source_split`. Coarse reads share their per-compute-
-#' chunk parts as elements of one shared list: consumers extract their
-#' element zero-copy. (Consumer-side RANGE subsetting of a mapped
+#' Coarse reads share their per-compute-chunk parts as elements of one
+#' shared list: consumers extract their element zero-copy. (Consumer-side RANGE subsetting of a mapped
 #' matrix would materialise the whole window per input, a large
 #' transient allocation, so the split happens producer-side here too.)
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
-#' @param path,band,nodata Source identity.
+#' @param ra Read arguments (as `.stage_read_args()`).
 #' @param cg `ChunkGrid`; `core` the chunk row; `key` the node key;
 #'   `reg_key` the daemon registry slot pinning the region.
 #' @param parts NULL for chunk-aligned reads (the buffer is shared
 #'   whole under `key`), else per-compute-chunk windows (`r0`/`c0`
 #'   0-based offsets, `nr`/`nc` sizes, `elt` the element name).
-#' @param decim Optional decimating-read spec (see [gdal_read_window()]),
-#'   set when an aligned warp is served by a direct RasterIO read.
+#' @param fuse The fused kernel to run on the window, or NULL.
+#' @param read_raw Read as a raw f32 payload?
 #' @return The shared object (serialises as its region name).
 #' @keywords internal
 .daemon_run_source_shm <- function(
-  path,
-  band,
-  nodata,
+  ra,
   cg,
   core,
   key,
   reg_key,
   parts = NULL,
-  open_options = character(0),
   fuse = NULL,
-  read_raw = FALSE,
-  store_raw = FALSE,
-  scale = numeric(0),
-  offset = numeric(0),
-  decim = NULL,
-  resampling = "near"
+  read_raw = FALSE
 ) {
-  m <- .exec_read_padded(
-    path,
-    band,
-    nodata,
-    cg,
-    core,
-    open_options = open_options,
-    out = if (read_raw) "raw_f32" else "matrix",
-    scale = scale,
-    offset = offset,
-    decim = decim,
-    resampling = resampling
-  )
+  m <- .exec_read_padded(ra, cg, core, out = if (read_raw) "raw_f32" else "matrix")
   # a fused read's window (and its device copy, counted through it) dies
   # with the task however small the export (a 145-band predict window is
   # ~150 MB for a ~1 MB export)
   win_bytes <- .payload_bytes(m)
   if (!is.null(fuse)) {
-    m <- .apply_fuse(m, fuse, store_raw)
-    if ((fuse$out_pad %||% 0L) > 0L) {
-      m <- .exec_mask_edge(m, fuse$out_pad, core, cg@grid@dims)
+    m <- .apply_fuse(m, fuse)
+    if (fuse$out_pad > 0L) {
+      m <- .exec_mask_edge(m, fuse$out_pad, core, cg@grid@dims, fuse$out_dtype)
     }
   }
   val <- if (is.null(parts)) {
@@ -480,6 +482,14 @@ NULL
 # Writer-daemon open-output cache: path -> GDALRaster (update mode).
 # Lives for the run; the host closes it with .daemon_write_close.
 .daemon_ds <- new.env(parent = emptyenv())
+.daemon_output <- function(path) {
+  ds <- .daemon_ds[[path]]
+  if (is.null(ds)) {
+    ds <- gdal_open_update(path)
+    .daemon_ds[[path]] <- ds
+  }
+  ds
+}
 
 #' Daemon task body: write one sink chunk window to an output file.
 #'
@@ -487,7 +497,7 @@ NULL
 #' host creates the output (geometry, bands, nodata) and ships only
 #' the mori region NAME plus window coordinates; this body maps the
 #' region, extracts the chunk, materialises/converts it and runs the
-#' GDAL write — so the multi-GB conversion transients (f64 scan sinks
+#' GDAL write: so the multi-GB conversion transients (f64 scan sinks
 #' cannot ride the raw f32 store) live in one lean process that is
 #' reaped per task, not on the thread that launches and harvests every
 #' other task. One writer daemon per session: GTiff is single-writer,
@@ -515,11 +525,7 @@ NULL
   nodata,
   n_chunks
 ) {
-  ds <- .daemon_ds[[path]]
-  if (is.null(ds)) {
-    ds <- gdal_open_update(path)
-    .daemon_ds[[path]] <- ds
-  }
+  ds <- .daemon_output(path)
   ch <- if (is.null(el)) val[[skey]] else val[[el]]
   .exec_check_writable(ch, n_chunks)
   .exec_write_chunk(ds, x_off, y_off, ch, pad, dtype, nodata)
@@ -554,19 +560,7 @@ NULL
   bytes <- 0
   d <- c(core$y_size, core$x_size)
   if (is.null(planes)) {
-    v <- .exec_read_padded(
-      ra$path,
-      ra$band,
-      ra$nodata,
-      cg,
-      core,
-      open_options = ra$open_options,
-      out = "raw_f32",
-      scale = ra$scale,
-      offset = ra$offset,
-      decim = ra$decim,
-      resampling = ra$resampling
-    )
+    v <- .exec_read_padded(ra, cg, core, out = "raw_f32")
     d <- .sv_dim(v)
     planes <- lapply(
       seq_len(if (length(d) == 3L) d[[1L]] else 1L),
@@ -608,26 +602,25 @@ NULL
 #' @return `TRUE`.
 #' @keywords internal
 .daemon_write_shared <- function(path, x_off, y_off, w, band0) {
-  ds <- .daemon_ds[[path]]
-  if (is.null(ds)) {
-    ds <- gdal_open_update(path)
-    .daemon_ds[[path]] <- ds
-  }
+  ds <- .daemon_output(path)
   planes <- mori::map_shared(w$name)
   for (b in seq_along(planes)) {
-    ds$write(as.integer(band0 + b), x_off, y_off, w$nc, w$nr, planes[[b]])
+    .gdal_write(ds, as.integer(band0 + b), x_off, y_off, w$nc, w$nr, planes[[b]])
   }
+  # a mapping pins its shared memory past the reader's drop until a
+  # collection unmaps it
+  bytes <- .payload_bytes(planes)
   rm(planes)
+  .daemon_gc_after(bytes)
   TRUE
 }
 
 #' Daemon task body: close every output the writer holds open.
 #'
-#' Returns the close errors, named by output path (empty when all closed).
-#'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
-#' @return `NULL`, invisibly.
+#' @return The close failures, named by output path (empty when all
+#'   closed).
 #' @keywords internal
 .daemon_write_close <- function() {
   # all.names: the cache is keyed by OUTPUT PATH, and ls() hides
@@ -636,20 +629,12 @@ NULL
   # never closed and the file stayed an unflushed zero-filled shell
   # (diagnosed 2026-08-13: pools + relative path + cog wrote "all
   # zeros" while the data sat in the writer's block cache).
-  # Close is where GDAL flushes the last dirty blocks, so a failure here
-  # (a full disk, an I/O error) means an incomplete file: report it.
   ks <- ls(.daemon_ds, all.names = TRUE)
   failed <- character(0)
   for (p in ks) {
-    err <- tryCatch(
-      {
-        .daemon_ds[[p]]$close()
-        NULL
-      },
-      error = function(e) conditionMessage(e)
-    )
-    if (!is.null(err)) {
-      failed[[p]] <- err
+    why <- .gdal_close_failure(.daemon_ds[[p]], p)
+    if (!is.null(why)) {
+      failed[[p]] <- why
     }
   }
   rm(list = ks, envir = .daemon_ds)
@@ -662,21 +647,16 @@ NULL
 #'
 #' The fetch half of the fetch/assemble split: a plain
 #' `gdal_translate -srcwin` of the window intersecting the target
-#' extent (plus a warp-kernel margin), remote COG to local tmpfs,
+#' extent (plus a warp-kernel margin, `.fetch_margin`), remote COG to local tmpfs,
 #' native dtype and blocks; no warp, no mosaic on the remote path.
-#' On failure with `garry.read_fail = "nodata"`, writes a small
-#' all-nodata placeholder covering the window so the local mosaic
-#' reads a hole instead of erroring (Int16 when a nodata sentinel is
-#' declared, Byte 255 otherwise, the HLS QA convention).
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param location Source path/URL.
 #' @param out_file Local destination.
 #' @param ext,crs Target extent and CRS defining the window.
-#' @param nodata Optional sentinel for the failure placeholder.
-#' @param margin Source-pixel margin around the window.
-#' @param nbands Source band count, for the failure placeholder.
+#' @param target_res Target x resolution: a coarser grid decimates the
+#'   fetch.
 #' @return `TRUE`.
 #' @keywords internal
 .daemon_fetch_window <- function(
@@ -684,37 +664,21 @@ NULL
   out_file,
   ext,
   crs,
-  nodata = numeric(0),
-  margin = 8L,
-  target_res = NULL,
-  nbands = 1L
+  target_res = NULL
 ) {
-  ok <- tryCatch(
-    .gdal_with_retry(
-      function() {
-        gdal_fetch_window(
-          location,
-          out_file,
-          ext,
-          crs,
-          margin = margin,
-          out_res = target_res
-        )
-      },
-      what = "fetch"
-    ),
-    error = function(e) e
+  .gdal_with_retry(
+    function() {
+      gdal_fetch_window(
+        location,
+        out_file,
+        ext,
+        crs,
+        out_res = target_res
+      )
+    },
+    what = "fetch",
+    src = location
   )
-  if (!isTRUE(ok)) {
-    if (!identical(garry_opt("read_fail"), "nodata")) {
-      cli::cli_abort("fetch failed: {location} ({conditionMessage(ok)})")
-    }
-    cli::cli_warn(
-      "fetch failed, writing nodata window: {location} ({conditionMessage(ok)})"
-    )
-    unlink(out_file)
-    gdal_nodata_window(out_file, ext, crs, nodata, nbands = nbands)
-  }
   .garry_malloc_trim()
   TRUE
 }
@@ -725,7 +689,8 @@ NULL
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
 #' @param cache_key Per-run jit cache key.
-#' @param fn Stage closure; `in_vals`/`in_keys`/`trims`/`dtypes`
+#' @param fn Stage kernel (a closure or a program set), NULL on a key-only
+#'   launch; `in_vals`/`in_keys`/`trims`/`dtypes`
 #'   describe the inputs (`in_keys` name the element to extract from
 #'   each shared value: the node key, or a part name for coarse
 #'   reads); `reg_key` the daemon registry slot for the result.
@@ -743,27 +708,12 @@ NULL
   reg_key,
   out_keys = NULL,
   device = "cpu",
-  store_raw = FALSE,
   edge = NULL,
   wq = NULL,
   grow = NULL
 ) {
-  if (length(ls(.daemon_cache, all.names = TRUE)) > .kernel_cache_max) {
-    rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
-  }
   dev <- .exec_device(device)
-  jf <- .daemon_cache[[cache_key]]
-  if (is.null(jf)) {
-    # The host sends fn = NULL for cache keys the pre-drain warm-up
-    # broadcast to this pool (the stage closure serializes at MBs per
-    # task otherwise). A miss with no fn (warm-up failed, cache
-    # evicted) signals the host to resend the task WITH the closure.
-    if (is.null(fn)) {
-      stop("garry_jit_miss: stage closure not cached on this daemon")
-    }
-    jf <- .kernel_of(fn, device = dev)
-    .daemon_cache[[cache_key]] <- jf
-  }
+  jf <- .daemon_kernel(cache_key, fn, dev)
   inputs <- Map(
     function(v, k, tr, dt) {
       .sv_upload(v[[k]], tr, dt, dev, grow = grow)
@@ -791,7 +741,7 @@ NULL
       )
     }
   }
-  res <- .sv_download_exports(dev_res, store_raw)
+  res <- .sv_download_exports(dev_res)
   if (!is.null(grow)) {
     res <- .sv_crop(res, grow)
   }
@@ -808,7 +758,8 @@ NULL
         res[[k]],
         edge$pads[[k]],
         edge$core,
-        edge$gdims
+        edge$gdims,
+        edge$dtypes[[k]]
       )
     }
   }
@@ -838,11 +789,12 @@ NULL
 #'
 #' Runs on compute-pool daemons at run start (see `garry_daemons()`),
 #' while the read pool owns the network drain: fills the per-daemon
-#' jit cache and triggers one dummy execution per stage so the XLA
-#' compile never lands on a tail chunk.
-#' Get-or-create against the same cache keys the real tasks use;
-#' failures are swallowed (warm-up is an optimisation, never a
-#' correctness dependency).
+#' jit cache, compiling a program's first shape or tracing a closure
+#' through one dummy execution, so the XLA compile never lands on a
+#' tail chunk.
+#' Get-or-create against the same cache keys the real tasks use. A
+#' failure raises: the host clears the kernel's warm mark, reports it,
+#' and the kernel's first task compiles it.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
@@ -853,36 +805,26 @@ NULL
 #' @keywords internal
 .daemon_warm_jit <- function(specs) {
   for (sp in specs) {
-    tryCatch(
-      {
-        dev <- .exec_device(sp$device %||% "cpu")
-        jf <- .daemon_cache[[sp$ck]]
-        if (is.null(jf)) {
-          jf <- .kernel_of(sp$fn, device = dev)
-          .daemon_cache[[sp$ck]] <- jf
+    dev <- .exec_device(sp$device)
+    jf <- .daemon_kernel(sp$ck, sp$fn, dev)
+    # a program's warm-up is its compile: nothing is left to trace
+    if (!is.null(attr(jf, "warm"))) {
+      attr(jf, "warm")()
+      next
+    }
+    dummy <- Map(
+      function(dt, ob) {
+        if (ob > 1L) {
+          g_upload(array(0, c(ob, sp$nr, sp$nc)), dt, device = dev)
+        } else {
+          g_upload(matrix(0, sp$nr, sp$nc), dt, device = dev)
         }
-        # a program's warm-up is its compile: nothing is left to trace
-        if (!is.null(attr(jf, "compile_all"))) {
-          attr(jf, "compile_all")()
-          next
-        }
-        obs <- sp$outers %||% rep(1L, length(sp$dtypes))
-        dummy <- Map(
-          function(dt, ob) {
-            if (ob > 1L) {
-              g_upload(array(0, c(ob, sp$nr, sp$nc)), dt, device = dev)
-            } else {
-              g_upload(matrix(0, sp$nr, sp$nc), dt, device = dev)
-            }
-          },
-          sp$dtypes,
-          obs
-        )
-        invisible(g_download(jf(unname(dummy))))
-        rm(dummy)
       },
-      error = function(e) NULL
+      sp$dtypes,
+      sp$outers
     )
+    invisible(g_download(jf(unname(dummy))))
+    rm(dummy)
   }
   gc(FALSE)
   invisible(NULL)
@@ -890,63 +832,21 @@ NULL
 
 # -- composite-direct daemon task bodies --------------------------------------
 
-# Warm a daemon's XLA/PJRT client (one trivial jit) so the first real compute
-# task doesn't pay the ~3s cold init on the critical path.
-#' Daemon task body: warm this daemon's XLA/PJRT client.
-#'
-#' Runs one trivial jitted kernel so the first real compute task does
-#' not pay the cold client initialisation.
-#' Internal; daemons reach it through `asNamespace("garry")`.
-#'
-#' @keywords internal
-.gd_warm <- function() {
-  a <- g_upload_raw(
-    writeBin(as.numeric(1:4), raw(), size = 4L),
-    "f32",
-    c(2L, 2L)
-  )
-  g_download(g_jit(function(inp) inp[[1L]] + 1)(list(a)))
-  invisible(TRUE)
-}
-
-# Pipeline JitFunction creations in this process (tests + progress lines).
-.gd_jit_stats <- new.env(parent = emptyenv())
-
-#' Daemon task body: pipeline JitFunctions created in this process so far.
+#' Daemon task body: kernels created in this process so far.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #' @return Integer count.
 #' @keywords internal
-.daemon_jit_creates <- function() .gd_jit_stats$creates %||% 0L
-
-# Get-or-create a content-addressed JitFunction for a pipeline kernel.
-# The dispatcher cache anvl hangs off a JitFunction is keyed on input
-# shapes only, never the function, so an inline g_jit per task recompiles
-# every time; caching the JitFunction under a host-computed content key
-# (everything the traced closure closes over) is what lets same-kernel
-# tasks share one dispatcher and hit anvl's shape LRU. ck = NULL keeps
-# the inline behaviour.
-.gd_cached_jit <- function(ck, fn, dev) {
-  if (is.null(ck)) {
-    return(g_jit(fn, device = dev))
-  }
-  if (length(ls(.daemon_cache, all.names = TRUE)) > .kernel_cache_max) {
-    rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
-  }
-  jf <- .daemon_cache[[ck]]
-  if (is.null(jf)) {
-    jf <- g_jit(fn, device = dev)
-    .daemon_cache[[ck]] <- jf
-    .gd_jit_stats$creates <- (.gd_jit_stats$creates %||% 0L) + 1L
-  }
-  jf
-}
+.daemon_jit_creates <- function() .kernel_stats$creates %||% 0L
 
 # Rebuild the lean band kernel from a spec. Shared by the real task body
 # and the warm-up so both produce semantically identical closures for one
 # ck (the ck hashes exactly these ingredients: F, op, nan_rm, affine,
-# masked, device).
+# masked, device). Forced for .gd_mask_fn()'s reason.
 .gd_lean_fn <- function(F, op, nan_rm, affine, masked) {
+  force(F)
+  force(op)
+  force(nan_rm)
   adj <- if (!is.null(affine) && length(affine$scale) == 1L) {
     sc <- affine$scale
     of <- affine$offset
@@ -961,15 +861,23 @@ NULL
   }
 }
 
+# The mask kernel of a chain. A kernel outlives its task in the cache, so
+# it is built here and not inline, with every argument forced: a closure
+# holds the frame it was made in, and a promise the frame of its caller.
+.gd_mask_fn <- function(chain, halo) {
+  force(chain)
+  force(halo)
+  function(inp) .gd_replay_mask(inp[[1L]], chain, halo)
+}
+
 #' Daemon task body: pre-compile the pipeline lean kernels.
 #'
 #' Runs on each compute-pool daemon while the read pool owns the fetch
 #' drain: get-or-create each spec's JitFunction under the same `ck` the
 #' real band tasks use, then execute once per strip height on `g_fill`
-#' dummies (the fill is represented in the program — no host bytes move)
-#' so the XLA compile never lands on the post-fetch tail. Failures fall
-#' back to the plain client wake; warm-up is an optimisation, never a
-#' correctness dependency.
+#' dummies (the fill is represented in the program: no host bytes move)
+#' so the XLA compile never lands on the post-fetch tail. A failure
+#' raises: the host reports it, and a band task compiles the kernel.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param specs List of kernel specs: `ck`, `F`, `op`, `nan_rm`,
@@ -977,32 +885,23 @@ NULL
 #' @return `NULL`, invisibly.
 #' @keywords internal
 .gd_warm_pipeline <- function(specs) {
-  ok <- tryCatch(
-    {
-      for (sp in specs) {
-        dev <- .exec_device(sp$dev)
-        jf <- .gd_cached_jit(
-          sp$ck,
-          .gd_lean_fn(sp$F, sp$op, sp$nan_rm, sp$affine, sp$masked),
-          dev
-        )
-        for (h in sp$hs) {
-          dims <- c(sp$n, h, sp$nx)
-          inputs <- if (sp$masked) {
-            list(g_fill(0, dims, "f32", dev), g_fill(0, dims, "f32", dev))
-          } else {
-            list(g_fill(0, dims, "f32", dev))
-          }
-          invisible(g_download_raw(jf(inputs)))
-          rm(inputs)
-        }
+  for (sp in specs) {
+    dev <- .exec_device(sp$dev)
+    jf <- .daemon_kernel(
+      sp$ck,
+      .gd_lean_fn(sp$F, sp$op, sp$nan_rm, sp$affine, sp$masked),
+      dev
+    )
+    for (h in sp$hs) {
+      dims <- c(sp$n, h, sp$nx)
+      inputs <- if (sp$masked) {
+        list(g_fill(0, dims, "f32", dev), g_fill(0, dims, "f32", dev))
+      } else {
+        list(g_fill(0, dims, "f32", dev))
       }
-      TRUE
-    },
-    error = function(e) FALSE
-  )
-  if (!ok) {
-    try(.gd_warm(), silent = TRUE)
+      invisible(g_download_raw(jf(inputs)))
+      rm(inputs)
+    }
   }
   gc(FALSE)
   invisible(NULL)
@@ -1032,25 +931,18 @@ NULL
     c(n, k$ny, k$nx),
     device = dev
   )
-  chain <- k$chain
-  halo <- k$halo
-  nyy <- k$ny
-  nxx <- k$nx
-  jf <- .gd_cached_jit(
-    k$ck,
-    function(inp) {
-      .gd_replay_mask(inp[[1L]], chain, halo, nyy, nxx)
-    },
-    dev
-  )
+  jf <- .daemon_kernel(k$ck, .gd_mask_fn(k$chain, k$halo), dev)
   r <- g_download_raw(jf(list(fm)))
   attributes(r) <- NULL
   writeBin(r, k$out_bin) # whole cube, row-major f32
+  bytes <- 2 * .payload_bytes(r) # the fmask cube read, and the mask written
+  rm(fm, r)
+  .daemon_gc_after(bytes)
   invisible(TRUE)
 }
 
 # Pipeline daemon task: one band's median (whole grid, or one horizontal
-# strip when `job$rows = c(y0, h)` is set — the bins are headerless
+# strip when `job$rows = c(y0, h)` is set: the bins are headerless
 # row-major f32, so a strip is a contiguous run at `y0*nx*4` per slice
 # and the median is spatially pointwise: no halo, byte-identical
 # reassembly). Reads the band cube plus the shared cleaned-mask cube
@@ -1093,14 +985,15 @@ NULL
   }
   band <- cube(job$band_bins)
   masked <- length(k$mask_bin) == 1L
-  created0 <- .gd_jit_stats$creates %||% 0L
-  jf <- .gd_cached_jit(
+  created0 <- .kernel_stats$creates %||% 0L
+  jf <- .daemon_kernel(
     job$ck,
     .gd_lean_fn(k$F, k$op, k$nan_rm, job$affine, masked),
     dev
   )
-  out <- if (masked) {
-    mask_strip <- if (!strip) {
+  inputs <- list(band)
+  if (masked) {
+    inputs[[2L]] <- if (!strip) {
       g_upload_raw(
         readBin(k$mask_bin, "raw", n = as.numeric(n) * k$ny * nx * 4),
         "f32",
@@ -1121,12 +1014,14 @@ NULL
         device = dev
       )
     }
-    g_download_raw(jf(list(band, mask_strip)))
-  } else {
-    g_download_raw(jf(list(band)))
   }
+  out <- g_download_raw(jf(inputs))
   attr(out, "gd_t") <- proc.time()[["elapsed"]] - t0
-  attr(out, "gd_jit") <- (.gd_jit_stats$creates %||% 0L) - created0
+  attr(out, "gd_jit") <- (.kernel_stats$creates %||% 0L) - created0
+  # the strip's cubes, read here and held on the device
+  bytes <- length(inputs) * 4 * as.numeric(n) * h * nx
+  rm(inputs, band)
+  .daemon_gc_after(bytes)
   out
 }
 
@@ -1143,48 +1038,48 @@ NULL
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param j Per-slice job (locs/dt/nodata/resampling/bin).
 #' @param k Grid-constant bundle (nx/ny/gtstr/wkt).
-#' @return List with `err` and `tw` (warp seconds).
+#' @return List with `tw` (warp seconds).
 #' @keywords internal
 .cd_fetch_warp <- function(j, k) {
   nx <- k$nx
   ny <- k$ny
-  buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny) # all-nodata default
-  tw <- 0
-  err <- tryCatch(
-    {
-      if (!length(j$locs)) {
-        cli::cli_abort("no items for this slice")
-      }
-      # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
-      # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
-      # reprojects and mosaics the sources itself. No tmpfs GTiff fetch, no
-      # per-slice local index. Ordered by datetime so overlap resolution (last
-      # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
-      tw <- system.time(
-        buf <- .gdal_with_retry(
-          function() {
-            gdal_warp_to_buffer(
-              buf,
-              nx,
-              ny,
-              k$gtstr,
-              k$wkt,
-              j$locs[order(j$dt)],
-              j$nodata,
-              resampling = j$resampling %||% "near",
-              band = j$band
-            )
-          },
-          what = "slice warp"
+  if (!length(j$locs)) {
+    cli::cli_abort(
+      c(
+        "a warp-on-read slice has no items to read.",
+        "i" = "Check the source's slice filter against its index."
+      ),
+      class = c("garry_read_error", "garry_error")
+    )
+  }
+  buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny) # no source reaches: NaN
+  # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
+  # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
+  # reprojects and mosaics the sources itself. No tmpfs GTiff fetch, no
+  # per-slice local index. Ordered by datetime so overlap resolution (last
+  # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
+  tw <- system.time(
+    buf <- .gdal_with_retry(
+      function() {
+        gdal_warp_to_buffer(
+          buf,
+          nx,
+          ny,
+          k$gtstr,
+          k$wkt,
+          j$locs[order(j$dt)],
+          j$nodata,
+          resampling = j$resampling,
+          band = j$band
         )
-      )[["elapsed"]]
-      NA_character_
-    },
-    error = function(e) conditionMessage(e)
-  )
-  writeBin(buf, j$bin) # always write a complete slice (real or all-NaN)
+      },
+      what = "slice warp",
+      src = j$locs
+    )
+  )[["elapsed"]]
+  writeBin(buf, j$bin)
+  bytes <- .payload_bytes(buf)
   rm(buf)
-  gc(FALSE)
-  .garry_malloc_trim()
-  list(err = err, tw = tw)
+  .daemon_gc_after(bytes)
+  list(tw = tw)
 }

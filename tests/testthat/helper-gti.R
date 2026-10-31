@@ -55,18 +55,20 @@
 # local GTIs: the canonical .cd_spec shape (band/mask MapNodes per slice,
 # shared mask chain, temporal median), built through the public dataset
 # verbs exactly as the HLS benchmark builds it.
-.gg_masked_composite <- function(open = 0L, dilate = 0L) {
+.gg_masked_composite <- function(open = 0L, dilate = 0L, single = FALSE) {
   gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)))
   gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
   qa1 <- matrix(0, 40, 60); qa1[10:20, 10:30] <- 2
   qa2 <- matrix(0, 40, 60); qa2[25:35, 40:55] <- 2
   gQ <- .gg_gti(list(s1 = qa1, s2 = qa2))
   g <- graph_new()
-  ds <- as_dataset(list(
+  vars <- list(
     V1 = list(s1 = .gg_slice(gA, "s1", g), s2 = .gg_slice(gA, "s2", g)),
     V2 = list(s1 = .gg_slice(gB, "s1", g), s2 = .gg_slice(gB, "s2", g)),
     Q  = list(s1 = .gg_slice(gQ, "s1", g), s2 = .gg_slice(gQ, "s2", g))
-  ), mask_asset = "Q")
+  )
+  if (single) vars$V2 <- NULL
+  ds <- as_dataset(vars, mask_asset = "Q")
   reduce_over(apply_mask(ds, where = c(2), open = open, dilate = dilate),
               "median", "t", nan_rm = TRUE)
 }

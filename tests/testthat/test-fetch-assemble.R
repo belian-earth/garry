@@ -1,7 +1,7 @@
 # Phase 12: fetch/assemble split. Gates: fetch-backed distributed
 # reads are identical to direct reads; "auto" leaves local sources
-# alone; a failed fetch under read_fail="nodata" degrades to a hole
-# instead of aborting; the tmpfs cache cleans up.
+# alone; a failed fetch aborts the run, naming the object; the tmpfs
+# cache cleans up.
 
 
 .fa_fixture <- function(dir, n_slices = 3L) {
@@ -73,16 +73,15 @@ test_that("fetch-backed distributed reads match direct reads", {
   expect_false(any(grepl("^f\\d+_", tl2$key)))
 })
 
-test_that("failed fetch degrades to a nodata hole under read_fail",
-{
+test_that("a failed fetch aborts the run, naming the object", {
   skip_if(!requireNamespace("garry", quietly = TRUE),
           "garry not installed for daemons")
   dir <- withr::local_tempdir("fa2")
   fx <- .fa_fixture(dir, n_slices = 2L)
 
   local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.fetch = "force", garry.read_fail = "nodata",
-                 garry.read_retry = 0L, garry.chunk_target_px = 1e6)
+  old <- options(garry.fetch = "force", garry.read_retry = 0L,
+                 garry.chunk_target_px = 1e6)
   on.exit(options(old), add = TRUE)
 
   layers <- lapply(fx$entries$slice, function(sl) {
@@ -92,13 +91,25 @@ test_that("failed fetch degrades to a nodata hole under read_fail",
                   sort_field = "datetime"))
   })
   p <- plan_lazy(lazy_stack(layers))
-  # the object vanishes AFTER planning (expired token / deleted blob):
-  # its fetch fails, writes a nodata placeholder, the slice reads as
-  # a hole, the run completes.
+  # the object vanishes AFTER planning (expired token / deleted blob)
   unlink(fx$entries$location[[2L]])
-  got <- suppressWarnings(execute_plan_mirai(p))
-  expect_false(any(is.nan(got[1, , ])))   # good slice intact
-  expect_true(all(is.nan(got[2, , ])))    # broken slice = hole
+  err <- expect_error(execute_plan_mirai(p), class = "garry_task_error")
+  expect_match(conditionMessage(err), "fetch failed", fixed = TRUE)
+  expect_match(conditionMessage(err), "tile2.tif", fixed = TRUE)
+  # GDAL's own cause and the daemon's class cross with it
+  expect_match(conditionMessage(err), "No such file or directory", fixed = TRUE)
+  expect_s3_class(err, "garry_read_error")
+})
+
+test_that("a tile off the grid fetches nothing a warp could use", {
+  dir <- withr::local_tempdir("fa")
+  fx <- .fa_fixture(dir, n_slices = 1L)
+  out <- file.path(dir, "off.tif")
+  # 600 m wide at 10 m a pixel: far past the fetch margin
+  garry:::gdal_fetch_window(fx$entries$location[[1L]], out, c(5000, 5000, 5100, 5100), "EPSG:3857")
+  ds <- methods::new(gdalraster::GDALRaster, out, read_only = TRUE)
+  withr::defer(ds$close())
+  expect_equal(c(ds$getRasterXSize(), ds$getRasterYSize()), c(1, 1))
 })
 
 test_that("gdal_fetch_window decimates to the target resolution via overviews", {
@@ -118,7 +129,7 @@ test_that("gdal_fetch_window decimates to the target resolution via overviews", 
   ext <- c(0, 0, n, n); crs <- gdalraster::srs_to_wkt("EPSG:32632")
   read_out <- function(out_res) {
     o <- tempfile(fileext = ".tif")
-    gdal_fetch_window(cog, o, ext, crs, margin = 0L, out_res = out_res)
+    gdal_fetch_window(cog, o, ext, crs, out_res = out_res)
     r <- new(gdalraster::GDALRaster, o); on.exit(r$close())
     nx <- r$getRasterXSize(); ny <- r$getRasterYSize()
     list(nx = nx, sd = sd(r$read(1, 0, 0, nx, ny, nx, ny)))

@@ -10,9 +10,7 @@ lazy_dataset(
   assets = NULL,
   mask_asset = NULL,
   granularity = "day",
-  sort_field = "datetime",
   nodata = NULL,
-  lon = NULL,
   resampling = "near",
   scale = FALSE,
   offset = NULL,
@@ -39,21 +37,23 @@ alongside the value assets and used as the default \code{from} in \code{\link[=a
 
 \item{granularity}{Time-slice granularity (see \code{\link[=stac_time_slices]{stac_time_slices()}}).}
 
-\item{sort_field}{Index field ordering overlaps within a slice.}
-
 \item{nodata}{Nodata handling: \code{NULL} (per-band file metadata), a scalar
 (applied to every asset), or a named numeric keyed by dataset band name
-or by asset (a band name wins; unnamed bands fall back to file
-metadata). An asset key covers every band of a multi-band asset. Reflectance and QA bands usually need
-different sentinels, so the named form is typical, e.g.
-\code{c(B04 = -9999, B03 = -9999, Fmask = 255)}.}
+or by asset (a band name wins; bands with no key fall back to file
+metadata). An asset key covers every band of a multi-band asset, and a
+key that names no band or asset of the source aborts. Reflectance and
+QA bands usually need different sentinels, so the named form is
+typical, e.g.
+\code{c(B04 = -9999, B03 = -9999, Fmask = 255)}. In the file form a
+sentinel replaces the file's own, whose cells then read as data. In
+the table form the tiles' own sentinel stays masked as well, since
+each slice's mosaic is built on it, and \code{\link[=align_to]{align_to()}} refuses such a
+band.}
 
-\item{lon}{Longitude for \code{granularity = "solar_day"} (see
-\code{\link[=stac_time_slices]{stac_time_slices()}}).}
-
-\item{resampling}{GDAL resampling for the warp-on-read onto \code{grid}: a scalar
+\item{resampling}{GDAL resampling for the warp-on-read onto \code{grid}, or
+onto the grid of several sources kept apart: a scalar
 (every value band) or a named character keyed by dataset band name or
-by asset, as for \code{nodata} (unnamed bands fall back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardless, since
+by asset, as for \code{nodata} (bands with no key fall back to \code{"near"}). \code{mask_asset} is always read \code{"near"} regardless, since
 interpolating packed QA bits corrupts them. \code{"near"} (the default)
 preserves exact source values; use \code{"bilinear"}, \code{"average"}, \code{"cubic"},
 ... to interpolate. Resample after the fact instead with \code{\link[=align_to]{align_to()}}.}
@@ -68,11 +68,12 @@ after the nodata sentinel becomes NaN. A scalar or named numeric
 explicitly. Discovery only consults the files themselves: STAC
 metadata is never read, so collections
 whose files carry no scaling metadata (e.g. Planetary Computer
-Sentinel-2 L2A) read raw and scale explicitly instead.
+Sentinel-2 L2A) warn, read raw and need scaling explicitly.
 \code{mask_asset} is never scaled.}
 
-\item{offset}{Explicit additive offset(s) (scalar or named by asset)
-used when \code{scale} is numeric; defaults to 0. Ignored when \code{scale} is
+\item{offset}{Explicit additive offset(s) (scalar or named by band or
+asset) used when \code{scale} is numeric; defaults to 0. A band with an
+offset and no scale of its own takes scale 1. Ignored when \code{scale} is
 logical.}
 
 \item{bands}{Source bands to select (default: all). File form: an
@@ -118,7 +119,10 @@ the asset's name. Every band of a multi-band asset (e.g. a SAR product
 packing several polarisations into one COG) becomes its own dataset
 band, named \verb{<asset>_<description>}, or \verb{<asset>_b<index>} when the
 file carries no band descriptions; \code{bands} selects and renames them.
-\item a character path (or vector of same-CRS tile paths, mosaicked): one band
+\item a character path, or a vector of tile paths (mosaicked where they
+share a CRS and one pixel lattice, kept apart and warped together
+otherwise; tiles off that lattice need \code{grid}, and tiles kept apart
+must agree on dtype and on any nodata they declare): one band
 per file band, one time slice. This is the multi-band raster entry --
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 GDAL driver, any multi-band file GDAL reads. Each band is its own

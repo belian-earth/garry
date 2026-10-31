@@ -5,6 +5,14 @@
 # global-reduce / multiband-sink pipelines; non-f32 sources stay on the
 # matrix path.
 
+.sv_from_vec <- function(v, nr, nc, gdt = "f32") {
+  structure(
+    writeBin(as.numeric(v), raw(), size = garry:::.sv_es(gdt)),
+    gdim = c(nr, nc),
+    gdt = gdt
+  )
+}
+
 test_that("sv helpers mirror matrix slicing exactly", {
   set.seed(3)
   m <- matrix(rnorm(35 * 52), 35, 52)
@@ -14,7 +22,7 @@ test_that("sv helpers mirror matrix slicing exactly", {
                    numeric(), length(x), size = 4L),
            nrow(x), byrow = TRUE)
   }
-  sv <- garry:::.sv_from_vec(as.numeric(t(m)), 35L, 52L)
+  sv <- .sv_from_vec(as.numeric(t(m)), 35L, 52L)
   expect_true(garry:::.sv_is(sv))
   expect_identical(garry:::.sv_dim(sv), c(35L, 52L))
   expect_identical(garry:::.sv_to_matrix(sv), f32(m))
@@ -94,7 +102,7 @@ test_that("distributed multiband sink streams to GTiff like the oracle", {
 
 test_that("f64 payloads round-trip the sv layer bit-exactly", {
   m <- matrix(c(1.5, -2.25, pi, exp(1), 1e-300, -0.125), 2, 3)
-  v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 3L, gdt = "f64")
+  v <- .sv_from_vec(as.numeric(t(m)), 2L, 3L, gdt = "f64")
   expect_identical(garry:::.sv_es(v), 8L)
   expect_identical(attr(v, "gdt"), "f64")
   expect_identical(garry:::.sv_to_matrix(v), m)
@@ -102,7 +110,7 @@ test_that("f64 payloads round-trip the sv layer bit-exactly", {
 
   # trim preserves dtype and bits
   mp <- matrix(rnorm(36), 6, 6)
-  vp <- garry:::.sv_from_vec(as.numeric(t(mp)), 6L, 6L, gdt = "f64")
+  vp <- .sv_from_vec(as.numeric(t(mp)), 6L, 6L, gdt = "f64")
   tr <- garry:::.sv_trim(vp, 1L)
   expect_identical(attr(tr, "gdt"), "f64")
   expect_identical(garry:::.sv_to_matrix(tr), mp[2:5, 2:5])
@@ -116,7 +124,7 @@ test_that("f64 payloads round-trip the sv layer bit-exactly", {
 
 test_that("f64 raw upload/download round-trips through anvl bit-exactly", {
   m <- matrix(c(1.5, -2.25, pi, 1e-300), 2, 2)
-  v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
+  v <- .sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
   up <- g_upload_raw(unclass(v), "f64", garry:::.sv_dim(v))
   down <- g_download_raw(up)
   expect_identical(attr(down, "gdt"), "f64")
@@ -196,11 +204,6 @@ test_that("plane extraction matches the byte-slice reference for every gdt", {
       expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
       expect_identical(garry:::.sv_plane_vec(v, b, -9999), ref(v, b, -9999))
     }
-    expect_identical(
-      garry:::.sv_to_vec(v),
-      ref(v, 1L)[rep(1, 0)] |>
-        c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
-    )
   }
   ints <- list(
     i8 = sample(-128:127, nb * n, TRUE),
@@ -214,10 +217,6 @@ test_that("plane extraction matches the byte-slice reference for every gdt", {
     for (b in 1:3) {
       expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
     }
-    expect_identical(
-      garry:::.sv_to_vec(v),
-      c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
-    )
   }
   # rank-2 payloads are their own single plane
   v2 <- structure(
@@ -511,4 +510,22 @@ test_that("read-only chunks keep the f32 route for floats, warps and affines", {
     "i16",
     -32768
   ))
+  # a failed read is a failed read, not a turn onto the f32 route
+  withr::local_options(garry.read_retry = 0L)
+  err <- expect_error(
+    suppressMessages(.read_int_planes(
+      modifyList(ra, list(path = "/nonexistent/ghost.tif")),
+      cg,
+      core,
+      "i16",
+      -32768
+    )),
+    class = "garry_read_error"
+  )
+  expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
+})
+
+test_that("an unknown payload tag fails loudly", {
+  expect_identical(garry:::.sv_es("f64"), 8L)
+  expect_error(garry:::.sv_es("c64"), class = "garry_error")
 })

@@ -1,6 +1,5 @@
 # Decision D1 lock: extent order is (xmin, ymin, xmax, ymax) everywhere in
-# garry; vaster's (xmin, xmax, ymin, ymax) exists only behind
-# as_vaster_extent(). If this file fails, someone flipped a convention.
+# garry. If this file fails, someone flipped a convention.
 
 test_that("GridSpec extent order is (xmin, ymin, xmax, ymax)", {
   # 30 m UTM-style grid: origin (500000, 4600000), 100 x 80 pixels.
@@ -42,15 +41,20 @@ test_that("rotated and south-up grids are rejected", {
   )
 })
 
-test_that("as_vaster_extent reorders to (xmin, xmax, ymin, ymax)", {
-  g <- grid_spec("EPSG:4326", extent = c(0, -10, 10, 0), dims = c(10L, 10L))
-  expect_identical(as_vaster_extent(g), c(0, 10, -10, 0))
-  expect_identical(as_vaster_extent(c(1, 2, 3, 4)), c(1, 3, 2, 4))
+test_that("a rotated file's error names the file and the way out", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 8L, 8L, 1L, "Float32", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 1, 0.1, 10, 0, -1))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:4326"))
+  ds$close()
+  err <- expect_error(gdal_grid_spec(f), "rotated")
+  expect_match(conditionMessage(err), basename(f), fixed = TRUE)
+  expect_match(conditionMessage(err), "gdalwarp", fixed = TRUE)
 })
 
 test_that("vaster round-trip agrees with garry's transform math", {
   g <- grid_spec("EPSG:4326", extent = c(0, -10, 10, 0), dims = c(10L, 10L))
-  ve <- as_vaster_extent(g)
+  ve <- g@extent[c(1L, 3L, 2L, 4L)] # vaster's (xmin, xmax, ymin, ymax)
   d  <- unname(g@dims[1:2])
 
   # Centre of the top-left pixel: vaster cell 1 (row-major from top-left).

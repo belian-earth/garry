@@ -88,3 +88,9 @@ test_that("reduce_over accepts exactly the executable ops", {
     expect_error(reduce_over(x, op, "x"), "must be one of")
   }
 })
+
+test_that("nan_rm must be TRUE or FALSE", {
+  a <- lazy_source_stub("a.tif")
+  expect_error(reduce_over(a, "mean", "x", nan_rm = 1), "nan_rm")
+  expect_error(reduce_over(a, "mean", "x", nan_rm = NA), "nan_rm")
+})

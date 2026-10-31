@@ -7,7 +7,7 @@
 g_ifelse(cond, yes, no)
 }
 \arguments{
-\item{cond}{Logical array.}
+\item{cond}{Logical array, or a stored 0/1 mask: nonzero is true.}
 
 \item{yes, no}{Arrays or scalars, broadcast against \code{cond}.}
 }

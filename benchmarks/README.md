@@ -9,6 +9,10 @@ Open Data Cube + dask; vrtility already beats it.
 Numbers are network-sensitive: always compare runs from the same
 sitting, against a vrtility baseline measured in that sitting.
 
+The sections below are dated records, so they name the options of their
+day, and some of those no longer exist. `garry_options()` lists the
+current ones.
+
 Two Kalman-smoother scripts ride the ScanNode work
 (design/scan-node-design.md): `kalman-kfas-validate.R` diffs
 `kalman_llt()` against hutan's per-pixel KFAS smoother on real tile
@@ -164,7 +168,7 @@ Findings the sweep forced into the engine:
 - Fused kernels execute at READ granularity: the AEF MLP holds ~2 KB/px
   of activations, fine at a 1 Mpx window (~2.4 GB/reader), fatal at
   4.2 Mpx (~9 GB/reader, three readers OOM-killed). Bounded by
-  `garry.fuse_reader_mb`; the long-term fix is fusion-aware read
+  `.fuse_reader_mb`; the long-term fix is fusion-aware read
   window sizing at plan time.
 - The crop=2048 tail OOM is `hutan::si_tail` host-side anon (~31 GB,
   deterministic, scales with pixels) — a pipeline scaling wall
@@ -549,8 +553,8 @@ per stage in its jit cache. Fixes, all in garry:
    the graph; user fns are rebound onto minimal environments holding
    only their free variables (`.slim_fn`, codetools). Stage closures
    are now ~300 KB.
-2. The GDAL dataset handle cache is LRU-capped
-   (`garry.handle_cache_max`, default 4) and closes evicted handles:
+2. The GDAL dataset handle cache is LRU-capped (depth 4 by default)
+   and closes evicted handles:
    open GTI warping mosaics pin warper + VSICURL + block-cache memory.
 3. The benchmark exports `GDAL_CACHEMAX=256`: GDAL's block cache
    defaults to 5% of RAM PER PROCESS and every daemon inherits it.

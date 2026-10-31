@@ -9,9 +9,10 @@ n_warps <- function(x) {
 }
 
 without_dedup <- function(expr) {
-  old <- options(garry.warp_dedup = FALSE)
-  on.exit(options(old))
-  force(expr)
+  testthat::with_mocked_bindings(
+    force(expr),
+    .dedup_warps = function(graph, sink_ids) invisible(graph)
+  )
 }
 
 target_of <- function(f, fact = 2L) {

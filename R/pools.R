@@ -16,16 +16,22 @@ NULL
 .garry_state <- new.env(parent = emptyenv())
 
 
-# Physical / logical core counts, with safe fallbacks (detectCores can NA).
+# Physical / logical core counts. detectCores() can return NA: pools then
+# size from an assumed 4 cores, which the warning says, once a session.
 .garry_cores <- function() {
-  phys <- tryCatch(parallel::detectCores(logical = FALSE), error = function(e) {
-    NA_integer_
-  })
-  logi <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) {
-    NA_integer_
-  })
+  phys <- parallel::detectCores(logical = FALSE)
+  logi <- parallel::detectCores(logical = TRUE)
   if (is.na(logi) || logi < 1L) {
     logi <- 4L
+    cli::cli_warn(
+      c(
+        "cannot read this machine's core count, so garry assumes {logi} cores.",
+        "i" = "Pass {.arg read} and {.arg compute} to {.fn garry_daemons}, and set {.code garry.pool_affinity = \"off\"}: CPU masks wrap at the assumed count."
+      ),
+      class = c("garry_cores_warning", "garry_warning"),
+      .frequency = "once",
+      .frequency_id = "garry_cores_unknown"
+    )
   }
   if (is.na(phys) || phys < 1L) {
     phys <- logi
@@ -37,8 +43,9 @@ NULL
 # list(avail, current, limit), where avail is the tightest
 # (limit - usage + inactive file cache) over the process's cgroup and
 # every ancestor with a finite limit, and current/limit belong to that
-# level. NULL when no level is limited or the files are unreadable.
-# /proc/meminfo reports the HOST, so inside a container, a SLURM step or
+# level. NULL when no level is limited. A limit file that is there and
+# will not read or parse aborts (.cgroup_lines()): only a level without
+# one, or one holding "max", is unlimited. /proc/meminfo reports the HOST, so inside a container, a SLURM step or
 # a systemd scope it can report tens of free GB while this process is a
 # breath away from its own limit -- budgeting on it would overcommit
 # straight into a cgroup OOM kill. Limits often sit on an ancestor
@@ -63,7 +70,7 @@ NULL
   if (!file.exists(self)) {
     return(NULL)
   } # non-Linux
-  ln <- tryCatch(readLines(self, n = 50L), error = function(e) character(0))
+  ln <- .cgroup_lines(self, 50L)
   v1 <- grep("^[0-9]+:([^:]*,)?memory(,[^:]*)?:", ln, value = TRUE)[1L]
   v2 <- grep("^0::", ln, value = TRUE)[1L]
   if (!is.na(v1)) {
@@ -84,24 +91,22 @@ NULL
   if (!nzchar(rel)) {
     return(NULL)
   }
+  # NA when the level has no such file, Inf for "max"
   read1 <- function(p) {
     if (!file.exists(p)) {
       return(NA_real_)
     }
-    suppressWarnings(as.numeric(
-      tryCatch(readLines(p, n = 1L), error = function(e) NA_character_)
-    ))
+    v <- .cgroup_lines(p, 1L)
+    if (identical(v, "max")) Inf else .cgroup_number(v, p)
   }
   inactive_file <- function(dir) {
     p <- file.path(dir, "memory.stat")
-    st <- if (file.exists(p)) {
-      tryCatch(readLines(p), error = function(e) character(0))
-    } else {
-      character(0)
+    if (!file.exists(p)) {
+      return(0)
     }
     key <- paste0("^", f[[3L]], " ")
-    v <- sub(key, "", grep(key, st, value = TRUE))
-    if (length(v)) suppressWarnings(as.numeric(v[[1L]])) else 0
+    v <- sub(key, "", grep(key, .cgroup_lines(p), value = TRUE))
+    if (length(v)) .cgroup_number(v[[1L]], p) else 0
   }
   parts <- strsplit(sub("^/", "", rel), "/", fixed = TRUE)[[1L]]
   parts <- parts[nzchar(parts)]
@@ -114,7 +119,7 @@ NULL
     }
     mx <- read1(file.path(dir, f[[1L]]))
     cur <- read1(file.path(dir, f[[2L]]))
-    # "max" parses NA (v2 unlimited); v1 writes unlimited as ~2^63
+    # v1 writes unlimited as ~2^63
     if (is.na(mx) || is.na(cur) || mx >= 2^60) {
       next
     }
@@ -124,6 +129,35 @@ NULL
     }
   }
   best
+}
+
+# A kernel-written cgroup file, whose failure leaves the memory limit
+# unknown: budgeting past it risks the OOM kill the limit will deliver.
+.cgroup_lines <- function(path, n = -1L) {
+  tryCatch(
+    suppressWarnings(readLines(path, n = n, warn = FALSE)),
+    error = function(e) .cgroup_abort(path, conditionMessage(e))
+  )
+}
+
+.cgroup_number <- function(v, path) {
+  n <- suppressWarnings(as.numeric(v))
+  if (length(n) != 1L || is.na(n)) {
+    .cgroup_abort(path, .glue("it holds {paste(v, collapse = ' ')}"))
+  }
+  n
+}
+
+.cgroup_abort <- function(path, why) {
+  cli::cli_abort(
+    c(
+      "cannot read {.file {path}}, so this process's memory limit is unknown.",
+      "x" = "{why}",
+      "i" = "Make the cgroup files readable in this container."
+    ),
+    class = c("garry_memory_error", "garry_error"),
+    call = NULL
+  )
 }
 
 # Headroom (MB) under the binding cgroup limit; NA when unlimited.
@@ -186,26 +220,38 @@ NULL
 # term is what makes the answer meaningful inside a container, systemd
 # scope or SLURM step, where the machine figure can be tens of GB while
 # this process is a breath from its own limit. NA when neither can be
-# determined.
+# determined, which leaves every budget open: that warns, once a session,
+# and a run still ends in the same values.
 .garry_ram_avail_mb <- function() {
   host <- .garry_darwin_avail_mb()
+  why <- "no reading"
   if (!is.finite(host)) {
     host <- tryCatch(
       as.numeric(memuse::Sys.meminfo()$freeram) / 2^20,
-      error = function(e) NA_real_
+      error = function(e) {
+        why <<- conditionMessage(e)
+        NA_real_
+      }
     )
   }
   if (length(host) != 1L || !is.finite(host)) {
     host <- NA_real_
   }
   cg <- .garry_cgroup_avail_mb()
-  if (is.na(cg)) {
-    host
-  } else if (is.na(host)) {
-    cg
-  } else {
-    min(host, cg)
+  if (is.na(host) && is.na(cg)) {
+    cli::cli_warn(
+      c(
+        "cannot read the available RAM, so garry runs with no memory budget.",
+        "x" = "{why}",
+        "i" = "Nothing limits what runs at once: use fewer daemons if this machine runs short."
+      ),
+      class = c("garry_memory_warning", "garry_warning"),
+      .frequency = "once",
+      .frequency_id = "garry_ram_unknown"
+    )
+    return(NA_real_)
   }
+  min(host, cg, na.rm = TRUE)
 }
 
 # Free space on /dev/shm in MB, NA when absent or unreadable. The mori
@@ -253,37 +299,28 @@ NULL
   }
 }
 
-# Number of connected daemons in a mirai profile (0 if none / unknown).
+# Number of connected daemons in a mirai profile (0 if it has none).
 .gd_n_compute <- function(prof) {
-  st <- tryCatch(mirai::status(.compute = prof), error = function(e) NULL)
-  if (is.null(st) || !is.numeric(st$connections)) {
-    0L
-  } else {
-    as.integer(st$connections)
-  }
+  as.integer(mirai::status(.compute = prof)$connections)
 }
 
-# Active compute-pool profile names. Routed dispatch
-# (garry.routed_dispatch at pool creation; design/routed-dispatch.md)
-# records the N width-1 profiles garry_daemons() created; legacy mode
-# is the single anonymous pool. Every compute-facing seam (creation,
-# teardown, affinity, pids, hygiene, ABI, warm-up, dispatch) loops
-# this, so legacy mode runs byte-identical through the same code paths.
+# Active compute-pool profile names: the N width-1 profiles
+# garry_daemons() created (design/routed-dispatch.md). Every
+# compute-facing seam (creation, teardown, affinity, pids, hygiene, ABI,
+# warm-up, dispatch) loops this, and it is empty with no compute pool.
 .comp_profiles <- function() {
-  .garry_state$comp_profiles %||% "garry_compute"
+  .garry_state$comp_profiles %||% character(0)
 }
+
+# Tasks a daemon is sent at once: one running and one queued behind it,
+# so it never idles between tasks.
+.daemon_depth <- 2L
 
 # Total connected compute daemons across the profile set.
 .comp_n <- function() {
   sum(vapply(.comp_profiles(), .gd_n_compute, integer(1)))
 }
 
-# Broadcast one QUOTED expression to every daemon of `profiles`,
-# shipping `...` as task args and awaiting completion. do.call defeats
-# everywhere()'s NSE so one language object serves the whole loop
-# (probed 2026-08-02; a substitute()-based first attempt relied on a
-# nonexistent .expr_quoted argument and was backed out). `quiet`
-# tolerates down profiles (teardown-adjacent broadcasts).
 # A run id unique on this machine: the host pid plus a per-session count.
 # It names the run's store regions and fetch directory, so it must not
 # come from the RNG (drawing would move the user's .Random.seed, and two
@@ -314,11 +351,24 @@ NULL
   invisible(profiles)
 }
 
-# Wait for a task, but not for a daemon that has gone: a width-1 profile
+# One idle step of a wait on `profiles`: a short sleep, and once a
+# second the check that a daemon is left to wait for. A width-1 profile
 # has no dispatcher to hand a dead daemon's task back, so the task stays
-# unresolved forever. A caller with its own failure policy takes a bare
-# error value back; otherwise it is the connection, not the task, and
-# the caller would take it for a result.
+# unresolved forever and only this ends the wait.
+.idle_step <- function(profiles, call = rlang::caller_env()) {
+  last_check <- Sys.time()
+  function() {
+    if (difftime(Sys.time(), last_check, units = "secs") > 1) {
+      .assert_pools_alive(profiles, call = call)
+      last_check <<- Sys.time()
+    }
+    Sys.sleep(0.002)
+  }
+}
+
+# Wait for a task, but not for a daemon that has gone. A caller with its
+# own failure policy takes a bare error value back; otherwise it is the
+# connection, not the task, and the caller would take it for a result.
 .await_task <- function(
   h,
   profiles,
@@ -326,77 +376,184 @@ NULL
   call = rlang::caller_env()
 ) {
   lost <- match.arg(lost)
-  last_check <- Sys.time()
+  idle <- .idle_step(profiles, call)
   while (mirai::unresolved(h)) {
-    if (difftime(Sys.time(), last_check, units = "secs") > 1) {
-      .assert_pools_alive(profiles, call = call)
-      last_check <- Sys.time()
-    }
-    Sys.sleep(0.002)
+    idle()
   }
   if (
     identical(lost, "abort") &&
       inherits(h$data, "errorValue") &&
       !inherits(h$data, "miraiError")
   ) {
-    why <- .task_failure(h$data)
-    cli::cli_abort(
-      "task failed on daemon: {why}",
-      class = c("garry_task_error", "garry_error"),
-      call = call
-    )
+    .task_abort("task failed on daemon", h$data, call = call)
   }
   h$data
 }
 
-# What a failed task reports. A bare error value 19 is a reset
-# connection: the daemon died under the task.
+# What a failed task reports. A bare error value is the connection: 19
+# is a reset, the daemon dying under the task. A daemon's error is its
+# header alone in as.character(): cli's bullets, where garry puts GDAL's
+# cause and the next step, ride as `body`.
 .task_failure <- function(x) {
-  if (!inherits(x, "miraiError") && identical(as.integer(x), 19L)) {
-    return("its daemon exited, probably killed (out of memory?)")
+  if (!inherits(x, "miraiError")) {
+    code <- as.integer(x)
+    if (identical(code, 19L)) {
+      return("its daemon exited, probably killed (out of memory?)")
+    }
+    return(.glue("daemon connection error {code}"))
   }
-  as.character(x)
+  paste(c(as.character(x), attr(x, "body", exact = TRUE)), collapse = " ")
 }
 
+# Abort on a failed task: `what` failed, with the daemon's account, classed
+# `class` and whatever garry class the daemon raised, so a handler sees the
+# one condition on every route.
+.task_abort <- function(
+  what,
+  x,
+  class = "garry_task_error",
+  ...,
+  call = rlang::caller_env()
+) {
+  why <- .task_failure(x)
+  raised <- grep("^garry_", attr(x, "condition.class", exact = TRUE), value = TRUE)
+  cli::cli_abort(
+    "{what}: {why}",
+    class = unique(c(class, raised, "garry_error")),
+    ...,
+    call = call
+  )
+}
+
+# Broadcast one QUOTED expression to every daemon of `profiles`,
+# shipping `...` as task args and awaiting completion. do.call defeats
+# everywhere()'s NSE so one language object serves the whole loop
+# (probed 2026-08-02). A task that fails aborts, classed `class` and
+# saying `what` failed: a daemon that misses a broadcast keeps stale
+# state. `live_only` is for work a dead daemon has no need of (hygiene,
+# credentials, teardown): it skips profiles with no daemon, and a daemon
+# lost under the broadcast ends that wait; otherwise both abort.
 .pool_broadcast <- function(
   expr,
   profiles = .comp_profiles(),
   ...,
-  quiet = FALSE
+  live_only = FALSE,
+  what = "a pool broadcast",
+  class = "garry_pool_error",
+  call = rlang::caller_env()
 ) {
   args <- c(list(expr), list(...))
   out <- list()
-  # a task sent to a profile with no daemon never resolves: skip those
-  # when quiet, refuse otherwise
-  if (quiet) {
+  if (live_only) {
     profiles <- profiles[vapply(profiles, .gd_n_compute, integer(1)) > 0L]
   } else {
-    .assert_pools_alive(profiles)
+    .assert_pools_alive(profiles, call = call)
+  }
+  lost <- function(why) {
+    cli::cli_abort(
+      c("{what} failed: a daemon was lost.", "x" = "{why}"),
+      class = unique(c(class, "garry_pool_error", "garry_error")),
+      call = call
+    )
   }
   for (p in profiles) {
-    h <- if (quiet) {
-      tryCatch(
-        do.call(mirai::everywhere, c(args, list(.compute = p))),
-        error = function(e) NULL
-      )
-    } else {
-      do.call(mirai::everywhere, c(args, list(.compute = p)))
-    }
-    if (!is.null(h)) out <- c(out, lapply(h, function(m) m[]))
+    h <- do.call(mirai::everywhere, c(args, list(.compute = p)))
+    out <- c(out, tryCatch(
+      lapply(h, .await_task, p, lost = "return"),
+      garry_pool_error = function(e) {
+        if (!live_only) lost(conditionMessage(e))
+      }
+    ))
+  }
+  failed <- Filter(function(r) inherits(r, "miraiError"), out)
+  if (length(failed)) {
+    why <- .task_failure(failed[[1L]])
+    cli::cli_abort(
+      c("{what} failed on {length(failed)} daemon{?s}.", "x" = "{why}"),
+      class = c(class, "garry_error"),
+      call = call
+    )
+  }
+  gone <- Filter(function(r) inherits(r, "errorValue"), out)
+  if (length(gone) && !live_only) {
+    lost(.task_failure(gone[[1L]]))
   }
   invisible(out)
 }
 
-# Every daemon pid of a mirai profile (empty when unavailable).
-.garry_pool_pids <- function(profile) {
-  tryCatch(
-    vapply(
-      mirai::everywhere(Sys.getpid(), .compute = profile),
-      function(m) m[],
-      integer(1)
-    ),
-    error = function(e) integer(0)
+# Close the outputs the writer daemon holds. A writer that dies under
+# the close leaves its last blocks unflushed, so its loss aborts here
+# (.await_task()) as a failed close does.
+.writer_close <- function(call = rlang::caller_env()) {
+  closed <- .pool_broadcast(
+    quote(asNamespace("garry")$.daemon_write_close()),
+    profiles = "garry_write",
+    what = "closing the writer's outputs",
+    class = "garry_write_error",
+    call = call
   )
+  for (r in closed) {
+    if (length(r)) {
+      .gdal_close_abort(names(r)[[1L]], r[[1L]], call)
+    }
+  }
+  invisible(NULL)
+}
+
+# A failed run's end on the writer: wait out its queued writes, whose
+# errors no longer matter, then close its handles so the partial output
+# is closed and deletable (Windows cannot delete an open file). The run
+# already has its error, so nothing here adds one.
+.writer_settle <- function(tasks) {
+  prof <- "garry_write"
+  if (.gd_n_compute(prof) > 0L) {
+    try(
+      {
+        lapply(tasks, function(w) .await_task(w$h, prof, lost = "return"))
+        .pool_broadcast(
+          quote(asNamespace("garry")$.daemon_write_close()),
+          profiles = prof,
+          live_only = TRUE
+        )
+      },
+      silent = TRUE
+    )
+  }
+  invisible(NULL)
+}
+
+# What a daemon must hold before it reads for a run. Daemons do not
+# inherit host options, so read policy is resolved here and shipped. One
+# list, so no route can miss an option.
+.daemon_policy <- function() {
+  list(
+    garry.read_retry = garry_opt("read_retry"),
+    garry.warp_exact = garry_opt("warp_exact")
+  )
+}
+
+# Start a run on `profiles`: garry attached (user stage closures call
+# the g_* vocabulary unqualified), the read policy set and, with `trim`,
+# the previous run's arenas trimmed (a tail plan otherwise starts with
+# the fleet at the predict plan's high-water).
+.daemons_run_start <- function(profiles, trim = FALSE) {
+  .pool_broadcast(
+    quote({
+      suppressMessages(library(garry))
+      options(policy)
+      asNamespace("garry")$.daemon_hygiene(trim = trim)
+    }),
+    profiles = profiles,
+    policy = .daemon_policy(),
+    trim = trim,
+    what = "starting the run"
+  )
+}
+
+# Every daemon pid of a mirai profile: what the CPU masks and the memory
+# measurements work from, so a daemon that will not answer stops the pool.
+.garry_pool_pids <- function(profile) {
+  unlist(.pool_broadcast(quote(Sys.getpid()), profiles = profile, what = "the pid query"))
 }
 
 # Measured ANONYMOUS resident memory (MB) summed over the daemon
@@ -453,66 +610,76 @@ NULL
 # Cap each daemon of a pool to a disjoint interleaved CPU-affinity
 # mask, so an XLA client created there sizes its thread pool to k CPUs
 # instead of all cores. This is a GENERAL rule, not a reader special
-# case: every process that may run an XLA client — readers via fused
-# kernels, compute daemons always — gets a bounded, mostly-disjoint
+# case: every process that may run an XLA client: readers via fused
+# kernels, compute daemons always: gets a bounded, mostly-disjoint
 # slice of the machine, which is what makes pool width a free
 # parameter (slots) while admission controls concurrency. XLA sizes
 # its eigen pool via tsl::port::MaxParallelism() = NumSchedulableCPUs,
 # which respects sched_setaffinity, and the client inits lazily on the
-# first g_jit — so affinity applied at pool creation bounds every
+# first g_jit: so affinity applied at pool creation bounds every
 # later client (spike A, benchmarks/README.md 2026-07-29: uncapped 93
 # threads/daemon; k=2 -> 39 on disjoint pairs; k=1 SEGFAULTS the
 # client, hence the hard floor of 2; spike B: 10 narrow clients ~2x
-# the throughput of 2 uncapped fat ones on matmul kernels). Linux +
-# taskset only; anywhere else the pool stays uncapped and the
-# placement pass's fuse_flops_max gate keeps wide kernels off the
-# readers. Returns the cap (NULL when uncapped) for .garry_state.
-.pool_affinity_apply <- function(profile, n, k = NULL, pids = NULL) {
+# the throughput of 2 uncapped fat ones on matmul kernels). Linux only;
+# anywhere else the pool stays uncapped and the placement pass's
+# .fuse_flops_max gate keeps wide kernels off the readers. On Linux a
+# mask that cannot be set warns: the pool runs, on uncapped clients.
+# `pids` take DISJOINT global slices in order: routed compute pools span
+# N width-1 profiles, whose pids the caller combines. Returns the cap
+# (NULL when uncapped) for .garry_state.
+.pool_affinity_apply <- function(pids, k = NULL) {
   if (!identical(Sys.info()[["sysname"]], "Linux")) {
     return(NULL)
   }
   if (!nzchar(Sys.which("taskset"))) {
+    .affinity_warn("the {.code taskset} program is not installed")
     return(NULL)
   }
   cores <- .garry_cores()$logical
-  k <- as.integer(k %||% max(2L, cores %/% max(1L, as.integer(n))))
+  k <- as.integer(k %||% max(2L, cores %/% max(1L, length(pids))))
   if (k >= cores) {
     return(NULL)
   } # cap would be a no-op
-  # `pids` overrides the profile lookup: routed compute pools span N
-  # width-1 profiles whose daemons must take DISJOINT global slices,
-  # so the caller passes the combined pid vector in profile order.
-  pids <- pids %||% .garry_pool_pids(profile)
-  if (length(pids) == 0L) {
-    return(NULL)
-  }
-  # Apply EVERY mask before judging success: returning early on one
-  # failed taskset left the pool half re-masked while the recorded
-  # thread state kept the old width (defect hunt L5).
-  ok <- TRUE
+  # Apply EVERY mask before judging success: an early return would leave
+  # the pool half re-masked while the recorded thread state kept the old
+  # width.
+  failed <- character(0)
   for (i in seq_along(pids)) {
     lo <- ((i - 1L) * k) %% cores
     cpus <- paste(seq(lo, lo + k - 1L) %% cores, collapse = ",")
-    st <- suppressWarnings(
-      system2(
-        "taskset",
-        c("-a", "-cp", cpus, pids[[i]]),
-        stdout = FALSE,
-        stderr = FALSE
-      )
-    )
-    if (!identical(st, 0L)) ok <- FALSE
+    out <- suppressWarnings(system2(
+      "taskset",
+      c("-a", "-cp", cpus, pids[[i]]),
+      stdout = TRUE,
+      stderr = TRUE
+    ))
+    if (!is.null(attr(out, "status"))) {
+      failed <- c(failed, paste(out, collapse = " "))
+    }
   }
-  if (!ok) {
+  if (length(failed)) {
+    .affinity_warn("{.code taskset} failed on {length(failed)} of {length(pids)} daemon{?s}: {failed[[1L]]}")
     return(NULL)
   }
   k
 }
 
+.affinity_warn <- function(what, env = parent.frame()) {
+  why <- cli::format_inline(what, .envir = env)
+  cli::cli_warn(
+    c(
+      "cannot pin the pool's daemons to CPUs, so their XLA clients run uncapped.",
+      "x" = "{why}",
+      "i" = "Install {.code util-linux}, or set {.code garry.pool_affinity = \"off\"} to run without masks."
+    ),
+    class = c("garry_affinity_warning", "garry_warning")
+  )
+}
+
 # Re-shape the compute pool's affinity for THIS plan. The optimal pool
 # shape is workload-dependent: fleets of moderate kernels (medians,
 # matmuls) want many narrow daemons (spike B: 10 x 2-CPU ~2x two fat
-# ones), while scan stages want few fat ones — each scan chunk is one
+# ones), while scan stages want few fat ones: each scan chunk is one
 # long sequential-in-t kernel whose XLA program parallelises across
 # the y/x plane, and a 2-CPU mask just makes both its compile and its
 # execution slow while the byte budget keeps most of a wide pool idle
@@ -520,7 +687,7 @@ NULL
 # per execution in milliseconds: scan-bearing plans get half-machine
 # masks (alternating halves; admission keeps ~2 active), everything
 # else keeps the creation-time disjoint narrow masks.
-.comp_pool_shape <- function(n_comp, plan_has_scan, n_scan = 0L) {
+.comp_pool_shape <- function(n_comp, n_scan = 0L) {
   if (is.null(.garry_state$comp_threads)) {
     return(invisible(NULL))
   }
@@ -530,17 +697,12 @@ NULL
     # Mixed per-role masks (routed scan plans): the designated scan
     # profiles get half-machine masks (scans are long sequential-in-t
     # kernels whose plane parallelism narrow masks starve), the map
-    # profiles keep narrow disjoint slices — the mixed topology spike
+    # profiles keep narrow disjoint slices: the mixed topology spike
     # B's data pointed at, expressible only with daemon identity.
     k_fat <- max(2L, cores %/% 2L)
     k_narrow <- max(2L, cores %/% max(1L, length(pids)))
-    .pool_affinity_apply(NULL, n_scan, k = k_fat, pids = pids[seq_len(n_scan)])
-    got <- .pool_affinity_apply(
-      NULL,
-      length(pids) - n_scan,
-      k = k_narrow,
-      pids = pids[-seq_len(n_scan)]
-    )
+    .pool_affinity_apply(pids[seq_len(n_scan)], k = k_fat)
+    got <- .pool_affinity_apply(pids[-seq_len(n_scan)], k = k_narrow)
     if (!is.null(got)) {
       .garry_state$comp_threads <- got
     }
@@ -549,7 +711,7 @@ NULL
     .garry_state$comp_mixed <- TRUE
     return(invisible(NULL))
   }
-  k_want <- if (plan_has_scan) {
+  k_want <- if (n_scan > 0L) {
     max(2L, cores %/% 2L)
   } else {
     max(2L, cores %/% max(1L, n_comp))
@@ -560,7 +722,7 @@ NULL
   ) {
     return(invisible(NULL))
   }
-  got <- .pool_affinity_apply(NULL, n_comp, k = k_want, pids = pids)
+  got <- .pool_affinity_apply(pids, k = k_want)
   if (!is.null(got)) {
     .garry_state$comp_threads <- got
     .garry_state$comp_mixed <- FALSE
@@ -585,9 +747,8 @@ NULL
 #' third of the logical cores, capped at 8 with a floor of 2; on CUDA
 #' the compute pool is 2, since concurrent clients share one card.
 #' `collect(distributed = TRUE)` detects the pools automatically and
-#' pre-compiles stage kernels at run start
-#' (`garry_opt("jit_warmup")`), scan kernels included, targeted at
-#' the `garry_opt("scan_profiles")` designated profiles only.
+#' pre-compiles stage kernels on idle daemons at run start, scan kernels
+#' on the `garry_opt("scan_profiles")` designated profiles only.
 #'
 #' You should not need to tune these. The cases for overriding: a
 #' source API that throttles concurrent reads (smaller `read`); one
@@ -602,8 +763,8 @@ NULL
 #' host's own GDAL config (that would hide local sidecars for the
 #' caller's reads); call [garry_gdal_config()] yourself to tune host-side
 #' discovery. `MALLOC_*` is only-if-unset, and `gdal_config = FALSE`
-#' skips the GDAL settings entirely. Headers registered with
-#' [garry_http_auth()] are applied to the new pools.
+#' skips the GDAL settings entirely, on every route. Headers registered
+#' with [garry_http_auth()] are applied to the new pools.
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses all
 #'   logical cores. `0` tears the pool down.
@@ -631,8 +792,6 @@ NULL
 #'   mixing local multi-file reads). Either way every daemon's GDAL
 #'   block cache is capped at `garry_opt("gdal_cachemax_mb")`: GDAL's
 #'   own default is 5% of RAM per process.
-#' @param ... Passed to `mirai::daemons()` for every pool; `dispatcher` is
-#'   garry's to set.
 #' @return Invisibly, `list(read =, compute =)`.
 #' @seealso [garry_daemons_set()], [garry_pool_hygiene()], [collect()]
 #' @export
@@ -640,29 +799,20 @@ garry_daemons <- function(
   read = NULL,
   compute = NULL,
   read_handles = NULL,
-  gdal_config = TRUE,
-  ...
+  gdal_config = TRUE
 ) {
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
-    # Machine-derived defaults (deep review 2026-08-02, from the
-    # routed width/K sweep, benchmarks/README.md):
-    # - compute: cores/3 capped at 8 (floor 2). Routed dispatch made
-    #   width SAFE (scan tasks are confined to the scan_profiles
-    #   designated daemons, so width no longer multiplies scan
-    #   compiles or scan memory) and the sweep measured the sweet spot
-    #   at 6 on a 20-core box, with width beyond it flat. CUDA keeps
-    #   2: concurrent clients share one card (compute=2 already
-    #   RESOURCE_EXHAUSTED a 4 GB card on the SI predict).
-    # - read: all logical cores. Remote fetch is LATENCY-bound: the
-    #   HLS composite regressed 23.2 -> 30.8 s (band drain 18.2 ->
-    #   26.0 s) when this default was briefly cut to min(cores, 8)
-    #   (benchmarks/README.md 2026-08-02) — the 8 came from the SI
-    #   reader-width sweep, but that regime is LOCAL raw-cube reads
-    #   competing with compute for cores; pipelines in that regime
-    #   pin their own width (build_si(readers = 8)). The default
-    #   serves the remote-fetch case, where width = cores restores
-    #   ODC parity.
+    # Machine-derived defaults (the routed width/K sweep,
+    # benchmarks/README.md):
+    # - compute: cores/3 capped at 8 (floor 2). Scan tasks are confined
+    #   to the scan_profiles daemons, so width does not multiply scan
+    #   compiles or scan memory; the sweep measured the sweet spot at 6
+    #   on a 20-core box, with width beyond it flat. CUDA keeps 2:
+    #   concurrent clients share one card.
+    # - read: all logical cores. Remote fetch is LATENCY-bound, and
+    #   width = cores keeps ODC parity. A pipeline of LOCAL raw-cube
+    #   reads competing with compute for cores pins its own width.
     if (is.null(compute)) {
       compute <- if (identical(garry_opt("device"), "cuda")) {
         2L
@@ -685,17 +835,13 @@ garry_daemons <- function(
   read <- count(read, "read")
   compute <- count(compute, "compute")
   read_handles <- count(read_handles %||% garry_opt("read_handles"), "read_handles", 1)
-  if ("dispatcher" %in% names(list(...))) {
-    cli::cli_abort("{.arg dispatcher} is set by {.fn garry_daemons} itself.")
-  }
   # MALLOC_* must be exported BEFORE the daemons spawn (read at exec). The GDAL
   # config is applied on the read daemons below, NOT on the host session:
   # DISABLE_READDIR_ON_OPEN=EMPTY_DIR would hide local sidecars (overviews,
   # world files) for the caller's own reads. Call garry_gdal_config() yourself
   # to tune host-side discovery.
-  if (isTRUE(gdal_config)) {
-    .garry_env_defaults()
-  }
+  .garry_env_defaults()
+  .garry_state$pools_set <- FALSE
   # Under covr, daemons must not load the INSTRUMENTED garry: covr
   # bakes a trace-file finalizer into the instrumented package, and a
   # daemon hitting the (benign) XLA teardown segfault leaves a
@@ -710,23 +856,20 @@ garry_daemons <- function(
   if (!is.null(restore_libs)) {
     on.exit(restore_libs(), add = TRUE)
   }
-  mirai::daemons(read, .compute = "garry_read", ...)
+  mirai::daemons(read, .compute = "garry_read")
   # Compute pool: N width-1 direct-connection profiles (no dispatcher
-  # processes — probed 2026-08-02: everywhere() state persists,
-  # width-1 queues serialise, teardown clean), giving the scheduler
-  # daemon identity — exact per-profile kernel warmth and scan-memory
-  # confinement (design/routed-dispatch.md; the anonymous width-N pool
-  # was excised after the both-mode suite and the width sweep proved
-  # routing strictly dominant). Any previous generation is torn down
+  # processes), giving the scheduler daemon identity: exact per-profile
+  # kernel warmth and scan-memory confinement
+  # (design/routed-dispatch.md). Any previous generation is torn down
   # first so generations never mix.
-  for (p in c(.garry_state$comp_profiles %||% character(0), "garry_compute")) {
-    try(mirai::daemons(0L, .compute = p), silent = TRUE)
+  for (p in .comp_profiles()) {
+    mirai::daemons(0L, .compute = p)
   }
   .garry_state$comp_profiles <- NULL
   if (compute > 0L) {
     profs <- .glue("garry_comp_{seq_len(compute)}")
     for (p in profs) {
-      mirai::daemons(1L, dispatcher = FALSE, .compute = p, ...)
+      mirai::daemons(1L, dispatcher = FALSE, .compute = p)
     }
     .garry_state$comp_profiles <- profs
   }
@@ -737,27 +880,46 @@ garry_daemons <- function(
   # host). Lean: no anvl, no GDAL session config needed.
   mirai::daemons(
     if (read > 0L || compute > 0L) 1L else 0L,
-    .compute = "garry_write",
-    ...
+    .compute = "garry_write"
   )
+  pools <- c(
+    if (read > 0L) "garry_read",
+    if (compute > 0L) .comp_profiles(),
+    if (read > 0L || compute > 0L) "garry_write"
+  )
+  # GDAL's block cache defaults to 5% of RAM PER PROCESS: ~12 GB on a
+  # 240 GB worker for each compute daemon and the writer, which read and
+  # write through GDAL but never ran garry_gdal_config(). Cap every pool
+  # at garry.gdal_cachemax_mb (.gdal_cache_cap applies it immediately).
+  # The option goes with it, first: read slabs and garry_gdal_config()
+  # size from it. It is fixed for the pool's life.
+  if (length(pools)) {
+    .pool_broadcast(
+      quote({
+        options(garry.gdal_cachemax_mb = mb)
+        asNamespace("garry")$.gdal_cache_cap(mb)
+      }),
+      profiles = pools,
+      mb = as.numeric(garry_opt("gdal_cachemax_mb")),
+      what = "capping the GDAL block cache"
+    )
+  }
   if (read > 0L) {
-    # Read daemons: set the handle-cache depth, and (once) the GDAL config so it
-    # is live from pool creation (the composite fast path also re-applies it
-    # per run).
-    w <- mirai::everywhere(
-      {
-        options(garry.handle_cache_max = hc, garry.gdal_cachemax_mb = cm)
+    # Read daemons: the handle-cache depth, and once, for the pool's life,
+    # the GDAL config.
+    .pool_broadcast(
+      quote({
+        suppressMessages(library(garry))
+        asNamespace("garry")$.gdal_handle_cap(hc)
         if (cfg) {
-          suppressMessages(library(garry))
           garry::garry_gdal_config()
         }
-      },
-      hc = as.integer(read_handles),
-      cm = as.numeric(garry_opt("gdal_cachemax_mb")),
+      }),
+      profiles = "garry_read",
+      hc = read_handles,
       cfg = isTRUE(gdal_config),
-      .compute = "garry_read"
+      what = "setting up the read pool"
     )
-    invisible(lapply(w, function(m) m[]))
   }
   # Pool CPU affinity (see .pool_affinity_apply): applied at pool
   # creation, BEFORE any kernel jits an XLA client anywhere. The
@@ -789,44 +951,21 @@ garry_daemons <- function(
     ),
     .garry_state$pool_pids
   )
-  # GDAL's block cache defaults to 5% of RAM PER PROCESS: ~12 GB on a
-  # 240 GB worker for each compute daemon and the writer, which read and
-  # write through GDAL but never ran garry_gdal_config(). Cap every pool
-  # at garry.gdal_cachemax_mb (.gdal_cache_cap applies it immediately).
-  capped <- .pool_broadcast(
-    quote(asNamespace("garry")$.gdal_cache_cap(mb)),
-    profiles = c(
-      if (read > 0L) "garry_read",
-      .comp_profiles(),
-      if (read > 0L || compute > 0L) "garry_write"
-    ),
-    mb = as.numeric(garry_opt("gdal_cachemax_mb")),
-    quiet = TRUE
-  )
-  failed <- Filter(
-    function(r) inherits(r, c("miraiError", "errorValue")),
-    capped
-  )
-  if (length(failed)) {
-    cli::cli_warn(c(
-      "Could not cap the GDAL block cache on {length(failed)} daemon{?s}.",
-      "i" = "They keep GDAL's default of 5% of RAM each: {as.character(failed[[1L]])}"
-    ))
-  }
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L) {
-    .pool_affinity_apply("garry_read", read)
+    .pool_affinity_apply(p_read)
   }
   .garry_state$comp_threads <- if (
     aff && compute > 0L && !identical(garry_opt("device"), "cuda")
   ) {
-    .pool_affinity_apply(NULL, compute, pids = .garry_state$comp_pids)
+    .pool_affinity_apply(.garry_state$comp_pids)
   }
   .garry_state$comp_mixed <- FALSE
   # Credentials registered with garry_http_auth() reach new pools too.
   if (length(.garry_state$http_auth) && (read > 0L || compute > 0L)) {
     .http_auth_push()
   }
+  .garry_state$pools_set <- read > 0L && compute > 0L
   invisible(list(read = read, compute = compute))
 }
 
@@ -837,10 +976,9 @@ garry_daemons <- function(
 #' `deep = TRUE` the daemons' jit caches are also evicted, forcing
 #' recompiles on next use (roughly a second per map kernel, tens of
 #' seconds per scan kernel); reserve that for memory pressure. Daemons
-#' already trim at run start, and during a run once the task transients
-#' since their last trim pass `garry.daemon_gc_mb` (see
-#' [garry_options()]); call this between pipeline phases when the fleet
-#' should idle lean.
+#' already trim at run start, and during a run once 128 MB of task
+#' transients have passed since their last trim; call this between
+#' pipeline phases when the fleet should idle lean.
 #'
 #' @param deep Also evict the jit caches?
 #' @return Invisibly `NULL`.
@@ -854,22 +992,26 @@ garry_pool_hygiene <- function(deep = FALSE) {
     quote(asNamespace("garry")$.daemon_hygiene(deep = d)),
     profiles = c("garry_read", .comp_profiles(), "garry_write"),
     d = deep,
-    quiet = TRUE
+    live_only = TRUE
   )
   invisible(NULL)
 }
 
-#' Are the garry daemon pools running?
+#' Are the garry daemon pools set?
 #'
-#' `TRUE` when the read and compute daemon pools created by
-#' [garry_daemons()] are running. This is the default for the `distributed`
-#' argument of [collect()], so `collect(x)` uses the pools when they are up and
-#' runs single-threaded otherwise. Mirrors `mirai::daemons_set()`.
+#' `TRUE` from [garry_daemons()] creating read and compute pools until
+#' they are torn down. This is the default for the `distributed` argument
+#' of [collect()], so `collect(x)` uses the pools when they are set and
+#' runs single-threaded otherwise. Mirrors `mirai::daemons_set()`: it
+#' says the pools were set, not that every daemon is alive, so a pool that
+#' lost its daemons stays `TRUE` and the next run fails with a
+#' `garry_pool_error`, rather than moving onto the process the pools
+#' protect. [garry_daemons()] restarts them.
 #'
 #' @return A single logical.
 #' @export
 garry_daemons_set <- function() {
-  .gd_n_compute("garry_read") > 0L && .comp_n() > 0L
+  isTRUE(.garry_state$pools_set)
 }
 
 # Coverage-safe daemon library path: when covr is active, scope R_LIBS

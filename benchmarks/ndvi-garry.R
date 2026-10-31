@@ -42,7 +42,7 @@ options(garry.progress = TRUE, garry.device = device)
 t_all <- system.time({
   ds <- lazy_dataset(
     src, grid = target, assets = c("B04", "B08"), mask_asset = "Fmask",
-    granularity = "day", sort_field = "datetime",
+    granularity = "day",
     nodata = c(B04 = -9999, B08 = -9999, Fmask = 255)
   )
   composite <- ds |>

@@ -40,12 +40,13 @@ band, so readers (QGIS, GDAL, \code{scale = TRUE} reads) recover
 \code{stored * scale + offset}.}
 }
 \value{
-An open dataset object; caller must \verb{$close()}.
+An open dataset object; the caller closes it with
+\code{gdal_close_output()}, which reports a failed close.
 }
 \description{
 A single non-spatial dim ("t" or "band") maps to bands; more than
 one is an error. A \code{.tif} destination writes a tiled GTiff; a
 \code{.vrt} destination writes a raw-BSQ cube (\code{.bin} + sibling
-\code{VRTRawRasterBand} VRT — the intermediate format whose reads bypass
+\code{VRTRawRasterBand} VRT: the intermediate format whose reads bypass
 GDAL's tile machinery; see \code{\link[=stage_raw_cube]{stage_raw_cube()}}).
 }

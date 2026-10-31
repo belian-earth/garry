@@ -43,10 +43,24 @@ test_that(".mpc_resign swaps a near-expiry token for a fresh cached one", {
   expect_identical(seen, "acc/cont")     # account/container token endpoint
 })
 
-test_that(".mpc_resign passes the URL through when the token request fails", {
+test_that("a failed re-sign warns once while the URL lasts, and aborts past it", {
+  calls <- 0L
   testthat::local_mocked_bindings(
-    .mpc_token = function(collection, ...) stop("MPC down"),
+    .mpc_token = function(collection, ...) {
+      calls <<- calls + 1L
+      stop("MPC down")
+    },
     .package = "garry")
-  u <- .mr_url(60)
-  expect_identical(garry:::.mpc_resign(u, margin = 600), u)
+  u <- c(.mr_url(60), sub("b.tif", "c.tif", .mr_url(60), fixed = TRUE))
+  expect_warning(got <- garry:::.mpc_resign(u, margin = 600), "MPC down")
+  expect_identical(got, u) # both still valid
+  expect_identical(calls, 1L) # one request per container, one warning
+  err <- expect_error(garry:::.mpc_resign(.mr_url(-60), margin = 600), class = "garry_read_error")
+  expect_match(conditionMessage(err), "expired", fixed = TRUE)
+  expect_match(conditionMessage(err), "MPC down", fixed = TRUE)
+})
+
+test_that("signing and re-signing take the key from one place", {
+  expect_named(formals(stac_sign_mpc), "items")
+  expect_false("subscription_key" %in% names(formals(garry:::.mpc_token)))
 })

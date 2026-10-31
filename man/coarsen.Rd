@@ -4,14 +4,12 @@
 \alias{coarsen}
 \title{Coarsen a raster or dataset by block means.}
 \usage{
-coarsen(x, factor, fun = "mean")
+coarsen(x, factor)
 }
 \arguments{
 \item{x}{A \code{LazyRaster} or \code{LazyDataset} reading its sources.}
 
 \item{factor}{Integer block size (>= 1).}
-
-\item{fun}{Block statistic; only \code{"mean"}.}
 }
 \value{
 A \code{LazyRaster} or \code{LazyDataset} on the coarser grid (f32).

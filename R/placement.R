@@ -14,17 +14,46 @@ NULL
 # execute_plan_mirai's task build; the single-threaded oracle and the
 # gdal-direct routes never see it.
 #
-# v1 replaces decision site A of the design doc (the fuse predicate,
-# formerly inline in the scheduler). Pool assignment for fetch-backed
-# assembles (site B) stays in the scheduler: it depends on
-# prepare_fetch's stateful index probing and is orthogonal to
+# Pool assignment for fetch-backed assembles stays in the scheduler: it
+# depends on prepare_fetch's stateful index probing and is orthogonal to
 # fuse-vs-materialise.
 # ---------------------------------------------------------------------------
 
-# Consumer index and warp-only mask, one pass, as the scheduler builds
-# them. The scheduler keeps its own copy (it needs stage_kind and
-# node_stage from the same sweep); this exists for callers that have
-# only a Plan (the explain surface, tests).
+# Cost-mode constants. Sustained per-core throughput of jitted kernels
+# (GFLOP/s) and effective /dev/shm copy bandwidth (MB/s): order-of-magnitude
+# figures, as the decisions they separate differ by orders of magnitude.
+.cost_gflops_core <- 4
+.cost_shm_bw_mbs <- 2000
+# Parallel efficiency of a compute pool of all-cores clients against
+# spread-out narrow ones: 2 such daemons measured 81.4 win/s vs 159.8 for
+# 10 x 2-CPU clients on the MLP kernel shape (spike B, benchmarks/README.md
+# 2026-07-29) = 0.51. Applied to the materialise route's compute term:
+# without it the model credits the warm pool with machine-wide throughput
+# it does not deliver and keeps wide kernels off the readers by a false
+# margin.
+.cost_comp_efficiency <- 0.55
+# Without a reader thread cap (garry.pool_affinity), a kernel above this
+# many flops/px never fuses: fusing wide compute onto N uncapped readers
+# spawns N all-cores XLA clients, a bigger thread cliff than the 2-daemon
+# pool it escapes (scheduling review 2026-07-29). Mask cleanup (~10
+# flops/px) fuses either way; a 145-band MLP (~2e4) needs the cap.
+.fuse_flops_max <- 128
+# Per-reader budget (MB) for a fused kernel's live working set: the read
+# window plus its activation cubes at read granularity (see
+# .stage_fuse_act_bytes_px). The AEF MLP fits a ~1 Mpx window (~2.4 GB)
+# and OOM-killed readers at ~4.2 Mpx (~9 GB).
+.fuse_reader_mb <- 2500
+# Resident cost (MB) of one XLA CPU client and its kernels on a daemon:
+# spike A measured ~277 MB after one trivial jit. Fusion is refused when
+# n_read x this does not fit in the RAM the exec budget leaves free.
+.xla_client_mb <- 350
+
+# Consumer index and warp-only mask, in ONE pass over the stage list:
+# per-stage Filter scans are O(stages^2) in S7 accessor calls, tens of
+# seconds at the ~2000-stage scale of a many-band multi-export plan. A
+# source that is itself a requested sink still needs reading even when
+# its only consumers are warps, or multi-export sink retrieval finds no
+# chunks.
 .placement_scan <- function(plan) {
   stage_kind <- vapply(plan@stages, function(s) s@kind, character(1))
   consumers_of <- vector("list", length(plan@stages))
@@ -112,12 +141,12 @@ NULL
   dev_px <- 4 * max(1, nb_src)
   act_mb <- win_px * max(0, act_px - dev_px) / 2^20
   in_mb <- win_px * (8 * nb_src + dev_px) / 2^20
-  tileable <- (C@out_pad %||% 0L) == 0L && (C@halo %||% 0L) == 0L
+  tileable <- C@out_pad == 0L && C@halo == 0L
   tiles <- 1L
   if (tileable) {
     tiles <- as.integer(max(1, min(
       win_rows,
-      ceiling(act_mb / garry_opt("fuse_tile_mb"))
+      ceiling(act_mb / garry_opt("ram_budget_mb"))
     )))
   }
   list(tiles = tiles, ws_mb = in_mb + act_mb / tiles, act_mb = act_mb,
@@ -133,10 +162,9 @@ NULL
 #   table     : data.frame of every candidate with decision + reason
 #               (the explain surface)
 #
-# mode = "rules" reproduces the phase 12b behaviour exactly: fuse every
-# candidate except multi-band (coalesced) sources, which keep their
-# consumer on the warm pool. The runtime-resource arguments are unused
-# in rules mode; they are the seam the cost mode (PR3) prices against.
+# mode = "rules" fuses every candidate except multi-band (coalesced)
+# sources, which keep their consumer on the warm pool. The runtime-resource
+# arguments are unused in rules mode; cost mode prices against them.
 .plan_placement <- function(
   plan,
   consumers_of,
@@ -146,7 +174,7 @@ NULL
   reader_threads = NULL,
   comp_threads = NULL,
   avail_mb = NULL,
-  mode = "rules"
+  mode = garry_opt("placement")
 ) {
   if (!mode %in% c("rules", "cost")) {
     .garry_error(
@@ -165,11 +193,11 @@ NULL
   # close to its nominal machine-bounded width (0.9 x, conservative
   # from spike B where 10 x 2-CPU clients ~doubled the fat pool); an
   # UNCAPPED pool of all-cores clients delivers only
-  # cost_comp_efficiency of the machine (0.55, spike B calibrated).
+  # .cost_comp_efficiency of the machine.
   width_mat <- if (is.finite(kc)) {
     min(cores, max(1, n_comp %||% 1) * kc) * 0.9
   } else {
-    cores * garry_opt("cost_comp_efficiency")
+    cores * .cost_comp_efficiency
   }
   rows <- list()
   for (cc in cands) {
@@ -179,7 +207,7 @@ NULL
     flops_px <- cost_fuse <- cost_mat <- move_mb <- NA_real_
     # Fused kernels run per READ window (no chunking). Tiled fused
     # kernels: a pointwise chain's activations scale with the pixels
-    # handed to ONE kernel call, so a window wider than `fuse_tile_mb`
+    # handed to ONE kernel call, so a window wider than `ram_budget_mb`
     # runs as row tiles (see .apply_fuse) and the reader holds the
     # input window plus one tile's activations, not the whole
     # window's. Halo / out_pad chains stay whole-window (tiles = 1).
@@ -220,7 +248,7 @@ NULL
         .node_outer_nb(graph, S@members[[1L]]) *
         (if (identical(S@grid@dtype, "f64")) 8 else 4) /
         2^20
-      gf <- garry_opt("cost_gflops_core") * 1e9
+      gf <- .cost_gflops_core * 1e9
       fl <- flops_px * px
       eff_fuse <- if (is.finite(k)) {
         min(cores, max(1, n_read %||% 1) * k)
@@ -228,11 +256,8 @@ NULL
         cores
       }
       cost_fuse <- fl / (gf * eff_fuse)
-      cost_mat <- 2 *
-        move_mb /
-        garry_opt("cost_shm_bw_mbs") +
-        fl / (gf * width_mat)
-      mem_need <- (n_read %||% 1) * garry_opt("cost_xla_client_mb")
+      cost_mat <- 2 * move_mb / .cost_shm_bw_mbs + fl / (gf * width_mat)
+      mem_need <- (n_read %||% 1) * .xla_client_mb
       mem_free <- if (is.null(avail_mb) || is.na(avail_mb)) {
         Inf
       } else {
@@ -243,25 +268,21 @@ NULL
       # Price that against the per-reader budget; a chain whose
       # working set does not fit materialises (the chunked compute
       # pool handles any size).
-      fuse_ws_mb <- tl$ws_mb
       if (is.na(flops_px)) {
         decision <- "comp"
         reason <- "cost: unknown compute cost (scan / opaque custom body)"
-      } else if (
-        !is.finite(k) &&
-          flops_px > garry_opt("fuse_flops_max")
-      ) {
+      } else if (!is.finite(k) && flops_px > .fuse_flops_max) {
         decision <- "comp"
         reason <- .glue(
           "cost: no reader thread cap and {round(flops_px)} flops/px > ",
-          "fuse_flops_max {round(garry_opt('fuse_flops_max'))} ",
+          "the {round(.fuse_flops_max)} limit ",
           "(N uncapped XLA clients)"
         )
-      } else if (fuse_ws_mb > garry_opt("fuse_reader_mb")) {
+      } else if (tl$ws_mb > .fuse_reader_mb) {
         decision <- "comp"
         reason <- .glue(
-          "cost: fused window working set {round(fuse_ws_mb)} MB exceeds ",
-          "fuse_reader_mb {round(garry_opt('fuse_reader_mb'))} ",
+          "cost: fused window working set {round(tl$ws_mb)} MB exceeds ",
+          "the {round(.fuse_reader_mb)} MB reader budget ",
           "(window {formatC(win_px / 1e6, format = 'f', digits = 1)} Mpx",
           "{if (tl$tiles > 1L) paste0(' in ', tl$tiles, ' row tiles') else ' at read granularity'})"
         )
@@ -269,7 +290,7 @@ NULL
         decision <- "comp"
         reason <- .glue(
           "cost: {as.integer(n_read %||% 1)} readers x ",
-          "{round(garry_opt('cost_xla_client_mb'))} MB XLA does not fit ",
+          "{round(.xla_client_mb)} MB XLA does not fit ",
           "{round(mem_free)} MB free headroom"
         )
       } else if (cost_fuse <= cost_mat) {
@@ -290,11 +311,10 @@ NULL
       # Per-task working-set estimate for the fused execution: the
       # window's activation cubes plus the raw read buffer and its
       # device copy. Rides the scheduler's compute in-flight byte
-      # budget — a fused read IS compute, and admitting a fleet of
+      # budget: a fused read IS compute, and admitting a fleet of
       # them by store bytes alone (fused outputs are tiny) stacked
       # N cold XLA ramps on top of whatever else holds the machine
       # (measured: crop=0 with the whole-AOI embedding staging resident).
-      ws_mb <- tl$ws_mb
       by_source[[.key(S@id)]] <- list(
         cid = C@id,
         ck = paste0(.stage_kernel_sig(graph, C), "@", C@device),
@@ -304,7 +324,7 @@ NULL
         out_pad = C@out_pad,
         out_nb = .node_outer_nb(graph, C@exports[[1L]]),
         out_dtype = graph_get(graph, C@exports[[1L]])@grid@dtype,
-        ws_mb = ws_mb,
+        ws_mb = tl$ws_mb,
         tiles = tl$tiles
       )
       fused[[.key(C@id)]] <- TRUE
@@ -359,29 +379,17 @@ NULL
 #'   `Plan`.
 #' @param read,compute Pool widths to assume; default = the live pools
 #'   (0 when none are running).
-#' @param mode `"rules"` or `"cost"`; default `garry_opt("placement")`.
 #' @return A data.frame with columns `source`, `compute`, `bands`,
 #'   `flops_px`, `move_mb`, `cost_fuse_s`, `cost_mat_s`, `decision`,
 #'   `tiles` (row tiles a fused kernel runs in), and `reason`; zero rows
 #'   when no read feeds a compute stage.
 #' @seealso [garry_options()], [garry_task_report()]
 #' @export
-garry_explain_placement <- function(
-  x,
-  read = NULL,
-  compute = NULL,
-  mode = garry_opt("placement")
-) {
+garry_explain_placement <- function(x, read = NULL, compute = NULL) {
   p <- if (S7::S7_inherits(x, Plan)) x else plan_lazy(x)
   sc <- .placement_scan(p)
-  n_read <- as.integer(
-    read %||%
-      tryCatch(.gd_n_compute("garry_read"), error = function(e) 0L)
-  )
-  n_comp <- as.integer(
-    compute %||%
-      tryCatch(.comp_n(), error = function(e) 0L)
-  )
+  n_read <- as.integer(read %||% .gd_n_compute("garry_read"))
+  n_comp <- as.integer(compute %||% .comp_n())
   .plan_placement(
     p,
     sc$consumers_of,
@@ -390,7 +398,6 @@ garry_explain_placement <- function(
     n_comp = n_comp,
     reader_threads = .garry_state$reader_threads,
     comp_threads = .garry_state$comp_threads,
-    avail_mb = .garry_ram_avail_mb(),
-    mode = mode
+    avail_mb = .garry_ram_avail_mb()
   )$table
 }

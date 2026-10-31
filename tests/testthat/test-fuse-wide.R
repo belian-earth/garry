@@ -179,8 +179,9 @@ test_that("placement tiles a wide pointwise chain and the fused run matches", {
 
   local_pools(4, 1, gdal_config = TRUE)
   # a tiny per-call activation budget forces several row tiles
+  # (the plan is built, so this only reaches the per-call budget)
   old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.fuse_tile_mb = 1e-4)
+                 garry.ram_budget_mb = 1e-4)
   on.exit(options(old), add = TRUE)
   tab <- garry_explain_placement(p)
   mlp <- tab[tab$bands > 1L, ]
@@ -192,12 +193,12 @@ test_that("placement tiles a wide pointwise chain and the fused run matches", {
   expect_equal(dist, single, tolerance = 1e-12)
 
   # with the default budget the same small window is one tile
-  options(garry.fuse_tile_mb = 512)
+  options(garry.ram_budget_mb = 512)
   tab1 <- garry_explain_placement(p)
   expect_identical(tab1[tab1$bands > 1L, ]$tiles, 1L)
 })
 
-test_that("tiling lets a window over fuse_reader_mb fuse instead of materialising", {
+test_that("tiling lets a window over .fuse_reader_mb fuse instead of materialising", {
   fx <- fixture_multiband()
   g <- graph_new()
   bands <- lapply(seq_len(fx$nb), function(b)
@@ -213,8 +214,7 @@ test_that("tiling lets a window over fuse_reader_mb fuse instead of materialisin
   # reader budget below the whole-window working set but above the
   # input window: untiled it must materialise, tiled it fuses
   old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.fuse_tile_mb = getOption("garry.fuse_tile_mb"),
-                 garry.fuse_reader_mb = getOption("garry.fuse_reader_mb"))
+                 garry.ram_budget_mb = getOption("garry.ram_budget_mb"))
   on.exit(options(old), add = TRUE)
   tab0 <- garry_explain_placement(p, read = 4L, compute = 1L)
   cid <- tab0[tab0$bands > 1L, ]$compute
@@ -222,18 +222,18 @@ test_that("tiling lets a window over fuse_reader_mb fuse instead of materialisin
   win_px <- prod(pmin(as.numeric(S@chunks@chunk_dim),
                       as.numeric(S@grid@dims[c("x", "y")])))
   win_rows <- min(S@chunks@chunk_dim[[2L]], S@grid@dims[["y"]])
-  options(garry.fuse_tile_mb = 1e9)
+  options(garry.ram_budget_mb = 1e9)
   whole <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
-  options(garry.fuse_tile_mb = whole$act_mb / 8)
+  options(garry.ram_budget_mb = whole$act_mb / 8)
   tiled <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
   expect_gte(tiled$tiles, 8L)
   expect_lt(tiled$ws_mb, whole$ws_mb)
   # a reader budget between the tiled and the whole working set
-  options(garry.fuse_reader_mb = (tiled$ws_mb + whole$ws_mb) / 2)
-  options(garry.fuse_tile_mb = 1e9)
+  testthat::local_mocked_bindings(.fuse_reader_mb = (tiled$ws_mb + whole$ws_mb) / 2)
+  options(garry.ram_budget_mb = 1e9)
   t_un <- garry_explain_placement(p, read = 4L, compute = 1L)
   expect_identical(t_un[t_un$bands > 1L, ]$decision, "comp")
-  options(garry.fuse_tile_mb = whole$act_mb / 8)
+  options(garry.ram_budget_mb = whole$act_mb / 8)
   t_ti <- garry_explain_placement(p, read = 4L, compute = 1L)
   expect_identical(t_ti[t_ti$bands > 1L, ]$decision, "fuse")
 })
@@ -249,7 +249,7 @@ test_that(".fuse_tiles keeps a halo chain whole and prices input plus activation
                       over = "band")
   p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"), nan_rm = TRUE))
   old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.fuse_tile_mb = 1e-4)
+                 garry.ram_budget_mb = 1e-4)
   on.exit(options(old), add = TRUE)
   tab <- garry_explain_placement(p, read = 4L, compute = 1L)
   C <- p@stages[[tab[tab$bands > 1L, ]$compute]]

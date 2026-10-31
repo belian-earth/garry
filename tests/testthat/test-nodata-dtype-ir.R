@@ -61,7 +61,7 @@ test_that("mean reduction promotes integer input to f32", {
   r <- reduce_over(a, "mean", c("x", "y"))
   expect_identical(r@grid@dtype, "f32")
   s <- reduce_over(a, "sum", c("x", "y"))
-  expect_identical(s@grid@dtype, "i32")
+  expect_identical(s@grid@dtype, "i64")
 })
 
 test_that("g_cast oracle respects target family semantics", {

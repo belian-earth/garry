@@ -63,10 +63,28 @@ test_that("default reads stay raw; explicit numeric scale applies", {
   expect_identical(graph_get(x@graph, x@node_id)@scale, numeric(0))
 })
 
-test_that("scale = TRUE without file metadata informs and reads raw", {
+test_that("the file form keys a named scale and offset by band", {
+  f <- system.file("extdata", "garry-example.tif", package = "garry")
+  raw <- lazy_dataset(f)
+  read <- function(x) as.numeric(collect(x, distributed = FALSE))
+  ds <- lazy_dataset(f, scale = c(nir = 0.5))
+  expect_equal(read(ds$nir), read(raw$nir) * 0.5)
+  expect_equal(read(ds$red), read(raw$red))         # no key: no scale
+  ds <- lazy_dataset(f, scale = c(nir = 0.5, red = 2), offset = c(nir = 1))
+  expect_equal(read(ds$nir), read(raw$nir) * 0.5 + 1, tolerance = 1e-6)
+  expect_equal(read(ds$red), read(raw$red) * 2)     # no key: no offset
+  ds <- lazy_dataset(f, scale = c(red = 2), offset = c(nir = 1))
+  expect_equal(read(ds$nir), read(raw$nir) + 1, tolerance = 1e-6) # scale 1
+  expect_error(lazy_dataset(f, scale = c(nirr = 0.5)), "nirr",
+               class = "garry_source_error")
+  expect_error(lazy_dataset(f, scale = NA_real_), "finite")
+  expect_error(lazy_dataset(f, scale = 2, offset = Inf), "finite")
+})
+
+test_that("scale = TRUE without file metadata warns and reads raw", {
   m <- .sr_m()
   f <- .sr_tile(m)
-  expect_message(x <- lazy_source(f, scale = TRUE), "no scale/offset")
+  expect_warning(x <- lazy_source(f, scale = TRUE), "no scale/offset", class = "garry_scale_warning")
   ref0 <- m; ref0[3, 4] <- NaN
   expect_equal(matrix(collect(x), nrow = 20), ref0)
 })
@@ -84,7 +102,8 @@ test_that("scaled reads are identical across host and scheduler routes", {
 # -- composite_direct: the affine rides the job, applied to the DN cube ------
 
 .sr_scaled_composite <- function(scaleA = 1e-4, offsetA = -0.1,
-                                 scaleB = scaleA, offsetB = offsetA) {
+                                 scaleB = scaleA, offsetB = offsetA,
+                                 single = FALSE) {
   gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)))
   gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
   qa1 <- matrix(0, 40, 60); qa1[10:20, 10:30] <- 2
@@ -97,13 +116,15 @@ test_that("scaled reads are identical across host and scheduler routes", {
                                     filter = sprintf("slice = '%s'", s),
                                     sort_field = "datetime"),
     grid = .gg_grid, block_dim = c(60L, 40L), scale = sc, offset = of)
-  ds <- as_dataset(list(
+  vars <- list(
     V1 = list(s1 = sl(gA, "s1", scaleA, offsetA),
               s2 = sl(gA, "s2", scaleA, offsetA)),
     V2 = list(s1 = sl(gB, "s1", scaleB, offsetB),
               s2 = sl(gB, "s2", scaleB, offsetB)),
     Q  = list(s1 = .gg_slice(gQ, "s1", g), s2 = .gg_slice(gQ, "s2", g))
-  ), mask_asset = "Q")
+  )
+  if (single) vars$V2 <- NULL
+  ds <- as_dataset(vars, mask_asset = "Q")
   reduce_over(apply_mask(ds, where = c(2)), "median", "t", nan_rm = TRUE)
 }
 
@@ -114,11 +135,10 @@ test_that("composite_direct applies the read affine on the cube path", {
   spec <- .cd_spec(p)
   expect_false(is.null(spec))                 # affine keeps the fast path eligible
   expect_identical(spec$band_affine[[1L]]$scale, 1e-4)
-  want <- collect(x, distributed = FALSE)     # host oracle scales in the read
-  for (gp in c(TRUE, FALSE)) {
-    old <- options(garry.gd_parallel = gp)
-    on.exit(options(old), add = TRUE)
-    got <- collect(x, distributed = TRUE)
+  # the multi-band pipeline, then a single band's whole-grid kernel
+  for (y in list(x, .sr_scaled_composite(single = TRUE))) {
+    want <- collect(y, distributed = FALSE)   # host oracle scales in the read
+    got <- collect(y, distributed = TRUE)
     expect_identical(garry_last_route(), "composite_direct")
     .gg_close(got, want)
   }

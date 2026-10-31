@@ -10,6 +10,9 @@ infeasible on a 62 GB box REGARDLESS of admission policy. Routing
 confines scan memory to K designated daemons while map/ensemble
 fleets use the full width.
 
+Later change (2026-10-31): `garry.gd_parallel` and
+`garry.compute_inflight`, named below, were removed.
+
 ## Shape
 
 `garry.routed_dispatch = TRUE` (new option, default FALSE until

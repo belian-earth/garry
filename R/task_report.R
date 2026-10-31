@@ -4,7 +4,7 @@ NULL
 
 #' Summarise a `garry.task_log` CSV.
 #'
-#' Summarises the task log CSV the distributed scheduler writes when
+#' Summarises the task log CSV the distributed routes write when
 #' the `garry.task_log` option is set (see [garry_options()]; schema
 #' `time,event,key,pool,slot,mb,store_mb,ready`): per-stage task counts
 #' and run/queue-wait quantiles, maximum concurrency, the drain vs
@@ -16,7 +16,7 @@ NULL
 #' budget. It answers "where did the time and memory go" for a
 #' distributed run.
 #'
-#' @param path Path to a task-log CSV written by the scheduler.
+#' @param path Path to a task-log CSV written by a distributed run.
 #' @return Invisibly, a list: `events` (event counts), `tasks` (one row
 #'   per launch/done pair: key, pool, slot, mb, store_mb, wait_s,
 #'   queue_s, run_s, harvest_s), `stages` (per-stage counts, p50/p95 run

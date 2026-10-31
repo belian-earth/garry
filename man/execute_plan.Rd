@@ -25,10 +25,7 @@ affine applied per chunk at the sink boundary) and \code{options}
 }
 \value{
 The sink stage's value (matrix for raster sinks, scalar for
-global reductions), or \code{path} invisibly when writing. When
-\code{options(garry.exec_stats = TRUE)}, in-memory results carry a
-\code{garry_exec_stats} attribute recording the distinct input shapes
-submitted per stage.
+global reductions), or \code{path} invisibly when writing.
 }
 \description{
 Runs every stage of a \code{\link[=plan_lazy]{plan_lazy()}} plan in the current R session.

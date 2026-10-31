@@ -178,6 +178,40 @@ test_that("distributed quantized write matches host, on the scheduler route", {
   expect_identical(md$scale, 1e-4)
 })
 
+# An i16 plan whose output is 100 + 1, quantized at scale 0.5: 202 on disk.
+.wt_int_plan <- function() {
+  f <- tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 40L, 40L, 1L, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(0, 10, 0, 400, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1L, 0L, 0L, 40L, 40L, rep(100, 1600L))
+  ds$close()
+  lazy_source(f) + 1L
+}
+
+test_that("an integer plan quantizes like a float one, in process", {
+  p <- tempfile(fileext = ".tif")
+  write_tif(.wt_int_plan(), p, dtype = "i16", scale = 0.5, distributed = FALSE)
+  expect_true(all(collect(lazy_source(p)) == 202))
+})
+
+test_that("an integer plan quantizes on every distributed route", {
+  local_pools(2, 1)
+  x <- .wt_int_plan()
+  p <- tempfile(fileext = ".tif")
+  write_tif(x, p, dtype = "i16", scale = 0.5, distributed = TRUE)
+  expect_true(all(collect(lazy_source(p)) == 202))
+  # a sink other stages read stays unquantized in the store, so the host
+  # tail quantizes it
+  dir <- tempfile()
+  dir.create(dir)
+  write_tif(list(a = x, b = x + 2L, c = x + 3L), dir, dtype = "i16",
+            scale = 0.5, distributed = TRUE)
+  expect_true(all(collect(lazy_source(file.path(dir, "a.tif"))) == 202))
+  expect_true(all(collect(lazy_source(file.path(dir, "b.tif"))) == 206))
+  expect_true(all(collect(lazy_source(file.path(dir, "c.tif"))) == 208))
+})
+
 test_that("g_quantize matches the historical writer semantics", {
   x <- c(-0.05, 0.00005, 0.15005, 3.27675, 9, NaN)
   dev <- g_upload(matrix(x, 1L), "f32")
@@ -318,4 +352,108 @@ test_that("write_tif validates dtype, nodata and quantization up front", {
   expect_error(write_tif(x, p, nodata = "a"), "single number")
   expect_error(write_tif(x, p, dtype = "i16", nodata = 1.5), "whole number")
   expect_error(write_tif(x, p, dtype = "u32", scale = 0.1), "other than u32")
+})
+
+test_that("nodata must fit the dtype the plan writes", {
+  f <- fixture_tile(1:16, type = "Byte")
+  x <- lazy_source(f)
+  expect_identical(x@grid@dtype, "u8")
+  p <- tempfile(fileext = ".tif")
+  bad <- function(...) {
+    expect_error(write_tif(x, p, ..., distributed = FALSE),
+                 class = "garry_write_error")
+  }
+  bad(nodata = -1)
+  bad(nodata = 256)
+  expect_error(write_tif(x, p, nodata = 1.5, distributed = FALSE), "whole number")
+  bad(nodata = NaN)
+  expect_error(write_tif(x, p, dtype = "f32", nodata = 1e39, distributed = FALSE),
+               class = "garry_write_error")
+  # each sink of a list, and a checkpoint's sentinel, are held to it too
+  sinks <- list(a = x, b = lazy_source(f) * 1.5)
+  paths <- c(a = tempfile(fileext = ".tif"), b = tempfile(fileext = ".tif"))
+  expect_error(write_tif(sinks, paths, nodata = -1, distributed = FALSE),
+               class = "garry_write_error")
+  expect_error(materialise(x, tempfile("mat-"), nodata = -1, distributed = FALSE),
+               class = "garry_write_error")
+  expect_false(any(file.exists(c(p, paths))))
+  # a hole in an integer plan keeps its sentinel, rather than reading as 0
+  wide <- grid_spec("EPSG:3857", extent = c(0, 0, 80, 40), dims = c(8L, 4L))
+  write_tif(align_to(x, wide), p, nodata = 255, distributed = FALSE)
+  back <- collect(lazy_source(p), distributed = FALSE)
+  expect_true(all(is.nan(back[, 5:8])) && !anyNA(back[, 1:4]))
+  # an explicit dtype is what the sentinel must fit
+  write_tif(x, p, dtype = "i16", nodata = -1, distributed = FALSE)
+  expect_identical(gdal_grid_spec(p)$nodata, -1)
+})
+
+test_that("a write refused before its first byte leaves an existing file", {
+  x <- lazy_source(fixture_tile(1:16, type = "Byte"))
+  p <- tempfile(fileext = ".tif")
+  writeLines("keep", p)
+  expect_error(write_tif(x, p, nodata = -1, distributed = FALSE),
+               class = "garry_write_error")
+  expect_identical(readLines(p), "keep")
+  # one that fails part way has already replaced it, and leaves nothing
+  wide <- grid_spec("EPSG:3857", extent = c(0, 0, 80, 40), dims = c(8L, 4L))
+  expect_error(write_tif(align_to(x, wide), p, distributed = FALSE), "sentinel")
+  expect_false(file.exists(p))
+})
+
+test_that("a bad block size or a malformed creation option never reaches GDAL", {
+  x <- lazy_source(fixture_gradient_f32())
+  # GDAL reads BLOCKSIZE=abc as 0, and the COG driver then allocates without
+  # bound. These stand in for GDAL, so a missed check fails here and goes no
+  # further.
+  local_mocked_bindings(
+    gdal_create_output = function(...) stop("reached GDAL"),
+    gdal_translate_file = function(...) stop("reached GDAL")
+  )
+  for (o in c("BLOCKSIZE=abc", "BLOCKSIZE=0", "BLOCKSIZE=-512", "BLOCKSIZE=512.5",
+              "BLOCKSIZE=1e3", "BLOCKSIZE=", "BLOCKSIZE=99999999999",
+              "blocksize=abc", "BLOCKSIZE:abc", "BLOCKXSIZE=abc", "BLOCKYSIZE=0")) {
+    for (cog in c(TRUE, FALSE)) {
+      expect_error(
+        write_tif(x, tempfile(fileext = ".tif"), cog = cog,
+                  creation_options = c("COMPRESS=DEFLATE", o), distributed = FALSE),
+        "must be a positive whole number", class = "garry_write_error"
+      )
+    }
+  }
+  for (o in list(c(COMPRESS = "ZSTD"), "COMPRESS", NA_character_, 512)) {
+    expect_error(
+      write_tif(x, tempfile(fileext = ".tif"), creation_options = o, distributed = FALSE),
+      "KEY=VALUE", class = "garry_write_error"
+    )
+  }
+})
+
+test_that("a valid block size reaches the COG driver", {
+  x <- lazy_source(fixture_gradient_f32())
+  p <- tempfile(fileext = ".tif")
+  write_tif(x, p, cog = TRUE, creation_options = "BLOCKSIZE=32", distributed = FALSE)
+  expect_identical(gdal_grid_spec(p)$block_dim, c(32L, 32L))
+})
+
+test_that("band_names must name every output band", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  g <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(4L, 4L, 2L) |>
+    stats::setNames(c("x", "y", "band")))
+  expect_error(gdal_create_output(f, g, band_names = "only_one"), "band_names")
+})
+
+test_that("a NaN sentinel on a float write declares nothing", {
+  x <- lazy_source(fixture_gradient_f32()) * 2
+  p <- tempfile(fileext = ".tif")
+  write_tif(x, p, dtype = "f32", nodata = NaN, distributed = FALSE)
+  expect_equal(unclass(collect(lazy_source(p), distributed = FALSE)), unclass(collect(x, distributed = FALSE)),
+               ignore_attr = TRUE)
+})
+
+test_that("write_tif() refuses what it would ignore", {
+  x <- lazy_source(fixture_gradient_f32())
+  out <- tempfile(fileext = ".tif")
+  expect_error(write_tif(x, out, cog = "yes"), "cog", fixed = TRUE)
+  expect_error(write_tif(x, out, cog = 1), "cog", fixed = TRUE)
+  expect_error(write_tif(x, out, overview_resampling = "nearest"), "cog = TRUE", fixed = TRUE)
 })

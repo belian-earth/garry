@@ -274,6 +274,15 @@ test_that("the read pool serves the read-only route with identical results", {
     lapply(1:2, function(b) ds$read(b, 0, 0, nx, ny, nx, ny))
   }
   expect_identical(rd(out), rd(ref))
+
+  # a read that fails on the pool reaches the host, naming the file
+  gone <- withr::local_tempfile(fileext = ".tif")
+  file.copy(f, gone)
+  x <- lazy_source(gone)
+  unlink(gone)
+  withr::local_options(garry.read_retry = 0L)
+  err <- expect_error(collect(x, distributed = TRUE), class = "garry_task_error")
+  expect_match(conditionMessage(err), basename(gone), fixed = TRUE)
 })
 
 test_that("a failed pool write errors and leaves no file", {

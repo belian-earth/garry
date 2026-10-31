@@ -91,7 +91,6 @@ test_that("multiband reducers: distributed == single-threaded", {
 
 test_that("multiband reducers validate their inputs", {
   expect_error(geomedian(iters = 0), "positive")
-  expect_error(medoid(eps = 0), "positive")
   # a plain (t, y, x) stack is not a multiband cube
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)

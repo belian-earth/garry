@@ -96,8 +96,8 @@ test_that("the fast path refuses anything the warper is needed for", {
   expect_null(.rio_direct_spec(f, ok, "average", "OVERVIEW_LEVEL=NONE"))
   # resampling with no RasterIO analogue
   expect_null(.rio_direct_spec(f, ok, "med"))
-  # multi-band request: the decimating read is single-band
-  expect_null(.rio_direct_spec(f, ok, "average", band = 1:2))
+  # a band the file does not have is an error, not a reason to warp
+  expect_error(.rio_direct_spec(f, ok, "average", band = 1:2), "band")
 
   # integer band + interpolating resampler: RasterIO and the warper
   # round .5 ties oppositely on ARM under GDAL 3.13.1, so identity only
@@ -738,4 +738,44 @@ test_that("a multi-band warp masks each band's nodata alone", {
   )
   expect_identical(both[2L, , ], one)
   expect_false(any(both == -1, na.rm = TRUE))
+})
+
+test_that("a source that will not open fails the plan, it does not change the route", {
+  f <- fixture_gradient_f32()
+  g <- gdal_grid_spec(f)$grid
+  withr::local_options(garry.read_retry = 0L)
+  real <- garry:::.gdal_handle
+  broken <- TRUE
+  testthat::local_mocked_bindings(.gdal_handle = function(path, ...) {
+    if (broken) stop("the network blinked")
+    real(path, ...)
+  })
+  for (probe in list(
+    function() garry:::.rio_direct_spec(f, g, "near"),
+    function() garry:::.mosaic_read_spec(c(f, f), g, nodata = NaN),
+    function() garry:::.bands_share_blocks(f)
+  )) {
+    err <- expect_error(probe(), class = "garry_read_error")
+    expect_match(conditionMessage(err), "the network blinked", fixed = TRUE)
+    expect_match(conditionMessage(err), basename(f), fixed = TRUE)
+  }
+  broken <- FALSE
+  # the failed attempt left no memo behind
+  expect_false(is.null(garry:::.mosaic_read_spec(c(f, f), g, nodata = NaN)))
+})
+
+test_that("a dtype that cannot be read is no reason to guess its size", {
+  ds <- list(
+    getBlockSize = function(b) c(16L, 16L),
+    getDataTypeName = function(b) stop("band gone")
+  )
+  expect_error(garry:::.gdal_band_slab(ds, 1L, 16L, 16L), "band gone")
+})
+
+test_that("a local .vrt that cannot be read fails, and a /vsi one is not local", {
+  d <- tempfile(fileext = ".vrt")
+  dir.create(d) # exists, cannot be read
+  on.exit(unlink(d, recursive = TRUE))
+  expect_error(suppressWarnings(garry:::.raw_vrt_info(d)))
+  expect_null(garry:::.raw_vrt_info("/vsicurl/https://x.test/a.vrt"))
 })

@@ -32,9 +32,8 @@ test_that("garry_pool_hygiene runs and the pools stay serviceable", {
 
 test_that(".daemon_gc_after defers the pass until the transient budget fills", {
   st <- garry:::.daemon_gc_state
-  old <- options(garry.daemon_gc_mb = 1)
+  testthat::local_mocked_bindings(.daemon_gc_budget_mb = 1)
   on.exit({
-    options(old)
     st$bytes <- 0
     st$since_full <- 0
   }, add = TRUE)
@@ -46,12 +45,8 @@ test_that(".daemon_gc_after defers the pass until the transient budget fills", {
   expect_equal(st$bytes, 0)
   # a single big transient always runs the pass
   expect_true(garry:::.daemon_gc_after(8 * 2^20))
-  # budget 0: every task cleans up, the historical behaviour
-  options(garry.daemon_gc_mb = 0)
-  expect_true(garry:::.daemon_gc_after(1))
   # passes are minor collections until four budgets of transients have
   # passed since the last full one
-  options(garry.daemon_gc_mb = 1)
   st$bytes <- 0
   st$since_full <- 0
   for (i in 1:3) garry:::.daemon_gc_after(1.2 * 2^20)
@@ -69,6 +64,73 @@ test_that(".payload_bytes sizes raw payloads, R vectors and lists", {
   expect_identical(pb(numeric(3)), 24)
   expect_identical(pb(integer(3)), 12)
   expect_identical(pb(list(raw(4), list(numeric(1), "x"))), 12)
+})
+
+test_that("gd task bodies report their transients to the deferred pass", {
+  st <- garry:::.daemon_gc_state
+  on.exit(st$bytes <- 0, add = TRUE)
+  dir <- withr::local_tempdir()
+  bin <- function(name, v) {
+    f <- file.path(dir, name)
+    writeBin(as.numeric(v), f, size = 4L)
+    f
+  }
+  fm <- bin("fm.bin", rep(1, 6))
+  band <- bin("b.bin", 1:6)
+  st$bytes <- 0
+  garry:::.gd_compute_mask(list(
+    fmask_bins = fm, out_bin = file.path(dir, "m.bin"), chain = list(),
+    halo = 0L, ny = 2L, nx = 3L, dev = "cpu", ck = "k-gc-mask"
+  ))
+  expect_gte(st$bytes, 2 * 6 * 4)
+  st$bytes <- 0
+  garry:::.gd_compute_masked_band(
+    list(
+      band_bins = band, affine = list(scale = numeric(0), offset = numeric(0)),
+      rows = NULL, ck = "k-gc-band"
+    ),
+    list(F = NULL, op = "median", nan_rm = TRUE, ny = 2L, nx = 3L, dev = "cpu",
+         mask_bin = character(0))
+  )
+  expect_gte(st$bytes, 6 * 4)
+})
+
+test_that("a cached pipeline kernel keeps no task's frame alive", {
+  built <- list(
+    function(k) garry:::.gd_lean_fn(k$F, k$op, k$nan_rm, k$affine, k$masked),
+    function(k) garry:::.gd_mask_fn(k$chain, k$halo)
+  )
+  for (build in built) {
+    gone <- FALSE
+    kernel <- local({
+      k <- list(
+        F = NULL, op = "median", nan_rm = TRUE, affine = NULL, masked = FALSE,
+        chain = list(), halo = 0L
+      )
+      reg.finalizer(environment(), function(e) gone <<- TRUE)
+      build(k)
+    })
+    gc()
+    expect_true(gone)
+    expect_true(is.function(kernel))
+  }
+})
+
+test_that("the read-only writer's mapped planes reach the deferred pass", {
+  # A mapped plane pins its shared memory until a collection unmaps it,
+  # even after the reader has dropped the region.
+  st <- garry:::.daemon_gc_state
+  on.exit(st$bytes <- 0, add = TRUE)
+  p <- tempfile(fileext = ".tif")
+  file.copy(fixture_gradient_f32(), p)
+  planes <- list(as.numeric(1:6))
+  sh <- mori::share(planes)
+  st$bytes <- 0
+  garry:::.daemon_write_shared(
+    p, 0L, 0L, list(name = mori::shared_name(sh), nr = 2L, nc = 3L), 0L
+  )
+  expect_identical(garry:::.daemon_write_close(), character(0))
+  expect_gte(st$bytes, 6 * 8)
 })
 
 test_that("the writer reopens a GTiff with threaded compression", {

@@ -18,10 +18,9 @@ heap pages to the operating system (glibc \code{malloc_trim}). With
 \code{deep = TRUE} the daemons' jit caches are also evicted, forcing
 recompiles on next use (roughly a second per map kernel, tens of
 seconds per scan kernel); reserve that for memory pressure. Daemons
-already trim at run start, and during a run once the task transients
-since their last trim pass \code{garry.daemon_gc_mb} (see
-\code{\link[=garry_options]{garry_options()}}); call this between pipeline phases when the fleet
-should idle lean.
+already trim at run start, and during a run once 128 MB of task
+transients have passed since their last trim; call this between
+pipeline phases when the fleet should idle lean.
 }
 \seealso{
 \code{\link[=garry_daemons]{garry_daemons()}}

@@ -17,10 +17,9 @@
 Runs on each compute-pool daemon while the read pool owns the fetch
 drain: get-or-create each spec's JitFunction under the same \code{ck} the
 real band tasks use, then execute once per strip height on \code{g_fill}
-dummies (the fill is represented in the program — no host bytes move)
-so the XLA compile never lands on the post-fetch tail. Failures fall
-back to the plain client wake; warm-up is an optimisation, never a
-correctness dependency.
+dummies (the fill is represented in the program: no host bytes move)
+so the XLA compile never lands on the post-fetch tail. A failure
+raises: the host reports it, and a band task compiles the kernel.
 }
 \details{
 Internal; daemons reach it through \code{asNamespace("garry")}.

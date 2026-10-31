@@ -26,10 +26,13 @@ lazy_source(
 
 \item{graph}{\code{Graph} to add the source to; defaults to a fresh graph.}
 
-\item{nodata}{Optional nodata sentinel overriding the file metadata.}
+\item{nodata}{Optional nodata sentinel replacing the file's: cells
+holding the file's own sentinel then read as data. A tile index, or a
+source opened with \code{open_options}, masks its own sentinel as well.}
 
 \item{open_options}{GDAL open options ("KEY=VALUE"), e.g. a GTI
-\code{FILTER} selecting one time slice of a tile index.}
+\code{FILTER} selecting one time slice of a tile index. They apply to one
+source, and not to a decoded one.}
 
 \item{grid}{Optional \code{GridSpec} declaring the source's grid and
 dtype, skipping metadata discovery (see Details).}
@@ -47,7 +50,7 @@ metadata (the GDAL scale/offset QGIS applies) and every read returns
 \code{v * scale + offset}, applied after the nodata sentinel becomes NaN.
 A length-1 numeric supplies the scale explicitly (with \code{offset}),
 skipping discovery. Discovery only consults the file: STAC-side
-metadata is never read.}
+metadata is never read. A band that reports none warns and reads raw.}
 
 \item{offset}{Explicit additive offset used when \code{scale} is numeric;
 defaults to 0. Ignored when \code{scale} is logical.}
@@ -67,9 +70,13 @@ A \code{LazyRaster}.
 \description{
 Grid, dtype, native block size, and file nodata come from GDAL via
 the adapter (\code{gdal_grid_spec()}). A user-supplied \code{nodata} overrides
-the file's. An integer source with nodata is promoted to f32 so NaN
-can carry nodata downstream; the sentinel-to-NaN rewrite happens at
-read time in the adapter.
+the file's. An integer source with nodata is promoted to the float
+that holds it (f32 up to 16 bits, else f64) so NaN can carry nodata
+downstream; the sentinel-to-NaN rewrite happens at read time in the
+adapter. An integer source without nodata has nowhere to put a missing
+cell, so a compute stage that meets one (a failed read, a cell no tile
+reaches, a cell a warp leaves past the source's footprint) fails: declare
+\code{nodata} where cells can be missing.
 }
 \details{
 Passing \code{grid} skips the GDAL open entirely: no metadata is read

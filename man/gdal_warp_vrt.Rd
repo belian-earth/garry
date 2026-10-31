@@ -4,7 +4,14 @@
 \alias{gdal_warp_vrt}
 \title{Build a warped VRT of a source onto an exact target grid.}
 \usage{
-gdal_warp_vrt(src_path, band, target_grid, resampling, src_nodata = numeric(0))
+gdal_warp_vrt(
+  src_path,
+  band,
+  target_grid,
+  resampling,
+  src_nodata = numeric(0),
+  open_options = character(0)
+)
 }
 \arguments{
 \item{src_path}{Source path/VSI URL. One source: gdalwarp writes a
@@ -18,6 +25,9 @@ VRT from a single input only. A multi-path source node is read by
 \item{resampling}{GDAL resampling method name.}
 
 \item{src_nodata}{Source sentinel (length 0 or 1), from the SourceNode.}
+
+\item{open_options}{GDAL open options of the source ("KEY=VALUE"). The
+VRT records them, so every read of it opens the same source.}
 }
 \value{
 Path to the VRT file (in \code{tempdir()}).
@@ -25,7 +35,7 @@ Path to the VRT file (in \code{tempdir()}).
 \description{
 Delegates every pixel of cross-CRS math to the GDAL warper:
 \code{-te}/\code{-ts} pin the output grid exactly to \code{target_grid}.
-A source nodata goes to the warper as both \code{-srcnodata} and
-\code{-dstnodata}, so it never enters resampling and area outside the source
-footprint reads as nodata; float targets without one get \verb{-dstnodata nan}.
+A source nodata goes to the warper as \code{-srcnodata}, so it never enters
+resampling. Area outside the source footprint reads as nodata
+(\code{.warp_dst_nodata()}).
 }

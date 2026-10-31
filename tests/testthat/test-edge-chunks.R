@@ -32,16 +32,17 @@ test_that(".sv_grow and .sv_crop pad with nodata and invert", {
       expect_identical(garry:::.sv_crop(g, c(2L, 1L)), v)
     }
   }
-  # R values (integer stores) pad with NA, which g_upload makes 0
+  # R values pad with what their dtype holds beyond the raster
   m <- matrix(1:15, 5L, 3L)
-  gm <- garry:::.sv_grow(m, c(1L, 2L))
+  gm <- garry:::.sv_grow(m, c(1L, 2L), "i16")
   expect_identical(dim(gm), c(6L, 5L))
-  expect_true(all(is.na(gm[6, ])) && all(is.na(gm[, 4:5])))
-  expect_identical(garry:::.sv_crop(gm, c(1L, 2L)), m)
-  expect_identical(garry:::.sv_crop(list(a = gm), c(1L, 2L)), list(a = m))
+  expect_true(all(gm[6, ] == 0) && all(gm[, 4:5] == 0))
+  expect_equal(garry:::.sv_crop(gm, c(1L, 2L)), m)
+  expect_equal(garry:::.sv_crop(list(a = gm), c(1L, 2L)), list(a = m))
+  expect_true(all(is.nan(garry:::.sv_grow(m + 0.5, c(1L, 2L), "f64")[6, ])))
   # values that are not planes pass through
-  expect_identical(garry:::.sv_grow(3.5, c(1L, 2L)), 3.5)
-  expect_identical(garry:::.sv_grow(1:4, c(1L, 2L)), 1:4)
+  expect_error(garry:::.sv_grow(3.5, c(1L, 2L), "f32"), class = "garry_kernel_error")
+  expect_error(garry:::.sv_crop(1:4, c(1L, 2L)), class = "garry_kernel_error")
 })
 
 test_that("grown edge chunks equal edge chunks run at their own shape", {

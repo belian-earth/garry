@@ -92,6 +92,98 @@ test_that("a read-only pool write logs its reads and writes as tasks", {
   expect_false(is.na(rep$host_tail_s))
 })
 
+# Every launch of a report landed, on the daemon's own clock.
+.tr_timed <- function(rep) {
+  expect_gt(nrow(rep$tasks), 0L)
+  expect_identical(nrow(rep$tasks), as.integer(rep$events[["launch"]]))
+  expect_false(anyNA(rep$tasks$t_start))
+  expect_false(anyNA(rep$tasks$t_end))
+  expect_true(all(rep$tasks$run_s >= 0))
+  expect_true(all(is.finite(rep$tasks$wait_s)))
+  expect_false(is.na(rep$drain_s))
+  expect_false(is.na(rep$host_tail_s))
+}
+
+test_that("a scheduler write logs its writes and warm-ups as timed tasks", {
+  local_pools(2, 1)
+  tlog <- withr::local_tempfile(fileext = ".csv")
+  out <- withr::local_tempfile(fileext = ".tif")
+  withr::local_options(garry.task_log = tlog, garry.chunk_target_px = 600)
+  f <- fixture_gradient_f32()
+  f2 <- withr::local_tempfile(fileext = ".tif")
+  file.copy(f, f2)
+  # two files: no read can fuse this kernel, so the compute pool warms it
+  write_tif(lazy_source(f) * lazy_source(f2), out, distributed = TRUE)
+  expect_identical(garry_last_route(), "scheduler")
+  rep <- suppressMessages(garry_task_report(tlog))
+  .tr_timed(rep)
+  w <- rep$tasks[rep$tasks$pool == "write", ]
+  expect_gt(nrow(w), 1L)
+  expect_true(all(w$slot == "write"))
+  expect_identical(
+    rep$pools$daemons[rep$pools$pool == "write"], 1
+  )
+  warm <- rep$tasks[startsWith(rep$tasks$key, "warm"), ]
+  expect_identical(nrow(warm), 1L)
+  expect_identical(warm$pool, "comp")
+  expect_identical(warm$slot, garry:::.comp_profiles()[[1L]])
+})
+
+test_that("a run with no task log evaluates nothing for it", {
+  withr::local_options(garry.task_log = NULL)
+  tl <- garry:::.task_log_open(stop("run"), stop("pools"))
+  expect_false(tl$timed)
+  expect_null(tl$tick())
+  expect_null(tl$line("launch", stop("key")))
+})
+
+# Two unmasked composites of different ops: two groups of one plan.
+.gt_rd_bands <- function() {
+  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+  g <- graph_new()
+  sl <- function(gti) lazy_stack(list(.gg_slice(gti, "s1", g), .gg_slice(gti, "s2", g)))
+  list(A = reduce_over(sl(gA), "median", "t"), B = reduce_over(sl(gB), "mean", "t"))
+}
+
+test_that("the gd routes log their tasks, and nothing without a log", {
+  local_pools(2, 2)
+  tlog <- withr::local_tempfile(fileext = ".csv")
+  x <- .gg_masked_composite(open = 1L)
+  plain <- collect(x, distributed = TRUE)
+  expect_false(file.exists(tlog))
+  withr::local_options(garry.task_log = tlog)
+  # the fetch-ordered pipeline: a fetch per source, the mask, band strips
+  # and the warm-ups
+  got <- collect(x, distributed = TRUE)
+  expect_identical(garry_last_route(), "composite_direct")
+  expect_identical(got, plain)
+  rep <- suppressMessages(garry_task_report(tlog))
+  .tr_timed(rep)
+  expect_setequal(rep$tasks$pool, c("read", "comp"))
+  expect_identical(sort(unique(substr(rep$tasks$key, 1L, 1L))), c("b", "f", "m", "w"))
+  expect_identical(rep$pools$daemons[rep$pools$pool == "comp"], 2)
+
+  # the whole-grid kernel: fetches, then the host
+  unlink(tlog)
+  x1 <- .gg_masked_composite(single = TRUE)
+  one <- collect(x1, distributed = FALSE)
+  .gg_close(collect(x1, distributed = TRUE), one)
+  expect_identical(garry_last_route(), "composite_direct")
+  rep <- suppressMessages(garry_task_report(tlog))
+  .tr_timed(rep)
+  expect_identical(unique(rep$tasks$pool), "read")
+
+  # the reduce decomposition: one run, however many groups it holds
+  unlink(tlog)
+  cs <- .gt_rd_bands()
+  invisible(collect((cs$A - cs$B) / (cs$A + cs$B), distributed = TRUE))
+  expect_identical(garry_last_route(), "gd_reduce")
+  rep <- suppressMessages(garry_task_report(tlog))
+  .tr_timed(rep)
+  expect_identical(sum(read.csv(tlog)$event == "run_start"), 1L)
+})
+
 test_that("garry_task_report splits queue from run time on start rows", {
   f <- withr::local_tempfile(fileext = ".csv")
   writeLines(c(

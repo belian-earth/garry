@@ -9,6 +9,15 @@ test_that("focal after a reduce barrier raises the structured error", {
                class = "garry_focal_placement_error")
 })
 
+test_that("computing on a spatial reduction fails at plan time", {
+  a <- lazy_source_stub("x.tif")
+  r <- reduce_over(a, "mean", c("x", "y"))
+  err <- expect_error(collect(r + 1, plan_only = TRUE),
+                      class = "garry_reduce_unsupported_error")
+  expect_match(conditionMessage(err), "spatial reduction")
+  expect_no_error(collect(r, plan_only = TRUE))
+})
+
 test_that("focal directly on a source or warp is allowed", {
   a <- lazy_source_stub("x.tif")
   f <- focal_map(a, fn = function(sh) Reduce(`+`, sh), radius = 1L)

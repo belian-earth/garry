@@ -187,7 +187,6 @@ test_that("kalman scan: distributed == single-threaded", {
 
 test_that("kalman_llt validates its arguments", {
   expect_error(kalman_llt(0, 0.1, 2), "finite positive")
-  expect_error(kalman_llt(1, 0.1, 2, kappa = -1), "finite positive")
   expect_error(kalman_llt(1, 0.1, 2, output = "variance"), "arg")
   expect_error(kalman_llt(c(1, 2), 0.1, 2), "finite positive")
   expect_error(kalman_llt(1, 0.1, 2, robust_iters = -1L), "robust_iters")
@@ -443,4 +442,17 @@ test_that("a regime with no observation is NaN, not the previous regime's trend"
   traced <- garry:::g_jit(function(inputs) list(out = body("mean")(inputs, 1L)))
   tv <- as.numeric(g_download(traced(lapply(list(cube, r, bd), g_upload, dtype = "f64")))$out)
   expect_equal(is.nan(tv), is.nan(got("mean")))
+})
+
+test_that("a variance that broke stays NaN: it does not read as perfect certainty", {
+  y <- c(1, 2, 3, 4, 5, 6)
+  cube <- array(y, c(6, 1, 1))
+  # a prior this wide overflows, so every covariance term is NaN
+  testthat::local_mocked_bindings(.kalman_kappa = 1e308)
+  body <- kalman_llt(1, 0.1, 2, output = "sd", dtype = "f64")
+  expect_true(all(is.na(as.numeric(body(list(cube), 1L)))))
+  jf <- g_jit(function(x) body(list(x), 1L))
+  expect_true(all(is.nan(g_download(jf(g_upload(cube, "f64"))))))
+  # a variance a hair below zero is rounding, and still floors at zero
+  expect_identical(as.numeric(garry:::.variance_sd(c(-1e-12, 0, 4))), c(0, 0, 2))
 })

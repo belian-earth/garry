@@ -128,8 +128,8 @@ test_that("stage_raw_cube carries each band's nodata, affine, type and name", {
   stage_raw_cube(f, v)
   for (b in 1:2) {
     expect_equal(
-      suppressMessages(collect(lazy_source(v, band = b, scale = TRUE))),
-      suppressMessages(collect(lazy_source(f, band = b, scale = TRUE))),
+      suppressWarnings(collect(lazy_source(v, band = b, scale = TRUE))),
+      suppressWarnings(collect(lazy_source(f, band = b, scale = TRUE))),
       ignore_attr = TRUE
     )
   }
@@ -159,4 +159,9 @@ test_that("a .vrt output records scale/offset and refuses GTiff options", {
     gdal_create_output(withr::local_tempfile(fileext = ".vrt"), g, options = "COMPRESS=DEFLATE"),
     "do not apply"
   )
+})
+
+test_that("a GDAL type with no byte size says so", {
+  expect_identical(garry:::.gdal_dtype_bytes("Int16"), 2L)
+  expect_error(garry:::.gdal_dtype_bytes("Float16"), "Unsupported buffer dtype")
 })

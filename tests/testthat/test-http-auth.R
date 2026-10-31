@@ -138,6 +138,30 @@ test_that("every pool sends the header, including pools started later", {
   expect_identical(.auth_of(S, "d3.tif"), "Bearer P2")
 })
 
+test_that("a push a daemon refuses fails, and the next run pushes again", {
+  skip_if(!requireNamespace("garry", quietly = TRUE),
+          "garry not installed for daemons")
+  local_http_auth()
+  local_pools(1, 1)
+  tok <- "Authorization: Bearer one"
+  garry_http_auth("https://push.test/", function() tok, refresh = 1e-3)
+  mirai::everywhere({
+    ns <- asNamespace("garry")
+    unlockBinding(".http_auth_apply", ns)
+    .real_apply <<- get(".http_auth_apply", envir = ns)
+    assign(".http_auth_apply", function(...) stop("no header for you"), envir = ns)
+  }, .compute = "garry_write")
+  tok <- "Authorization: Bearer two"
+  Sys.sleep(0.01)
+  err <- expect_error(garry:::.http_auth_sync(), class = "garry_pool_error")
+  expect_match(conditionMessage(err), "no header for you", fixed = TRUE)
+  mirai::everywhere({
+    assign(".http_auth_apply", .real_apply, envir = asNamespace("garry"))
+  }, .compute = "garry_write")
+  Sys.sleep(0.01)
+  expect_true(garry:::.http_auth_sync()) # the value still counts as new
+})
+
 test_that("garry_http_auth validates its arguments without echoing headers", {
   local_http_auth()
   expect_error(garry_http_auth(c("a", "b"), "x"), "single non-empty")
@@ -153,4 +177,18 @@ test_that("garry_http_auth validates its arguments without echoing headers", {
   )
   expect_match(err, "/vsicurl/https://h/", fixed = TRUE)
   expect_length(.garry_state$http_auth, 0L)
+})
+
+test_that("an auth failure's own text is never read as a template", {
+  bad <- function() stop('{"error":"invalid_grant"}')
+  err <- expect_error(garry:::.http_auth_value(bad, "https://x"))
+  expect_match(conditionMessage(err), '{"error":"invalid_grant"}', fixed = TRUE)
+  state <- garry:::.garry_state
+  old <- state$http_auth
+  withr::defer(state$http_auth <- old)
+  state$http_auth <- list(
+    "https://x" = list(source = bad, value = "kept", at = Sys.time() - 1e4, refresh = 1)
+  )
+  expect_warning(garry:::.http_auth_sync(), '{"error":"invalid_grant"}', fixed = TRUE)
+  expect_identical(state$http_auth[["https://x"]]$value, "kept")
 })

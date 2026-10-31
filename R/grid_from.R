@@ -13,7 +13,7 @@ NULL
 # Choose a projected CRS for a lon/lat bbox and reproject the bbox into it.
 # Returns list(crs = <wkt>, extent = c(xmin, ymin, xmax, ymax)). The bbox is a
 # rectangle, so its centroid is just the midpoint.
-.project_bbox <- function(bbox_ll, projection, ellps) {
+.project_bbox <- function(bbox_ll, projection) {
   lon <- (bbox_ll[[1L]] + bbox_ll[[3L]]) / 2
   lat <- (bbox_ll[[2L]] + bbox_ll[[4L]]) / 2
   crs <- switch(
@@ -24,21 +24,21 @@ NULL
     },
     laea = .glue(
       "+proj=laea +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
-      "+ellps={ellps} +no_defs"
+      "+ellps=WGS84 +no_defs"
     ),
     aeqd = .glue(
       "+proj=aeqd +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
-      "+ellps={ellps} +no_defs"
+      "+ellps=WGS84 +no_defs"
     ),
     pconic = .glue(
       "+proj=pconic +lon_0={.g10(lon)} +lat_0={.g10(lat)} ",
       "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
-      "+ellps={ellps} +no_defs"
+      "+ellps=WGS84 +no_defs"
     ),
     eqdc = .glue(
       "+proj=eqdc +lon_0={.g10(lon)} ",
       "+lat_1={.g10(bbox_ll[[4L]])} +lat_2={.g10(bbox_ll[[2L]])} ",
-      "+ellps={ellps} +no_defs"
+      "+ellps=WGS84 +no_defs"
     )
   )
   wkt <- gdalraster::srs_to_wkt(crs)
@@ -51,7 +51,7 @@ NULL
 }
 
 # extent snapped out to whole multiples of res, with matching integer dims.
-.grid_from_extent <- function(crs, extent, res, buffer, dtype) {
+.grid_from_extent <- function(crs, extent, res, buffer) {
   res <- rep(as.numeric(res), length.out = 2L)
   if (any(res <= 0)) {
     cli::cli_abort("{.arg res} must be positive.")
@@ -63,7 +63,7 @@ NULL
   ymax <- ceiling(e[[4L]] / res[[2L]]) * res[[2L]]
   nx <- as.integer(round((xmax - xmin) / res[[1L]]))
   ny <- as.integer(round((ymax - ymin) / res[[2L]]))
-  grid_spec(crs, c(xmin, ymin, xmax, ymax), c(nx, ny), dtype = dtype)
+  grid_spec(crs, c(xmin, ymin, xmax, ymax), c(nx, ny))
 }
 
 #' Build an analysis grid from a lon/lat bounding box.
@@ -85,9 +85,7 @@ NULL
 #' @param res Target resolution in the projected CRS units (metres for the
 #'   supported projections); a scalar, or `c(xres, yres)`.
 #' @param projection Projection family; the first is the default (see Details).
-#' @param ellps Ellipsoid for the centred projections.
 #' @param buffer Extent padding in projected units, applied before snapping.
-#' @param dtype Grid dtype.
 #' @return A `GridSpec`.
 #' @examples
 #' # An equal-area 30 m grid over a small AOI.
@@ -99,9 +97,7 @@ grid_from_bbox <- function(
   bbox,
   res,
   projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-  ellps = "WGS84",
-  buffer = 0,
-  dtype = "f32"
+  buffer = 0
 ) {
   if (
     !is.numeric(bbox) ||
@@ -115,8 +111,8 @@ grid_from_bbox <- function(
     ))
   }
   projection <- rlang::arg_match(projection)
-  proj <- .project_bbox(as.numeric(bbox), projection, ellps)
-  .grid_from_extent(proj$crs, proj$extent, res, buffer, dtype)
+  proj <- .project_bbox(as.numeric(bbox), projection)
+  .grid_from_extent(proj$crs, proj$extent, res, buffer)
 }
 
 #' Build an analysis grid from a raster or vector source.
@@ -127,12 +123,12 @@ grid_from_bbox <- function(
 #' * **Raster** (GeoTIFF, COG, ...): the source already has a projected CRS and
 #'   footprint, so the grid keeps that native CRS and extent and is simply
 #'   re-gridded to `res` (the extent is snapped out to whole multiples of `res`).
-#'   `projection`/`ellps` are ignored: reprojecting a raster's own grid would
+#'   `projection` is ignored: reprojecting a raster's own grid would
 #'   distort it. Use this to coarsen a tile in place, e.g. read a 10 m embedding
 #'   COG onto a 30 m grid while preserving its geometry.
 #' * **Vector** (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
 #'   so a projected CRS is chosen for it and the grid is built exactly as
-#'   [grid_from_bbox()] does, honouring `projection`/`ellps`.
+#'   [grid_from_bbox()] does, honouring `projection`.
 #'
 #' Remote sources are read via HTTP range requests (header only), so this does
 #' not download the whole file.
@@ -140,8 +136,8 @@ grid_from_bbox <- function(
 #' @param x Path or URL to a raster or vector source.
 #' @param res Target resolution. For a raster, in the source's native CRS units;
 #'   for a vector, in the chosen projected CRS units (see [grid_from_bbox()]).
-#' @param projection,ellps Vector sources only; ignored for rasters.
-#' @param buffer,dtype As in [grid_from_bbox()].
+#' @param projection Vector sources only; ignored for rasters.
+#' @param buffer As in [grid_from_bbox()].
 #' @return A `GridSpec`.
 #' @seealso [grid_from_bbox()] to build a grid from a lon/lat bounding
 #'   box; [grid_spec()] to build one from an explicit extent.
@@ -157,9 +153,7 @@ grid_from_src <- function(
   x,
   res,
   projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-  ellps = "WGS84",
-  buffer = 0,
-  dtype = "f32"
+  buffer = 0
 ) {
   if (!is.character(x) || length(x) != 1L || !nzchar(x)) {
     cli::cli_abort(
@@ -171,14 +165,12 @@ grid_from_src <- function(
   # header only, so remote sources are not downloaded.
   if (gdal_is_raster(x)) {
     g <- gdal_grid_spec(x)$grid
-    return(.grid_from_extent(g@crs, g@extent, res, buffer, dtype))
+    return(.grid_from_extent(g@crs, g@extent, res, buffer))
   }
   grid_from_bbox(
     gdal_vector_bbox_ll(x),
     res,
     projection = rlang::arg_match(projection),
-    ellps = ellps,
-    buffer = buffer,
-    dtype = dtype
+    buffer = buffer
   )
 }

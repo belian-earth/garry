@@ -35,8 +35,8 @@ keeps the plan's dtype (usually \code{"f32"}).}
 integer \code{dtype}; \code{offset} defaults to 0.}
 
 \item{nodata}{Sentinel written to the file and used for NaN demotion,
-in stored (DN) units. Required when an integer \code{dtype} output can
-contain NaN.}
+in stored (DN) units. It must fit the output dtype, \code{dtype} or else
+the plan's own. Required when an integer output can contain NaN.}
 
 \item{cog}{Write a Cloud Optimized GeoTIFF (see Details).}
 
@@ -44,7 +44,8 @@ contain NaN.}
 \code{cog = FALSE} these replace the default tiled-DEFLATE options of the
 streamed write (compression stays multi-threaded unless they set
 \code{NUM_THREADS}); with \code{cog = TRUE} they go to the COG translate pass
-(the temporary streamed file keeps the defaults).}
+(the temporary streamed file keeps the defaults). A \code{BLOCKSIZE},
+\code{BLOCKXSIZE} or \code{BLOCKYSIZE} must be a positive whole number.}
 
 \item{overview_resampling}{COG overview resampling (\code{cog = TRUE}
 only). \code{"average"} (default) suits continuous data; use \code{"nearest"}

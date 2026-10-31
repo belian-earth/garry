@@ -271,3 +271,35 @@ test_that("a GTI index over remote tiles counts as a remote open", {
   unlink(paste0(remote, ".meta.rds"))
   expect_false(.gdal_opens_remote(paste0("GTI:", remote)))
 })
+
+test_that("each resampling of one index reads through its own wrapper", {
+  gti <- .gg_gti(list(s1 = .gg_val(0) * .gg_val(0)))
+  path <- paste0("GTI:", gti)
+  coarse <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400), dims = c(20L, 13L),
+                      dtype = "f32")
+  band <- function(rs, g) lazy_source(path, graph = g, grid = coarse,
+                                      block_dim = c(20L, 13L),
+                                      open_options = gti_open_options(coarse),
+                                      resampling = rs)
+  alone <- function(rs) as.numeric(collect(band(rs, graph_new()), distributed = FALSE))
+  bil <- alone("bilinear")
+  avg <- alone("average")
+  expect_false(isTRUE(all.equal(bil, avg)))
+  g <- graph_new()
+  both <- collect(stack_bands(as_dataset(list(b = band("bilinear", g), a = band("average", g)))),
+                  distributed = FALSE)
+  expect_equal(as.numeric(both[, , 1L]), bil)
+  expect_equal(as.numeric(both[, , 2L]), avg)
+})
+
+test_that("a GTI sidecar is remembered until it changes", {
+  dir <- withr::local_tempdir()
+  idx <- file.path(dir, "m.gti.fgb")
+  f <- paste0(idx, ".meta.rds")
+  expect_null(garry:::.gti_meta(idx))
+  saveRDS(list(entries = data.frame(location = "a.tif")), f)
+  expect_identical(garry:::.gti_meta(paste0("GTI:", idx))$entries$location, "a.tif")
+  expect_false(is.null(garry:::.gdal_cache$gti_meta[[f]]))
+  saveRDS(list(entries = data.frame(location = c("a.tif", "b.tif"))), f)
+  expect_identical(garry:::.gti_meta(idx)$entries$location, c("a.tif", "b.tif"))
+})

@@ -11,8 +11,7 @@ NULL
 #
 # Internal representation: band-major, and each band is a list of PER-TIME-SLICE
 # 2D LazyRasters (not a single (t, y, x) node). This mirrors the proven composite
-# path and keeps focal morphology on 2D inputs (`.eval_node`'s focal branch is
-# 2D). The temporal reduce stacks a band's slices into (t, y, x) and collapses t;
+# path and keeps focal morphology per slice. The temporal reduce stacks a band's slices into (t, y, x) and collapses t;
 # `collect()`/`stack_bands()` then assemble the band axis. One object at the API
 # level; the per-slice layout is an implementation detail.
 # ---------------------------------------------------------------------------
@@ -86,6 +85,25 @@ LazyDataset <- S7::new_class(
   list(kind = kind, label = label, detail = detail)
 }
 
+# `x` with `bands`, one more recorded step, and `mask_asset`.
+.ds_step <- function(x, bands, kind, detail, label = kind, mask_asset = x@mask_asset) {
+  LazyDataset(
+    graph = x@graph,
+    bands = bands,
+    mask_asset = mask_asset,
+    steps = c(x@steps, list(.step(kind, label, detail = detail)))
+  )
+}
+
+# The bands of `x`, each slice of those in `sel` through `f`.
+.ds_map_layers <- function(x, sel, f) {
+  bands <- x@bands
+  for (a in sel) {
+    bands[[a]] <- lapply(x@bands[[a]], f)
+  }
+  bands
+}
+
 # Format an integer set as compact ranges, e.g. 0:3 -> "0-3",
 # c(0,1,2,3,8,9,10,11) -> "0-3, 8-11". Uses an en dash when UTF-8.
 .rng <- function(v) {
@@ -134,7 +152,10 @@ LazyDataset <- S7::new_class(
 #'   packing several polarisations into one COG) becomes its own dataset
 #'   band, named `<asset>_<description>`, or `<asset>_b<index>` when the
 #'   file carries no band descriptions; `bands` selects and renames them.
-#' * a character path (or vector of same-CRS tile paths, mosaicked): one band
+#' * a character path, or a vector of tile paths (mosaicked where they
+#'   share a CRS and one pixel lattice, kept apart and warped together
+#'   otherwise; tiles off that lattice need `grid`, and tiles kept apart
+#'   must agree on dtype and on any nodata they declare): one band
 #'   per file band, one time slice. This is the multi-band raster entry --
 #'   geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 #'   GDAL driver, any multi-band file GDAL reads. Each band is its own
@@ -199,18 +220,22 @@ LazyDataset <- S7::new_class(
 #' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
 #'   alongside the value assets and used as the default `from` in [apply_mask()].
 #' @param granularity Time-slice granularity (see [stac_time_slices()]).
-#' @param sort_field Index field ordering overlaps within a slice.
 #' @param nodata Nodata handling: `NULL` (per-band file metadata), a scalar
 #'   (applied to every asset), or a named numeric keyed by dataset band name
-#'   or by asset (a band name wins; unnamed bands fall back to file
-#'   metadata). An asset key covers every band of a multi-band asset. Reflectance and QA bands usually need
-#'   different sentinels, so the named form is typical, e.g.
-#'   `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
-#' @param lon Longitude for `granularity = "solar_day"` (see
-#'   [stac_time_slices()]).
-#' @param resampling GDAL resampling for the warp-on-read onto `grid`: a scalar
+#'   or by asset (a band name wins; bands with no key fall back to file
+#'   metadata). An asset key covers every band of a multi-band asset, and a
+#'   key that names no band or asset of the source aborts. Reflectance and
+#'   QA bands usually need different sentinels, so the named form is
+#'   typical, e.g.
+#'   `c(B04 = -9999, B03 = -9999, Fmask = 255)`. In the file form a
+#'   sentinel replaces the file's own, whose cells then read as data. In
+#'   the table form the tiles' own sentinel stays masked as well, since
+#'   each slice's mosaic is built on it, and [align_to()] refuses such a
+#'   band.
+#' @param resampling GDAL resampling for the warp-on-read onto `grid`, or
+#'   onto the grid of several sources kept apart: a scalar
 #'   (every value band) or a named character keyed by dataset band name or
-#'   by asset, as for `nodata` (unnamed bands fall back to `"near"`). `mask_asset` is always read `"near"` regardless, since
+#'   by asset, as for `nodata` (bands with no key fall back to `"near"`). `mask_asset` is always read `"near"` regardless, since
 #'   interpolating packed QA bits corrupts them. `"near"` (the default)
 #'   preserves exact source values; use `"bilinear"`, `"average"`, `"cubic"`,
 #'   ... to interpolate. Resample after the fact instead with [align_to()].
@@ -224,10 +249,11 @@ LazyDataset <- S7::new_class(
 #'   explicitly. Discovery only consults the files themselves: STAC
 #'   metadata is never read, so collections
 #'   whose files carry no scaling metadata (e.g. Planetary Computer
-#'   Sentinel-2 L2A) read raw and scale explicitly instead.
+#'   Sentinel-2 L2A) warn, read raw and need scaling explicitly.
 #'   `mask_asset` is never scaled.
-#' @param offset Explicit additive offset(s) (scalar or named by asset)
-#'   used when `scale` is numeric; defaults to 0. Ignored when `scale` is
+#' @param offset Explicit additive offset(s) (scalar or named by band or
+#'   asset) used when `scale` is numeric; defaults to 0. A band with an
+#'   offset and no scale of its own takes scale 1. Ignored when `scale` is
 #'   logical.
 #' @return A `LazyDataset`.
 #' @seealso [group_by_time()], [collect()]
@@ -243,9 +269,7 @@ lazy_dataset <- function(
   assets = NULL,
   mask_asset = NULL,
   granularity = "day",
-  sort_field = "datetime",
   nodata = NULL,
-  lon = NULL,
   resampling = "near",
   scale = FALSE,
   offset = NULL,
@@ -253,7 +277,25 @@ lazy_dataset <- function(
   decode = NULL,
   time = NULL
 ) {
+  if (!isFALSE(scale) && !isTRUE(scale) && !is.numeric(scale)) {
+    cli::cli_abort(
+      "{.arg scale} must be `FALSE`, `TRUE`, or numeric (scalar or named by band or asset).",
+      class = c("garry_source_error", "garry_error")
+    )
+  }
+  .check_band_args(list(
+    nodata = nodata,
+    resampling = resampling,
+    scale = scale,
+    offset = offset
+  ))
   if (is.character(sources)) {
+    if (!missing(granularity)) {
+      cli::cli_abort(c(
+        "{.arg granularity} groups STAC items into slices.",
+        "i" = "A file's slices come from the file: select them with {.arg time}."
+      ))
+    }
     return(.ds_from_files(
       sources,
       grid,
@@ -305,44 +347,31 @@ lazy_dataset <- function(
   # object end to end. A plain data.frame (non-STAC / manual sources) passes
   # through unchanged.
   if (inherits(sources, "doc_items")) {
+    offered <- .stac_asset_names(sources$features)
     sources <- stac_sources(sources, assets = all_assets)
+  } else {
+    offered <- unique(sources$asset)
   }
-  sources <- stac_time_slices(sources, granularity, lon = lon)
+  sources <- stac_time_slices(sources, granularity)
 
-  # Named per-band arguments resolve by output band name first, then by
-  # asset: `c(enclosure_tiff = -9999)` covers every band of a multi-band
-  # asset and `c(hh = -9999)` overrides one of them.
-  key_of <- function(x, nm, a) {
-    if (nm %in% names(x)) nm else if (a %in% names(x)) a else NULL
-  }
   resolve_nodata <- function(nm, a, meta_nodata) {
-    file_nd <- if (length(meta_nodata) == 1L) meta_nodata else NULL
-    if (is.null(nodata)) {
-      return(file_nd)
-    }
-    if (!is.null(names(nodata))) {
-      k <- key_of(nodata, nm, a)
-      return(if (is.null(k)) file_nd else unname(nodata[[k]]))
-    }
-    as.numeric(nodata) # scalar for every asset
+    .band_value(
+      nodata,
+      nm,
+      a,
+      default = if (length(meta_nodata) == 1L) meta_nodata
+    )
   }
 
-  .valid_resampling <- .resampling_methods
-  if (!all(resampling %in% .valid_resampling)) {
+  if (!all(resampling %in% .resampling_methods)) {
     cli::cli_abort(c(
-      "Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .valid_resampling)}}.",
-      "i" = "One of {.val {.valid_resampling}}."
+      "Invalid {.arg resampling} method{?s}: {.val {setdiff(resampling, .resampling_methods)}}.",
+      "i" = "One of {.val {(.resampling_methods)}}."
     ))
   }
   resolve_resampling <- function(nm, a) {
-    if (!is.null(mask_asset) && a %in% mask_asset) {
-      return("near")
-    } # QA never interpolates
-    if (is.null(names(resampling))) {
-      return(unname(resampling[[1L]]))
-    } # scalar for all
-    k <- key_of(resampling, nm, a)
-    if (is.null(k)) "near" else unname(resampling[[k]])
+    # QA never interpolates
+    if (a %in% mask_asset) "near" else .band_value(resampling, nm, a, default = "near")
   }
 
   # Per-asset read affine (TIFF metadata only). Discovery probes the GTI
@@ -351,51 +380,16 @@ lazy_dataset <- function(
   # scale/offset. One asset per band; the collection is assumed
   # homogeneous (documented caveat, e.g. the S2 baseline-04 cutover).
   resolve_affine <- function(nm, a, b, meta) {
-    if (!is.null(mask_asset) && a %in% mask_asset) {
-      return(list(scale = numeric(0), offset = numeric(0)))
-    }
-    pick <- function(x, default = NULL) {
-      if (is.null(x)) {
-        return(default)
-      }
-      if (!is.null(names(x))) {
-        k <- key_of(x, nm, a)
-        return(if (is.null(k)) default else unname(x[[k]]))
-      }
-      unname(x[[1L]])
-    }
-    if (isFALSE(scale)) {
-      return(list(scale = numeric(0), offset = numeric(0)))
-    }
-    if (isTRUE(scale)) {
-      if (length(meta$scale) == 1L) {
-        return(list(scale = meta$scale, offset = meta$offset))
-      }
-      probe <- gdal_grid_spec(
-        sources$location[sources$asset == a][[1L]],
-        band = b
-      )
-      if (length(probe$scale) == 1L) {
-        return(list(scale = probe$scale, offset = probe$offset))
-      }
-      cli::cli_inform(c(
-        "i" = "{.arg scale}: no scale/offset metadata on {.val {nm}}; reading raw values."
-      ))
-      return(list(scale = numeric(0), offset = numeric(0)))
-    }
-    sc <- pick(scale)
-    if (is.null(sc)) {
-      return(list(scale = numeric(0), offset = numeric(0)))
-    }
-    of <- pick(offset, default = 0)
-    if (sc == 1 && of == 0) {
-      return(list(scale = numeric(0), offset = numeric(0)))
-    }
-    list(scale = as.numeric(sc), offset = as.numeric(of))
-  }
-  if (!isFALSE(scale) && !isTRUE(scale) && !is.numeric(scale)) {
-    cli::cli_abort(
-      "{.arg scale} must be `FALSE`, `TRUE`, or numeric (scalar or named by asset)."
+    .resolve_scale(
+      if (a %in% mask_asset) FALSE else .band_scale(scale, offset, nm, a),
+      .band_value(offset, nm, a),
+      function() {
+        if (length(meta$scale) == 1L) {
+          return(meta)
+        }
+        gdal_grid_spec(sources$location[sources$asset == a][[1L]], band = b)
+      },
+      what = nm
     )
   }
 
@@ -407,7 +401,6 @@ lazy_dataset <- function(
     # The GTI driver infers band count, dtype and nodata per band from the
     # first tile, so one index serves every band of a multi-band asset.
     nb <- .gdal_handle(gti, gti_open_options(grid))$getRasterCount()
-    .gti_meta_set_bands(idx, nb)
     sel <- if (!is.null(mask_asset) && a %in% mask_asset) {
       stats::setNames(1L, a)
     } else {
@@ -439,7 +432,7 @@ lazy_dataset <- function(
           open_options = gti_open_options(
             grid,
             filter = .glue("slice = '{sl}'"),
-            sort_field = sort_field
+            sort_field = "datetime"
           ),
           grid = meta$grid,
           block_dim = meta$block_dim,
@@ -459,6 +452,10 @@ lazy_dataset <- function(
       out[[nm]] <- layers
     }
   }
+  .check_band_keys(
+    list(nodata = nodata, resampling = resampling, scale = scale, offset = offset),
+    c(names(out), offered)
+  )
   LazyDataset(
     graph = graph,
     bands = out,
@@ -468,6 +465,73 @@ lazy_dataset <- function(
       as.character(mask_asset)
     },
     steps = list(.step("source", "source", detail = max(lengths(out))))
+  )
+}
+
+# The per-band arguments of lazy_dataset(): one value for every band, or
+# values named by dataset band or asset. Several unnamed values, a blank
+# name or a repeated one do not say which band takes which value.
+.check_band_args <- function(args, call = rlang::caller_env()) {
+  ok <- vapply(
+    args,
+    function(x) {
+      keys <- names(x)
+      if (is.null(keys)) {
+        return(is.null(x) || length(x) == 1L)
+      }
+      !anyNA(keys) && all(nzchar(keys)) && !anyDuplicated(keys)
+    },
+    logical(1)
+  )
+  if (!all(ok)) {
+    arg <- names(args)[!ok][[1L]]
+    cli::cli_abort(c(
+      "{.arg {arg}} must be one value for every band, or values with unique names.",
+      "i" = "Name each value by band or asset, e.g. {.code c(red = 1, nir = 2)}."
+    ), class = c("garry_source_error", "garry_error"), call = call)
+  }
+  invisible(args)
+}
+
+# Every name in a per-band argument must be something the source holds. A
+# typo would otherwise leave that band on its file metadata, or on "near",
+# with nothing to show for it.
+.check_band_keys <- function(args, known, call = rlang::caller_env()) {
+  for (arg in names(args)) {
+    bad <- setdiff(names(args[[arg]]), known)
+    if (length(bad)) {
+      cli::cli_abort(c(
+        "{.arg {arg}} names no band or asset of the source: {.val {bad}}.",
+        "i" = "The source holds {.val {unique(known)}}."
+      ), class = c("garry_source_error", "garry_error"), call = call)
+    }
+  }
+  invisible(args)
+}
+
+# One band's entry of a per-band argument: the value every band shares, or
+# the one keyed by band name, then by asset, so `c(enclosure_tiff = -9999)`
+# covers every band of a multi-band asset and `c(hh = -9999)` overrides one
+# of them. A band with no key takes `default`.
+.band_value <- function(x, nm, a = nm, default = NULL) {
+  if (is.null(x)) {
+    return(default)
+  }
+  if (is.null(names(x))) {
+    return(x)
+  }
+  k <- intersect(c(nm, a), names(x))
+  if (length(k)) x[[k[[1L]]]] else default
+}
+
+# One band's `scale`: an offset keyed to a band with no scale of its own
+# still applies, at scale 1.
+.band_scale <- function(scale, offset, nm, a = nm) {
+  .band_value(
+    scale,
+    nm,
+    a,
+    default = if (is.null(.band_value(offset, nm, a))) FALSE else 1
   )
 }
 
@@ -525,12 +589,13 @@ lazy_dataset <- function(
 }
 
 # File form of lazy_dataset(): one band per (selected) file band, one time
-# slice. A vector of paths mosaics first (same-CRS north-up tiles,
-# gdalbuildvrt); tiles the mosaic cannot hold (south-up, or across a
-# projection boundary) stay a multi-path source node that the warper
-# reads together (gdal_warp_window()): band by band, or every band of a
-# window at once when the files' bands share storage (one Zarr array per
-# UTM zone). ONE
+# slice. A vector of paths mosaics first (north-up tiles on one lattice
+# of one CRS, gdalbuildvrt); tiles the mosaic cannot hold (south-up, across
+# a projection boundary, off that lattice with a `grid` to warp them onto,
+# with gaps and no sentinel to mark them, or with a given nodata replacing
+# their own) stay a multi-path source node that the warper reads together
+# (gdal_warp_window()): band by band, or every band of a window at once
+# when the files' bands share storage (one Zarr array per UTM zone). ONE
 # metadata probe serves every band (.gdal_handle caches the dataset handle),
 # and the probed grid is DECLARED on each band source, so construction costs
 # one header fetch however many bands the file carries. Each band is its own
@@ -572,7 +637,14 @@ lazy_dataset <- function(
       cli::cli_abort(c(
         "The sources differ in band count ({.val {unique(nbs)}}).",
         "i" = "Read them separately and combine on a common grid."
-      ))
+      ), class = c("garry_source_error", "garry_error"))
+    }
+    types <- lapply(probes, `[[`, "types")
+    if (length(unique(types)) > 1L) {
+      cli::cli_abort(c(
+        "The sources differ in band type ({.val {unique(unlist(types))}}).",
+        "i" = "Read them separately and combine on a common grid."
+      ), class = c("garry_source_error", "garry_error"))
     }
     same_dims <- vapply(
       probes[-1L],
@@ -583,13 +655,32 @@ lazy_dataset <- function(
       cli::cli_abort(c(
         "The sources' bands carry different dimension coordinates (e.g. years).",
         "i" = "Read them separately and combine on a common grid."
-      ))
+      ), class = c("garry_source_error", "garry_error"))
+    }
+    # One grid must come from somewhere: without `grid` it is the first
+    # source's, and a tile off it would move or change resolution unasked.
+    off <- .off_lattice(probes)
+    if (is.null(grid) && length(off)) {
+      cli::cli_abort(c(
+        "{.path {paths[[off[[1L]]]]}} is not on the pixel lattice of {.path {paths[[1L]]}}: its resolution or origin differs.",
+        "i" = "Give {.arg grid} to read the sources onto one grid."
+      ), class = c("garry_source_error", "garry_error"))
+    }
+    if (isTRUE(scale) && length(unique(lapply(probes, `[[`, "affine"))) > 1L) {
+      cli::cli_abort(c(
+        "The sources declare different band scales or offsets, and {.code scale = TRUE} reads one affine.",
+        "i" = "Give {.arg scale} and {.arg offset}, or read them separately."
+      ), class = c("garry_source_error", "garry_error"))
     }
     # A Zarr store stays a multi-path source even in one CRS: a mosaic VRT
     # hides the store from every Zarr-specific read path (dimension
     # layout, chunk-sharing collapse, handle budget, single-threaded reads).
+    # So do tiles whose sentinel a given nodata replaces: a mosaic's gaps
+    # read as that sentinel, which would then be data.
     zarr <- any(vapply(paths, .gdal_is_zarr, logical(1)))
-    if (!zarr && .mosaicable(probes)) {
+    own <- unlist(lapply(probes, `[[`, "nodata"))
+    replaced <- !is.null(nodata) && !all(is.na(own) | own %in% nodata)
+    if (!zarr && !replaced && .mosaicable(probes)) {
       gdal_mosaic_vrt(tempfile("garry-mosaic-", fileext = ".vrt"), paths)
     } else {
       meta <- .multi_source_meta(paths, probes)
@@ -655,12 +746,19 @@ lazy_dataset <- function(
       "i" = "Its bands are read as bands; select them with {.arg bands} or {.arg assets}."
     ))
   }
+  .check_band_keys(
+    list(nodata = nodata, resampling = resampling, scale = scale, offset = offset),
+    all_nms
+  )
   n_axis <- length(all_nms)
 
-  idx <- if (is.null(bands)) seq_len(n_axis) else as.integer(bands)
-  if (any(idx < 1L | idx > n_axis)) {
+  idx <- if (is.null(bands)) seq_len(n_axis) else bands
+  if (
+    !is.numeric(idx) || anyNA(idx) || anyDuplicated(idx) ||
+      any(idx != round(idx) | idx < 1L | idx > n_axis)
+  ) {
     what <- if (is.null(nd)) "file has" else "band dimension has"
-    cli::cli_abort("{.arg bands} must index 1..{n_axis} ({what} {n_axis} band{?s}).")
+    cli::cli_abort("{.arg bands} must index 1..{n_axis} by whole position, each once ({what} {n_axis} band{?s}).")
   }
   nms <- all_nms[idx]
   if (!is.null(assets)) {
@@ -676,29 +774,29 @@ lazy_dataset <- function(
     idx <- idx[keep]
     nms <- nms[keep]
   }
-  if (!is.null(mask_asset) && !mask_asset %in% nms) {
-    cli::cli_abort("{.arg mask_asset} must name one of the selected bands.")
+  if (length(mask_asset) > 1L || !all(mask_asset %in% nms)) {
+    cli::cli_abort("{.arg mask_asset} must name one selected band.")
   }
 
-  resolve_nd <- function(nm, b) {
-    fnd <- ds$getNoDataValue(b)
-    fnd <- if (is.na(fnd)) NULL else as.numeric(fnd)
-    if (is.null(nodata)) {
-      return(fnd)
+  # the sentinel file band `b` declares; a node of several sources goes
+  # to the warper under one, so those that declare one must share it
+  file_nd <- function(b) {
+    nd <- if (length(path) > 1L) {
+      vapply(probes, function(p) p$nodata[[b]], numeric(1))
+    } else {
+      ds$getNoDataValue(b)
     }
-    if (!is.null(names(nodata))) {
-      return(if (nm %in% names(nodata)) unname(nodata[[nm]]) else fnd)
+    nd <- unique(as.numeric(nd[!is.na(nd)]))
+    if (length(nd) > 1L) {
+      cli::cli_abort(c(
+        "The sources declare different nodata for band {b}: {.val {nd}}.",
+        "i" = "Give {.arg nodata} to mask one value in all of them, or read them separately."
+      ), class = c("garry_source_error", "garry_error"))
     }
-    as.numeric(nodata)
+    if (length(nd)) nd
   }
   resolve_rs <- function(nm) {
-    if (!is.null(mask_asset) && nm %in% mask_asset) {
-      return("near")
-    }
-    if (is.null(names(resampling))) {
-      return(unname(resampling[[1L]]))
-    }
-    if (nm %in% names(resampling)) unname(resampling[[nm]]) else "near"
+    if (nm %in% mask_asset) "near" else .band_value(resampling, nm, default = "near")
   }
 
   if (!is.null(grid)) {
@@ -710,17 +808,27 @@ lazy_dataset <- function(
     # a mask band's bits are read as stored: never scaled or decoded
     dec_b <- if (is_mask) NULL else dec
     m <- if (is.null(dec_b) && !is.null(meta_codes)) meta_codes else meta
+    # the grid came from band 1; a VRT's bands can differ in type
+    bg <- if (is.null(dec_b)) {
+      .grid_retype(m$grid, .gdal_band_dtype(ds, b))
+    } else {
+      m$grid
+    }
+    # a decoded band's nodata is the VRT's NaN
+    nd_b <- if (is.null(dec_b)) .band_value(nodata, nm, default = file_nd(b))
     x <- lazy_source(
-      path,
+      .source_for_nodata(path, ds$getNoDataValue(b), nd_b),
       band = b,
       graph = g,
-      grid = m$grid,
+      grid = bg,
       block_dim = m$block_dim,
-      # a decoded band's nodata is the VRT's NaN
-      nodata = if (is.null(dec_b)) resolve_nd(nm, b),
+      nodata = nd_b,
       decode = dec_b,
-      scale = if (is_mask) FALSE else scale,
-      offset = offset,
+      scale = if (is_mask) FALSE else .band_scale(scale, offset, nm),
+      offset = .band_value(offset, nm),
+      # several sources warp on their planning grid too; one source reads
+      # as it is stored there, whatever `resampling` asks of a warp
+      resampling = if (length(path) > 1L) resolve_rs(nm) else "near",
       name = nm
     )
     if (!is.null(grid)) {
@@ -952,15 +1060,6 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   )
 }
 
-# Assign a derived band into the dataset: `ds[["ndvi"]] <- (nir - red)/(nir + red)`.
-# The RHS is a LazyRaster (or a per-slice list) on the dataset's grid; because
-# band math like `ds[["B04"]] - ds[["B03"]]` already builds on the shared graph,
-# the derivation is part of the dataset's graph and is written by collect().
-# Registered as a plain S3 method, not via S7::method(): S7's dynamic
-# registration stores the closure itself in the namespace's S3methods table,
-# and R < 4.6's `checking replacement functions` calls get() on that entry
-# and halts.
-#' @rawNamespace S3method("[[<-", "garry::LazyDataset", .lazy_dataset_assign)
 # Split a (t, y, x) raster into its per-slice layers: a stack along t
 # gives its inputs back, and an elementwise map over t-stacks is rebuilt
 # once per slice over the matching slice of each input. Anything else
@@ -997,6 +1096,7 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
           labels = g@labels[names(g@labels) != "t"]
         ),
         fn = n@fn,
+        dtype = n@dtype,
         role = n@role
       )
     } else {
@@ -1016,6 +1116,15 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   stats::setNames(layers, x@grid@labels[["t"]])
 }
 
+# Assign a derived band into the dataset: `ds[["ndvi"]] <- (nir - red)/(nir + red)`.
+# The RHS is a LazyRaster (or a per-slice list) on the dataset's grid; because
+# band math like `ds[["B04"]] - ds[["B03"]]` already builds on the shared graph,
+# the derivation is part of the dataset's graph and is written by collect().
+# Registered as a plain S3 method, not via S7::method(): S7's dynamic
+# registration stores the closure itself in the namespace's S3methods table,
+# and R < 4.6's `checking replacement functions` calls get() on that entry
+# and halts.
+#' @rawNamespace S3method("[[<-", "garry::LazyDataset", .lazy_dataset_assign)
 .lazy_dataset_assign <- function(x, i, value) {
   if (S7::S7_inherits(value, LazyRaster) && "t" %in% names(value@grid@dims)) {
     # ds[["ndvi"]] <- (ds$nir - ds$red) / (ds$nir + ds$red) on a multi-slice
@@ -1080,47 +1189,22 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
   }
   bands <- .ds_check_bands(x, bands)
   sel <- bands %||% .ds_value_bands(x)
-  newbands <- x@bands
-  for (a in sel) {
-    newbands[[a]] <- lapply(x@bands[[a]], function(lr) {
-      lazy_map(lr, fn = fn, dtype = dtype)
-    })
-  }
-  LazyDataset(
-    graph = x@graph,
-    bands = newbands,
-    mask_asset = x@mask_asset,
-    steps = c(
-      x@steps,
-      list(.step("map", "map", detail = paste(sel, collapse = " ")))
-    )
+  .ds_step(
+    x,
+    .ds_map_layers(x, sel, function(lr) lazy_map(lr, fn = fn, dtype = dtype)),
+    "map",
+    paste(sel, collapse = " ")
   )
 }
 
-.ds_focal <- function(x, fn, radius, boundary, bands) {
+.ds_focal <- function(x, fn, radius, bands) {
   bands <- .ds_check_bands(x, bands)
   sel <- bands %||% .ds_value_bands(x)
-  newbands <- x@bands
-  for (a in sel) {
-    newbands[[a]] <- lapply(x@bands[[a]], function(lr) {
-      focal_map(lr, fn = fn, radius = radius, boundary = boundary)
-    })
-  }
-  LazyDataset(
-    graph = x@graph,
-    bands = newbands,
-    mask_asset = x@mask_asset,
-    steps = c(
-      x@steps,
-      list(.step(
-        "focal",
-        "focal",
-        detail = .glue(
-          "r={radius} {cli::symbol$bullet %||% '-'} ",
-          "{paste(sel, collapse = ' ')}"
-        )
-      ))
-    )
+  .ds_step(
+    x,
+    .ds_map_layers(x, sel, function(lr) focal_map(lr, fn = fn, radius = radius)),
+    "focal",
+    .glue("r={radius} {cli::symbol$bullet %||% '-'} {paste(sel, collapse = ' ')}")
   )
 }
 
@@ -1143,21 +1227,12 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
     lr <- lazy_stack(x@bands[[a]], along = "t")
     newbands[[a]] <- list(reduce_over(lr, op, over, nan_rm = nan_rm))
   }
-  LazyDataset(
-    graph = x@graph,
-    bands = newbands,
-    mask_asset = intersect(x@mask_asset, names(newbands)),
-    steps = c(
-      x@steps,
-      list(.step(
-        "reduce",
-        "reduce",
-        detail = .glue(
-          "{if (is.function(op)) 'custom' else op}",
-          " over {paste(over, collapse = ',')}"
-        )
-      ))
-    )
+  .ds_step(
+    x,
+    newbands,
+    "reduce",
+    .glue("{if (is.function(op)) 'custom' else op} over {paste(over, collapse = ',')}"),
+    mask_asset = intersect(x@mask_asset, names(newbands))
   )
 }
 
@@ -1181,14 +1256,12 @@ S7::method(`[`, LazyDataset) <- function(x, i) {
       dtype = dtype
     ))
   }
-  LazyDataset(
-    graph = x@graph,
-    bands = newbands,
-    mask_asset = intersect(x@mask_asset, names(newbands)),
-    steps = c(
-      x@steps,
-      list(.step("scan", "scan", detail = .glue("{direction} over {over}")))
-    )
+  .ds_step(
+    x,
+    newbands,
+    "scan",
+    .glue("{direction} over {over}"),
+    mask_asset = intersect(x@mask_asset, names(newbands))
   )
 }
 
@@ -1328,15 +1401,7 @@ group_by_time <- function(x, by = "month") {
   groups <- lapply(labels, function(g) {
     nb <- lapply(x@bands, function(b) b[.time_group(names(b), by) == g])
     nb <- nb[lengths(nb) > 0L] # drop bands empty this group
-    LazyDataset(
-      graph = x@graph,
-      bands = nb,
-      mask_asset = intersect(x@mask_asset, names(nb)),
-      steps = c(
-        x@steps,
-        list(.step("group", "group", detail = .glue("{lab} = {g}")))
-      )
-    )
+    .ds_step(x, nb, "group", .glue("{lab} = {g}"), mask_asset = intersect(x@mask_asset, names(nb)))
   })
   names(groups) <- labels
   LazyDatasetGroups(groups = groups, by = lab)
@@ -1357,11 +1422,10 @@ group_by_time <- function(x, by = "month") {
 #'
 #' @param x A `LazyRaster` with a `t` dim, or a `LazyDataset`.
 #' @param method `"ffill"`, `"bfill"` or `"linear"`.
-#' @param over Axis to fill along (only `"t"` is meaningful today).
 #' @return The filled object, same class as `x`.
 #' @family time series smoothers
 #' @export
-fill_gaps <- function(x, method = c("ffill", "bfill", "linear"), over = "t") {
+fill_gaps <- function(x, method = c("ffill", "bfill", "linear")) {
   method <- rlang::arg_match(method)
   if (S7::S7_inherits(x, LazyDataset)) {
     newbands <- x@bands
@@ -1370,19 +1434,14 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"), over = "t") {
         next # a single slice has no gaps to fill along t
       }
       lr <- lazy_stack(x@bands[[a]], along = "t")
-      newbands[[a]] <- list(fill_gaps(lr, method, over))
+      newbands[[a]] <- list(fill_gaps(lr, method))
     }
-    return(LazyDataset(
-      graph = x@graph,
-      bands = newbands,
-      mask_asset = x@mask_asset,
-      steps = c(x@steps, list(.step("fill", "fill_gaps", detail = method)))
-    ))
+    return(.ds_step(x, newbands, "fill", method, label = "fill_gaps"))
   }
   .assert_class(x, LazyRaster, "LazyRaster")
   # Carry the last valid value; a NaN carry (init) means "none yet".
-  # ScanNode `direction` is declarative metadata — the body itself must
-  # run g_scan(reverse=) — so the factories bake the direction in.
+  # ScanNode `direction` is declarative metadata: the body itself must
+  # run g_scan(reverse=): so the factories bake the direction in.
   carry_body <- function(reverse) {
     force(reverse)
     function(xs, margin) {
@@ -1398,10 +1457,10 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"), over = "t") {
     }
   }
   if (method == "ffill") {
-    return(scan_over(x, carry_body(FALSE), over = over, direction = "forward"))
+    return(scan_over(x, carry_body(FALSE), over = "t", direction = "forward"))
   }
   if (method == "bfill") {
-    return(scan_over(x, carry_body(TRUE), over = over, direction = "backward"))
+    return(scan_over(x, carry_body(TRUE), over = "t", direction = "backward"))
   }
   # linear: nearest-valid value and distance in both directions, then a
   # distance-weighted combination per pixel. The zero branch is v * 0
@@ -1420,19 +1479,19 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear"), over = "t") {
       )$out
     }
   }
-  vf <- scan_over(x, carry_body(FALSE), over = over, direction = "forward")
-  vb <- scan_over(x, carry_body(TRUE), over = over, direction = "backward")
+  vf <- scan_over(x, carry_body(FALSE), over = "t", direction = "forward")
+  vb <- scan_over(x, carry_body(TRUE), over = "t", direction = "backward")
   df <- scan_over(
     x,
     dist_body(FALSE),
-    over = over,
+    over = "t",
     direction = "forward",
     dtype = "f32"
   )
   db <- scan_over(
     x,
     dist_body(TRUE),
-    over = over,
+    over = "t",
     direction = "backward",
     dtype = "f32"
   )
@@ -1515,7 +1574,6 @@ stack_bands <- function(x) {
 #'   removing isolated flagged pixels up to the radius. `0` skips it.
 #' @param dilate Dilation radius (buffer): grows the surviving bad regions
 #'   outward, a safety margin around clouds. `0` skips it. Applied after `open`.
-#' @param drop Drop the QA band from the returned dataset? (default `TRUE`.)
 #' @param join How value and mask slices pair when both carry slice
 #'   names that do not fully align: `"exact"` (default) aborts;
 #'   `"inner"` pairs on the shared slice names and reports what
@@ -1534,10 +1592,11 @@ apply_mask <- function(
   where,
   open = 0L,
   dilate = 0L,
-  drop = TRUE,
   join = "exact"
 ) {
   .assert_class(x, LazyDataset, "LazyDataset")
+  open <- .check_radius(open, "open")
+  dilate <- .check_radius(dilate, "dilate")
   if (is.null(from)) {
     if (length(x@mask_asset) == 0L) {
       cli::cli_abort(
@@ -1554,21 +1613,23 @@ apply_mask <- function(
   masks <- lapply(x@bands[[from]], function(qlr) {
     m <- .with_role(lazy_map(qlr, fn = pred, dtype = "f32"), "mask")
     if (open > 0L) {
-      m <- .morph_open(m, as.integer(open))
+      m <- .dilate(.erode(m, open), open)
     }
     if (dilate > 0L) {
-      m <- .morph_dilate(m, as.integer(dilate))
+      m <- .dilate(m, dilate)
     }
     m
   })
 
   apply_mask <- function(v, m) {
+    # NaN needs a float: an integer band leaves its dtype here
+    dt <- .exact_float(v@grid@dtype)
     .with_role(
       lazy_map(
         v,
         m,
-        fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
-        dtype = "f32"
+        fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, .g_as_declared(vv, dt)),
+        dtype = dt
       ),
       "mask"
     )
@@ -1586,9 +1647,6 @@ apply_mask <- function(
       nm
     )
   }
-  if (!drop) {
-    newbands[[from]] <- x@bands[[from]]
-  }
 
   where_desc <- attr(where, "garry_desc") %||%
     if (is.numeric(where)) paste0("values ", .rng(where)) else "predicate"
@@ -1600,12 +1658,7 @@ apply_mask <- function(
     c(.glue("from {from}"), where_desc, morph),
     collapse = .glue(" {cli::symbol$bullet %||% '-'} ")
   )
-  LazyDataset(
-    graph = x@graph,
-    bands = newbands,
-    mask_asset = if (drop) character(0) else x@mask_asset,
-    steps = c(x@steps, list(.step("mask", "mask", detail = detail)))
-  )
+  .ds_step(x, newbands, "mask", detail, mask_asset = character(0))
 }
 
 # Pair each value-band layer with the mask for its slice, by slice name when
@@ -1626,7 +1679,7 @@ apply_mask <- function(
   if (named) {
     # Both sides carry slice names but neither covers the other. The
     # old fall-through paired POSITIONALLY when the counts happened to
-    # match — silently mispairing dates. Named mismatches now
+    # match: silently mispairing dates. Named mismatches now
     # inner-join on the name intersection (join = "inner", reporting
     # what dropped) or abort prescriptively (join = "exact").
     common <- intersect(sl, names(masks))
@@ -1724,8 +1777,6 @@ qa_bits <- function(bits) {
     1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))
   })
 }
-.morph_open <- function(x, r) .dilate(.erode(x, r), r)
-.morph_dilate <- function(x, r) .dilate(x, r)
 
 # ---------------------------------------------------------------------------
 # Arithmetic. A scalar scales/offsets every value band (the mask band, if any,
@@ -1746,18 +1797,21 @@ qa_bits <- function(bits) {
   } else {
     .glue("bands {sym} {s}")
   }
-  LazyDataset(
-    graph = ds@graph,
-    bands = newbands,
-    mask_asset = ds@mask_asset,
-    steps = c(ds@steps, list(.step("math", "math", detail = detail)))
-  )
+  .ds_step(ds, newbands, "math", detail)
 }
 
 .ds_ds_arith <- function(a, b, op, sym) {
-  common <- intersect(.ds_value_bands(a), .ds_value_bands(b))
-  if (length(common) == 0L) {
-    cli::cli_abort("datasets share no value bands to combine")
+  common <- .ds_value_bands(a)
+  only <- c(setdiff(common, .ds_value_bands(b)), setdiff(.ds_value_bands(b), common))
+  if (length(only) || !length(common)) {
+    cli::cli_abort(
+      c(
+        "datasets must hold the same value bands to combine.",
+        "x" = if (length(only)) "Only one of them holds {.val {only}}." else "They hold none.",
+        "i" = "Select the bands to combine first: {.code x[bands] {sym} y[bands]}."
+      ),
+      class = c("garry_source_error", "garry_error")
+    )
   }
   newbands <- list()
   for (nm in common) {
@@ -1769,15 +1823,7 @@ qa_bits <- function(bits) {
       names(la)
     )
   }
-  LazyDataset(
-    graph = a@graph,
-    bands = newbands,
-    mask_asset = character(0),
-    steps = c(
-      a@steps,
-      list(.step("math", "math", detail = .glue("bands {sym} dataset")))
-    )
-  )
+  .ds_step(a, newbands, "math", .glue("bands {sym} dataset"), mask_asset = character(0))
 }
 
 # Comparisons, ^ and %% ride the same per-slice machinery: `f` here is

@@ -1,6 +1,6 @@
 # Kernels as programs, and one program per chunk
 
-Status: spike, 2026-10-30, branch `stablehlo-kernels`. Both switches are off by default and today's behaviour is unchanged. Results are in section 6.
+Status: 2026-10-31, branch `stablehlo-kernels`. The defaults are `kernel_wire = "program"` and `stage_merge = "auto"`, with `"closure"` and `"guarded"` kept as rollback switches until a production run. Whole-chunk merging (`stage_merge = "chunk"`) and `garry.pad_to_chunk` were tried and removed; their results stay in section 6 as the record. Section 7 records what the review of this branch changed.
 
 ## 1. The problem
 
@@ -19,17 +19,17 @@ garry's scope makes both avoidable. Kernels are a closed vocabulary, "no arbitra
 `garry.kernel_wire = "program"`:
 
 1. The host traces each kernel once per input shape set, with `anvl::trace_fn(optimize = TRUE)`, `anvl::stablehlo()` and `stablehlo::repr()`. The results are kept for the session, keyed by kernel signature and shapes, so later tiles of a shape trace nothing.
-2. What crosses is a `garry_programs` set: shape key -> `list(src, constants)`. `constants` are closed-over arrays that lowering lifts to leading inputs, carried as R data.
-3. A daemon compiles with `pjrt_program(src, format = "mlir")` and `pjrt_compile()`, once per shape, inside a `pjrt::dispatcher()`: the same cache, buffer wrapping and phantom outputs as `jit()`, with the compile callback reading the program in place of tracing. The phantoms matter, because they are how R counts a CPU output's memory. `.kernel_of()` returns a function of a list of arrays either way, so task bodies are unchanged.
-4. Warmth outlives a run, keyed by kernel and shape, and is dropped by `garry_daemons()`. A daemon that wiped its cache takes the existing `garry_jit_miss` path and gets the program resent. A kernel that fails to trace stays a closure, so its error arrives as the classed task failure it always was.
+2. What crosses is a `garry_programs` set: shape key -> `list(src, constants)`. `constants` are closed-over arrays that lowering lifts to leading inputs. The set holds each once, as raw bytes in its `constants` attribute, and a program indexes them.
+3. A daemon compiles with `pjrt_program(src, format = "mlir")` and `pjrt_compile()`, once per shape, inside a `pjrt::dispatcher()`: the same cache, buffer wrapping and phantom outputs as `jit()`, with the compile callback reading the program in place of tracing. A warm-up compiles the first shape, the modal chunk's; a task compiles any other it meets. Shapes share one device buffer per constant, and a compiled shape's text and an uploaded constant's bytes are dropped. The phantoms matter, because they are how R counts a CPU output's memory. `.kernel_of()` returns a function of a list of arrays either way, so task bodies are unchanged.
+4. Warmth outlives a run, keyed by kernel and shape, and is dropped by `garry_daemons()`. A daemon that wiped its cache takes the existing `garry_jit_miss` path and gets the program resent.
 
 Compute tasks and fused reads both use this. A stage's shape set comes from its chunk table: the modal chunk where edges grow to it, otherwise every distinct chunk shape, and each row-tile height for a tiled fused kernel.
 
-**If this becomes the default**, these go: closure shipping, `.slim_fn`, the closure half of `.fn_identity` (a program's text is its identity), hutan's slim-safe rule, daemon-side tracing, and `.daemon_warm_jit`'s dummy execution. The untraced oracle stays: it is the correctness reference and never crosses a process.
+**What remains.** Programs are the default, but closure shipping, `.slim_fn`, the closure half of `.fn_identity`, hutan's slim-safe rule, daemon-side tracing and `.daemon_warm_jit`'s dummy execution all stay while the paths in section 7 run closures. The untraced oracle stays regardless: it is the correctness reference and never crosses a process.
 
 ## 3. One program per chunk
 
-`garry.stage_merge = "chunk"`, after the guarded merge pass, folds each connected group of spatially equal compute stages into one stage (`.merge_chunk_pipelines()`). `.compose_stage_fn()` needs no change, and a merged stage flows through both executors as any multi-export stage does. Chunks stay sized on the unmerged stages. A group a non-compute stage would both feed and read from stays split, because a spatial reduce's combine runs on the host.
+After the guarded merge pass, `.merge_chunk_pipelines()` folds each connected group of spatially equal compute stages into one stage, where `.merge_worth()` says it pays (`stage_merge = "auto"`). `.compose_stage_fn()` needs no change, and a merged stage flows through both executors as any multi-export stage does. Chunks stay sized on the unmerged stages. A group a non-compute stage would both feed and read from stays split, because a spatial reduce's combine runs on the host.
 
 The guards in `.merge_stages()` exist for reasons this spike must respect:
 
@@ -185,7 +185,7 @@ With `kernel_wire = "program"` and `pad_to_chunk = "ladder"` the suite ran 8,482
 | Bilateral | 2.9, 2.7, 2,840 | 3.3, 2.6, 2,740 |
 | Predict | 11.7, 10.9, 7,650 | 11.8, 10.7, 7,360 |
 
-**Padding is not a default.** At 10 GB the proposed set took predict to 16.5, 17.6 s and 9,240 MB against 8.8, 8.0 s and 5,250 MB. Tested alone, closures with the ladder gave 15.4, 17.9 s and 9,436 MB, while programs gave 8.8, 8.7 s and 5,032 MB and programs with `auto` 9.0, 8.8 s and 5,275 MB. With more memory the chunk outgrows the 1024-cell grid, so the ladder pads the grid up to the chunk, and an MLP pays for every cell. The 8 GB runs hid this: there the chunk is 768 cells and nothing pads. So padding helps where compile dominates and hurts where cells do, and the plan cannot tell which. It stays opt-in, for a caller that knows it runs many small boxes of a cheap kernel, such as hutan around `si_tail()`. The defaults are `kernel_wire = "program"` and `stage_merge = "auto"`.
+**Padding was removed.** At 10 GB the proposed set took predict to 16.5, 17.6 s and 9,240 MB against 8.8, 8.0 s and 5,250 MB. Tested alone, closures with the ladder gave 15.4, 17.9 s and 9,436 MB, while programs gave 8.8, 8.7 s and 5,032 MB and programs with `auto` 9.0, 8.8 s and 5,275 MB. With more memory the chunk outgrows the 1024-cell grid, so the ladder pads the grid up to the chunk, and an MLP pays for every cell. The 8 GB runs hid this: there the chunk is 768 cells and nothing pads. So padding helps where compile dominates and hurts where cells do, and the plan cannot tell which. Its only value was a many-box tail, and no caller asked for it, so the option went. The defaults are `kernel_wire = "program"` and `stage_merge = "auto"`.
 
 **The defaults against today.** Programs and `auto` against closures and guarded merging, no padding. Two runs per arm, 10 GB, stablehlo `main`, loop lookup, cold and warm seconds and peak MB. Every hash matches across arms. The full suite on these defaults: 8,486 expectations, 0 failed, 0 errors, 3 skipped.
 
@@ -203,13 +203,13 @@ With `kernel_wire = "program"` and `pad_to_chunk = "ladder"` the suite ran 8,482
 **Program identity.** An independent review of this branch found that programs gave silent wrong results, which the suite had missed because its workloads are nearly all f32. Reproduced through the pools: a u16 raster ran an f32 program of the same shape, because PJRT checks buffer size and not type, and returned wrong values; an i16 raster crashed; a kernel reading a global kept its old value after the global changed. Fixed at source, with no fallback, so nothing is retried down another path:
 
 - The program key covers input dtypes, anvl's default dtypes, the values of globals a kernel reads, the contents of captured arrays, and scan labels.
-- A daemon dispatches on exact dtypes and shapes. Anything else raises `garry_no_program`: PJRT would otherwise run it.
-- The host knows every input before it traces. The graph's declared dtype can be wrong: `lazy_map()` without `dtype` declares its input's, and the store keeps floats raw as the kernel made them. So the scheduler, which walks producers first, takes each input's dtype and outer dims from its producer's trace (`.stage_inputs()`, `.note_outputs()`).
+- A daemon dispatches on exact dtypes and shapes. Anything else raises `garry_no_program_error`: PJRT would otherwise run it.
+- The host knows every input before it traces. A node's declared dtype is the kernel's real one: `lazy_map()`, `scan_over()` and a custom `reduce_over()` trace `fn` on abstract inputs when the raster is built (`.node_dtype()`), and every member holds its declared dtype (`.g_as_declared()`), so a value does not depend on where a stage boundary falls and every executor and writer reads the same dtype from the graph. Outer dims come from the graph too: an input's grid dims, size-one axes included, flat only for a read whose dims multiply to one.
 - A kernel that fails to trace is the task's failure, raised on the host as `garry_task_error`. It no longer stays a closure.
 - The host memo drops its oldest sets past 1 GB, and warmth resets when daemon caches are emptied.
 - A dead reader on the gdal-direct routes is a failed read, not a NaN slice, and those waits check liveness.
 
-**A lost daemon.** A daemon killed mid-run hung the host on width-1 profiles and the writer, which have no dispatcher to hand a task back. `.assert_pools_alive()` already guarded the read-only route and run start; it now guards the scheduler's drain and writer waits and the gdal-direct waits, and cleanup no longer waits on a daemon that has gone. Killing each kind mid-run: compute and writer fail with `garry_pool_error` in 2.8 s, reader in 2.1 s and compute on the median route in 1.1 s with a readable task error, and teardown takes 0.8 s. A later run fails in 0.1 s on a dead compute profile and finishes on a dead writer or reader.
+**A lost daemon.** A daemon killed mid-run hung the host on width-1 profiles and the writer, which have no dispatcher to hand a task back. `.assert_pools_alive()` already guarded the read-only route and run start; it now guards the scheduler's drain and writer waits and the gdal-direct waits, and cleanup no longer waits on a daemon that has gone. Killing each kind mid-run: compute and writer fail with `garry_pool_error` in 2.8 s, reader in 2.1 s and compute on the median route in 1.1 s with a readable task error, and teardown takes 0.8 s. A later run fails in 0.1 s on a dead compute profile, on a pool with no reader left, and on a dead writer if it writes: `garry_daemons_set()` says the pools were set, so such a run no longer moves onto the host.
 
 **Donation.** Marking kernel inputs as donated changed no output hash and saved no memory, so the switch was removed. XLA reuses a donated buffer only for an output of the same type, not for temporaries, and most kernels have no such output. Three pairs per row, means of finished runs, program mode at 8 GB. Timing differences sit inside the spread between repeats, which reached 25 to 40 s for one tail arm.
 
@@ -223,3 +223,12 @@ With `kernel_wire = "program"` and `pad_to_chunk = "ladder"` the suite ran 8,482
 **Tests.** Full garry suite, 8,482 expectations, 0 failed, 0 errors, 3 skipped, with `kernel_wire = "program"` and with the switches off. Whole chunk has not been run under the suite: golden plans pin stage counts.
 
 **Reading.** Programs improve or match every workload measured, and they are the only arm besides whole chunk that survived 6 daemons at 7 GB, where closures did not. Whole chunk loses on small plans, where compile dominates, and on predict, where a merged stage waits for all its inputs. It wins strongly on large many-task plans once warm, 16 s against 52 s, and it costs about 15 % more peak memory there than programs do. Folding only the map stages gave nothing, which suggests the saving comes from the scan's inputs and outputs leaving the store, not from the tiny stages alone (inference). Whether to merge has to be a per-plan decision.
+
+## 7. After review
+
+Recorded 2026-10-31. The review of this branch changed these decisions, beyond the program identity rules in section 6.
+
+- **Closures stay on three paths:** `kernel_wire = "closure"`, any device but the CPU, and the kernels of the composite and reduce routes (`.execute_composite_direct()`, `.execute_gd_reduce()`). Moving those two routes to programs is what would retire the machinery listed at the end of section 2.
+- **One kernel cache.** Every kernel goes through `.daemon_kernel()` at one cap, `.kernel_cache_max`, on the daemons and on the host. The per-route caches are gone, so the cap in section 6 holds on every route, and closure kernels share it.
+- **A figure nobody tunes is a constant beside its use.** The option table keeps the `user` and `tuning` tiers, and any other `garry.*` name aborts at run start and at `garry_daemons()`. `ram_budget_mb` bounds one kernel call, for chunks and for fused tiles. `exec_ram_fraction` bounds committed memory in the scheduler and in the fetch-ordered pipeline.
+- **A value nothing produced is an error.** A failed read aborts on every route, and NaN reaching an integer upload raises `garry_nodata_error`. There is no hole option and no substituted 0. This is the same rule as section 6's kernel failures: nothing is retried down another path.
