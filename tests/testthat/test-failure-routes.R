@@ -1,8 +1,7 @@
 # A failed run says so the same way on every route: the classes a handler
 # can rely on, the cause in GDAL's or the kernel's own words, no signed
-# token anywhere the session can see it, and no output from a run that failed
-# before it wrote. A run failing mid-write leaves its partial file (see
-# execute_plan_mirai()) closed, for the next write to replace.
+# token anywhere the session can see it, and every target as it was, whether
+# it failed before it wrote or part way through (.collect_write()).
 
 .fr_grid <- grid_spec("EPSG:3857", extent = c(0, 0, 60, 40), dims = c(x = 6L, y = 4L),
                       dtype = "f32")
@@ -92,6 +91,34 @@
   }, name = name, at = at, .compute = prof)
 }
 
+# What materialise() writes. A list and a dataset's slices write `first`
+# before `last`.
+.fr_mat_forms <- function(first, last) {
+  slices <- stats::setNames(list(first, last), c("2024-01-05", "2024-01-20"))
+  list(raster = last, list = list(a = first, b = last), slices = as_dataset(list(B = slices)))
+}
+
+# Chunk `at` of the write in `code` fails on the host, as on a full disk.
+# Returns the names of the files the run had built under `dir` by then.
+.fr_chunk_fails <- function(at, dir, code) {
+  real <- garry:::.exec_write_chunk
+  landed <- 0L
+  started <- character(0)
+  testthat::local_mocked_bindings(
+    .exec_write_chunk = function(...) {
+      landed <<- landed + 1L
+      if (landed == at) {
+        started <<- basename(list.files(dir, recursive = TRUE, all.files = TRUE))
+        stop("disk full")
+      }
+      real(...)
+    },
+    .package = "garry"
+  )
+  expect_error(code, "disk full")
+  started
+}
+
 test_that("a source that cannot open says why when it is planned", {
   withr::local_options(garry.read_retry = 0L)
   for (src in .fr_sources) {
@@ -129,6 +156,151 @@ test_that("a kernel's own stop reaches the caller in process", {
   out <- tempfile(fileext = ".tif")
   .fr_fails(collect(.fr_bomb(), distributed = FALSE), "error", "kernel bomb")
   .fr_fails(write_tif(.fr_bomb(), out, distributed = FALSE), "error", "kernel bomb", out)
+})
+
+test_that("a materialise failing mid-write in process leaves no target", {
+  for (type in c("Float32", "Int16")) {
+    one <- lazy_source(fixture_tile(1, type, nx = 6L))
+    forms <- .fr_mat_forms(one + 1L, one * 2L)
+    for (form in names(forms)) {
+      x <- forms[[form]]
+      dir <- withr::local_tempdir()
+      info <- paste(type, form)
+      # each file of the earlier sinks and of the sink that fails has started
+      sinks <- if (form == "raster") 1L else 2L
+      started <- .fr_chunk_fails(sinks, dir, materialise(x, dir, name = "m", distributed = FALSE))
+      expect_length(started, sinks * if (type == "Float32") 2L else 1L)
+      expect_identical(list.files(dir), character(0), info = info)
+      # nothing at the target refuses the same call
+      materialise(x, dir, name = "m", distributed = FALSE)
+      expect_gt(length(list.files(dir)), 0L)
+    }
+  }
+})
+
+test_that("list and grouped writes leave no sink that finished before a failure", {
+  one <- lazy_source(fixture_tile(1, nx = 6L))
+  dir <- withr::local_tempdir()
+  started <- .fr_chunk_fails(2L, dir, write_tif(list(a = one + 1, b = one * 2), dir, distributed = FALSE))
+  expect_setequal(started, c("a.tif", "b.tif"))
+  expect_identical(list.files(dir), character(0))
+  groups <- group_by_time(.fr_mat_forms(one + 1, one * 2)$slices, "day")
+  started <- .fr_chunk_fails(2L, dir, write_tif(groups, file.path(dir, "c-{group}.tif"), distributed = FALSE))
+  expect_setequal(started, c("c-2024-01-05.tif", "c-2024-01-20.tif"))
+  expect_identical(list.files(dir), character(0))
+})
+
+test_that("a failed write leaves a file at a target", {
+  one <- lazy_source(fixture_tile(1, nx = 6L))
+  dir <- withr::local_tempdir()
+  writeLines("keep", file.path(dir, "b.tif"))
+  .fr_chunk_fails(1L, dir, write_tif(list(a = one + 1, b = one * 2), dir, distributed = FALSE))
+  expect_identical(list.files(dir), "b.tif")
+  expect_identical(readLines(file.path(dir, "b.tif")), "keep")
+  # refused before its first byte, a write reaches none of them
+  writeLines("keep", file.path(dir, "a.tif"))
+  bytes <- function() lazy_source(fixture_tile(1, "Byte", nx = 6L))
+  expect_error(write_tif(list(a = bytes(), b = bytes()), dir, nodata = -1, distributed = FALSE),
+               class = "garry_write_error")
+  expect_identical(readLines(file.path(dir, "a.tif")), "keep")
+  expect_identical(readLines(file.path(dir, "b.tif")), "keep")
+})
+
+# What a directory holds, by content.
+.fr_held <- function(dir) tools::md5sum(sort(list.files(dir, full.names = TRUE)))
+
+test_that("a materialise refused before its first byte keeps the checkpoint", {
+  for (type in c("Float32", "Int16")) {
+    one <- lazy_source(fixture_tile(1, type, nx = 6L))
+    forms <- .fr_mat_forms(one + 1L, one * 2L)
+    for (form in names(forms)) {
+      dir <- withr::local_tempdir()
+      materialise(forms[[form]], dir, name = "m", distributed = FALSE)
+      held <- .fr_held(dir)
+      expect_gt(length(held), 0L)
+      expect_error(materialise(forms[[form]], dir, name = "m", overwrite = TRUE, distributed = TRUE),
+                   "no garry daemon pools")
+      expect_identical(.fr_held(dir), held, info = paste(type, form))
+    }
+  }
+  # a sentinel its band cannot hold
+  one <- lazy_source(fixture_tile(1, "Int16", nx = 6L))
+  dir <- withr::local_tempdir()
+  materialise(one + 1L, dir, name = "m", distributed = FALSE)
+  held <- .fr_held(dir)
+  expect_error(materialise(one + 1L, dir, name = "m", nodata = 1e9, overwrite = TRUE, distributed = FALSE),
+               class = "garry_write_error")
+  expect_identical(.fr_held(dir), held)
+})
+
+test_that("a materialise whose read fails on the host keeps the checkpoint", {
+  withr::local_options(garry.read_retry = 0L)
+  for (dtype in c("f32", "i16")) {
+    type <- c(f32 = "Float32", i16 = "Int16")[[dtype]]
+    good <- lazy_source(fixture_tile(1, type, nx = 6L))
+    bad <- lazy_source(.fr_gone(), grid = garry:::.grid_retype(.fr_grid, dtype),
+                       block_dim = c(6L, 4L))
+    forms <- .fr_mat_forms(good + 1L, bad + 1L)
+    fine <- .fr_mat_forms(good + 1L, good * 2L)
+    for (form in names(forms)) {
+      dir <- withr::local_tempdir()
+      materialise(fine[[form]], dir, name = "m", distributed = FALSE)
+      held <- .fr_held(dir)
+      .fr_fails(materialise(forms[[form]], dir, name = "m", overwrite = TRUE, distributed = FALSE),
+                c("garry_read_error", "garry_error"), .fr_sources$missing$cause)
+      expect_identical(.fr_held(dir), held, info = paste(dtype, form))
+    }
+  }
+})
+
+test_that("an overwrite that fails between a cube's two files keeps the old pair", {
+  one <- lazy_source(fixture_tile(1, nx = 6L)) + 1
+  dir <- withr::local_tempdir()
+  materialise(one, dir, name = "m", distributed = FALSE)
+  held <- .fr_held(dir)
+  local_mocked_bindings(.raw_bsq_vrt_xml = function(...) stop("disk full"))
+  expect_error(materialise(one, dir, name = "m", overwrite = TRUE, distributed = FALSE), "disk full")
+  expect_identical(.fr_held(dir), held)
+})
+
+test_that("a failed write leaves a file the run did not create", {
+  # the kernel stands in for another process, writing while the run has yet
+  # to reach its target
+  one <- lazy_source(fixture_tile(1, nx = 6L))
+  bomb <- function(out) {
+    lazy_map(one, dtype = "f32", fn = function(v) {
+      writeLines("other", out)
+      stop("kernel bomb")
+    })
+  }
+  for (there in c(TRUE, FALSE)) {
+    dir <- withr::local_tempdir()
+    out <- file.path(dir, "o.tif")
+    if (there) writeLines("first", out)
+    expect_error(write_tif(bomb(out), out, distributed = FALSE), "kernel bomb")
+    expect_identical(readLines(out), "other", info = there)
+    out <- file.path(dir, "m.vrt")
+    if (there) writeLines("first", out)
+    expect_error(materialise(bomb(out), dir, name = "m", overwrite = TRUE, distributed = FALSE),
+                 "kernel bomb")
+    expect_identical(readLines(out), "other", info = there)
+  }
+})
+
+test_that("a COG finalise failing part way replaces no target", {
+  one <- lazy_source(fixture_tile(1, nx = 6L))
+  real <- gdal_translate_file
+  n <- 0L
+  local_mocked_bindings(gdal_translate_file = function(...) {
+    n <<- n + 1L
+    if (n == 2L) stop("disk full")
+    real(...)
+  })
+  dir <- withr::local_tempdir()
+  expect_error(write_tif(list(a = one + 1, b = one * 2), dir, cog = TRUE, distributed = FALSE),
+               "disk full")
+  expect_identical(n, 2L)
+  expect_identical(list.files(dir), character(0))
 })
 
 local({
@@ -243,6 +415,56 @@ local({
     bomb("fuse")
   })
 
+  # A pool opens its outputs before the first task runs, so a read failing at
+  # once has still started every file in the temporary directory.
+  test_that("a materialise failing on the pools leaves no target", {
+    withr::local_options(garry.read_retry = 0L, garry.placement = "rules")
+    for (dtype in c("f32", "i16")) {
+      type <- c(f32 = "Float32", i16 = "Int16")[[dtype]]
+      good <- lazy_source(fixture_tile(1, type, nx = 6L))
+      bad <- lazy_source(.fr_gone(), grid = garry:::.grid_retype(.fr_grid, dtype),
+                         block_dim = c(6L, 4L))
+      forms <- .fr_mat_forms(good + 1L, bad + 1L)
+      fine <- .fr_mat_forms(good + 1L, good * 2L)
+      for (form in names(forms)) {
+        dir <- withr::local_tempdir()
+        info <- paste(dtype, form)
+        .fr_fails(materialise(forms[[form]], dir, name = "m", distributed = TRUE),
+                  task_read, .fr_sources$missing$cause)
+        expect_identical(garry_last_route(), "scheduler", info = info)
+        expect_identical(list.files(dir), character(0), info = info)
+        # nothing at the target refuses the next call
+        materialise(fine[[form]], dir, name = "m", distributed = TRUE)
+        expect_gt(length(list.files(dir)), 0L)
+      }
+    }
+    groups <- group_by_time(forms$slices, "day")
+    dir <- withr::local_tempdir()
+    .fr_fails(write_tif(groups, file.path(dir, "c-{group}.tif"), distributed = TRUE),
+              task_read, .fr_sources$missing$cause)
+    expect_identical(list.files(dir), character(0))
+  })
+
+  test_that("a materialise failing on the read pool leaves no target", {
+    withr::local_options(garry.read_retry = 0L)
+    dir <- withr::local_tempdir()
+    .fr_fails(materialise(.fr_src(.fr_gone()), dir, name = "m", distributed = TRUE),
+              task_read, .fr_sources$missing$cause)
+    expect_identical(garry_last_route(), "read_only")
+    expect_identical(list.files(dir), character(0))
+  })
+
+  test_that("a materialise failing under a fused kernel leaves no target", {
+    skip_on_os("mac")
+    withr::local_options(garry.read_retry = 0L, garry.placement = "cost")
+    x <- .fr_src(.fr_gone())
+    .fr_placed(x + 1, "fuse")
+    dir <- withr::local_tempdir()
+    .fr_fails(materialise(x + 1, dir, name = "m", distributed = TRUE),
+              task_read, .fr_sources$missing$cause)
+    expect_identical(list.files(dir), character(0))
+  })
+
   test_that("the pools go on after every failure above", {
     x <- lazy_source(fixture_tile(1, nx = 6L)) + 1
     expect_plan(x, matrix(2, 4L, 6L), "f32", legs = list(.comp), file = FALSE)
@@ -262,7 +484,7 @@ local({
     .fr_call_fails(".daemon_run_compute_shm", garry:::.comp_profiles(), 2L)
     out <- withr::local_tempfile(fileext = ".tif")
     err <- .fr_fails(write_tif(x, out, distributed = TRUE), .fr_task_kernel,
-                     "kernel bomb on a daemon")
+                     "kernel bomb on a daemon", out)
     expect_true(nzchar(err$task))
     write_tif(x, out, distributed = TRUE)
     .expect_cells(.read_cube(out), want)
@@ -276,5 +498,24 @@ local({
     err <- .fr_fails(collect(x, distributed = TRUE), .fr_task_kernel, "kernel bomb on a daemon")
     expect_true(nzchar(err$task))
     .expect_cells(unclass(collect(x, distributed = TRUE)), want)
+  })
+})
+
+local({
+  local_pools(1, 1)
+
+  test_that("a task failing mid-materialise leaves nothing of the first chunks", {
+    withr::local_options(garry.placement = "rules", garry.chunk_target_px = 4)
+    one <- lazy_source(fixture_tile(1, nx = 6L))
+    x <- list(a = one + 1, b = one * 2)
+    expect_gt(.plan_chunks(x), 1L)
+    .fr_call_fails(".daemon_run_compute_shm", garry:::.comp_profiles(), 2L)
+    dir <- withr::local_tempdir()
+    .fr_fails(materialise(x, dir, name = "m", distributed = TRUE), .fr_task_kernel,
+              "kernel bomb on a daemon")
+    expect_identical(list.files(dir), character(0))
+    back <- materialise(x, dir, name = "m", distributed = TRUE)
+    .expect_cells(unclass(collect(back$a, distributed = FALSE)), matrix(2, 4L, 6L))
+    .expect_cells(unclass(collect(back$b, distributed = FALSE)), matrix(2, 4L, 6L))
   })
 })

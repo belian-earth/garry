@@ -388,6 +388,29 @@ NULL
   fn
 }
 
+# The members that put a parent's ring back to nodata before they read it: the
+# windows (focal and patch members) over another member. A stage input needs
+# nothing, as the read or a stage boundary left its cells past the raster at
+# nodata. A member has computed those cells, and a NaN-ignoring window, a
+# NaN-filling map, an integer cast or a count makes real-looking values of
+# them, which the next window would read as data. One compiled kernel serves
+# every chunk of a stage, so where the raster ends reaches it as a run-time
+# input (.ring_cells), after its stage inputs, and only a stage with such a
+# window takes it.
+.ring_windows <- function(graph, members, input_nodes) {
+  Filter(
+    function(id) {
+      node <- graph_get(graph, id)
+      required_halo(node) > 0L && !node@parents[[1L]] %in% input_nodes
+    },
+    members
+  )
+}
+
+.takes_ring <- function(graph, s) {
+  length(.ring_windows(graph, s@members, s@input_nodes)) > 0L
+}
+
 # Composed closure for a compute stage: runs members in ascending (topo)
 # order, returns the named list of exports. Each value carries a
 # remaining-pad count: inputs start at `halo + out_pad` (D22), focal
@@ -395,6 +418,14 @@ NULL
 # different pads trim the larger to the common minimum (the halo
 # contract in plan.R generalised to DAGs). `.stage_export_pads` is the
 # static mirror of this walk; keep them in lockstep.
+#
+# A window over a member reads its parent with the cells past the raster
+# back at nodata (.ring_windows), so a chain gives the same answer inside
+# a stage as across a boundary. That is a read of the parent, not a change
+# to it: a map still sees what it saw, and an export is masked at the
+# boundary. The stage then takes `.ring_cells()` as one input past
+# `input_nodes`, counted at the padded inputs; a member at a lower pad sits
+# `in_pad - pad` cells in from them.
 #
 # The closure captures per-member SPECS extracted from the graph, never
 # the graph itself: a closure kernel crosses to its daemons, and a graph
@@ -408,6 +439,7 @@ NULL
   halo,
   out_pad = 0L
 ) {
+  windows <- .ring_windows(graph, members, input_nodes)
   specs <- lapply(members, function(id) {
     node <- graph_get(graph, id)
     if (S7::S7_inherits(node, MapNode) || S7::S7_inherits(node, FocalNode)) {
@@ -422,13 +454,14 @@ NULL
       node = node,
       halo = required_halo(node),
       dtype = node@grid@dtype,
-      pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims)
+      pdims = names(graph_get(graph, node@parents[[1L]])@grid@dims),
+      ring_dtype = if (id %in% windows) graph_get(graph, node@parents[[1L]])@grid@dtype
     )
   })
   in_pad <- as.integer(halo + out_pad)
   force(input_nodes)
   force(exports)
-  rm(graph, members, halo, out_pad)
+  rm(graph, members, halo, out_pad, windows)
   function(inputs) {
     vals <- new.env(parent = emptyenv())
     pads <- new.env(parent = emptyenv())
@@ -447,6 +480,10 @@ NULL
       )
       if (sp$halo > 0L) {
         out_pad <- pp[[1L]] - sp$halo
+        if (!is.null(sp$ring_dtype)) {
+          ring <- inputs[[length(input_nodes) + 1L]]
+          pv[[1L]] <- .g_mask_ring(pv[[1L]], ring, in_pad - pp[[1L]], sp$ring_dtype)
+        }
       } else {
         out_pad <- min(pp)
         pv <- Map(function(v, d) .trim_to_pad(v, d - out_pad), pv, as.list(pp))

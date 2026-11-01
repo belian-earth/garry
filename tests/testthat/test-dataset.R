@@ -483,7 +483,9 @@ test_that("the file form refuses what it would ignore", {
   expect_error(lazy_dataset(f, granularity = "month"), "granularity", fixed = TRUE)
   expect_error(lazy_dataset(f, bands = c(1, 1)), "each once", fixed = TRUE)
   expect_error(lazy_dataset(f, bands = 1.7), "whole position", fixed = TRUE)
-  expect_error(lazy_source(f, band = 1.7), "whole band numbers", fixed = TRUE)
+  expect_error(lazy_source(f, band = 1.7), "one whole band number", fixed = TRUE)
+  # a read takes one band, so a vector would fail only there
+  expect_error(lazy_source(f, band = 1:2), "one whole band number", fixed = TRUE)
   nms <- names(lazy_dataset(f))
   expect_error(lazy_dataset(f, mask_asset = nms[1:2]), "one selected band", fixed = TRUE)
 })

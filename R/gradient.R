@@ -18,7 +18,9 @@ NULL
 # mask through the pipeline (window fully valid for focals), and
 # reduces sum(out * mask) / sum(mask). Forward values agree with the
 # nan_rm forward semantics: an output cell is NaN exactly when its
-# window is not fully valid.
+# window is not fully valid. A cell past the raster is invalid at the
+# inputs: an integer read holds 0 there, which reads as data, so the
+# tape takes the chunk's .ring_cells() as a stage's kernel does.
 #
 # Hard boundaries (documented, structurally rejected):
 # - Warp on the tape: GDAL resampling is outside the tape (D15).
@@ -28,7 +30,8 @@ NULL
 
 # Grad-mode chunk loss: function(w, inputs) -> list(s, c).
 # `w` is the flattened kernel (length (2r+1)^2, row-major over (dy, dx));
-# `inputs` are RAW chunk arrays (NaN nodata), padded to the stage halo.
+# `inputs` are RAW chunk arrays (NaN nodata), padded to the stage halo,
+# then the chunk's .ring_cells().
 .grad_chunk_fn <- function(graph, stage, focal_id) {
   members <- stage@members
   input_nodes <- stage@input_nodes
@@ -40,11 +43,13 @@ NULL
     vals <- new.env(parent = emptyenv())
     masks <- new.env(parent = emptyenv())
     pads <- new.env(parent = emptyenv())
+    ring <- inputs[[length(input_nodes) + 1L]]
     for (i in seq_along(input_nodes)) {
       x <- inputs[[i]]
       k <- .key(input_nodes[[i]])
-      assign(k, g_ifelse(g_is_nodata(x), 0, x), envir = vals)
-      assign(k, g_cast(!g_is_nodata(x), "f32"), envir = masks)
+      nd <- g_is_nodata(x)
+      assign(k, g_ifelse(nd, 0, x), envir = vals)
+      assign(k, g_cast(!nd & .g_on_raster(x, ring, 0L), "f32"), envir = masks)
       assign(k, halo, envir = pads)
     }
 
@@ -273,6 +278,7 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
     inputs <- lapply(src_meta, function(meta) {
       g_upload(.exec_read_padded(.source_read_args(meta$node), meta$chunks, it[j, ]), meta$dtype)
     })
+    inputs <- c(inputs, .ring_input(.ring_cells(it[j, ], compute@grid@dims, compute@halo)))
     r <- vg(w_up, inputs)
     S <- S + g_download(r$value)
     G <- G + g_download(r$grad$w)

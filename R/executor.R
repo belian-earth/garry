@@ -799,32 +799,37 @@ NULL
   if (is.na(i)) 0L else stage@export_pads[[i]]
 }
 
-# NaN out the beyond-raster margin of a padded chunk value (D22 + D8):
-# the ring a padded stage computes past the raster edge starts as NaN
-# at the read, but a member fn need not map NaN to NaN (integer casts
-# do not), so every stage boundary re-presents beyond-edge cells as
-# nodata for `dtype` (.sv_fill). Interior chunks return untouched; raw
-# payloads materialise (edge chunks only, and only under a nonzero pad).
-.exec_mask_edge <- function(v, pad, core, gdims, dtype) {
-  pad <- as.integer(pad)
-  if (pad == 0L) {
-    return(v)
-  }
-  top <- max(0L, pad - core$y_off)
-  left <- max(0L, pad - core$x_off)
-  bot <- max(0L, core$y_off + core$y_size + pad - gdims[["y"]])
-  right <- max(0L, core$x_off + core$x_size + pad - gdims[["x"]])
-  if (top + left + bot + right == 0L) {
-    return(v)
-  }
-  was_raw <- .sv_is(v)
-  gdt0 <- if (was_raw) attr(v, "gdt")
-  if (was_raw) {
-    v <- .sv_materialise(v)
-  }
+# The cells of chunk `core`, padded by `pad`, that lie past the raster on
+# each side: c(top, left, bottom, right). A side can hold fewer than `pad`,
+# as a chunk smaller than the pad, one in from the edge, reaches past it by
+# less. A chunk grown by `grow` (.sv_grow) holds its new cells past it too.
+.ring_cells <- function(core, gdims, pad, grow = NULL) {
+  grow <- grow %||% c(0L, 0L)
+  as.integer(c(
+    max(0L, pad - core$y_off),
+    max(0L, pad - core$x_off),
+    max(0L, core$y_off + core$y_size + pad - gdims[["y"]]) + grow[[1L]],
+    max(0L, core$x_off + core$x_size + pad - gdims[["x"]]) + grow[[2L]]
+  ))
+}
+
+# How a kernel takes .ring_cells() (see .ring_windows()): the input it adds
+# to its stage's, or nothing for a kernel that takes none.
+.ring_dtype <- "i32"
+.ring_shape <- 4L
+.ring_input <- function(ring, dev = NULL) {
+  if (!is.null(ring)) list(g_upload(ring, .ring_dtype, device = dev))
+}
+
+# Nodata for `dtype` (.sv_fill) in the outer `ring` cells of a value's planes.
+.mask_cells <- function(v, ring, dtype) {
   d <- dim(v)
   nr <- d[[length(d) - 1L]]
   nc <- d[[length(d)]]
+  top <- ring[[1L]]
+  left <- ring[[2L]]
+  bot <- ring[[3L]]
+  right <- ring[[4L]]
   # i64 and u32 arrive as doubles; an R integer stays one
   fill <- if (is.double(v)) .sv_fill(dtype) else 0L
   if (length(d) == 2L) {
@@ -850,6 +855,32 @@ NULL
     }
     if (right > 0L) v[,, (nc - right + 1L):nc] <- fill
   }
+  v
+}
+
+# NaN out the beyond-raster margin of a padded chunk value (D22 + D8):
+# the ring a padded stage computes past the raster edge starts as NaN
+# at the read, but a member fn need not map NaN to NaN (integer casts
+# do not), so every stage boundary re-presents beyond-edge cells as
+# nodata for `dtype` (.sv_fill), and so does a window reading a member
+# inside a stage (.g_mask_ring). Interior chunks return untouched; raw
+# payloads materialise (edge chunks only, and only under a nonzero pad).
+.exec_mask_edge <- function(v, pad, core, gdims, dtype) {
+  pad <- as.integer(pad)
+  if (pad == 0L) {
+    return(v)
+  }
+  ring <- .ring_cells(core, gdims, pad)
+  if (sum(ring) == 0L) {
+    return(v)
+  }
+  was_raw <- .sv_is(v)
+  gdt0 <- if (was_raw) attr(v, "gdt")
+  if (was_raw) {
+    v <- .sv_materialise(v)
+  }
+  d <- dim(v)
+  v <- .mask_cells(v, ring, dtype)
   # Re-wrap raw payloads (row-major, original element size): leaving the
   # masked edge chunk as R doubles stored 8 B/px while the budget booked
   # the raw element size under-accounts boundary chunks 2x (defect
@@ -1372,6 +1403,7 @@ execute_plan <- function(
       edtypes <- .export_dtypes(graph, s)
       gdims <- s@grid@dims
       grows <- .stage_grows_edges(graph, s)
+      takes_ring <- .takes_ring(graph, s)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
         # an edge chunk runs the modal chunk's kernel (.sv_grow)
         grow <- if (grows) .chunk_grow(s@chunks, it[j, ])
@@ -1386,6 +1418,10 @@ execute_plan <- function(
           }
           g_upload(v, meta$dtype, device = dev)
         })
+        if (takes_ring) {
+          ring <- .ring_cells(it[j, ], gdims, s@halo + s@out_pad, grow)
+          inputs <- c(inputs, .ring_input(ring, dev))
+        }
         res <- g_download(jf(inputs))
         if (!is.null(grow)) {
           res <- .sv_crop(res, grow)

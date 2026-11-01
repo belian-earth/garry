@@ -168,13 +168,92 @@ using D22 fall back to the standard executors); gradient tape.
   re-presents beyond-raster cells as NaN on every padded stage export
   (and after fused compute-on-read kernels). Gated by the
   materialise-first parity test's NaN-pattern assertion.
-- `nan_rm` reductions INSIDE a halo stage define the beyond-edge ring
+- `nan_rm` reductions INSIDE a halo stage compute the beyond-edge ring
   as the empty-set reduction (a nan_rm sum gives 0, a nan_rm mean
-  gives 0/0 = NaN). This is pre-existing classic-path semantics
-  (focal-over-reduce fed by sources behaves identically) and is NOT
-  changed by D22; only stage BOUNDARIES guarantee NaN. Exact
-  materialise-first parity for sum-like reductions needs
-  `nan_rm = FALSE` or an explicit validity gate in the body.
+  gives 0/0 = NaN). See the section below: no window reads that value.
 - Single-chunk in-memory collects trim per-export pads through the
   same `.exec_trim` as assembly (rank-3 included); raw store values
   materialise first.
+
+## The ring inside a stage
+
+A boundary is correct by construction, and a stage was not: a member
+computes the ring too, so a NaN-ignoring window, a NaN-filling map, an
+integer cast or a `count` left real-looking values past the raster, and
+the next window in the stage read them as data. Two focals in one stage
+gave 0 NaN cells where the same two across a materialised file gave 220.
+
+Inside a stage now equals across a boundary. A member with
+`required_halo > 0` (a focal or a patch) that reads another member, not a
+stage input, reads its parent with the cells past the raster back at
+`.sv_fill()` of the parent's declared dtype. That is one select per such
+window and nothing for any other member. It changes what the window
+reads, not the parent: a map or an export still sees the computed value,
+and only a window moves a value onto the raster. A stage input needs
+nothing, as the read or the boundary already set those cells.
+
+**Position is a run-time input.** One compiled kernel serves every chunk
+of a stage, so baking position in would multiply compiles by nine. A stage
+with such a window takes `.ring_cells()`, four i32 counts (top, left,
+bottom, right) at the padded input's level, as one input after its stage
+inputs. A member at a lower pad sits `in_pad - pad` cells in from them. The
+counts are per side, as a chunk smaller than the pad and one in from the
+edge reaches past it by less than the pad. Cells grown onto an edge chunk
+(`.sv_grow`) count as past the raster.
+
+`.ring_windows()` is the one place that decides this. It follows from
+the members and input nodes, which the kernel signature already holds, so a
+stage without the pattern keeps its key, program text and inputs.
+
+**Coverage.** Compute tasks, the host executor and fused reads pass the
+counts; a program lists them as an `i32:4` input of every shape, and a
+closure warm-up passes zeros. Row tiles and scan strips need a kernel with
+no halo, which a stage with such a window never is. `.gd_host_kernel` runs a
+whole grid, so its counts are the whole pad on every side, and
+`.gd_replay_mask` masks the same way between chain members. The gradient
+tape does not compose stages, so it takes the counts itself and marks those
+cells invalid at its inputs. Its validity mask then carries them through
+every map, and no ring value reaches a valid cell. Testing inputs for NaN
+is not enough: a decode keeps its integer read, which holds 0 past the
+raster.
+
+Placement and size estimates are unchanged: the counts are 16 bytes. A ring
+window adds one select and its position mask, 42 lowered ops at any radius
+(20 to 62 at radius 1, 244 to 286 at radius 5). End to end on a 4096 x 4096
+raster in 16 chunks that is about 1.3 ms per 1024 x 1024 chunk: +5 % at
+radius 1, under 2 % at radius 5. Only the smallest windows show it, and it
+adds 2 to 6 % on a 16-band 512 x 512 cube.
+
+**A window over a decode reads NaN.** A map that names a float dtype over
+integers keeps its integer read and still sees 0 past the raster, but a
+window over it finds NaN, as it does over the same map in a file. It read
+the map's 0 before.
+
+**Morphology reads NaN as clear.** `apply_mask(open = , dilate = )`
+promises scipy's constant-0 border, which odc-algo's `mask_cleanup` shares
+(phase 11.2). It held because the mask predicate maps the NaN ring to 0. With
+the ring back at NaN a product over the window would spread NaN inward from
+the edge, by the chain's whole halo, and flagged cells would read clear:
+235 of 278 cells on a small fixture at `open = 2, dilate = 3`. So `.erode` and
+`.dilate` are boolean: a cell is set if it is above 0.5, the test
+`apply_mask()` makes at the end, and NaN compares false. The border holds on
+every route and across a boundary too.
+
+Clearing NaN with a select per disk offset gives the same arrays and was
+rejected on cost: 58 selects against the 3 ring selects at `open = 2,
+dilate = 3`, 637 lowered ops against 453 (291 before the ring), and warm
+kernel CPU of x1.17 to x1.53 against x0.89 to x1.11, the old product being
+x1. Measured against that product, ring included, the first trace costs +6 %
+on a 4096 x 4096 mask and +13 % on a 4-slice composite. Warm wall time holds
+on the mask, at 0.78 s, and falls on the composite, from 0.26 s to 0.23 s.
+
+Two answers move with this, both deliberately. A read of integer QA pads with
+0, so a `where` holding 0 flagged the ring on the scheduler alone, 67 extra
+cells on the same fixture at `open = 1, dilate = 1`. And a `where` function
+that returns NaN on a raster cell spread it through the old product,
+unmasking flagged cells around it; that NaN now reads clear at its own cell
+and goes no further. On a 24 x 30 fixture at `open = 1, dilate = 1` this moves
+25 cells, up to 11 in from the edge, and gives the 153 masked cells a numeric
+`where` gives. It is the one move outside the ring. A `where` must return 0
+or 1: a fraction now thresholds at 0.5 in the morphology, where the product
+carried it.

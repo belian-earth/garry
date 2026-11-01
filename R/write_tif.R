@@ -21,12 +21,29 @@ NULL
 #' limits, quantized values saturate one step inside it, so they never
 #' read back as nodata; choose `scale` and `offset` so the data fits.
 #'
-#' `cog = TRUE` streams to a temporary tiled GeoTIFF beside `path`, then
-#' finalises with one `gdal_translate` pass to the COG driver (which is
-#' copy-only by design: overviews precede full-res data). The extra
-#' sequential pass is the trade every COG producer makes; the temporary
-#' file is removed even on failure, so `path` never holds a half-written
-#' COG.
+#' `cog = TRUE` streams to a tiled GeoTIFF, then finalises with one
+#' `gdal_translate` pass to the COG driver (which is copy-only by design:
+#' overviews precede full-res data). The extra sequential pass is the trade
+#' every COG producer makes.
+#'
+#' Every write builds in a hidden temporary directory, `.garry-write-XXXX`,
+#' in the target's directory, and moves into place only when the whole run
+#' has succeeded, every sink and group of it. So a plan may read the file it
+#' replaces and gets the old values, and a failed run leaves every target as
+#' it was: a previous file byte for byte, an absent one absent. Until the
+#' move the filesystem must hold both the old file and the new one. Missing
+#' directories on the way to a target are created at the move. The target's
+#' directory must be writable, even for a file that is, and a symlink at the
+#' target is replaced, not followed.
+#'
+#' A failure during the moves themselves is an error naming what is already
+#' in place and what is still as it was: earlier targets are replaced, later
+#' ones are not. A raw cube whose `.bin` moved and whose `.vrt` did not is
+#' named as mixed, and needs writing again. A session killed during a run
+#' leaves its temporary directory behind, holding partial files, and the
+#' targets as they were; delete it by hand. A `/vsi` target has no directory
+#' to rename in, so it builds in the session's [tempdir()] and is copied; a URL
+#' is refused, as GDAL writes to a store through its `/vsi` path.
 #'
 #' @param x A `LazyRaster`, a `LazyDataset` (bands assembled along the
 #'   band axis), a named list of lazy rasters (multi-export: one plan,
@@ -148,84 +165,25 @@ write_tif <- function(
     wspec <- NULL
   }
 
-  # cog: stream to sibling temp target(s), then translate into place.
-  work <- path
-  tmp_dirs <- character(0)
-  if (cog) {
-    if (length(path) > 1L) {
-      work <- stats::setNames(
-        vapply(
-          path,
-          function(p) {
-            tempfile("garry-cog-", tmpdir = dirname(p), fileext = ".tif")
-          },
-          character(1)
-        ),
-        names(path)
-      )
-    } else {
-      # Stream into a temp dir under the target's fixed prefix, mirroring
-      # the rest of the path (placeholders included), so each streamed
-      # file's final path is its path relative to the temp dir, under the
-      # prefix. The temp dir is removed on exit, whatever was streamed.
-      # normalizePath: a relative target makes the prefix ".", and a
-      # "./"-prefixed temp key would be invisible to any default ls()
-      # over a path-keyed cache (the writer-close bug, 2026-08-13).
-      ca <- .cog_anchor(path)
-      cog_anchor <- ca$anchor
-      dir.create(cog_anchor, recursive = TRUE, showWarnings = FALSE)
-      td <- tempfile("garry-cog-", tmpdir = normalizePath(cog_anchor))
-      dir.create(td)
-      tmp_dirs <- td
-      work <- if (nzchar(ca$rel)) file.path(td, ca$rel) else td
-    }
-    on.exit(
-      unlink(c(unname(unlist(work)), tmp_dirs), recursive = TRUE),
-      add = TRUE
-    )
-  }
-
-  # a failed streamed write must not leave a half-written file behind
-  # (the COG route already writes to temporaries), and a write refused
-  # before it starts must not take the file it would have replaced
-  done <- FALSE
-  if (!cog) {
-    targets <- .write_targets(x, path)
-    was <- file.mtime(targets)
-    on.exit(
-      if (!done) unlink(targets[which(is.na(was) | file.mtime(targets) != was)]),
-      add = TRUE
-    )
-  }
   res <- .collect_impl(
     x,
-    path = work,
+    path = path,
     nodata = nodata,
     distributed = distributed,
     band_names = band_names,
-    wspec = wspec
-  )
-  done <- TRUE
-  if (!cog) {
-    return(invisible(res))
-  }
-
-  # Enumerate the streamed files (a directory target returns the dir).
-  wf <- unname(unlist(res))
-  streamed <- unique(unlist(lapply(wf, function(p) {
-    if (dir.exists(p)) {
-      list.files(p, "\\.tif$", full.names = TRUE, recursive = TRUE)
-    } else {
-      p
+    wspec = wspec,
+    finish = if (cog) {
+      function(work, targets) {
+        .cog_finalise(work, targets, overview_resampling, creation_options)
+      }
     }
-  })))
-  finals <- if (length(path) > 1L) {
-    unname(unlist(path))[match(streamed, unname(unlist(work)))]
-  } else {
-    td <- normalizePath(tmp_dirs[[1L]])
-    rel <- substring(normalizePath(streamed), nchar(td) + 2L)
-    file.path(cog_anchor, rel)
-  }
+  )
+  invisible(res)
+}
+
+# Rewrite each file a run streamed as a COG, still in the temporary directory:
+# the move into place is the write's, as for any other.
+.cog_finalise <- function(work, targets, overview_resampling, creation_options) {
   cl <- c(
     "-of",
     "COG",
@@ -239,28 +197,22 @@ write_tif <- function(
   for (o in creation_options) {
     cl <- c(cl, "-co", o)
   }
-  for (i in seq_along(streamed)) {
-    dir.create(dirname(finals[[i]]), recursive = TRUE, showWarnings = FALSE)
-    # translate beside the target, then rename: an interrupted or failed
-    # translate never leaves a partial COG at the final path
-    part <- tempfile("garry-cog-", tmpdir = dirname(finals[[i]]), fileext = ".tif")
-    res <- tryCatch(
-      .gdal_attempt(gdal_translate_file(streamed[[i]], part, cl)),
-      interrupt = function(e) {
-        unlink(part)
-        stop(e)
-      }
-    )
+  for (i in seq_along(work)) {
+    # a short name: GDAL's own temporaries extend it, and a name may be at the
+    # filesystem's limit
+    part <- tempfile("cog", tmpdir = dirname(work[[i]]), fileext = ".tif")
+    res <- .gdal_attempt(gdal_translate_file(work[[i]], part, cl))
     why <- c(res$failed, if (file.exists(part)) .gtiff_incomplete(part) else "GDAL wrote no file")
-    if (length(why) || !file.rename(part, finals[[i]])) {
-      unlink(part)
+    if (!length(why)) {
+      why <- gdal_place(part, work[[i]])
+    }
+    if (length(why)) {
       cli::cli_abort(
-        c("COG finalise failed for {.path {finals[[i]]}}.", "x" = if (length(why)) "{why[[1L]]}"),
+        c("COG finalise failed for {.path {targets[[i]]}}.", "x" = "{why[[1L]]}"),
         class = c("garry_write_error", "garry_error")
       )
     }
   }
-  invisible(if (length(finals) == 1L) finals[[1L]] else finals)
 }
 
 # Creation options as GDAL parses them: KEY=VALUE, or KEY:VALUE. GDAL reads
@@ -288,35 +240,4 @@ write_tif <- function(
     )
   }
   invisible(options)
-}
-
-# Split a COG write target into its fixed prefix (an existing directory,
-# or the path up to the first placeholder component) and the rest. A
-# directory target has an empty rest.
-.cog_anchor <- function(path) {
-  if (dir.exists(path)) {
-    return(list(anchor = path, rel = ""))
-  }
-  parts <- strsplit(path, "/", fixed = TRUE)[[1L]]
-  k <- which(grepl("\\{(group|time)\\}", parts))[1L]
-  if (is.na(k)) {
-    k <- length(parts)
-  }
-  anchor <- paste(parts[seq_len(k - 1L)], collapse = "/")
-  if (!nzchar(anchor)) {
-    anchor <- if (startsWith(path, "/")) "/" else "."
-  }
-  list(anchor = anchor, rel = paste(parts[k:length(parts)], collapse = "/"))
-}
-
-# The files a write of `x` to `path` produces: one path, one per sink of a
-# list (named paths, or "<sink>.tif" in a directory), or one per group.
-.write_targets <- function(x, path) {
-  if (S7::S7_inherits(x, LazyDatasetGroups)) {
-    return(unlist(.group_paths(path, names(x@groups))))
-  }
-  if (is.list(x) && !S7::S7_inherits(x, LazyRaster) && !S7::S7_inherits(x, LazyDataset)) {
-    return(unname(.sink_paths(path, names(x))))
-  }
-  path
 }

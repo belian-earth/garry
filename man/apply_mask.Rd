@@ -20,7 +20,7 @@ e.g. \code{c(0, 1, 2, 3, 8, 9, 10, 11)};
 \item \code{\link[=qa_bits]{qa_bits()}} -> a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. \code{qa_bits(0:3)};
 \item a function \verb{\\(f) ...} -> a predicate returning a 0/1 (or logical)
-mask, written in the \verb{g_*} vocabulary.
+mask, written in the \verb{g_*} vocabulary. NaN reads as clear.
 }}
 
 \item{open}{Opening radius (despeckle): erosion then dilation at this radius,

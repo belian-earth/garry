@@ -620,6 +620,29 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
   do.call(`[`, c(list(xpad), idx, list(drop = FALSE)))
 }
 
+# `x` with its cells past the raster back at nodata for `dtype`, as a stage
+# boundary leaves them (.exec_mask_edge()). `ring` counts those cells on each
+# side of a stage's padded input (.ring_cells()) and `d` is how far in from
+# that input `x` sits. Inside a kernel `ring` is a run-time array, as one
+# kernel serves every chunk of a stage, so a select picks the cells.
+.g_mask_ring <- function(x, ring, d, dtype) {
+  if (!.g_traced(x)) {
+    return(.mask_cells(x, pmax(ring - d, 0L), dtype))
+  }
+  g_ifelse(.g_on_raster(x, ring, d), x, .sv_fill(dtype))
+}
+
+# TRUE on the cells of traced `x` that lie on the raster.
+.g_on_raster <- function(x, ring, d) {
+  sh <- .g_shape(x)
+  inside <- function(axis, lo, hi) {
+    i <- anvl::nv_iota(axis, sh, "i32")
+    i > g_index_scalar(ring, lo) - d & i <= sh[[axis]] - g_index_scalar(ring, hi) + d
+  }
+  n <- length(sh)
+  inside(n - 1L, 1L, 3L) & inside(n, 2L, 4L)
+}
+
 #' Cast to a garry dtype.
 #'
 #' Integer targets truncate toward zero; `pred` maps nonzero to TRUE.

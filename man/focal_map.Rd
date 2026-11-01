@@ -29,11 +29,12 @@ plain arithmetic and the \verb{g_*} vocabulary (\code{\link[=g_ifelse]{g_ifelse(
 ...). Example, a 3x3 sum: \code{function(sh) Reduce("+", sh)}.
 }
 \details{
-Cells beyond the raster edge are NaN (nodata). An
-integer raster is read as a float for the stencil (f32 up to 16 bits,
-else f64), so the edge can be NaN, and the result is that float. A map
-that names its float \code{dtype} over integers keeps its integer read: its
-kernel decodes them, and cells beyond the edge read as 0.
+Cells beyond the raster edge are NaN (nodata), whatever a kernel before
+this one made of them. An integer raster is read as a float for the
+stencil (f32 up to 16 bits, else f64), so the edge can be NaN, and the
+result is that float. A map that names its float \code{dtype} over integers
+keeps its integer read: its kernel decodes them, and sees cells beyond
+the edge as 0.
 
 Over a \code{LazyDataset}, the stencil is applied to every value band per slice;
 \code{bands} restricts which bands.

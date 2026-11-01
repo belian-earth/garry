@@ -23,6 +23,11 @@ and reads the bin directly, which is many times faster than walking
 the tiled GeoTIFF. Use it once on pipeline intermediates that are
 read many times (per-year context cubes, prediction stacks).
 }
+\details{
+As for every write (see \code{\link[=write_tif]{write_tif()}}), the cube builds beside its target
+and replaces it only when complete, so \code{src} may be the cube itself, and a
+failure leaves the target as it was.
+}
 \seealso{
 \code{\link[=gdal_create_output]{gdal_create_output()}}
 }

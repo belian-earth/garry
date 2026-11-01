@@ -54,12 +54,11 @@ test_that("cog = TRUE produces COG layout and leaves no temps", {
   expect_identical(d$getMetadataItem(0, "LAYOUT", "IMAGE_STRUCTURE"), "COG")
   d$close()
   expect_equal(matrix(collect(lazy_source(p)), 20), s$m, tolerance = 1e-7)
-  expect_length(list.files(dirname(p), pattern = "garry-cog-"), 0L)
+  expect_length(list.files(dirname(p), pattern = "garry-write-", all.files = TRUE), 0L)
   unlink(p)
 })
 
-# Pools spawned in a scratch directory: daemons resolve a relative path in the
-# working directory they start in.
+# Pools spawned in a scratch directory, where a relative target lands.
 local({
   withr::local_dir(withr::local_tempdir())
   local_pools(2, 1)
@@ -310,17 +309,17 @@ test_that("nodata must fit the dtype the plan writes", {
   expect_identical(gdal_grid_spec(p)$nodata, -1)
 })
 
-test_that("a write refused before its first byte leaves an existing file", {
+test_that("a failed write leaves an existing file", {
   x <- lazy_source(fixture_tile(1:16, type = "Byte"))
   p <- tempfile(fileext = ".tif")
   writeLines("keep", p)
   expect_error(write_tif(x, p, nodata = -1, distributed = FALSE),
                class = "garry_write_error")
   expect_identical(readLines(p), "keep")
-  # one that fails part way has already replaced it, and leaves nothing
+  # so does one that fails part way, after its output was created
   wide <- grid_spec("EPSG:3857", extent = c(0, 0, 80, 40), dims = c(8L, 4L))
   expect_error(write_tif(align_to(x, wide), p, distributed = FALSE), "sentinel")
-  expect_false(file.exists(p))
+  expect_identical(readLines(p), "keep")
 })
 
 test_that("a bad block size or a malformed creation option never reaches GDAL", {

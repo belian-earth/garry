@@ -39,7 +39,8 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   .collect_impl(x, plan_only = plan_only, distributed = distributed)
 }
 
-# The execution engine behind collect()/write_tif()/materialise().
+# The way into execution for collect()/write_tif()/materialise(). A run with
+# a `path` writes, through .collect_write().
 # `wspec` (write_tif) is the sink write spec: list(dtype, scale, offset),
 # applied at the sink boundary by the executors.
 .collect_impl <- function(
@@ -49,15 +50,240 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   nodata = NULL,
   distributed = garry_daemons_set(),
   band_names = NULL,
-  wspec = NULL
+  wspec = NULL,
+  finish = NULL
 ) {
   .garry_opt_check()
   if (!rlang::is_bool(distributed)) {
     cli::cli_abort("{.arg distributed} must be {.code TRUE} or {.code FALSE}.")
   }
-  if (!is.null(path)) {
-    .check_write_path(x, path)
+  if (is.null(path)) {
+    return(.collect_run(x, plan_only, path, nodata, distributed, band_names, wspec))
   }
+  .collect_write(x, path, nodata, distributed, band_names, wspec, finish)
+}
+
+# A run with a path writes its result through .write_through().
+.collect_write <- function(x, path, nodata, distributed, band_names, wspec, finish) {
+  .check_write_path(x, path)
+  targets <- .write_targets(x, path)
+  .write_through(targets, function(work) {
+    .collect_run(x, FALSE, work, nodata, distributed, band_names, wspec)
+    if (!is.null(finish)) {
+      finish(work, targets)
+    }
+  })
+  invisible(targets)
+}
+
+# The one rule of every write: `run(work)` builds `targets` at temporary paths
+# in hidden directories beside them, and they move into place only if it
+# returns. So a plan may read its own target and gets the old values, and a
+# failed run leaves every target as it was, whatever route it took and however
+# far it got.
+.write_through <- function(targets, run, call = rlang::caller_env()) {
+  stage <- .write_stage(targets, call)
+  on.exit(unlink(stage$dirs, recursive = TRUE, expand = FALSE), add = TRUE)
+  tryCatch(
+    {
+      for (d in unique(dirname(stage$work))) {
+        why <- tryCatch(dir.create(d, recursive = TRUE), warning = .file_reason)
+        if (!dir.exists(d)) {
+          cli::cli_abort(
+            c("cannot create a temporary directory for {.path {d}}.", "x" = "{why}"),
+            class = c("garry_write_error", "garry_error"),
+            call = call
+          )
+        }
+      }
+      run(stage$work)
+      .write_publish(stage, targets, call)
+    },
+    error = function(e) stop(.write_named(e, stage))
+  )
+}
+
+# The files a write of `x` to `path` produces, in the shape the routes take:
+# one path, one named by sink, or one named by group.
+.write_targets <- function(x, path) {
+  if (S7::S7_inherits(x, LazyDatasetGroups)) {
+    stats::setNames(.group_paths(path, names(x@groups)), names(x@groups))
+  } else if (.is_sink_list(x)) {
+    .sink_paths(path, names(x))
+  } else {
+    path
+  }
+}
+
+# Where each target builds, with nothing yet created: `work` matches `targets`,
+# and `dirs` holds the temporary directories, named by the directory each sits
+# in. That is the target's nearest existing one, so a rename stays on one
+# filesystem. Below it a file keeps its own name, which keeps a .vrt's reference
+# to its .bin, and any directories the target still lacks, so a failed run
+# creates none. Absolute, as a daemon resolves a relative path in its own
+# working directory. A /vsi target is on no directory here, so it builds in the
+# session's and is copied (gdal_place()). What can never be a target is refused
+# here, before the run.
+.write_stage <- function(targets, call = rlang::caller_env()) {
+  refuse <- function(message) {
+    cli::cli_abort(message, class = c("garry_write_error", "garry_error"), call = call)
+  }
+  url <- targets[grepl("^[A-Za-z][A-Za-z0-9+.-]+://", targets)]
+  if (length(url)) {
+    refuse(c(
+      "cannot write to the URL {.path {url[[1L]]}}.",
+      "i" = "GDAL writes to a store through its /vsi path, such as {.path /vsis3/bucket/key.tif}."
+    ))
+  }
+  taken <- targets[dir.exists(targets)]
+  if (length(taken)) {
+    refuse("cannot write a raster over the directory {.path {taken[[1L]]}}.")
+  }
+  work <- targets
+  dirs <- character()
+  on_vsi <- .gdal_is_vsi(targets)
+  for (i in seq_along(targets)) {
+    rel <- basename(targets[[i]])
+    home <- dirname(targets[[i]])
+    vsi <- on_vsi[[i]]
+    while (!vsi && !dir.exists(home)) {
+      # a file on the way is no directory to create, and neither is a `.` or
+      # `..` below a missing directory, or a root that is not there
+      if (file.exists(home) || basename(home) %in% c(".", "..") || dirname(home) == home) {
+        refuse("cannot write {.path {targets[[i]]}}: {.path {home}} is not a directory.")
+      }
+      rel <- file.path(basename(home), rel)
+      home <- dirname(home)
+    }
+    if (!vsi) {
+      home <- normalizePath(home, winslash = "/")
+    }
+    if (is.na(dirs[home])) {
+      dirs[[home]] <- tempfile(".garry-write-", tmpdir = if (vsi) tempdir() else home)
+    }
+    work[[i]] <- file.path(dirs[[home]], rel)
+  }
+  twice <- work %in% work[duplicated(work)]
+  if (any(twice)) {
+    refuse(c(
+      "{.val {names(targets)[twice]}} would write the same file, {.path {targets[twice][[1L]]}}.",
+      "i" = "Give each its own path."
+    ))
+  }
+  list(work = work, dirs = dirs)
+}
+
+# Which of `work` each built file goes with: itself, or the one it extends by
+# name (x.bin and x.tif.aux.xml go with x.tif). NA for neither.
+.write_owner <- function(files, work) {
+  keys <- c(work, tools::file_path_sans_ext(work))
+  owner <- rep(NA_integer_, length(files))
+  name <- files
+  repeat {
+    left <- is.na(owner)
+    owner[left] <- (match(name[left], keys) - 1L) %% length(work) + 1L
+    shorter <- tools::file_path_sans_ext(name)
+    if (!anyNA(owner) || identical(shorter, name)) {
+      return(owner)
+    }
+    name <- shorter
+  }
+}
+
+# Close whatever could serve a replaced target's old pixels, here and on the
+# daemons. Before the moves, so no process holds a target at its rename. A new
+# file has no reader to mislead, so a write replacing nothing sends nothing.
+.write_release <- function(targets) {
+  if (!any(gdal_exists(targets))) {
+    return(invisible(NULL))
+  }
+  .gdal_handles_release(targets)
+  .pool_broadcast(
+    quote(asNamespace("garry")$.gdal_handles_release(targets)),
+    profiles = c("garry_read", .comp_profiles()),
+    targets = unname(targets),
+    live_only = TRUE,
+    what = "closing the daemons' read handles"
+  )
+}
+
+# Move everything a run built into place, target by target. What a target
+# produced beside it (a .bin, an .aux.xml) goes first, so a .vrt never points at
+# nothing; a sidecar left by the file it replaced goes after it, as GDAL's own
+# create takes it. A failed move stops here and says what it left, and the
+# run's unmoved files go with its temporary directories. An interrupt waits for
+# the last move, so it cannot leave a partial result unreported.
+.write_publish <- function(stage, targets, call = rlang::caller_env()) {
+  work <- stage$work
+  rel <- lapply(stage$dirs, list.files, recursive = TRUE, all.files = TRUE)
+  from <- unlist(Map(file.path, stage$dirs, rel), use.names = FALSE)
+  to <- unlist(Map(file.path, names(stage$dirs), rel), use.names = FALSE)
+  lost <- targets[!work %in% from]
+  if (length(lost)) {
+    cli::cli_abort(
+      "the run finished without building {.path {lost}}.",
+      class = c("garry_write_error", "garry_error"),
+      call = call
+    )
+  }
+  owner <- .write_owner(from, work)
+  built <- from %in% work
+  turn <- order(owner, built)
+  from <- from[turn]
+  to <- to[turn]
+  owner <- owner[turn]
+  built <- built[turn]
+  stale <- outer(to, .gdal_sidecars, paste0)
+  stale[stale %in% to] <- NA
+  .write_release(targets)
+  suspendInterrupts(
+    for (i in seq_along(from)) {
+      why <- gdal_place(from[[i]], to[[i]])
+      if (!is.null(why)) {
+        moved <- tabulate(owner[seq_len(i - 1L)], length(targets))
+        whole <- moved == tabulate(owner, length(targets))
+        cli::cli_abort(
+          c(
+            "the run succeeded, but {.path {to[[i]]}} could not move into place.",
+            "x" = "{why}",
+            "i" = if (any(whole)) "Already in place: {.path {targets[whole]}}.",
+            "!" = if (any(moved > 0L & !whole)) {
+              "Old and new files mixed, so write these again: {.path {targets[moved > 0L & !whole]}}."
+            },
+            "i" = if (any(moved == 0L)) "Still as they were: {.path {targets[moved == 0L]}}."
+          ),
+          class = c("garry_write_error", "garry_error"),
+          call = call
+        )
+      }
+      if (built[[i]]) {
+        gdal_remove(stale[i, !is.na(stale[i, ])])
+      }
+    }
+  )
+  invisible(NULL)
+}
+
+# A failure names where the file was going: the temporary paths in it are gone
+# by the time anyone reads them.
+.write_named <- function(e, stage) {
+  for (f in intersect(names(e), c("message", "body"))) {
+    if (is.character(e[[f]])) {
+      for (home in names(stage$dirs)) {
+        e[[f]][] <- gsub(stage$dirs[[home]], home, e[[f]], fixed = TRUE)
+      }
+    }
+  }
+  e
+}
+
+# The files at a target path: a raw cube's .bin sits beside its .vrt.
+.target_files <- function(path) {
+  unique(c(path, sub("\\.vrt$", ".bin", path, ignore.case = TRUE)))
+}
+
+# Execute `x`: in memory, or to the temporary `path` of .collect_write().
+.collect_run <- function(x, plan_only, path, nodata, distributed, band_names, wspec) {
   if (!plan_only) {
     .http_auth_sync()
   }
@@ -294,10 +520,9 @@ as_terra <- function(x) {
 #' @export
 garry_last_route <- function() .garry_state$route
 
-# Materialise each time group of a LazyDatasetGroups. With `path`, writes one
-# file per group (a `{group}` placeholder is substituted, else the group label
-# is inserted before the extension) and returns the paths invisibly; otherwise
-# returns a named list of results (or Plans when `plan_only`).
+# Materialise each time group of a LazyDatasetGroups: a named list of results
+# (or Plans when `plan_only`), or with `path`, one file per group
+# (.write_targets()).
 .collect_groups <- function(
   x,
   plan_only,
@@ -308,15 +533,6 @@ garry_last_route <- function() .garry_state$route
   band_names = NULL
 ) {
   labels <- names(x@groups)
-  paths <- if (is.null(path)) {
-    NULL
-  } else {
-    stats::setNames(unlist(.group_paths(path, labels)), labels)
-  }
-  # a {group} placeholder may name a directory ("out/{group}/comp.tif")
-  for (d in unique(dirname(as.character(paths)))) {
-    dir.create(d, recursive = TRUE, showWarnings = FALSE)
-  }
   # Multi-export route (design/multi-export-collect.md): ONE plan whose
   # sinks are the per-group band stacks, so every group's reads enter
   # one ready queue and drain together under fetch-first priority.
@@ -330,24 +546,21 @@ garry_last_route <- function() .garry_state$route
       lapply(x@groups, function(g) band_names %||% names(g@bands)),
       labels
     )
-    res <- .collect_impl(
+    return(.collect_run(
       sinks,
-      path = paths,
+      plan_only = FALSE,
+      path = path,
       nodata = nodata,
       distributed = distributed,
       band_names = bn,
       wspec = wspec
-    )
-    if (!is.null(path)) {
-      return(invisible(paths))
-    }
-    return(res)
+    ))
   }
   res <- lapply(seq_along(x@groups), function(i) {
-    .collect_impl(
+    .collect_run(
       x@groups[[i]],
       plan_only = plan_only,
-      path = if (is.null(paths)) NULL else paths[[i]],
+      path = if (is.null(path)) NULL else path[[i]],
       nodata = nodata,
       distributed = distributed,
       band_names = band_names,
@@ -355,9 +568,6 @@ garry_last_route <- function() .garry_state$route
     )
   })
   names(res) <- labels
-  if (!is.null(path) && !plan_only) {
-    return(invisible(paths))
-  }
   res
 }
 
@@ -422,19 +632,24 @@ garry_last_route <- function() .garry_state$route
   res
 }
 
+# A named list of rasters: one sink, and one file, per element.
+.is_sink_list <- function(x) {
+  is.list(x) &&
+    !S7::S7_inherits(x, LazyRaster) &&
+    !S7::S7_inherits(x, LazyDataset) &&
+    !S7::S7_inherits(x, LazyDatasetGroups)
+}
+
 # The accepted write targets: one path for a raster, dataset or grouped
-# dataset (a {group} placeholder or a directory expands per group), and
-# for a named list of rasters either an existing directory or a path per
-# sink named like the list.
+# dataset (a {group} placeholder, or the label before the extension, expands
+# it per group), and for a named list of rasters either an existing directory
+# or a path per sink named like the list. .write_stage() refuses what no path
+# can name.
 .check_write_path <- function(x, path, call = rlang::caller_env()) {
   if (!is.character(path) || anyNA(path) || !all(nzchar(path))) {
     cli::cli_abort("{.arg path} must be a character vector of file paths.", call = call)
   }
-  multi <- is.list(x) &&
-    !S7::S7_inherits(x, LazyRaster) &&
-    !S7::S7_inherits(x, LazyDataset) &&
-    !S7::S7_inherits(x, LazyDatasetGroups)
-  if (!multi) {
+  if (!.is_sink_list(x)) {
     if (length(path) != 1L) {
       cli::cli_abort("{.arg path} must be a single file path.", call = call)
     }

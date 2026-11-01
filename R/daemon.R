@@ -189,6 +189,7 @@ NULL
   ".gd_warm_pipeline",
   ".gdal_cache_cap",
   ".gdal_handle_cap",
+  ".gdal_handles_release",
   ".http_auth_apply"
 )
 
@@ -306,11 +307,11 @@ NULL
 
 # Compute-on-read: apply a fused single-consumer stage kernel to the
 # whole padded read window, once, on the daemon that read it. `fuse` is
-# list(ck, fn, dtype, out_key, tiles, out_pad, out_dtype, grow, wq): jit
-# cache key (content-addressed), kernel, upload dtype, export node key,
-# row-tile count, the export's ring and dtype, and the edge growth and
-# write quantization where they apply. Returns the kernel's single
-# export (pad consumed: core-sized).
+# list(ck, fn, dtype, out_key, tiles, out_pad, out_dtype, grow, ring, wq):
+# jit cache key (content-addressed), kernel, upload dtype, export node key,
+# row-tile count, the export's ring and dtype, and the edge growth, the
+# window's cells past the raster and write quantization where they apply.
+# Returns the kernel's single export (pad consumed: core-sized).
 #
 # Tiled execution (`tiles > 1`, pointwise chains only, decided by
 # placement's .fuse_tiles): the window is uploaded once, the kernel
@@ -338,7 +339,7 @@ NULL
     out_dev <- .apply_fuse_tiled(jf, up, fuse$tiles)
     res <- NULL
   } else {
-    res <- jf(list(up))
+    res <- jf(c(list(up), .ring_input(fuse$ring)))
     out_dev <- res[[1L]]
   }
   # Producer-side write quantization for a FUSED sink (the host sets
@@ -696,6 +697,8 @@ NULL
 #'   reads); `reg_key` the daemon registry slot for the result.
 #'   `grow` = c(rows, cols) pads an edge chunk's inputs to the stage's
 #'   modal chunk shape and crops the outputs back (see `.sv_grow()`).
+#'   `ring` holds the chunk's cells past the raster for a kernel that
+#'   takes them (see `.ring_cells()`).
 #' @return The shared result (serialises as its region name).
 #' @keywords internal
 .daemon_run_compute_shm <- function(
@@ -710,7 +713,8 @@ NULL
   device = "cpu",
   edge = NULL,
   wq = NULL,
-  grow = NULL
+  grow = NULL,
+  ring = NULL
 ) {
   dev <- .exec_device(device)
   jf <- .daemon_kernel(cache_key, fn, dev)
@@ -723,7 +727,7 @@ NULL
     trims,
     dtypes
   )
-  dev_res <- jf(unname(inputs))
+  dev_res <- jf(c(unname(inputs), .ring_input(ring, dev)))
   # Producer-side write quantization (g_quantize, the one quantizer):
   # `wq$keys` names the sink exports the host cleared for it (sink
   # nodes with NO other consumers -- a store value another stage still
@@ -800,7 +804,7 @@ NULL
 #'
 #' @param specs List of per-stage specs: `ck` cache key, `fn` stage
 #'   closure, `dtypes` per-input upload dtypes, `nr`/`nc` modal input
-#'   dims.
+#'   dims, `ring` whether the kernel takes `.ring_cells()`.
 #' @return `NULL`, invisibly.
 #' @keywords internal
 .daemon_warm_jit <- function(specs) {
@@ -823,8 +827,9 @@ NULL
       sp$dtypes,
       sp$outers
     )
-    invisible(g_download(jf(unname(dummy))))
-    rm(dummy)
+    ring <- .ring_input(if (isTRUE(sp$ring)) integer(.ring_shape), dev)
+    invisible(g_download(jf(c(unname(dummy), ring))))
+    rm(dummy, ring)
   }
   gc(FALSE)
   invisible(NULL)

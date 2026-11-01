@@ -103,6 +103,9 @@ oracle_exec <- function(plan, data) {
           stopifnot(extra >= 0L)
           .trim_pad(v, extra)
         })
+        if (garry:::.takes_ring(graph, s)) {
+          inputs <- c(inputs, list(garry:::.ring_cells(it[j, ], s@grid@dims, s@halo)))
+        }
         s@fn(inputs)
       })
 

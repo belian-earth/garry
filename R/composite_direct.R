@@ -47,11 +47,21 @@ NULL
 # over time: pad spatially by the chain halo, then apply each node -- Map fns
 # elementwise, Focal fns as spatial stencils (g_shift_slice over the last two
 # dims, batched across time). Runs inside the jitted kernel. Returns the mask
-# cube (t, ny, nx).
+# cube (t, ny, nx). The chain is one whole slice, so all that is left of its
+# pad lies past the raster, and a window over a chain member reads it back at
+# nodata as in a stage (.ring_windows). The pad at the source needs nothing:
+# a window directly over a source reads it as a float.
 .gd_replay_mask <- function(fm, chain, halo) {
   mc <- g_pad(fm, halo, NaN)
-  for (node in chain) {
+  pad <- halo
+  for (i in seq_along(chain)) {
+    node <- chain[[i]]
+    r <- required_halo(node)
+    if (r > 0L && i > 1L) {
+      mc <- .g_mask_ring(mc, rep(pad, .ring_shape), 0L, chain[[i - 1L]]@grid@dtype)
+    }
     mc <- .g_as_declared(.eval_node(node, list(mc), NULL), node@grid@dtype)
+    pad <- pad - r
   }
   mc
 }
@@ -1035,9 +1045,11 @@ NULL
 
 # The kernel of a gdal-direct route's upper IR, on the host. Its one
 # export comes back by position: a cached kernel's names are those of the
-# plan that compiled it.
+# plan that compiled it. It runs over one whole grid, so where a stage's
+# kernel takes its chunk's cells past the raster, this one's are the whole
+# pad on every side.
 .gd_host_kernel <- function(graph, g, dev) {
-  .host_kernel(
+  jf <- .host_kernel(
     paste0(
       .kernel_sig(graph, g$input_nodes, g$members, g$sink_out, halo = g$halo),
       "@",
@@ -1046,6 +1058,9 @@ NULL
     .compose_stage_fn(graph, g$members, g$input_nodes, list(g$sink_out), g$halo),
     dev
   )
+  takes_ring <- length(.ring_windows(graph, g$members, g$input_nodes)) > 0L
+  ring <- .ring_input(if (takes_ring) rep(g$halo, .ring_shape), dev)
+  function(inputs) jf(c(inputs, ring))
 }
 
 # Write or return a whole-grid kernel's one result, band by band.

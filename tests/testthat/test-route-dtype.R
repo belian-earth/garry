@@ -69,13 +69,12 @@
     list(lazy_map(x, fn = .rd_above_1, dtype = "pred"), m > 1, "pred")
   },
   # a window over a map that names its float dtype: the map keeps its
-  # integer read, whose ring beyond the raster decodes as 0, and a float
-  # read's ring is NaN
+  # integer read, and the window finds NaN past the raster over either read
   focal = function(x, m, dt) {
     float <- startsWith(dt, "f")
     fn <- if (float) function(v) g_cast(v, "f32") else function(v) g_cast(g_bitand(v, 1L), "f32")
     cells <- if (float) .as_f32(m) else m %% 2
-    want <- matrix(if (float) NaN else 0, 4L, 6L)
+    want <- matrix(NaN, 4L, 6L)
     want[2:4, 2:6] <- cells[1:3, 1:5]
     list(focal_map(lazy_map(x, fn = fn, dtype = "f32"), .rd_nw, 1L), want, "f32")
   }

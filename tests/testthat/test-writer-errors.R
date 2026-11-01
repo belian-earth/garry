@@ -110,8 +110,13 @@ test_that("a close that fails or dies on the writer fails the write, and only a 
 test_that("a full disk fails a host write", {
   p <- .we_full_target()
   x <- lazy_source(fixture_gradient_f32()) + 1
+  # the run builds on the full disk
+  testthat::local_mocked_bindings(
+    .write_stage = function(targets, call) list(work = p, dirs = character()),
+    .package = "garry"
+  )
   err <- expect_error(
-    suppressMessages(write_tif(x, p, distributed = FALSE)),
+    suppressMessages(write_tif(x, tempfile(fileext = ".tif"), distributed = FALSE)),
     class = "garry_write_error"
   )
   expect_match(conditionMessage(err), basename(p), fixed = TRUE)

@@ -11,6 +11,12 @@
   garry:::.plan_placement(p, sc$consumers_of, sc$warp_only, mode = mode)
 }
 
+test_that("a stage reading one source twice is no fused chain", {
+  # a fused task uploads one window, and this kernel takes two inputs
+  x <- lazy_source(fixture_gradient_f32())
+  expect_identical(nrow(.pl(plan_lazy(x * x))$table), 0L)
+})
+
 test_that("single-band source-fed chain fuses with a full spec", {
   f <- fixture_gradient_f32()
   # benchmark-mini shape (as test-compute-on-read): qa source -> mask

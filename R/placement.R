@@ -83,8 +83,9 @@ NULL
 # (a GPU stage would jit on a reader; a multi-consumer source's other
 # consumers would find no stored window; multi-input/multi-export
 # kernels do not fit the one-window-in, one-export-out fused task
-# body). SINK stages are eligible since the scheduler's chunk lookup
-# and streaming writers became fused-aware (chunk_of/sink_task_map):
+# body, and a self-join is a two-input kernel over one read). SINK
+# stages are eligible since the scheduler's chunk lookup and streaming
+# writers became fused-aware (chunk_of/sink_task_map):
 # a fused sink's chunks stream from its source's read tasks. They are
 # flagged `sinkful` so rules mode can keep the exact phase 12b
 # behaviour (sinks stayed materialised). The dtype/halo raw-store
@@ -99,7 +100,7 @@ NULL
     if (!identical(C@device, "cpu")) {
       next
     }
-    if (length(C@inputs) != 1L || length(C@exports) != 1L) {
+    if (length(C@inputs) != 1L || length(C@input_nodes) != 1L || length(C@exports) != 1L) {
       next
     }
     S <- plan@stages[[C@inputs[[1L]]]]
@@ -131,12 +132,14 @@ NULL
 # Row-tile count and per-task working set of a fused chain over one
 # read window. Only pointwise chains tile (no halo, no out_pad): a tile
 # of rows is then an exact sub-problem, and .apply_fuse concatenates
-# the tiles' exports on device. The reader holds the host read buffer
-# (up to 8 bytes/px/band: an R double matrix on the non-raw path), the
-# window's device copy (4 bytes/px/band, uploaded whole) and the
-# activations of ONE kernel call; only the activations shrink with the
-# tile. .stage_fuse_act_bytes_px prices the device copy inside its
-# per-pixel figure, so it is split out here rather than counted twice.
+# the tiles' exports on device. A kernel taking .ring_cells() never
+# tiles: its window over a member gives its stage a halo. The reader
+# holds the host read buffer (up to 8 bytes/px/band: an R double matrix
+# on the non-raw path), the window's device copy (4 bytes/px/band,
+# uploaded whole) and the activations of ONE kernel call; only the
+# activations shrink with the tile. .stage_fuse_act_bytes_px prices the
+# device copy inside its per-pixel figure, so it is split out here
+# rather than counted twice.
 .fuse_tiles <- function(graph, C, win_px, win_rows, nb_src) {
   act_px <- .stage_fuse_act_bytes_px(graph, C@members, nb_src)
   dev_px <- 4 * max(1, nb_src)
@@ -325,6 +328,7 @@ NULL
         out_pad = C@out_pad,
         out_nb = .node_outer_nb(graph, C@exports[[1L]]),
         out_dtype = graph_get(graph, C@exports[[1L]])@grid@dtype,
+        takes_ring = .takes_ring(graph, C),
         ws_mb = tl$ws_mb,
         tiles = tl$tiles
       )

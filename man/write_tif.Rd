@@ -83,12 +83,29 @@ as the nearest limit, without a warning. When \code{nodata} is one of those
 limits, quantized values saturate one step inside it, so they never
 read back as nodata; choose \code{scale} and \code{offset} so the data fits.
 
-\code{cog = TRUE} streams to a temporary tiled GeoTIFF beside \code{path}, then
-finalises with one \code{gdal_translate} pass to the COG driver (which is
-copy-only by design: overviews precede full-res data). The extra
-sequential pass is the trade every COG producer makes; the temporary
-file is removed even on failure, so \code{path} never holds a half-written
-COG.
+\code{cog = TRUE} streams to a tiled GeoTIFF, then finalises with one
+\code{gdal_translate} pass to the COG driver (which is copy-only by design:
+overviews precede full-res data). The extra sequential pass is the trade
+every COG producer makes.
+
+Every write builds in a hidden temporary directory, \code{.garry-write-XXXX},
+in the target's directory, and moves into place only when the whole run
+has succeeded, every sink and group of it. So a plan may read the file it
+replaces and gets the old values, and a failed run leaves every target as
+it was: a previous file byte for byte, an absent one absent. Until the
+move the filesystem must hold both the old file and the new one. Missing
+directories on the way to a target are created at the move. The target's
+directory must be writable, even for a file that is, and a symlink at the
+target is replaced, not followed.
+
+A failure during the moves themselves is an error naming what is already
+in place and what is still as it was: earlier targets are replaced, later
+ones are not. A raw cube whose \code{.bin} moved and whose \code{.vrt} did not is
+named as mixed, and needs writing again. A session killed during a run
+leaves its temporary directory behind, holding partial files, and the
+targets as they were; delete it by hand. A \verb{/vsi} target has no directory
+to rename in, so it builds in the session's \code{\link[=tempdir]{tempdir()}} and is copied; a URL
+is refused, as GDAL writes to a store through its \verb{/vsi} path.
 }
 \examples{
 f <- system.file("extdata", "garry-example.tif", package = "garry")

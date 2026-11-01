@@ -6,6 +6,14 @@
 # unfused.
 
 
+test_that("a self-join of a source runs on the pools", {
+  a <- matrix(as.numeric(1:24), 4L, 6L)
+  x <- lazy_source(fixture_tile(t(a), nx = 6L, gt = c(0, 10, 0, 40, 0, -10)))
+  local_pools(2, 1)
+  withr::local_options(garry.placement = "cost")
+  expect_plan(x * x, a * a, "f32", file = FALSE, legs = list(.leg(decision = "none")))
+})
+
 test_that("source-fed kernel chains execute on their read tasks", {
   # Fused-on-reader execution hangs on the macOS ARM CI runners: the
   # suite stalls at this test until the 6h job limit (runs 30854991920,

@@ -277,6 +277,20 @@ NULL
   invisible(NULL)
 }
 
+# Close the cached handles that could serve a replaced file's old pixels: any
+# on `paths`, and any on a local file, as a VRT or tile index keeps its own stamp
+# while the file beneath it changes. A remote handle stays: no local file sits
+# behind it, and it is slow to reopen.
+.gdal_handles_release <- function(paths) {
+  for (p in paths) {
+    .gdal_handle_drop(p)
+  }
+  for (k in names(.gdal_cache$stamps)) {
+    .gdal_handle_forget(k)
+  }
+  invisible(NULL)
+}
+
 # Close a cached handle and forget all that is kept under its key.
 .gdal_handle_forget <- function(key) {
   try(.gdal_cache$handles[[key]]$close(), silent = TRUE)
@@ -334,12 +348,10 @@ NULL
     .gdal_cache$handles[[key]] <- h
     return(h)
   }
+  # Not shared: GDAL would hand back any dataset already open on the path, a
+  # user's included, which still reads a file replaced since it opened.
   open_raw <- function() {
-    if (length(open_options) > 0L) {
-      methods::new(gdalraster::GDALRaster, path, TRUE, open_options)
-    } else {
-      methods::new(gdalraster::GDALRaster, path, read_only = TRUE)
-    }
+    methods::new(gdalraster::GDALRaster, path, TRUE, open_options, FALSE)
   }
   # Remote opens run under the scoped hygiene config (sidecar-probe
   # storm + serial IFD walk otherwise cost ~8 s each at typical RTT).
@@ -1426,6 +1438,10 @@ gdal_open_update <- function(path) {
 #' the tiled GeoTIFF. Use it once on pipeline intermediates that are
 #' read many times (per-year context cubes, prediction stacks).
 #'
+#' As for every write (see [write_tif()]), the cube builds beside its target
+#' and replaces it only when complete, so `src` may be the cube itself, and a
+#' failure leaves the target as it was.
+#'
 #' @param src Source path readable by GDAL.
 #' @param dst_vrt Destination `.vrt` path (the `.bin` lands beside it).
 #' @return `dst_vrt`, invisibly.
@@ -1435,6 +1451,12 @@ stage_raw_cube <- function(src, dst_vrt) {
   if (!grepl("\\.vrt$", dst_vrt, ignore.case = TRUE)) {
     cli::cli_abort("{.arg dst_vrt} must end in .vrt")
   }
+  .write_through(dst_vrt, function(work) .raw_cube_from(src, work))
+  invisible(dst_vrt)
+}
+
+# Write every band of `src` to the raw cube at `dst_vrt`.
+.raw_cube_from <- function(src, dst_vrt) {
   meta <- gdal_grid_spec(src)
   ds <- methods::new(gdalraster::GDALRaster, src)
   nb <- ds$getRasterCount()
@@ -1482,7 +1504,6 @@ stage_raw_cube <- function(src, dst_vrt) {
     offset = offset
   )
   writeLines(xml, dst_vrt)
-  invisible(dst_vrt)
 }
 
 # ---------------------------------------------------------------------------
@@ -2551,7 +2572,7 @@ gdal_write_window <- function(
 .gdal_close_abort <- function(path, why, call = rlang::caller_env()) {
   cli::cli_abort(
     c(
-      "closing {.path {path}} failed, so the file is incomplete.",
+      "closing {.path {path}} failed, so the new file is incomplete.",
       "x" = "{why}",
       "i" = "Check the free space on its filesystem, then write it again."
     ),
@@ -2625,6 +2646,67 @@ gdal_pixel_extract <- function(raster, ...) {
     return(gdalraster::pixel_extract(raster, ...))
   }
   .gdal_with_retry(function() gdalraster::pixel_extract(raster, ...), "read", raster)
+}
+
+# A /vsi path, by GDAL's own list of them: on no filesystem file.rename() can
+# reach. A local directory whose name only starts the same way is not one.
+.gdal_is_vsi <- function(path) {
+  sub("^(/vsi[^/]*/).*", "\\1", path) %in% gdalraster::vsi_get_fs_prefixes()
+}
+
+# Whether each path exists, on the filesystem or under /vsi.
+gdal_exists <- function(paths) {
+  vsi <- .gdal_is_vsi(paths)
+  hit <- file.exists(paths)
+  hit[vsi] <- vapply(paths[vsi], gdalraster::vsi_stat, logical(1), USE.NAMES = FALSE)
+  hit
+}
+
+# A local path made absolute against the session, which a daemon in another
+# working directory reads the same, behind any driver prefix (GTI:, ZARR:").
+# A URL or /vsi path passes through.
+.gdal_absolute <- function(path) {
+  driver <- sub('^(GTI:|[A-Za-z0-9_]+:")?.*$', "\\1", path)
+  file <- substring(path, nchar(driver) + 1L)
+  rel <- !grepl("^(/|\\\\|~|[A-Za-z0-9_+.-]+:)", file)
+  path[rel] <- paste0(driver[rel], file.path(getwd(), file[rel]))
+  path
+}
+
+# The reason in a warning from base R's file functions, without their paths.
+.file_reason <- function(w) {
+  sub(".*reason '(.*)'$", "\\1", conditionMessage(w))
+}
+
+# Sidecars GDAL keeps beside a raster. They describe that file, and GDAL's
+# create removes them with it, so they do not outlive a replaced target.
+.gdal_sidecars <- c(".aux.xml", ".ovr", ".msk")
+
+# Put a finished file at its final path: what went wrong, or NULL. A rename on
+# the filesystem, into any directories the target lacks. A /vsi target is another
+# filesystem and may have no rename, so it is copied.
+gdal_place <- function(from, to) {
+  if (.gdal_is_vsi(to)) {
+    res <- .gdal_attempt(gdalraster::vsi_copy_file(from, to))
+    if (length(res$failed)) {
+      return(res$failed[[1L]])
+    }
+    return(if (res$value != 0L) "GDAL could not copy the file")
+  }
+  dir.create(dirname(to), recursive = TRUE, showWarnings = FALSE)
+  tryCatch(
+    if (!file.rename(from, to)) "the rename failed",
+    warning = .file_reason
+  )
+}
+
+# Remove files at final paths, on the filesystem or under /vsi. A file that is
+# not there is no failure.
+gdal_remove <- function(paths) {
+  for (p in paths) {
+    gdalraster::vsi_unlink(p)
+  }
+  invisible(NULL)
 }
 
 # Whole-file gdal_translate (D13: the only home for the gdalraster call).

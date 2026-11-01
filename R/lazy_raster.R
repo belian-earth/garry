@@ -73,7 +73,9 @@ LazyRaster <- S7::new_class(
 #' adapter. An integer source without nodata has nowhere to put a missing
 #' cell, so a compute stage that meets one (a failed read, a cell no tile
 #' reaches, a cell a warp leaves past the source's footprint) fails: declare
-#' `nodata` where cells can be missing.
+#' `nodata` where cells can be missing. An Int32 cell holding `-2147483648`
+#' reads as missing, `nodata` or not: gdalraster returns R integers, and that
+#' value is R's `NA_integer_`.
 #'
 #' Passing `grid` skips the GDAL open entirely: no metadata is read
 #' until execution. Use it when the dataset's grid is known by
@@ -85,7 +87,9 @@ LazyRaster <- S7::new_class(
 #' not checked. With `grid` given, file nodata is NOT consulted (pass
 #' `nodata` explicitly if the source has a sentinel).
 #'
-#' @param path Path or VSI URL readable by GDAL.
+#' @param path Path or VSI URL readable by GDAL. A relative path is taken
+#'   against the working directory here, so a later [setwd()] or a pool
+#'   started elsewhere reads the same file.
 #' @param band 1-based band index.
 #' @param graph `Graph` to add the source to; defaults to a fresh graph.
 #' @param nodata Optional nodata sentinel replacing the file's: cells
@@ -139,8 +143,11 @@ lazy_source <- function(
   name = NULL,
   decode = NULL
 ) {
-  if (!is.numeric(band) || !length(band) || anyNA(band) || any(band < 1 | band != round(band))) {
-    cli::cli_abort("{.arg band} must be whole band numbers from 1, not {.val {band}}.")
+  if (!is.numeric(band) || length(band) != 1L || is.na(band) || band < 1 || band != round(band)) {
+    cli::cli_abort(c(
+      "{.arg band} must be one whole band number from 1, not {.val {band}}.",
+      "i" = "{.fn lazy_dataset} reads several bands of a file."
+    ))
   }
   if (length(open_options) && (length(path) > 1L || !is.null(decode))) {
     cli::cli_abort(c(
@@ -219,7 +226,7 @@ lazy_source <- function(
     SourceNode,
     parents = integer(0),
     grid = grid,
-    path = path,
+    path = .gdal_absolute(path),
     band = as.integer(band),
     nodata = nodata,
     block_dim = block_dim,
@@ -886,7 +893,7 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
 # dtype that holds it, sharing copies through `memo`. A float warp is a
 # read that needs nothing below it. So is a kernel that names its float
 # dtype over integers: it decodes them (QA bits, g_bitand()), so it keeps
-# its integer read, whose ring beyond the raster reads 0, as clear.
+# its integer read, whose ring beyond the raster it reads as 0, clear.
 .float_copy <- function(g, id, memo) {
   key <- .key(id)
   hit <- memo[[key]]
@@ -939,11 +946,12 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
 #' plain arithmetic and the `g_*` vocabulary ([g_ifelse()], [g_cast()],
 #' ...). Example, a 3x3 sum: `function(sh) Reduce("+", sh)`.
 #'
-#' Cells beyond the raster edge are NaN (nodata). An
-#' integer raster is read as a float for the stencil (f32 up to 16 bits,
-#' else f64), so the edge can be NaN, and the result is that float. A map
-#' that names its float `dtype` over integers keeps its integer read: its
-#' kernel decodes them, and cells beyond the edge read as 0.
+#' Cells beyond the raster edge are NaN (nodata), whatever a kernel before
+#' this one made of them. An integer raster is read as a float for the
+#' stencil (f32 up to 16 bits, else f64), so the edge can be NaN, and the
+#' result is that float. A map that names its float `dtype` over integers
+#' keeps its integer read: its kernel decodes them, and sees cells beyond
+#' the edge as 0.
 #'
 #' Over a `LazyDataset`, the stencil is applied to every value band per slice;
 #' `bands` restricts which bands.
@@ -1067,17 +1075,20 @@ shrink_footprint <- function(
   lazy_map(x, near, fn = function(v, n) g_ifelse(n > 0.5, NaN, v))
 }
 
-#' Whole-window model op (advanced): apply `fn` to the raw padded chunk.
+#' Whole-window model op (advanced): apply `fn` to the whole padded chunk.
 #'
 #' The escape hatch behind model-inference verbs such as [ocm_mask()]:
 #' where [focal_map()] materialises a shift list (unusable beyond small
-#' radii), a patch op hands `fn` the raw window carrying `radius` halo
+#' radii), a patch op hands `fn` the whole window carrying `radius` halo
 #' cells per side and crops the contaminated ring off the result. `fn`
 #' must be size-preserving on the last two (spatial) dims, derive every
 #' size from its input's shape, be written in the `g_*` vocabulary, and
 #' reduce the leading band axis to `out_bands` channels (0 = a plain
 #' 2D result). Not differentiable. [ocm_model()]-based cloud-mask
 #' prediction is the in-package example of its use.
+#'
+#' Cells beyond the raster edge hold the nodata of `x`'s dtype (NaN for a
+#' float, 0 for an integer), whatever a kernel before this one made of them.
 #'
 #' `kernel_id` stands in for `fn` in kernel signatures: give two calls
 #' the same id ONLY if their fns are interchangeable (same weights,

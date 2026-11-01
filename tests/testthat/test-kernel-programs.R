@@ -177,7 +177,7 @@ test_that("a kernel with very many inputs stays addressable", {
   expect_equal(as.numeric(g_download(run(rep(list(x), n))[[1L]])), rep(2, 64))
 })
 
-test_that("an integer stage's edge ring holds 0, not NaN, at every width", {
+test_that("an integer stage's edge ring uploads as 0, not NaN, at every width", {
   f <- .kp_tif(rep(5, 4096))
   for (dt in c("i64", "u32", "i32")) {
     g <- graph_new()
@@ -190,8 +190,12 @@ test_that("an integer stage's edge ring holds 0, not NaN, at every width", {
       dtype = "f32"
     )
     x <- focal_map(b, radius = 1L, fn = function(sh) Reduce(`+`, sh))
+    # a NaN would fail the float map's integer upload (garry_nodata_error);
+    # the window finds NaN past the raster over the map, as it would in a file
     v <- collect(x, distributed = FALSE)
-    expect_equal(range(v), c(20, 45))
+    inner <- 2:63
+    expect_true(all(v[inner, inner, ] == 45))
+    expect_true(all(is.nan(v[-inner, , ])) && all(is.nan(v[, -inner, ])))
   }
 })
 

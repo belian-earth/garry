@@ -58,6 +58,10 @@ cubes hold floats only. A raster with a \code{t} or \code{band} axis comes back
 stacked along that axis with its labels. Existing files are refused unless \code{overwrite = TRUE}:
 the graph may have changed since they were written, and silently
 reusing stale pixels is the failure mode a checkpoint must not have.
+As for every write (see \code{\link[=write_tif]{write_tif()}}), the files build in a hidden
+\code{.garry-write-XXXX} directory beside the target and replace it only when
+the whole run has succeeded, so \code{x} may read the checkpoint it replaces,
+and a failed run leaves it as it was.
 
 \code{dir} defaults to a fresh unique directory under the session's
 \code{\link[=tempdir]{tempdir()}}, announced by a message: convenient, but session-scoped

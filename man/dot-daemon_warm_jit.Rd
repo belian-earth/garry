@@ -10,7 +10,7 @@ shape.}
 \arguments{
 \item{specs}{List of per-stage specs: \code{ck} cache key, \code{fn} stage
 closure, \code{dtypes} per-input upload dtypes, \code{nr}/\code{nc} modal input
-dims.}
+dims, \code{ring} whether the kernel takes \code{.ring_cells()}.}
 }
 \value{
 \code{NULL}, invisibly.

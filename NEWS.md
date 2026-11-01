@@ -14,6 +14,26 @@
   `reduce_over()` that declares no `dtype`. To narrow, say so:
   `write_tif(dtype = "u8")` saturates at the dtype's ends, and
   `lazy_map(dtype = "u8")` keeps the declaration.
+* A window over another kernel finds nodata past the raster, whatever that
+  kernel made of those cells, so a chain gives one answer inside a stage
+  and across a boundary. `focal_map()`, `focal_kernel()` and `lazy_patch()`
+  read real-looking values there before, wherever a NaN-ignoring window, a
+  NaN-filling map, an integer cast or a `count` reduction left them: two
+  windows in one stage gave no NaN cells on a fixture where the same two
+  across a materialised file gave 220. Only cells whose windows reach past
+  the raster change. A window over a map that names a float dtype over
+  integers now reads NaN there, not 0, in `collect()` and
+  `lazy_value_and_grad()` alike.
+* `apply_mask(open = , dilate = )` reads a mask as `apply_mask()` does, set
+  where it is above 0.5. On integer QA a `where` holding 0 no longer flags
+  the ring past the raster on the scheduler. A NaN that a `where` function
+  returns reads clear at its own cell: it spread across the window and
+  unmasked flagged cells around it, however far from the raster's edge.
+  A `where` function returning fractions now thresholds in the morphology
+  as well as at the end.
+* `lazy_source(band = )` takes one band number, as documented. A vector
+  passed the check and failed at the read with an opaque error;
+  `lazy_dataset()` reads several bands of a file.
 * These options are gone, and setting one now aborts:
   `garry.compute_inflight`, `garry.compute_ram_fraction`,
   `garry.cost_comp_efficiency`, `garry.cost_gflops_core`,
@@ -237,6 +257,44 @@
 
 ## Bug fixes
 
+* Every write builds in a hidden `.garry-write-XXXX` directory beside its
+  target and moves into place only when the whole run has succeeded, on every
+  route and in every form: `write_tif()`, `cog = TRUE`, lists, groups and
+  `materialise()`. `write_tif(lazy_source(p) + 1, p, distributed = TRUE)` read
+  the empty output the host had just created, a sum of 600 where 180900 is
+  right, with no error. A plan may now read its own target and gets the old
+  values. A failed run leaves every target as it was, where it used to replace
+  the file and delete what it had written: a previous file survives byte for
+  byte, an absent one stays absent, and `overwrite` no longer deletes up front.
+  The filesystem must hold both files until the move, so the target's
+  directory must be writable, and a symlink at the target is replaced, not
+  followed. A failure during the moves is an error naming what is in place,
+  what is not, and any `.vrt` and `.bin` pair left mixed. A session killed
+  during a run leaves its hidden directory behind, holding partial files, and
+  the targets as they were. `stage_raw_cube()` writes the same way, so a cube
+  staged onto itself survives.
+* A sink's temporary path is absolute, so a relative target lands in the
+  session's working directory, not a daemon's, and any write creates missing
+  directories on the way to its target, as `cog = TRUE`, `{group}` paths and
+  `materialise()` did. A failure names the target, not the temporary path.
+* A target that can never be written is refused before the run: a directory,
+  a path under a file, a `.` or `..` below a missing directory, and a URL,
+  which became local directories named `s3:`. So are two sinks with one target
+  by any spelling, where one sink's output was lost with no error.
+* A local `lazy_source()` path is absolute from the moment it is opened, so
+  a relative source, and a raster `materialise()` returns, read the session's
+  file on a pool started in another directory. They read the daemon's file of
+  that name, or failed, and a write could then replace the target with values
+  from the wrong file.
+* A write that replaces a file closes the read handles on every process before
+  the move, so a VRT or tile index over the target reads its new pixels on the
+  pools, as a direct read did. A read also passes a handle a user holds open.
+* A `/vsi` target builds in the session's temporary directory and is copied
+  at the end, so `cog = TRUE` and the pools now reach it. They failed before.
+  `materialise()` refuses one that exists unless `overwrite = TRUE`.
+* `x * x` on one source no longer aborts on the pools under the default
+  placement. A kernel with two inputs from one read cannot run on that
+  read's task, so it runs on the compute pool.
 * `^` on an integer raster computes in the float it declares. `x^2L` ran
   at the integer dtype and wrapped (30000^2L gave -5888), and `x^-1L`
   truncated to 0.

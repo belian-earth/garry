@@ -2,11 +2,11 @@
 #' @keywords internal
 NULL
 
-# Refuse (or clear, with overwrite = TRUE) an existing .vrt/.bin pair or
-# GeoTIFF.
-.mat_check_clear <- function(path, overwrite) {
-  bin <- sub("\\.vrt$", ".bin", path)
-  hit <- unique(c(path, bin)[file.exists(c(path, bin))])
+# Refuse an existing .vrt/.bin pair or GeoTIFF unless `overwrite`. Only a run
+# that has succeeded replaces it (.collect_write()).
+.mat_check_target <- function(path, overwrite) {
+  files <- .target_files(path)
+  hit <- files[gdal_exists(files)]
   if (length(hit) && !overwrite) {
     cli::cli_abort(c(
       "target already exists: {.path {hit[[1L]]}}.",
@@ -14,7 +14,6 @@ NULL
              file may hold pixels from an older graph)"
     ))
   }
-  unlink(c(path, bin))
 }
 
 # Checkpoint file for a sink: a raw-BSQ cube for float data, a GeoTIFF for
@@ -74,6 +73,10 @@ NULL
 #' stacked along that axis with its labels. Existing files are refused unless `overwrite = TRUE`:
 #' the graph may have changed since they were written, and silently
 #' reusing stale pixels is the failure mode a checkpoint must not have.
+#' As for every write (see [write_tif()]), the files build in a hidden
+#' `.garry-write-XXXX` directory beside the target and replace it only when
+#' the whole run has succeeded, so `x` may read the checkpoint it replaces,
+#' and a failed run leaves it as it was.
 #'
 #' `dir` defaults to a fresh unique directory under the session's
 #' [tempdir()], announced by a message: convenient, but session-scoped
@@ -112,10 +115,9 @@ materialise <- function(
     dir <- tempfile("materialise-")
     cli::cli_inform("materialising to {.path {dir}} (session-temporary)")
   }
-  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   if (S7::S7_inherits(x, LazyRaster)) {
     path <- .mat_path(dir, name, x@grid@dtype)
-    .mat_check_clear(path, overwrite)
+    .mat_check_target(path, overwrite)
     .collect_impl(x, path = path, nodata = nodata, distributed = distributed)
     return(.mat_reopen(path, x@grid))
   }
@@ -136,7 +138,7 @@ materialise <- function(
       function(nm) .mat_path(dir, paste0(name, "-", nm), x[[nm]]@grid@dtype),
       character(1)
     )
-    for (p in paths) .mat_check_clear(p, overwrite)
+    for (p in paths) .mat_check_target(p, overwrite)
     .collect_impl(x, path = paths, nodata = nodata, distributed = distributed)
     return(Map(.mat_reopen, paths, lapply(x, function(e) e@grid)))
   }
@@ -155,7 +157,7 @@ materialise <- function(
       lazy_stack(stats::setNames(layers, bn), along = "band")
     }
     path <- .mat_path(dir, name, sink@grid@dtype)
-    .mat_check_clear(path, overwrite)
+    .mat_check_target(path, overwrite)
     .collect_impl(
       sink,
       path = path,
@@ -201,7 +203,7 @@ materialise <- function(
     character(1)
   )
   for (p in paths) {
-    .mat_check_clear(p, overwrite)
+    .mat_check_target(p, overwrite)
   }
 
   .collect_impl(

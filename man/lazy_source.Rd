@@ -20,7 +20,9 @@ lazy_source(
 )
 }
 \arguments{
-\item{path}{Path or VSI URL readable by GDAL.}
+\item{path}{Path or VSI URL readable by GDAL. A relative path is taken
+against the working directory here, so a later \code{\link[=setwd]{setwd()}} or a pool
+started elsewhere reads the same file.}
 
 \item{band}{1-based band index.}
 
@@ -76,7 +78,9 @@ downstream; the sentinel-to-NaN rewrite happens at read time in the
 adapter. An integer source without nodata has nowhere to put a missing
 cell, so a compute stage that meets one (a failed read, a cell no tile
 reaches, a cell a warp leaves past the source's footprint) fails: declare
-\code{nodata} where cells can be missing.
+\code{nodata} where cells can be missing. An Int32 cell holding \code{-2147483648}
+reads as missing, \code{nodata} or not: gdalraster returns R integers, and that
+value is R's \code{NA_integer_}.
 }
 \details{
 Passing \code{grid} skips the GDAL open entirely: no metadata is read

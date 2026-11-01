@@ -187,15 +187,23 @@ test_that("a kernel that names its float dtype keeps its integer read", {
   bits <- lazy_map(x, fn = function(v) g_cast(g_bitand(v, 1L), "f32"), dtype = "f32")
   mean_fn <- function(sh) Reduce(`+`, sh) / length(sh)
   r <- collect(focal_map(bits, mean_fn, 1L), distributed = FALSE)
-  # the low bit of 1, 2, 1, 2 ... in every row; the ring past the raster is an
-  # integer read's, so 0, and the windows there count it: 3 x 3 sums over 9
-  pad <- matrix(0, 22L, 32L)
-  pad[2:21, 2:31] <- matrix(rep(c(1, 0), 15L), 20L, 30L, byrow = TRUE)
+  # the low bit of 1, 2, 1, 2 ... in every row; the windows find NaN past the
+  # raster, in one stage as over the same bits in a file: 3 x 3 sums over 9
+  low <- matrix(rep(c(1, 0), 15L), 20L, 30L, byrow = TRUE)
+  pad <- matrix(NaN, 22L, 32L)
+  pad[2:21, 2:31] <- low
   want <- matrix(0, 20L, 30L)
   for (dy in 0:2) for (dx in 0:2) {
     want <- want + pad[(1 + dy):(20 + dy), (1 + dx):(30 + dx)]
   }
   .expect_cells(unclass(r), want / 9, tolerance = 1e-6)
+  across <- tempfile(fileext = ".tif")
+  write_tif(bits, across, distributed = FALSE)
+  .expect_cells(
+    unclass(collect(focal_map(lazy_source(across), mean_fn, 1L), distributed = FALSE)),
+    want / 9,
+    tolerance = 1e-6
+  )
 })
 
 test_that("arithmetic on an integer raster keeps the edge NaN under a window", {

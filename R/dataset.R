@@ -1569,7 +1569,7 @@ stack_bands <- function(x) {
 #'   * [qa_bits()] -> a bitmask test (bad if any listed bit is set), for
 #'     packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. `qa_bits(0:3)`;
 #'   * a function `\(f) ...` -> a predicate returning a 0/1 (or logical)
-#'     mask, written in the `g_*` vocabulary.
+#'     mask, written in the `g_*` vocabulary. NaN reads as clear.
 #' @param open Opening radius (despeckle): erosion then dilation at this radius,
 #'   removing isolated flagged pixels up to the radius. `0` skips it.
 #' @param dilate Dilation radius (buffer): grows the surviving bad regions
@@ -1759,22 +1759,25 @@ qa_bits <- function(bits) {
   )
 }
 
-# Binary morphology on a 0/1 mask, disk structuring element. Erosion of a 0/1
-# mask is the product over the disk offsets; dilation is its dual. NaN (beyond-
-# edge halo pad) propagates and reads as clear in apply_mask()'s final ifelse,
-# matching scipy's constant-0 border.
+# Binary morphology on a 0/1 mask, disk structuring element: erosion keeps a
+# cell where every cell of the disk is set, dilation where any is. A cell is
+# set as apply_mask() reads one, `> 0.5`, and NaN compares false, so NaN, which
+# is what a window finds past the raster, reads as clear at its own cell and
+# goes no further, matching scipy's constant-0 border.
 .disk_sel <- function(r) {
   o <- expand.grid(dx = -r:r, dy = -r:r)
   which(o$dx^2 + o$dy^2 <= r^2)
 }
 .erode <- function(x, r) {
   sel <- .disk_sel(r)
-  focal_map(x, radius = as.integer(r), fn = function(sh) Reduce(`*`, sh[sel]))
+  focal_map(x, radius = as.integer(r), fn = function(sh) {
+    g_cast(Reduce(`&`, lapply(sh[sel], function(s) s > 0.5)), "f32")
+  })
 }
 .dilate <- function(x, r) {
   sel <- .disk_sel(r)
   focal_map(x, radius = as.integer(r), fn = function(sh) {
-    1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))
+    g_cast(Reduce(`|`, lapply(sh[sel], function(s) s > 0.5)), "f32")
   })
 }
 

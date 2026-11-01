@@ -788,6 +788,9 @@ execute_plan_mirai <- function(
     if (rd$grows) {
       fs$grow <- .chunk_grow(rd$cg, core)
     }
+    if (isTRUE(fs$takes_ring)) {
+      fs$ring <- .ring_cells(core, rd$cg@grid@dims, rd$cg@halo, fs$grow)
+    }
     add_task(
       key,
       rd$deps,
@@ -852,6 +855,7 @@ execute_plan_mirai <- function(
       list(pads = cd$pads, core = core, gdims = cd$grid_dims, dtypes = cd$out_dtypes)
     }
     grow <- if (cd$grows) .chunk_grow(cd$cg, core)
+    ring <- if (cd$ring) .ring_cells(core, cd$grid_dims, cd$need, grow)
     key <- .glue("s{cd$id}_c{j}")
     rk <- unique(in_deps)
     add_task(
@@ -877,7 +881,8 @@ execute_plan_mirai <- function(
             device = dv,
             edge = eg,
             wq = wqt,
-            grow = gr
+            grow = gr,
+            ring = rg
           )),
           ck = cd$ck,
           fn = if (with_fn) cd$fn else NULL,
@@ -891,6 +896,7 @@ execute_plan_mirai <- function(
           eg = edge,
           wqt = cd$wq,
           gr = grow,
+          rg = ring,
           .compute = prof,
           .timed = tl$timed
         )
@@ -1149,6 +1155,7 @@ execute_plan_mirai <- function(
       # (.sv_grow), instead of every daemon compiling a kernel for each
       # edge shape (a robust Kalman stage: ~2.5 s a shape).
       pad_edges <- .stage_grows_edges(graph, s)
+      takes_ring <- .takes_ring(graph, s)
       stage_fn <- s@fn
       if (wire_program) {
         pg <- .stage_as_program(graph, s, sig, in_meta, need, pad_edges)
@@ -1175,7 +1182,8 @@ execute_plan_mirai <- function(
           integer(1)
         ),
         nr = modal[[2L]] + 2L * need,
-        nc = modal[[1L]] + 2L * need
+        nc = modal[[1L]] + 2L * need,
+        ring = takes_ring
       )
       # Compute outputs pin store regions exactly like read windows:
       # from launch until the last consumer retires, or for host_keep
@@ -1217,6 +1225,8 @@ execute_plan_mirai <- function(
         pads = epads[epads > 0L],
         out_dtypes = .export_dtypes(graph, s),
         grows = pad_edges,
+        need = need,
+        ring = takes_ring,
         wq = if (length(wq_keys_of[[.key(s@id)]])) {
           c(wq, list(keys = wq_keys_of[[.key(s@id)]]))
         },
@@ -1471,8 +1481,8 @@ execute_plan_mirai <- function(
   # Streaming sink writes (phase 11.3): with a file destination, each
   # sink chunk writes the moment it lands, so all but the last band's
   # writes hide under the drain instead of running serially after it.
-  # (On error the partially written file is left behind; the
-  # single-threaded executor writes at the end.)
+  # (The single-threaded executor writes at the end. Either way the files
+  # build in the temporary directories of .collect_write().)
   wnodata <- as.numeric(nodata)
   multi <- length(plan@sinks) > 1L
   # Streamed writes go to the writer daemon: the host creates the outputs

@@ -155,6 +155,10 @@ NULL
 .stage_as_program <- function(graph, s, sig, in_meta, need, grows) {
   sets <- .stage_shape_sets(graph, s, need, grows)
   dtypes <- vapply(in_meta, function(m) m$dtype, character(1))
+  if (.takes_ring(graph, s)) {
+    sets <- lapply(sets, c, list(.ring_shape))
+    dtypes <- c(dtypes, .ring_dtype)
+  }
   key <- paste0(sig, "#", .program_tag(dtypes, sets))
   list(set = .trace_kernel(key, s@fn, dtypes, sets, s@id), key = key)
 }
@@ -177,8 +181,13 @@ NULL
       )
     }
   }
-  key <- paste0(fspec$ck, "#", .program_tag(fspec$dtype, sets))
-  fspec$fn <- .trace_kernel(key, fspec$fn, fspec$dtype, sets, src@id)
+  dtypes <- fspec$dtype
+  if (fspec$takes_ring) {
+    sets <- lapply(sets, c, list(.ring_shape))
+    dtypes <- c(dtypes, .ring_dtype)
+  }
+  key <- paste0(fspec$ck, "#", .program_tag(dtypes, sets))
+  fspec$fn <- .trace_kernel(key, fspec$fn, dtypes, sets, src@id)
   fspec$ck <- key
   fspec
 }
