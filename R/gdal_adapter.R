@@ -53,8 +53,10 @@ NULL
 .gdal_cache$handles <- list() # named, insertion-ordered = LRU order
 .gdal_cache$stamps <- list() # key -> .gdal_local_stamp() at open
 .gdal_cache$zarr_bytes <- list() # key -> bytes read through a Zarr handle
+.gdal_cache$header_bytes <- 0 # see .gdal_note_header()
 .gdal_cache$cap <- 4L # LRU depth: see .gdal_handle_cap()
 .gdal_cache$gti_meta <- new.env(parent = emptyenv()) # see .gti_meta()
+.gdal_cache$warp_vrt <- new.env(parent = emptyenv()) # see gdal_warp_vrt()
 
 # Set this process's handle-cache depth, returning the old one. A read
 # daemon holds garry_daemons()'s `read_handles`; a read that needs every
@@ -195,13 +197,22 @@ NULL
 # PAM sidecars (.aux.xml, .aux, .ovr) by name whatever EMPTY_DIR says,
 # seven serial 404s (~5 s) per open measured on OlmoEarth 2026-10-22.
 # Admitting only Zarr's own keys (.zarr_allowed_ext) refuses them.
+#
+# A read daemon opens every file it reads, and 4 MB can outweigh the
+# window it came for, so a daemon ingests what the run's files need
+# (`.garry_open_bytes`, shipped by .daemon_policy()). The host opens few
+# files and keeps 4 MB, and so does a Zarr open: its metadata is no TIFF
+# header, and a daemon opens a store once.
 .gdal_quiet_remote <- function(code, zarr = FALSE) {
   prev_rd <- .gdal_config_prev("GDAL_DISABLE_READDIR_ON_OPEN")
   prev_ib <- .gdal_config_prev("GDAL_INGESTED_BYTES_AT_OPEN")
   prev_ext <- .gdal_config_prev("CPL_VSIL_CURL_ALLOWED_EXTENSIONS")
   allowlist <- gdalraster::get_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS")
   gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
-  gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", "4194304")
+  gdalraster::set_config_option(
+    "GDAL_INGESTED_BYTES_AT_OPEN",
+    if (zarr) .gdal_open_bytes_most else getOption(".garry_open_bytes", .gdal_open_bytes_most)
+  )
   if (zarr && !nzchar(allowlist)) {
     gdalraster::set_config_option(
       "CPL_VSIL_CURL_ALLOWED_EXTENSIONS",
@@ -217,6 +228,38 @@ NULL
     add = TRUE
   )
   force(code)
+}
+
+.gdal_open_bytes_most <- "4194304"
+.gdal_open_bytes_least <- "32768" # one range grabs a COG's header
+
+# A TIFF's tile offsets and sizes in bytes: 16 a tile a band in a BigTIFF,
+# a third more for its overviews. They sit in the header, and a remote
+# open that stops short of them walks them 16 KB at a time.
+.gtiff_header_bytes <- function(ds) {
+  block <- ds$getBlockSize(1L)
+  tiles <- ceiling(ds$getRasterXSize() / block[[1L]]) *
+    ceiling(ds$getRasterYSize() / block[[2L]])
+  tiles * ds$getRasterCount() * 16 * 4 / 3
+}
+
+# Remember the largest TIFF header this process has opened remotely, which
+# the run's read daemons will ingest. Only the host's memory is shipped,
+# and it outlives a run: a later plan over small headers overfetches.
+.gdal_note_header <- function(ds, path) {
+  if (.gdal_is_remote(path) && identical(ds$getDriverShortName(), "GTiff")) {
+    .gdal_cache$header_bytes <- max(.gdal_cache$header_bytes, .gtiff_header_bytes(ds))
+  }
+  invisible(NULL)
+}
+
+# What a read daemon's remote open ingests, for .daemon_policy().
+.gdal_daemon_open_bytes <- function() {
+  bytes <- min(
+    as.numeric(.gdal_open_bytes_most),
+    max(as.numeric(.gdal_open_bytes_least), ceiling(.gdal_cache$header_bytes))
+  )
+  format(bytes, scientific = FALSE, trim = TRUE)
 }
 
 # What to restore a config option to after a scoped change. GDAL reports a
@@ -396,6 +439,7 @@ NULL
       }
     }
   )
+  .gdal_note_header(h, path)
   while (length(.gdal_cache$handles) >= .gdal_cache$cap) {
     .gdal_handle_forget(names(.gdal_cache$handles)[[1L]])
   }
@@ -604,6 +648,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   ([.mosaic_read_spec()]): the target may reach beyond the source,
 #'   and only a nearest-neighbour read on the source's own pixels, with
 #'   the file's nodata (if any) the node's, qualifies.
+#' @param src_grid The source node's [GridSpec()], which can decline
+#'   without opening the file.
 #' @return `NULL`, or a list with `fx`, `fy`, `x_off`, `y_off` (the
 #'   target origin in source pixels, rows counted from the north),
 #'   `resamp`, `flip`, and the source's `nx` and `ny`.
@@ -616,7 +662,8 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   band = 1L,
   nodata = numeric(0),
   partial = FALSE,
-  decode = FALSE
+  decode = FALSE,
+  src_grid = NULL
 ) {
   if (length(src_path) != 1L || length(open_options) > 0L || !length(band)) {
     return(NULL)
@@ -629,6 +676,15 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   if (
     (partial && resamp != "NEAREST") ||
       (decode && !resamp %in% c("NEAREST", "AVERAGE"))
+  ) {
+    return(NULL)
+  }
+  # What the source node's grid already says needs no open of the file.
+  # An interpolating read of integer bands stays with the warper below.
+  if (
+    !is.null(src_grid) &&
+      (!.grid_could_align(src_grid, target_grid) ||
+        (resamp != "NEAREST" && !decode && .dtype_family(src_grid@dtype) != "float"))
   ) {
     return(NULL)
   }
@@ -740,6 +796,24 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     nx = as.integer(ds$getRasterXSize()),
     ny = as.integer(ds$getRasterYSize())
   )
+}
+
+# Could `target` be a window of `src`, or its decimation? The grid says so
+# before the file is opened, and a warp of a remote file would otherwise
+# pay an open, serially on the host, to learn that it stays a warp.
+.grid_could_align <- function(src, target) {
+  shift <- .crs_false_origin_shift(src@crs, target@crs)
+  if (is.null(shift)) {
+    return(FALSE)
+  }
+  st <- src@transform
+  tt <- target@transform
+  all(.rio_near_int(c(
+    tt[[2L]] / st[[2L]],
+    tt[[6L]] / st[[6L]],
+    (tt[[1L]] - shift[[1L]] - st[[1L]]) / st[[2L]],
+    (tt[[4L]] - shift[[2L]] - st[[4L]]) / st[[6L]]
+  )))
 }
 
 #' How a nearest-neighbour read of several sources is served.
@@ -1899,6 +1973,9 @@ stage_raw_cube <- function(src, dst_vrt) {
 #' @param src_nodata Source sentinel (length 0 or 1), from the SourceNode.
 #' @param open_options GDAL open options of the source ("KEY=VALUE"). The
 #'   VRT records them, so every read of it opens the same source.
+#' @param alike What makes sources warp alike: two sources with the same
+#'   `alike` differ only in their name, so the second takes the first's VRT
+#'   with its source renamed and is never opened here. `NULL` builds.
 #' @return Path to the VRT file (in `tempdir()`).
 gdal_warp_vrt <- function(
   src_path,
@@ -1906,12 +1983,21 @@ gdal_warp_vrt <- function(
   target_grid,
   resampling,
   src_nodata = numeric(0),
-  open_options = character(0)
+  open_options = character(0),
+  alike = NULL
 ) {
   if (length(src_path) != 1L) {
     cli::cli_abort("gdal_warp_vrt() takes one source; several are read by gdal_warp_window().")
   }
   vrt <- tempfile(fileext = ".vrt")
+  key <- .warp_vrt_key(alike, band, target_grid, resampling, src_nodata, open_options)
+  named <- .xml_escape(.gdal_href(src_path))
+  memo <- .gdal_cache$warp_vrt
+  hit <- if (!is.null(key)) memo[[key]]
+  if (!is.null(hit)) {
+    writeLines(gsub(hit$named, named, hit$xml, fixed = TRUE), vrt)
+    return(vrt)
+  }
   args <- c(
     "-of",
     "VRT",
@@ -1949,7 +2035,22 @@ gdal_warp_vrt <- function(
     cl_arg = args,
     quiet = TRUE
   )
+  xml <- readLines(vrt, warn = FALSE)
+  # A source named more than once, or relative to the VRT, is not a rename.
+  if (!is.null(key) && sum(lengths(regmatches(xml, gregexpr(named, xml, fixed = TRUE)))) == 1L) {
+    if (length(memo) >= .gti_meta_max) {
+      rm(list = ls(memo, all.names = TRUE), envir = memo)
+    }
+    memo[[key]] <- list(named = named, xml = xml)
+  }
   vrt
+}
+
+# What a warped VRT is remembered under: see gdal_warp_vrt()'s `alike`.
+.warp_vrt_key <- function(alike, band, target_grid, resampling, src_nodata, open_options) {
+  if (!is.null(alike) && !length(open_options)) {
+    rlang::hash(list(alike, band, target_grid, resampling, src_nodata))
+  }
 }
 
 #' GDAL runtime version as an integer `GDAL_VERSION_NUM` (adapter).
@@ -3224,7 +3325,7 @@ garry_gdal_config <- function() {
   sc("GDAL_HTTP_TIMEOUT", "60")
   sc("GDAL_HTTP_CONNECTTIMEOUT", "10")
   sc("GDAL_CACHEMAX", as.character(as.integer(garry_opt("gdal_cachemax_mb"))))
-  sc("GDAL_INGESTED_BYTES_AT_OPEN", "32768") # one range grabs the COG header
+  sc("GDAL_INGESTED_BYTES_AT_OPEN", .gdal_open_bytes_least)
   sc("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   # Zarr's own keys (.zarr_allowed_ext); the list still refuses the
   # sidecar probes (.aux.xml, .ovr, .msk, ...) GDAL issues on every

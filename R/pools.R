@@ -579,7 +579,8 @@ NULL
 .daemon_policy <- function() {
   list(
     garry.read_retry = garry_opt("read_retry"),
-    garry.warp_exact = garry_opt("warp_exact")
+    garry.warp_exact = garry_opt("warp_exact"),
+    .garry_open_bytes = .gdal_daemon_open_bytes() # no user option: see .gdal_quiet_remote()
   )
 }
 

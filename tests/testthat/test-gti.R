@@ -329,3 +329,36 @@ test_that("a GTI sidecar is remembered until it changes", {
   saveRDS(list(entries = data.frame(location = c("a.tif", "b.tif"))), f)
   expect_identical(garry:::.gti_meta(idx)$entries$location, c("a.tif", "b.tif"))
 })
+
+test_that("a read daemon's remote open ingests what the run's headers need", {
+  key <- "GDAL_INGESTED_BYTES_AT_OPEN"
+  ingest <- function(...) garry:::.gdal_quiet_remote(gdalraster::get_config_option(key), ...)
+  cache <- garry:::.gdal_cache
+  withr::defer(cache$header_bytes <- 0)
+
+  # the host opens few files and keeps the most, as does any Zarr open
+  expect_identical(ingest(), "4194304")
+  withr::local_options(.garry_open_bytes = "32768")
+  expect_identical(ingest(), "32768")
+  expect_identical(ingest(zarr = TRUE), "4194304")
+
+  # the floor holds a small header, and a many-band header raises it
+  cache$header_bytes <- 0
+  expect_identical(garry:::.gdal_daemon_open_bytes(), "32768")
+  cache$header_bytes <- 1398102
+  expect_identical(garry:::.gdal_daemon_open_bytes(), "1398102")
+  cache$header_bytes <- 1e9
+  expect_identical(garry:::.gdal_daemon_open_bytes(), "4194304")
+  expect_identical(garry:::.daemon_policy()$.garry_open_bytes, "4194304")
+})
+
+test_that("a TIFF's header size follows its tiles and bands", {
+  path <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create(
+    "GTiff", path, 1024L, 512L, 8L, "Byte",
+    options = c("TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256"),
+    return_obj = TRUE
+  )
+  withr::defer(ds$close())
+  expect_equal(garry:::.gtiff_header_bytes(ds), 4 * 2 * 8 * 16 * 4 / 3)
+})

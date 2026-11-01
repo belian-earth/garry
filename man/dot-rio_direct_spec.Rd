@@ -12,7 +12,8 @@
   band = 1L,
   nodata = numeric(0),
   partial = FALSE,
-  decode = FALSE
+  decode = FALSE,
+  src_grid = NULL
 )
 }
 \arguments{
@@ -39,6 +40,9 @@ the file's nodata (if any) the node's, qualifies.}
 \item{decode}{\code{TRUE} for the codes behind a decoded source
 (\code{.gdal_read_decoded()}): integer bands qualify for \code{"near"} and
 \code{"average"}, the two reads that decode applies itself, and no others.}
+
+\item{src_grid}{The source node's \code{\link[=GridSpec]{GridSpec()}}, which can decline
+without opening the file.}
 }
 \value{
 \code{NULL}, or a list with \code{fx}, \code{fy}, \code{x_off}, \code{y_off} (the

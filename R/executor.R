@@ -134,14 +134,20 @@ NULL
       resampling = wnode@resampling
     ))
   }
-  spec <- .rio_direct_spec(
-    snode@path,
-    wnode@target_grid,
-    wnode@resampling,
-    snode@open_options,
-    band = band,
-    nodata = snode@nodata
-  )
+  # A file on the grid of one that had to warp warps too: no need to open it
+  alike <- list(snode@grid, snode@scale, snode@offset)
+  key <- .warp_vrt_key(alike, band, wnode@target_grid, wnode@resampling, snode@nodata, snode@open_options)
+  spec <- if (is.null(key) || is.null(.gdal_cache$warp_vrt[[key]])) {
+    .rio_direct_spec(
+      snode@path,
+      wnode@target_grid,
+      wnode@resampling,
+      snode@open_options,
+      band = band,
+      nodata = snode@nodata,
+      src_grid = snode@grid
+    )
+  }
   if (!is.null(spec)) {
     return(list(
       path = snode@path,
@@ -179,7 +185,8 @@ NULL
       wnode@target_grid,
       wnode@resampling,
       src_nodata = snode@nodata,
-      open_options = snode@open_options
+      open_options = snode@open_options,
+      alike = alike
     ),
     band = seq_along(band),
     nodata = snode@nodata,

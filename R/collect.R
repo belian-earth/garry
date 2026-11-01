@@ -28,6 +28,7 @@ NULL
 #'   `gdalraster::read_ds()` (`type`, `bbox` = `c(xmin, ymin, xmax, ymax)`,
 #'   `dim` = `c(nx, ny, nbands)`, `srs` = WKT, `datatype`), so the array is
 #'   self-describing and [preview()] can set real-world axes without the grid.
+#'   An `i32` cell of -2^31 reads as `NA`, the value R's integers keep for it.
 #' @examples
 #' f <- system.file("extdata", "garry-example.tif", package = "garry")
 #' red <- lazy_source(f, band = 1L)
@@ -748,8 +749,11 @@ garry_last_route <- function() .garry_state$route
   # straight from the remote, so they stay with the scheduler.
   if (distributed) {
     for (s in read_stage) {
+      if (s@kind != "source_read") {
+        next
+      }
       a <- .stage_read_args(graph, s)
-      if (s@kind == "source_read" && .read_would_fetch(a$path, a$open_options)) {
+      if (.read_would_fetch(a$path, a$open_options)) {
         return(NULL)
       }
     }

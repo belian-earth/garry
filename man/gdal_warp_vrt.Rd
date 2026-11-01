@@ -10,7 +10,8 @@ gdal_warp_vrt(
   target_grid,
   resampling,
   src_nodata = numeric(0),
-  open_options = character(0)
+  open_options = character(0),
+  alike = NULL
 )
 }
 \arguments{
@@ -28,6 +29,10 @@ VRT from a single input only. A multi-path source node is read by
 
 \item{open_options}{GDAL open options of the source ("KEY=VALUE"). The
 VRT records them, so every read of it opens the same source.}
+
+\item{alike}{What makes sources warp alike: two sources with the same
+\code{alike} differ only in their name, so the second takes the first's VRT
+with its source renamed and is never opened here. \code{NULL} builds.}
 }
 \value{
 Path to the VRT file (in \code{tempdir()}).

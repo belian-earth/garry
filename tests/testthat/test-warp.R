@@ -312,3 +312,59 @@ test_that("planning asks a warp's route without building its VRT", {
   invisible(collect(x, distributed = FALSE))
   expect_gte(n, 1L)
 })
+
+test_that("a file on a warped file's grid takes its VRT with the source renamed", {
+  # /vsimem, not a temporary directory: a VRT beside its source names it
+  # relatively, and that VRT is built each time.
+  dir <- "/vsimem/warp-alike"
+  withr::defer(gdalraster::vsi_rmdir(dir, recursive = TRUE))
+  a <- file.path(dir, "a.tif")
+  b <- file.path(dir, "b.tif")
+  gone <- file.path(dir, "gone.tif")
+  for (i in 1:2) {
+    ds <- gdalraster::create("GTiff", c(a, b)[[i]], 60, 40, 1, "Float32", return_obj = TRUE)
+    ds$setGeoTransform(c(500000, 10, 0, 4600000, 0, -10))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+    ds$write(1, 0, 0, 60, 40, as.numeric(t(.fixture_values(60, 40))) * i)
+    ds$close()
+  }
+
+  target <- .warp_target()
+  alike <- list(gdal_grid_spec(a)$grid)
+  warp <- function(path, alike = NULL) {
+    gdal_warp_vrt(path, 1L, target, "bilinear", alike = alike)
+  }
+  read <- function(vrt) gdal_read_window(vrt, 1L, 0L, 0L, 71L, 47L)
+
+  memo <- garry:::.gdal_cache$warp_vrt
+  rm(list = ls(memo), envir = memo)
+  first <- warp(a, alike)
+  renamed <- warp(b, alike)
+  expect_length(ls(memo), 1L)
+  expect_identical(readLines(renamed), readLines(warp(b)))
+  expect_equal(mean(read(renamed), na.rm = TRUE), 2 * mean(read(first), na.rm = TRUE), tolerance = 1e-6)
+
+  # no open comes with a rename, and any other `alike` opens to build
+  expect_no_error(warp(gone, alike))
+  expect_error(warp(gone, list("another grid")))
+})
+
+test_that("a grid that cannot align declines a direct read before any open", {
+  f <- fixture_gradient_f32()
+  g <- gdal_grid_spec(f)$grid
+  gone <- tempfile(fileext = ".tif") # any open would fail
+  decimated <- grid_spec(g@crs, extent = c(500000, 4599800, 500600, 4600000), dims = c(30L, 10L))
+  shifted <- grid_spec(g@crs, extent = c(500005, 4599605, 500605, 4600005), dims = c(60L, 40L))
+
+  expect_true(garry:::.grid_could_align(g, g))
+  expect_true(garry:::.grid_could_align(g, decimated))
+  expect_false(garry:::.grid_could_align(g, shifted))
+  expect_false(garry:::.grid_could_align(g, .warp_target()))
+
+  expect_null(garry:::.rio_direct_spec(gone, shifted, "near", src_grid = g))
+  expect_null(garry:::.rio_direct_spec(gone, .warp_target(), "near", src_grid = g))
+  integers <- g
+  integers@dtype <- "i16"
+  expect_null(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers))
+  expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = g))
+})

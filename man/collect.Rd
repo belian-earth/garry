@@ -29,6 +29,7 @@ A matrix/array result also carries a \code{gis} attribute in the style of
 \code{gdalraster::read_ds()} (\code{type}, \code{bbox} = \code{c(xmin, ymin, xmax, ymax)},
 \code{dim} = \code{c(nx, ny, nbands)}, \code{srs} = WKT, \code{datatype}), so the array is
 self-describing and \code{\link[=preview]{preview()}} can set real-world axes without the grid.
+An \code{i32} cell of -2^31 reads as \code{NA}, the value R's integers keep for it.
 }
 \description{
 Executes the plan and returns the result in the R session, always.

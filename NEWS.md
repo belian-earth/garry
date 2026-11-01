@@ -146,6 +146,15 @@
 
 ## Performance
 
+* A stack of remote files warped to another grid no longer stops at the
+  host to open them. `collect()` opened each file twice, one at a time,
+  and built its warped VRT twice. Now a file takes the VRT of the first
+  file on its grid, with the source renamed, and is not opened until a
+  daemon reads it. 141 files through 20 daemons at 15 ms went from 15.9 s
+  to 4.5 s, same pixels. Files sharing a grid, band, nodata, scale and
+  offset count as one product, so a file with an alpha band of its own
+  among them needs an open of its own: give it its own `lazy_source()`
+  grid.
 * Compute kernels reach daemons as StableHLO programs: the host traces
   each kernel once per input shape, a daemon compiles the text, and no R
   closure crosses a process. Compute stages on one chunk fold into one
@@ -257,6 +266,13 @@
 
 ## Bug fixes
 
+* A read daemon's remote open takes what the run's files need in its first
+  request, 32 KB unless the host has opened a many-band header, not 4 MB.
+  The pool read 1,576 MB of a 525 MB fixture, and read 2.5 times slower
+  over a 1 Gbit link and 4.9 times slower over a poor one with a plain
+  reader set the same way. On files small enough for 4 MB to hold them
+  whole, a far link loses that whole-file read: 2.5 s to 2.9 s on 1.6 MB
+  files at 100 ms.
 * Every write builds in a hidden `.garry-write-XXXX` directory beside its
   target and moves into place only when the whole run has succeeded, on every
   route and in every form: `write_tif()`, `cog = TRUE`, lists, groups and
