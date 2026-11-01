@@ -12,12 +12,12 @@
   f
 }
 
-test_that("a double scalar makes an integer raster f32; an integer keeps it", {
+test_that("a double scalar makes an integer raster f32; an integer keeps its carrier", {
   x <- lazy_source(.int_source())
   expect_identical(x@grid@dtype, "u16")
   expect_identical((x * 0.5)@grid@dtype, "f32")
   expect_identical((x - 100)@grid@dtype, "f32")
-  expect_identical((x * 2L)@grid@dtype, "u16")
+  expect_identical((x * 2L)@grid@dtype, "i32")
   expect_identical(sqrt(x)@grid@dtype, "f32")
 })
 
@@ -56,9 +56,9 @@ test_that("a map computes the dtype it declares", {
   expect_plan(lazy_map(x, fn = function(v) v / 2), m(1.5), "f32", file = FALSE)
   expect_plan(lazy_map(x, fn = function(v) v + 1L), m(4), "i16", file = FALSE)
   expect_plan(lazy_map(x, fn = function(v) g_cast(v, "f64")), m(3), "f64", file = FALSE)
-  # a carrier is the declared dtype, and a logical stores 0/1 at it
+  # an unsigned input computes in its carrier, and a logical stores 0/1
   u <- lazy_source(.int_source("UInt16", rep(3, 600)))
-  expect_plan(lazy_map(u, fn = function(v) v + 1L), m(4), "u16", file = FALSE)
+  expect_plan(lazy_map(u, fn = function(v) v + 1L), m(4), "i32", file = FALSE)
   expect_plan(lazy_map(u, fn = function(v) v > 1L), m(1), "u16", file = FALSE)
   # a stack's kernel sees its outer axis
   s <- lazy_stack(rep(list(x), 3), along = "t")

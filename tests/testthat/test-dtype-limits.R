@@ -61,7 +61,7 @@ test_that("+ 1L stays exact up to a dtype's end", {
     m <- .dl_m(vals)
     want <- if (type == "Float32") .as_f32(m + 1) else m + 1
     for (px in c(1e6, 4)) {
-      expect_plan(x + 1L, want, .dl_dtype[[type]], px = px, file = px == 4, info = type)
+      expect_plan(x + 1L, want, .carried(.dl_dtype[[type]]), px = px, file = px == 4, info = type)
     }
   }
 })
@@ -182,4 +182,55 @@ test_that("a band type garry has no dtype for is named", {
   f <- fixture_tile(1, "CFloat32")
   err <- expect_error(gdal_grid_spec(f), "unsupported GDAL data type")
   expect_match(conditionMessage(err), basename(f), fixed = TRUE)
+})
+
+# An unsigned value computes in a signed carrier. A result declares that dtype,
+# so it leaves the unsigned range alike in memory, across stages and in a file,
+# and only an explicit dtype narrows it.
+.dl_unsigned <- function(legs) {
+  b <- lazy_source(.dl_tile(c(200, 7), "Byte"))
+  u <- lazy_source(.dl_tile(c(60000, 7), "UInt16"))
+  w <- lazy_source(.dl_tile(c(4294967295, 7), "UInt32"))
+  bm <- .dl_m(c(200, 7))
+  um <- .dl_m(c(60000, 7))
+  wm <- .dl_m(c(4294967295, 7))
+  expect_plan(b * 2L, bm * 2, "i16", legs = legs)
+  expect_plan(b - 201L, bm - 201, "i16", legs = legs)
+  expect_plan(u + 10000L, um + 10000, "i32", legs = legs)
+  expect_plan(w + 1L, wm + 1, "i64", legs = legs, file = FALSE)
+  expect_plan(lazy_map(b, fn = function(v) v * 2L), bm * 2, "i16", legs = legs)
+}
+
+test_that("arithmetic on an unsigned raster declares the dtype it computes in", {
+  .dl_unsigned(list(.host))
+  b <- lazy_source(.dl_tile(c(200, 7), "Byte"))
+  m <- .dl_m(c(200, 7))
+  expect_plan(b + b, m * 2, "i16")
+  expect_plan(b - (b + 1L), m * 0 - 1, "i16")
+  expect_plan(-b, -m, "i16")
+  expect_plan(b %% 3L, m %% 3, "i16")
+  # across a stage boundary, as within one
+  expect_plan(lazy_map(b * 2L, fn = function(v) v + 1L), m * 2 + 1, "i16", px = 4)
+})
+
+test_that("a result that stays in range keeps the unsigned dtype", {
+  b <- lazy_source(.dl_tile(c(200, 7), "Byte"))
+  m <- .dl_m(c(200, 7))
+  expect_plan(abs(b), m, "u8")
+  expect_plan(reduce_over(lazy_stack(list(b, b), along = "t"), "max", "t"), m, "u8")
+})
+
+test_that("only an explicit dtype narrows an unsigned result", {
+  b <- lazy_source(.dl_tile(c(200, 7), "Byte"))
+  m <- .dl_m(c(200, 7))
+  expect_written(b * 2L, pmin(m * 2, 255), "u8")
+  expect_written(b - 201L, pmax(m - 201, 0), "u8")
+  expect_identical(lazy_map(b, fn = function(v) v * 2L, dtype = "u8")@grid@dtype, "u8")
+})
+
+local({
+  local_pools(2, 1)
+  test_that("the pools declare and hold an unsigned result the same", {
+    .dl_unsigned(list(.comp, .fused))
+  })
 })

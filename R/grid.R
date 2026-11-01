@@ -134,7 +134,7 @@ dtype_promote <- function(a, b, divide = FALSE) {
   if (!is.null(hit)) {
     return(hit)
   }
-  wkt <- gdalraster::srs_to_wkt(crs)
+  wkt <- tryCatch(gdalraster::srs_to_wkt(crs), error = function(e) "")
   if (!nzchar(wkt)) {
     cli::cli_abort("cannot interpret CRS: {.val {crs}}")
   }

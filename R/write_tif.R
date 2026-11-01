@@ -36,7 +36,9 @@ NULL
 #' @param path Destination path. For a named-list input: a directory
 #'   (files named `<sink>.tif`) or a named character vector keyed by sink.
 #' @param dtype Output dtype override (e.g. `"i16"`, `"u8"`); default
-#'   keeps the plan's dtype (usually `"f32"`).
+#'   keeps the plan's dtype (usually `"f32"`). Values past an integer
+#'   dtype's range saturate at its ends, so writing arithmetic on `u8` data,
+#'   which declares `i16`, back to Byte means asking for `dtype = "u8"`.
 #' @param scale,offset Quantization affine (see Details). Requires an
 #'   integer `dtype`; `offset` defaults to 0.
 #' @param nodata Sentinel written to the file and used for NaN demotion,

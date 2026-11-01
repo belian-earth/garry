@@ -71,11 +71,17 @@ g_value_and_gradient <- function(f, wrt) {
   anvl::value_and_gradient(f, wrt = wrt)
 }
 
-# The dtype a stored value reaches a kernel as: unsigned values upload
-# through a carrier.
-.input_dtype <- function(dtype) {
+# The dtype a kernel holds `dtype` in: unsigned values upload through a
+# carrier, so arithmetic on them leaves the unsigned range (Byte 200 * 2L
+# is 400, 7 - 8L is -1) and returns this dtype, not the unsigned one.
+.carrier_dtype <- function(dtype) {
   carrier <- unname(.anvl_upload_dtype[dtype])
-  as.character(.to_anvl_dtype(if (is.na(carrier)) dtype else carrier))
+  if (is.na(carrier)) dtype else carrier
+}
+
+# The dtype a stored value reaches a kernel as.
+.input_dtype <- function(dtype) {
+  as.character(.to_anvl_dtype(.carrier_dtype(dtype)))
 }
 
 # One key for a kernel's inputs. `dtypes` are as they reach the kernel.
@@ -267,12 +273,12 @@ g_value_and_gradient <- function(f, wrt) {
 #' @return An `AnvlArray`.
 #' @export
 g_upload <- function(x, dtype, device = NULL) {
-  carrier <- unname(.anvl_upload_dtype[dtype])
+  carrier <- .carrier_dtype(dtype)
   # An integer buffer cannot hold NaN, garry's nodata. Padding that reaches
   # an integer buffer is 0 from the start (.sv_grow, .exec_read_padded), so
   # a NaN here is a real missing cell: a read that failed, or one no tile
   # reaches.
-  if (!startsWith(dtype, "f") && (is.na(carrier) || !startsWith(carrier, "f")) && anyNA(x)) {
+  if (!startsWith(carrier, "f") && anyNA(x)) {
     cli::cli_abort(
       c(
         "a {.val {dtype}} raster holds missing values, which an integer buffer cannot.",
@@ -282,7 +288,7 @@ g_upload <- function(x, dtype, device = NULL) {
       call = NULL
     )
   }
-  anvl::nv_array(x, dtype = if (is.na(carrier)) dtype else carrier, device = device)
+  anvl::nv_array(x, dtype = carrier, device = device)
 }
 
 #' Download an AnvlArray (or a nested list of them) to R arrays.

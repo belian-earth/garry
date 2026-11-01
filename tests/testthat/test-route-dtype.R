@@ -39,7 +39,7 @@
 .rd_rows <- list(
   # the source's own integers, past every kernel seam
   add = function(x, m, dt) {
-    list(lazy_map(x, fn = .rd_add), if (dt == "f32") .as_f32(m + 1) else m + 1, dt)
+    list(lazy_map(x, fn = .rd_add), if (dt == "f32") .as_f32(m + 1) else m + 1, .carried(dt))
   },
   # float arithmetic leaves the integer dtype and declares so
   half = function(x, m, dt) {
@@ -53,7 +53,7 @@
     list(
       lazy_map(x, fn = .rd_third, dtype = named) * 2L,
       trunc(.rd_at(.rd_at(m, fl) / 3, fl)) * 2,
-      named
+      .carried(named)
     )
   },
   # a logical stores 0/1 at its carrier and selects in the next map

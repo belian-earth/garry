@@ -119,7 +119,7 @@
     expect_error(write_tif(x, tempfile(fileext = ".tif"), distributed = FALSE), "nodata")
   } else {
     expect_plan(x + 0, .as_f32(m), "f32", legs = maps, file = FALSE, info = info)
-    expect_plan(x + 1L, m + 1, dt, legs = maps, file = FALSE, info = info)
+    expect_plan(x + 1L, m + 1, .carried(dt), legs = maps, file = FALSE, info = info)
   }
   if (!S7::S7_inherits(graph_get(x@graph, x@node_id), WarpNode)) {
     wide <- align_to(x, .mc_wider(x))

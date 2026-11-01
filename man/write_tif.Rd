@@ -29,7 +29,9 @@ in \code{path}).}
 (files named \verb{<sink>.tif}) or a named character vector keyed by sink.}
 
 \item{dtype}{Output dtype override (e.g. \code{"i16"}, \code{"u8"}); default
-keeps the plan's dtype (usually \code{"f32"}).}
+keeps the plan's dtype (usually \code{"f32"}). Values past an integer
+dtype's range saturate at its ends, so writing arithmetic on \code{u8} data,
+which declares \code{i16}, back to Byte means asking for \code{dtype = "u8"}.}
 
 \item{scale, offset}{Quantization affine (see Details). Requires an
 integer \code{dtype}; \code{offset} defaults to 0.}

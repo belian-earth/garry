@@ -5,6 +5,15 @@
 * A `garry.*` option with no such name aborts with a `garry_option_error`,
   at run start and at `garry_daemons()`, so a typo or a retired name no
   longer means the default.
+* Arithmetic on an unsigned raster declares the dtype it computes in:
+  `u8` as `i16`, `u16` as `i32`, `u32` as `i64`, `u64` as `f64`. A Byte
+  cell of 200 `* 2L` collected 400 under a `u8` declaration and wrote 255,
+  and `-1` wrote 0. It now declares `i16` and writes 400, so a Byte raster
+  plus one writes Int16 unless asked otherwise. This covers `+`, `-`, `*`,
+  `%%`, unary minus, and a `lazy_map()`, `scan_over()` or custom
+  `reduce_over()` that declares no `dtype`. To narrow, say so:
+  `write_tif(dtype = "u8")` saturates at the dtype's ends, and
+  `lazy_map(dtype = "u8")` keeps the declaration.
 * These options are gone, and setting one now aborts:
   `garry.compute_inflight`, `garry.compute_ram_fraction`,
   `garry.cost_comp_efficiency`, `garry.cost_gflops_core`,

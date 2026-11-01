@@ -305,6 +305,9 @@ lazy_source <- function(
 #' @param fn Function of as many arrays as there are inputs.
 #' @param dtype Optional output dtype. Given, `fn` is not traced when the
 #'   raster is built, so a kernel that only traces at chunk time can use it.
+#'   Left out, it is what `fn` returns. Unsigned inputs compute in a wider
+#'   signed dtype (`u8` in `i16`, `u16` in `i32`), so `fn` over them returns
+#'   that unless told otherwise.
 #' @param bands `LazyDataset` only: bands to map over (default: all value bands).
 #' @return A `LazyRaster`, or a `LazyDataset` when given one.
 #' @seealso [collect()]
@@ -586,7 +589,7 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   b_id <- graph_import(graph, b@graph, b@node_id)
   grid <- .grid_retype(
     a@grid,
-    dtype %||% dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide)
+    dtype %||% .carrier_dtype(dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide))
   )
   id <- graph_add(
     graph,
@@ -599,9 +602,10 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 }
 
 # Scalar op helper: scalar on one side. The declared dtype follows what
-# the kernel computes (anvl's rules): an R integer keeps the raster's
-# dtype, while an R double, like division, makes an integer raster f32.
-# A float raster keeps its own float dtype either way.
+# the kernel computes (anvl's rules): an R integer keeps a signed raster's
+# dtype and an unsigned raster's carrier, while an R double, like
+# division, makes an integer raster f32. A float raster keeps its own
+# float dtype either way.
 .lazy_scalar_op <- function(
   lr,
   s,
@@ -620,7 +624,9 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
     s <- as.integer(s)
   }
   floats <- divide || is.double(s)
-  declared <- dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
+  declared <- dtype %||% .carrier_dtype(
+    dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
+  )
   if (identical(op, `^`)) {
     op <- .float_pow(declared)
   }
@@ -692,7 +698,7 @@ for (op_name in c("+", "-", "*", "/", "^", "%%", ">", "<", ">=", "<=", "==", "!=
 #' @rawNamespace S3method("-", "garry::LazyRaster", .lazy_minus_raster)
 .lazy_minus_raster <- function(e1, e2) {
   if (missing(e2)) {
-    return(.arith_map(e1, function(v) -v, e1@grid@dtype))
+    return(.arith_map(e1, function(v) -v, .carrier_dtype(e1@grid@dtype)))
   }
   .lazy_pm(`-`, e1, e2, "-")
 }
@@ -813,7 +819,7 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
   dots <- list(...)
   # round(x, digits) divides, so it leaves the integers
   keeps_dtype <- !length(dots) && generic %in%
-    c("abs", "sign", "floor", "ceiling", "trunc", "round", "signif")
+    c("abs", "sign", "floor", "ceiling", "trunc", "round")
   digits_only <- generic == "round" && length(dots) == 1L &&
     (is.null(names(dots)) || identical(names(dots), "digits"))
   if (length(dots) && !digits_only) {

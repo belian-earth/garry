@@ -3,6 +3,13 @@
 # take, so each leg compares its result to `want` exactly and reports the
 # path it ran on.
 
+# What arithmetic on `dtype` declares: an unsigned value computes in a signed
+# carrier, so a result can leave the unsigned range.
+.carried <- function(dtype) {
+  carrier <- c(u8 = "i16", u16 = "i32", u32 = "i64")
+  if (dtype %in% names(carrier)) carrier[[dtype]] else dtype
+}
+
 # The f32 nearest a double, in plain R: what a plan declaring f32 can hold.
 .as_f32 <- function(x) {
   out <- readBin(writeBin(as.numeric(x), raw(), size = 4L), "numeric", length(x), size = 4L)

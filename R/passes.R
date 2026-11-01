@@ -179,10 +179,11 @@ NULL
 }
 
 # The dtype `node` really returns over parents on these grids, so the
-# graph, every executor and every writer agree on one. `node@grid@dtype`
-# is what its inputs promote to, kept where the kernel returns that
-# dtype's carrier (.anvl_upload_dtype), and where it returns a logical,
-# which the node stores as 0/1. A node that cannot be traced here would
+# graph, every executor and every writer agree on one: an unsigned input
+# computes in its carrier (.carrier_dtype), so a kernel that returns the
+# carrier declares it, since its values need not fit the unsigned dtype.
+# A logical keeps `node@grid@dtype`, what its inputs promote to, and the
+# node stores it as 0/1. A node that cannot be traced here would
 # fail in its stage too, later, so the failure is raised now. The last
 # answer is kept: one fn over a dataset's bands, slices or groups meets
 # the same inputs thousands of times, and a large kernel traces for
@@ -226,12 +227,7 @@ NULL
       )
     }
   )
-  declared <- node@grid@dtype
-  dtype <- if (real == "bool" || identical(real, .input_dtype(declared))) {
-    declared
-  } else {
-    .from_anvl_dtype(real)
-  }
+  dtype <- if (real == "bool") node@grid@dtype else .from_anvl_dtype(real)
   .garry_state$node_dtype <- list(id = id, dtype = dtype)
   dtype
 }
