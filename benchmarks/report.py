@@ -269,6 +269,12 @@ def main() -> int:
             compile_s[r["arm"]].append(r["extra"]["jit_s"])
     for arm, seconds in sorted(compile_s.items()):
         print(f"- {arm}: cold wall includes numba's compile of numbagg, median {statistics.median(seconds):.1f} s, once per process, as garry's includes XLA's. The cost is fixed, so its share falls with data size.")
+    spill_mb = defaultdict(list)
+    for r in runs:
+        if (r.get("extra") or {}).get("spill_mb") is not None:
+            spill_mb[r["arm"]].append(r["extra"]["spill_mb"])
+    for arm, sizes in sorted(spill_mb.items()):
+        print(f"- {arm}: temporary files on disk, median {statistics.median(sizes) / 1024:.1f} GiB where a task writes them. The peak columns leave them out.")
     seen = {k.task for k in groups}
     for task in tasks_spec["tasks"]:
         if task["id"] in seen:

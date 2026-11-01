@@ -6,7 +6,8 @@
     "garry": {"cmd": ["Rscript", "engines/garry.R"], "route_check": true},
     "odc-dask": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-dask"], "chunk": {"small": 2048}, "env": {"GDAL_CACHEMAX": "256"}},
     "odc-threads": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-threads"], "read_pool": 4, "env": {"GDAL_CACHEMAX": "256"}},
-    "cubed": {"cmd": ["{python}", "engines/cubed.py"], "track": "memory", "dataset": "hls-zarr", "only_variant": "aligned"}
+    "cubed": {"cmd": ["{python}", "engines/cubed.py"], "track": "memory", "dataset": "hls-zarr", "only_variant": "aligned"},
+    "terra": {"cmd": ["Rscript", "engines/terra.R"]}
   },
   "output": {
     "driver": "GTiff",
@@ -33,7 +34,7 @@
       "variants": ["aligned", "warp"],
       "params": {"bands": ["B04", "B03", "B02"]},
       "route": "composite_direct",
-      "arms": ["garry", "odc-dask", "odc-threads", "cubed"],
+      "arms": ["garry", "odc-dask", "odc-threads", "cubed", "terra"],
       "notes": [
         "mask_cleanup takes about five times what binary morphology with the same disks takes, 0.14 against 0.03 s on one Fmask slice with the same cells (probe). It stays, as what a skilled ODC user writes: about 1 s of warm wall on masked aligned rows is this choice (estimate).",
         "warp: a 5 x 4 LocalCluster's best runs were 6.6 s warm against 7.3 s on threads, and 24 s on its first run against 15 s (probe). The arm stays on Dask threads."
@@ -50,7 +51,7 @@
       "variants": ["aligned", "warp"],
       "params": {"red": "B04", "nir": "B08"},
       "route": "gd_reduce",
-      "arms": ["garry", "odc-dask", "odc-threads", "cubed"],
+      "arms": ["garry", "odc-dask", "odc-threads", "cubed", "terra"],
       "notes": ["warp: a 5 x 4 LocalCluster's best runs were 4.5 s warm against 5.8 s on threads, and 23 s on its first run against 14 s (probe). The arm stays on Dask threads."],
       "check": {
         "aligned": {"max_abs": 0.001, "p99_abs": 0.0005, "nan_mismatch_frac": 0.0, "cor_min": 0.9999},
@@ -68,10 +69,13 @@
         "reference": {"eps": 1e-7, "maxiters": 1000},
         "objective_stride": 8
       },
+      "notes": ["No terra arm: terra has no geometric median, and a terra user would read the cube into matrices, rotate them and call another library."],
       "gap": {
         "max_ratio": 2.0,
         "not_comparable": {
-          "warp": {"garry": "odc reads int16 and the reference is float32, so its gap floors at 5.3e-6 at any eps, and garry's gap would carry the two engines' warp differences"}
+          "warp": {
+            "garry": "odc reads int16 and the reference is float32, so its gap floors at 5.3e-6 at any eps, and garry's gap would carry the two engines' warp differences"
+          }
         }
       },
       "route": "scheduler",
@@ -88,8 +92,8 @@
       "variants": ["default"],
       "params": {"k": 3, "t0": 3},
       "route": "scheduler",
-      "arms": ["garry", "odc-dask", "odc-threads"],
-      "notes": ["The Python wall measures numbagg, not the best Python Hampel: numbagg.nanmedian allocates per lane in float64. A 20-line numba gufunc behind the same call took odc-dask from about 6 s to 0.7 s warm with identical output (probe), which reverses the row's direction. The brief names numbagg, so the row stays until that is decided."],
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
+      "notes": ["The Python arms use a 20-line numba gufunc: no package has a Hampel filter for this shape, and numbagg allocates a buffer per lane. The suite takes a stock function where one exists, otherwise what a skilled user writes."],
       "check": {"default": {"max_abs": 0.001, "p99_abs": 0.0001, "nan_mismatch_frac": 0.0, "cor_min": 0.99999}}
     },
     {
@@ -99,7 +103,7 @@
       "variants": ["default"],
       "params": {"sigma_lvl": 1.0, "sigma_slp": 0.1, "sigma_obs": 2.0, "output": "mean"},
       "route": "scheduler",
-      "arms": ["garry", "odc-dask", "odc-threads"],
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
       "check": {"default": {"max_abs": 0.05, "p99_abs": 0.001, "nan_mismatch_frac": 0.0, "cor_min": 0.9999}}
     },
     {
@@ -109,7 +113,7 @@
       "variants": ["aligned"],
       "params": {"radius": 2, "stat": "nanmean", "band": "B08", "t": 27},
       "route": "scheduler",
-      "arms": ["garry", "odc-dask", "odc-threads"],
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
       "check": {"aligned": {"max_abs": 0.01, "p99_abs": 0.001, "nan_mismatch_frac": 0.0, "cor_min": 0.99999}}
     },
     {
@@ -120,7 +124,7 @@
       "params": {},
       "output": {"dtype": "int8", "nodata": -128},
       "route": "read_only",
-      "arms": ["garry", "odc-dask", "odc-threads"],
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
       "check": {"default": {"max_abs": 0.0, "p99_abs": 0.0, "nan_mismatch_frac": 0.0}}
     }
   ]

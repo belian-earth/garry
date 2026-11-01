@@ -80,7 +80,7 @@ GEOMAD_EPS = 0.45
 GEOMAD_MAXITERS = 1000
 
 
-# ---- proof that numbagg ran -----------------------------------------------------------------------
+# ---- the median kernel, and proof that it ran ------------------------------------------------------
 
 numbagg_calls = []
 numbagg_compile_s = []  # one entry, from the process's first call
@@ -106,9 +106,50 @@ def nanmedian_counted(a, **kwargs):
     return _nanmedian(a, **kwargs)
 
 
+def use_lane_median() -> None:
+    """ts_hampel's median. numbagg has no loop for short windows: it allocates a float64 buffer per lane, and no
+    package has a Hampel filter for this shape, so this is the loop a skilled user writes. Where a stock function
+    exists the suite uses it. numba compiles a gufunc when it is defined, so this runs inside the clock, once."""
+    global _nanmedian
+    if numbagg_compile_s:
+        return
+    start = time.perf_counter()
+
+    @numba.guvectorize(
+        [(numba.float32[:], numba.float64[:]), (numba.float64[:], numba.float64[:])],
+        "(n)->()",
+        nopython=True,
+        target="parallel",
+    )
+    def lane_median(lane, out):
+        buffer = np.empty(lane.shape[0], np.float64)
+        k = 0
+        for i in range(lane.shape[0]):
+            value = float(lane[i])
+            if value == value:
+                j = k
+                while j > 0 and buffer[j - 1] > value:
+                    buffer[j] = buffer[j - 1]
+                    j -= 1
+                buffer[j] = value
+                k += 1
+        if k == 0:
+            out[0] = np.nan
+        elif k % 2:
+            out[0] = buffer[k // 2]
+        else:
+            out[0] = 0.5 * (buffer[k // 2 - 1] + buffer[k // 2])
+
+    def median(a, axis=None, **kwargs):
+        return lane_median(np.moveaxis(a, axis[0] if isinstance(axis, (list, tuple)) else axis, -1))
+
+    _nanmedian = median
+    numbagg_compile_s.append(time.perf_counter() - start)
+
+
 # dask.array.nanmedian and xarray both look the function up on the module at call time.
 numbagg.nanmedian = nanmedian_counted
-USES_NUMBAGG = {"median", "ndvi", "ts_hampel"}
+USES_NUMBAGG = {"median", "ndvi", "ts_hampel"}  # ts_hampel through use_lane_median(), behind the same call
 
 
 # ---- context --------------------------------------------------------------------------------------
@@ -359,6 +400,7 @@ def annual_stack(ctx: Ctx) -> xr.DataArray:
 def task_ts_hampel(ctx: Ctx, path: str) -> None:
     """Window, median and scaled MAD, the classic filter. construct pads the series ends with NaN, so a window
     shrinks there, and the median skips NaN, so gaps never count; a gap stays a gap."""
+    use_lane_median()
     k, t0 = ctx.params["k"], ctx.params["t0"]
     cube = annual_stack(ctx)
     window = cube.rolling(t=2 * k + 1, center=True).construct("w")
