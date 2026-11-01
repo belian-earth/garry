@@ -27,6 +27,46 @@ Every script below is at `git show fa45425:benchmarks/<name>`.
 
 The remote workload those scripts ran, for anyone restoring it: `hls2-s30` from Planetary Computer, bbox 144.13, -7.725, 144.47, -7.475, all of 2023, Fmask bits 0 to 3, onto EPSG:20255 at 30 m with extent 183060, 9144870, 220830, 9172800. The suite's `hls` data keeps that grid and mask. `hls-median-composite.R` also carried the first same-machine references, three bands, one pass: ODC and Dask 28.35 s, vrtility 20.74 s.
 
+## Suite baselines
+
+First full runs of the suite on commit `73480da`, 2026-11-01, on a 20-thread workstation with 62 GB. Three repeats, median wall in seconds, cold / warm; `report.py` over the runs gives the rest. "Best ODC" is the faster of `odc-dask` and `odc-threads`. Cold ODC wall holds about 6.4 s of numba compile, once per process. Wall excludes pool start, 5.4 s for garry, 0.7 s for ODC and 1.8 s for terra.
+
+Small, 8 GB cap:
+
+| task | variant | garry | best ODC | terra |
+|---|---|---|---|---|
+| median | aligned | 9.0 / 7.8 | 9.5 / 3.0 | 10.5 / 10.0 |
+| median | warp | 9.6 / 9.6, 2 of 3 | 14.8 / 7.5 | 27.4 / 26.5 |
+| ndvi | aligned | 8.2 / OOM | 9.0 / 2.5 | 8.9 / 8.6 |
+| ndvi | warp | 8.5 / 7.0 | 13.1 / 5.8 | 21.2 / 20.6 |
+| geomedian | aligned | OOM | 3.4 / 3.2 | no arm |
+| geomedian | warp | OOM | 12.4 / 11.6 | no arm |
+| ts_kalman | default | 1.9 / 1.4 | 2.3 / 2.3 | 9.6 / 9.3 |
+| ts_hampel | default | 2.5 / 1.8 | 1.2 / 0.7 | 11.9 / 11.6 |
+| focal | aligned | 1.1 / 0.8 | 0.1 / 0.1 | 0.1 / 0.1 |
+| wide_write | default | 1.2 / 0.8 | 0.3 / 0.2 | 0.7 / 0.6 |
+
+Medium, 16 GB cap, `odc-dask` chunk 2048 from the sweep:
+
+| task | variant | garry | best ODC | terra |
+|---|---|---|---|---|
+| median | aligned | OOM | 36.6 / 29.6 | 117 / 115 |
+| median | warp | OOM | 57.5 / 49.9 | not run |
+| ndvi | aligned | OOM | 30.7 / 24.5 | 103 / 102 |
+| ndvi | warp | OOM | 46.3 / 39.2 | not run |
+| geomedian | aligned | OOM | OOM | no arm |
+| geomedian | warp | OOM | OOM | no arm |
+| ts_kalman | default | 2.9 / 2.3 | 9.0 / 9.6 | 12.8 / 12.6 |
+| ts_hampel | default | 4.5 / 3.8 | 2.7 / 2.2 | 15.6 / 15.4 |
+| focal | aligned | 1.6 / 1.3 | 0.4 / 0.3 | 0.4 / 0.4 |
+| wide_write | default | 5.0 / 4.6 | 2.3 / 2.3 | 8.4 / 8.3 |
+
+- Every garry median, ndvi and geomedian run at medium failed at the cap. Two of those runs left no scope record, which means the kill took the wrapper too.
+- ODC also reaches the cap on median and ndvi, with up to 2,400 `memory.max` events a run, and lost 2 of its 48 phases, both warm on `odc-dask` aligned.
+- Cubed, the memory track, finishes all three aligned tasks at medium: geomedian 53.9 s, median 45.0 s, ndvi 42.2 s, cold.
+- terra's warp variants stopped at medium: median warp spilled about 8 GB of temporary files, past the disk free on the day. That is a limit of this run, not of terra.
+- All value checks pass at both sizes.
+
 ---
 
 # garry benchmarks

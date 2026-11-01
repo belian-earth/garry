@@ -48,8 +48,7 @@ processes, with the numeric kernels JIT-compiled to XLA (CPU or GPU).
   moved half a cell.
 - **Fast.** `collect()` plans the graph into chunks, streams reads through a
   GDAL daemon pool, and runs the fused kernels through
-  [anvl](https://github.com/r-xla/anvl) (XLA). On a three-band annual HLS
-  composite it matches Python's ODC + dask on the same machine, in idiomatic R.
+  [anvl](https://github.com/r-xla/anvl) (XLA).
 - **GDAL-faithful.** IO is [gdalraster](https://cran.r-project.org/package=gdalraster).
 
 ## Scope
