@@ -196,12 +196,13 @@ NULL
 # seven serial 404s (~5 s) per open measured on OlmoEarth 2026-10-22.
 # Admitting only Zarr's own keys (.zarr_allowed_ext) refuses them.
 .gdal_quiet_remote <- function(code, zarr = FALSE) {
-  prev_rd <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
-  prev_ib <- gdalraster::get_config_option("GDAL_INGESTED_BYTES_AT_OPEN")
-  prev_ext <- gdalraster::get_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS")
+  prev_rd <- .gdal_config_prev("GDAL_DISABLE_READDIR_ON_OPEN")
+  prev_ib <- .gdal_config_prev("GDAL_INGESTED_BYTES_AT_OPEN")
+  prev_ext <- .gdal_config_prev("CPL_VSIL_CURL_ALLOWED_EXTENSIONS")
+  allowlist <- gdalraster::get_config_option("CPL_VSIL_CURL_ALLOWED_EXTENSIONS")
   gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   gdalraster::set_config_option("GDAL_INGESTED_BYTES_AT_OPEN", "4194304")
-  if (zarr && !nzchar(prev_ext)) {
+  if (zarr && !nzchar(allowlist)) {
     gdalraster::set_config_option(
       "CPL_VSIL_CURL_ALLOWED_EXTENSIONS",
       paste(.zarr_allowed_ext, collapse = ",")
@@ -218,6 +219,15 @@ NULL
   force(code)
 }
 
+# What to restore a config option to after a scoped change. GDAL reports a
+# value from the environment as well as a config option, and writing that
+# back would pin it as a config option that outlives the variable, so it
+# restores to unset.
+.gdal_config_prev <- function(key) {
+  prev <- gdalraster::get_config_option(key)
+  if (identical(prev, Sys.getenv(key))) "" else prev
+}
+
 # Modification stamp of a local file (mtime and size), or NULL for a
 # remote or virtual path. A cached handle whose file changed since it was
 # opened would serve the old pixels from its block cache.
@@ -230,31 +240,29 @@ NULL
   c(as.numeric(info$mtime), as.numeric(info$size))
 }
 
-# Decode blocks on every core for the rest of the calling function:
-# GDAL_NUM_THREADS is read when a GTiff is opened, so `paths`' cached
-# handles are dropped on entry (they reopen threaded) and on exit (later
-# reads reopen as configured). Only the calling host process is affected.
+# Decode blocks on every core until the returned closure runs, which the
+# caller hands to on.exit(): GDAL_NUM_THREADS is read when a GTiff is
+# opened, so `paths`' cached handles are dropped here (they reopen
+# threaded) and by the closure (later reads reopen as configured). Only
+# the calling host process is affected.
 #
 # Not for a read that touches a Zarr store. The threaded warper and Zarr
 # shard reader report from GDAL worker threads (a missing shard comes back
 # as "shard file too small"), and gdalraster's message handler then calls
 # into R off the main thread, which aborts the session (seen 2026-10-22).
 # Remote Zarr reads are bandwidth-bound, so the threads buy nothing.
-.with_gdal_threads <- function(paths, envir = parent.frame()) {
+.gdal_threads_all <- function(paths) {
   if (any(vapply(paths, .gdal_is_zarr, logical(1)))) {
-    return(invisible(NULL))
+    return(function() invisible(NULL))
   }
-  prev <- gdalraster::get_config_option("GDAL_NUM_THREADS")
+  prev <- .gdal_config_prev("GDAL_NUM_THREADS")
   gdalraster::set_config_option("GDAL_NUM_THREADS", "ALL_CPUS")
   for (p in paths) .gdal_handle_drop(p)
-  withr::defer(
-    {
-      gdalraster::set_config_option("GDAL_NUM_THREADS", prev)
-      for (p in paths) .gdal_handle_drop(p)
-    },
-    envir = envir
-  )
-  invisible(NULL)
+  function() {
+    gdalraster::set_config_option("GDAL_NUM_THREADS", prev)
+    for (p in paths) .gdal_handle_drop(p)
+    invisible(NULL)
+  }
 }
 
 # Close and forget every cached handle on `path`, whatever its open
@@ -456,7 +464,7 @@ gdal_blank_vrt <- function(grid) {
 #'   (each length 0 when the band carries no scaling metadata).
 #' @export
 gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
-  ds <- .gdal_handle(path, open_options)
+  ds <- .gdal_probe(path, open_options)
   gt <- ds$getGeoTransform()
   nx <- ds$getRasterXSize()
   ny <- ds$getRasterYSize()
@@ -989,7 +997,7 @@ gdal_read_window <- function(
     sw <- x_size * decim$fx
     sh <- y_size * decim$fy
     if (decim$fx > 1L || decim$fy > 1L) {
-      prev <- gdalraster::get_config_option("GDAL_RASTERIO_RESAMPLING")
+      prev <- .gdal_config_prev("GDAL_RASTERIO_RESAMPLING")
       gdalraster::set_config_option("GDAL_RASTERIO_RESAMPLING", decim$resamp)
       on.exit(
         gdalraster::set_config_option("GDAL_RASTERIO_RESAMPLING", prev),
@@ -2411,13 +2419,21 @@ gdal_write_window <- function(
 # sf's and terra's, when loaded, replace it and warn. It runs inside
 # GDAL's stack, so this only records. `failed` lists GDAL's reports and
 # then the call's error, the first being the nearest to the cause, with
-# signed URLs scrubbed; `value` is the call's value or that error.
+# signed URLs scrubbed; `value` is the call's value or that error. A
+# report naming a signed URL reaches the session afterwards without its
+# token, as a message.
 .gdal_attempt <- function(expr) {
   failed <- character(0)
+  held <- character(0)
   listen <- function(cnd) {
-    m <- cli::ansi_strip(conditionMessage(cnd))
-    if (grepl("GDAL (FAILURE|[Ee]rror)|error occurred during GDAL", m)) {
-      failed <<- c(failed, .url_scrub(sub("^.*GDAL FAILURE [0-9]+: ", "", trimws(m))))
+    said <- trimws(cli::ansi_strip(conditionMessage(cnd)))
+    if (grepl("GDAL (FAILURE|[Ee]rror)|error occurred during GDAL", said)) {
+      failed <<- c(failed, .url_scrub(sub("^.*GDAL FAILURE [0-9]+: ", "", said)))
+    }
+    clean <- .url_scrub(said)
+    if (!identical(clean, said)) {
+      held <<- c(held, clean)
+      invokeRestart(if (inherits(cnd, "warning")) "muffleWarning" else "muffleMessage")
     }
   }
   value <- tryCatch(
@@ -2427,6 +2443,7 @@ gdal_write_window <- function(
       e
     }
   )
+  lapply(held, message)
   list(value = value, failed = failed)
 }
 
@@ -2581,10 +2598,13 @@ gdal_close_output <- function(ds, path, call = rlang::caller_env()) {
     }
   }
   if (length(nodata) != 1L && .dtype_family(dtype) != "float" && anyNA(v)) {
-    cli::cli_abort(paste0(
-      "result contains nodata (NaN) but no {.arg nodata} sentinel was ",
-      "given for integer output dtype {.val {dtype}}"
-    ))
+    cli::cli_abort(
+      paste0(
+        "result contains nodata (NaN) but no {.arg nodata} sentinel was ",
+        "given for integer output dtype {.val {dtype}}"
+      ),
+      class = c("garry_write_error", "garry_error")
+    )
   }
   list(v = v, nr = nr, nc = nc)
 }
@@ -2601,7 +2621,10 @@ gdal_close_output <- function(ds, path, call = rlang::caller_env()) {
 #' @return As [gdalraster::pixel_extract()].
 #' @keywords internal
 gdal_pixel_extract <- function(raster, ...) {
-  gdalraster::pixel_extract(raster, ...)
+  if (!is.character(raster)) {
+    return(gdalraster::pixel_extract(raster, ...))
+  }
+  .gdal_with_retry(function() gdalraster::pixel_extract(raster, ...), "read", raster)
 }
 
 # Whole-file gdal_translate (D13: the only home for the gdalraster call).

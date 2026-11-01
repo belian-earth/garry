@@ -12,7 +12,6 @@
 }
 
 test_that(".gdal_band_dims reads an N-D array's time and band dimensions", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   bd <- .gdal_band_dims(.gdal_handle(fx$path))
   expect_identical(attr(bd, "dims"), c("time", "band"))
@@ -25,7 +24,6 @@ test_that(".gdal_band_dims reads an N-D array's time and band dimensions", {
 })
 
 test_that("lazy_dataset() lays an N-D Zarr array out as bands x time slices", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   ds <- lazy_dataset(fx$path)
   expect_named(ds@bands, paste0("b", 1:4))
@@ -40,7 +38,6 @@ test_that("lazy_dataset() lays an N-D Zarr array out as bands x time slices", {
 })
 
 test_that("bands and assets select along the band dimension", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   ds <- lazy_dataset(fx$path, bands = c(4L, 2L))
   expect_named(ds@bands, c("b4", "b2"))
@@ -51,7 +48,6 @@ test_that("bands and assets select along the band dimension", {
 })
 
 test_that("time_sel() on a dataset keeps the matching slices of every band", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   ds <- lazy_dataset(fx$path)
   two <- time_sel(ds, c("2021", "2023"))
@@ -66,7 +62,6 @@ test_that("time_sel() on a dataset keeps the matching slices of every band", {
 })
 
 test_that("time builds only the selected slices, as time_sel() keeps them", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   g <- grid_spec("EPSG:32632", c(500000, 4599800, 500300, 4600000), res = 10)
   for (sel in list("2023", c("2021", "2023"), 2L, "202")) {
@@ -101,7 +96,6 @@ test_that("time builds only the selected slices, as time_sel() keeps them", {
 })
 
 test_that("a year's bands on a target grid collapse into one multi-band read", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
   yr <- time_sel(lazy_dataset(fx$path, g), "2023")
@@ -116,7 +110,6 @@ test_that("a year's bands on a target grid collapse into one multi-band read", {
 })
 
 test_that("the OlmoEarth decode fuses onto a Zarr read, nodata staying NaN", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   ds <- lazy_map(time_sel(lazy_dataset(fx$path), "2022"),
                  fn = dequantize_olmoearth, dtype = "f32")
@@ -125,18 +118,6 @@ test_that("the OlmoEarth decode fuses onto a Zarr read, nodata staying NaN", {
   expect_equal(unname(got[, , 3]), sign(ref) * (abs(ref) / 127.5)^2,
                tolerance = 1e-6)
   expect_true(is.nan(got[1, 1, 3]))
-})
-
-test_that("pooled reads of a Zarr dataset match the single-process read", {
-  skip_on_cran()
-  skip_if_not_installed("jsonlite")
-  fx <- fixture_zarr_nd()
-  local_pools(2, 1, gdal_config = TRUE)
-  g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
-  yr <- lazy_map(time_sel(lazy_dataset(fx$path, g), "2021"),
-                 fn = dequantize_olmoearth, dtype = "f32")
-  expect_equal(collect(yr, distributed = TRUE),
-               collect(yr, distributed = FALSE), tolerance = 0)
 })
 
 test_that("Zarr connection strings count as remote and get the vsicurl prefix", {
@@ -153,7 +134,6 @@ test_that("Zarr connection strings count as remote and get the vsicurl prefix", 
 })
 
 test_that("a Zarr handle is closed once its reads pass its budget", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   testthat::local_mocked_bindings(.gdal_zarr_handle_mb = 600 / 2^20) # 600 bytes
   .gdal_handle_drop(fx$path)
@@ -180,7 +160,6 @@ test_that("a Zarr handle is closed once its reads pass its budget", {
 }
 
 test_that("a dataset across two UTM-zone Zarr stores reads both zones", {
-  skip_if_not_installed("jsonlite")
   zp <- .zone_pair()
   build <- function(coalesce) {
     old <- options(garry.read_coalesce = coalesce)
@@ -203,18 +182,7 @@ test_that("a dataset across two UTM-zone Zarr stores reads both zones", {
   expect_gt(mean(!is.na(on$value[, 32:60, 3])), 0.5)
 })
 
-test_that("pooled cross-zone reads match the single-process read", {
-  skip_on_cran()
-  skip_if_not_installed("jsonlite")
-  zp <- .zone_pair()
-  local_pools(2, 1, gdal_config = TRUE)
-  yr <- time_sel(lazy_dataset(c(zp$a$path, zp$b$path), zp$grid), "2021")
-  expect_equal(collect(yr, distributed = TRUE),
-               collect(yr, distributed = FALSE), tolerance = 0)
-})
-
 test_that("sources that differ in band count are refused", {
-  skip_if_not_installed("jsonlite")
   zp <- .zone_pair()
   f <- withr::local_tempfile(fileext = ".tif")
   ds <- gdalraster::create("GTiff", f, 10, 10, 1, "Int8", return_obj = TRUE)
@@ -225,7 +193,6 @@ test_that("sources that differ in band count are refused", {
 })
 
 test_that("a Zarr store warps window by window, matching GDAL's warped VRT", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   # half-pixel shift and 15 m: neither a window nor a decimation
   g <- grid_spec("EPSG:32632", c(500005, 4599815, 500275, 4599995), res = 15)
@@ -245,7 +212,6 @@ test_that("a Zarr store warps window by window, matching GDAL's warped VRT", {
 })
 
 test_that("daemon hygiene closes cached Zarr handles and keeps the rest", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   tif <- fixture_multiband()$path
   .gdal_handle(fx$path)
@@ -257,7 +223,6 @@ test_that("daemon hygiene closes cached Zarr handles and keeps the rest", {
 })
 
 test_that("band_sel() still selects from a stack the planner collapsed", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
   yr <- time_sel(lazy_dataset(fx$path, g), "2023")
@@ -287,7 +252,6 @@ test_that("a coarsened preview keeps a collapsed warp's bands", {
 })
 
 test_that("same-CRS Zarr stores stay a multi-path source, not a mosaic VRT", {
-  skip_if_not_installed("jsonlite")
   a <- fixture_zarr_nd()
   b <- fixture_zarr_nd(x0 = 500300, shift = 7L)
   g <- grid_spec("EPSG:32632", c(500000, 4599800, 500600, 4600000), res = 10)
@@ -307,7 +271,6 @@ test_that("same-CRS Zarr stores stay a multi-path source, not a mosaic VRT", {
 })
 
 test_that("Zarr sources with different time coordinates are refused", {
-  skip_if_not_installed("jsonlite")
   a <- fixture_zarr_nd()
   b <- fixture_zarr_nd(x0 = 500300, year0 = 2022L)
   g <- grid_spec("EPSG:32632", c(500000, 4599800, 500600, 4600000), res = 10)
@@ -315,7 +278,6 @@ test_that("Zarr sources with different time coordinates are refused", {
 })
 
 test_that("a Zarr handle's byte count goes with the handle on eviction", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   old <- .gdal_handle_cap(1L)
   on.exit(.gdal_handle_cap(old), add = TRUE)
@@ -328,7 +290,6 @@ test_that("a Zarr handle's byte count goes with the handle on eviction", {
 })
 
 test_that("a multi-band window warp returns the same cube in either form", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   g <- grid_spec("EPSG:32632", c(500005, 4599815, 500275, 4599995), res = 15)
   args <- list(fx$path, 9:12, g, 0L, 0L, g@dims[["x"]], g@dims[["y"]],
@@ -342,7 +303,6 @@ test_that("a multi-band window warp returns the same cube in either form", {
 })
 
 test_that("a failed Zarr warp reports GDAL's cause, not the wrapper's words", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   grid <- lazy_dataset(fx$path)@bands[[1L]][[1L]]@grid
   n <- 0L
@@ -358,4 +318,30 @@ test_that("a failed Zarr warp reports GDAL's cause, not the wrapper's words", {
     "HTTP 403 on a shard",
     fixed = TRUE
   )
+})
+
+# A skip here ends the file, so this block stays last.
+local({
+  skip_on_cran()
+  local_pools(2, 1, gdal_config = TRUE)
+
+  test_that("pooled reads of a Zarr dataset match the single-process read", {
+    fx <- fixture_zarr_nd()
+    g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
+    yr <- lazy_map(time_sel(lazy_dataset(fx$path, g), "2021"),
+                   fn = dequantize_olmoearth, dtype = "f32")
+    got <- collect(yr, distributed = TRUE)
+    expect_equal(got, collect(yr, distributed = FALSE), tolerance = 0)
+    ref <- .nd_ref(fx, 1, 3)[6:15, 6:25]
+    expect_equal(unname(got[, , 3]), sign(ref) * (abs(ref) / 127.5)^2, tolerance = 1e-6)
+  })
+
+  test_that("pooled cross-zone reads match the single-process read", {
+    zp <- .zone_pair()
+    yr <- time_sel(lazy_dataset(c(zp$a$path, zp$b$path), zp$grid), "2021")
+    got <- collect(yr, distributed = TRUE)
+    expect_equal(got, collect(yr, distributed = FALSE), tolerance = 0)
+    # the west half is zone 32's own pixels
+    expect_equal(unname(got[, 1:30, 3]), .nd_ref(zp$a, 1, 3))
+  })
 })

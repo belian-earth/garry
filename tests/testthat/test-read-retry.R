@@ -5,6 +5,7 @@
 
 test_that("a transient failure is retried and succeeds", {
   withr::local_options(garry.read_retry = 2L)
+  .local_no_backoff()
   n <- 0L
   thunk <- function() {
     n <<- n + 1L
@@ -19,6 +20,7 @@ test_that("a transient failure is retried and succeeds", {
 
 test_that("a persistent failure exhausts the retries and propagates", {
   withr::local_options(garry.read_retry = 1L)
+  .local_no_backoff()
   n <- 0L
   expect_error(
     suppressWarnings(
@@ -51,6 +53,7 @@ test_that("the last failure names the source and the cause", {
 
 test_that("a signed URL's token stays out of GDAL's own text", {
   withr::local_options(garry.read_retry = 1L)
+  .local_no_backoff()
   url <- "/vsicurl/https://acct.blob.core.windows.net/c/a.tif?se=2026&sig=tok%3D"
   msg <- paste0("'", url, "' not recognized as being in a supported file format")
   warned <- NULL
@@ -86,8 +89,8 @@ test_that("garry's own errors are not retried or relabelled", {
 
 test_that(".exec_read_padded survives one transient read failure", {
   withr::local_options(garry.read_retry = 1L)
+  .local_no_backoff()
   f <- fixture_gradient_f32()
-  want <- collect(lazy_source(f) + 0)
   n <- 0L
   real <- gdal_read_window
   testthat::local_mocked_bindings(
@@ -99,5 +102,5 @@ test_that(".exec_read_padded survives one transient read failure", {
     .package = "garry")
   got <- suppressWarnings(collect(lazy_source(f) + 0))
   expect_gte(n, 2L)   # the failed attempt was retried, not fatal
-  expect_identical(got, want)
+  expect_equal(unclass(got), .fixture_values(60, 40), tolerance = 0, ignore_attr = TRUE)
 })

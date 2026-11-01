@@ -351,15 +351,61 @@ NULL
   invisible(profiles)
 }
 
+# Abort if a dispatcher has stopped handing out tasks. A broadcast sends
+# one task per daemon. Lose a daemon before it takes its task and that
+# task stays queued: the survivors stay connected and idle, every later
+# task queues behind it, and cancelling it frees nothing (mirai 2.7.2,
+# 3 readers, one busy when the broadcast came). A queue with nothing
+# running, and nothing finished since the check before, is that state: a
+# task waits on an idle daemon for milliseconds at most. Resetting the
+# profile lets every later check read it as a pool with no daemon.
+# `before` is this function's value at the last check; a width-1 profile
+# has no dispatcher and no queue.
+.assert_pools_moving <- function(profiles, before = list(), call = rlang::caller_env()) {
+  now <- lapply(
+    stats::setNames(nm = profiles),
+    function(p) mirai::status(.compute = p)$mirai
+  )
+  blocked <- function(q) {
+    !is.null(q) && q[["awaiting"]] > 0L && q[["executing"]] == 0L
+  }
+  stuck <- Filter(
+    function(p) {
+      blocked(now[[p]]) &&
+        blocked(before[[p]]) &&
+        now[[p]][["completed"]] == before[[p]][["completed"]]
+    },
+    profiles
+  )
+  for (p in stuck) {
+    mirai::daemons(0L, .compute = p)
+  }
+  if (length(stuck)) {
+    cli::cli_abort(
+      c(
+        "{length(stuck)} garry daemon pool{?s} will take no more tasks: {.val {stuck}}.",
+        "i" = "A daemon was probably killed (out of memory?) with a broadcast task queued for it.",
+        "i" = "Call {.fn garry_daemons} to restart the pools."
+      ),
+      class = c("garry_pool_error", "garry_error"),
+      call = call
+    )
+  }
+  now
+}
+
 # One idle step of a wait on `profiles`: a short sleep, and once a
-# second the check that a daemon is left to wait for. A width-1 profile
-# has no dispatcher to hand a dead daemon's task back, so the task stays
-# unresolved forever and only this ends the wait.
+# second the checks that a daemon is left to wait for and that the
+# queue moves. A width-1 profile has no dispatcher to hand a dead
+# daemon's task back, so the task stays unresolved forever and only this
+# ends the wait.
 .idle_step <- function(profiles, call = rlang::caller_env()) {
   last_check <- Sys.time()
+  queues <- list()
   function() {
     if (difftime(Sys.time(), last_check, units = "secs") > 1) {
       .assert_pools_alive(profiles, call = call)
+      queues <<- .assert_pools_moving(profiles, queues, call = call)
       last_check <<- Sys.time()
     }
     Sys.sleep(0.002)
@@ -456,10 +502,15 @@ NULL
       call = call
     )
   }
-  for (p in profiles) {
-    h <- do.call(mirai::everywhere, c(args, list(.compute = p)))
+  # Send to every profile, then wait. A fresh daemon's first task loads
+  # garry, about a second, so a wait per profile before the next send is
+  # that second per profile. The same reason as .garry_abi_check().
+  sent <- lapply(profiles, function(p) {
+    do.call(mirai::everywhere, c(args, list(.compute = p)))
+  })
+  for (i in seq_along(profiles)) {
     out <- c(out, tryCatch(
-      lapply(h, .await_task, p, lost = "return"),
+      lapply(sent[[i]], .await_task, profiles[[i]], lost = "return"),
       garry_pool_error = function(e) {
         if (!live_only) lost(conditionMessage(e))
       }

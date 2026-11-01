@@ -273,6 +273,11 @@ stac_sign_mpc <- function(items) {
   if (!is.null(hit)) {
     return(hit)
   }
+  # a re-sign reaches here at run time, past stac_sign_mpc()'s own check
+  rlang::check_installed(
+    "httr2",
+    reason = "to request Planetary Computer tokens."
+  )
   url <- paste0(
     "https://planetarycomputer.microsoft.com/api/sas/v1/token/",
     collection

@@ -189,11 +189,21 @@ test_that("preview() coarse-collects a grid-pinned lazy raster", {
 test_that("na_col paints nodata instead of leaving it transparent", {
   m <- matrix(runif(120), 10, 12)
   m[1:3, 1:4] <- NaN
+  drawn <- NULL
+  local_mocked_bindings(
+    rasterImage = function(image, ...) {
+      drawn <<- as.matrix(image)
+      invisible(NULL)
+    },
+    .package = "graphics"
+  )
   f <- tempfile(fileext = ".png")
   grDevices::png(f, 200, 200)
+  withr::defer(grDevices::dev.off())
   preview(m, na_col = "#eb4310", legend = FALSE, axes = FALSE)
-  grDevices::dev.off()
-  expect_true(file.exists(f) && file.size(f) > 0)
+  expect_identical(drawn == "#eb4310", is.nan(m))
+  preview(m, legend = FALSE, axes = FALSE)
+  expect_identical(is.na(drawn), is.nan(m))
 })
 
 test_that("preview(<file>, bands) plots the bands asked for, in that order", {

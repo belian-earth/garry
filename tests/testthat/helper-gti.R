@@ -5,11 +5,11 @@
 .gg_grid <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400),
                       dims = c(60L, 40L), dtype = "f32")
 
-# A local, sliced GTI over per-slice tiles.
-.gg_gti <- function(slices) {
+# A local, sliced GTI over per-slice tiles of GDAL type `type`.
+.gg_gti <- function(slices, type = "Float32") {
   ent <- do.call(rbind, lapply(names(slices), function(sl) {
     f <- tempfile(fileext = ".tif")
-    d <- gdalraster::create("GTiff", f, 60, 40, 1, "Float32", return_obj = TRUE)
+    d <- gdalraster::create("GTiff", f, 60, 40, 1, type, return_obj = TRUE)
     d$setGeoTransform(c(0, 10, 0, 400, 0, -10))
     d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
     d$write(1, 0, 0, 60, 40, as.numeric(t(slices[[sl]]))); d$close()
@@ -21,11 +21,11 @@
   gti
 }
 
-.gg_slice <- function(gti, s, graph) lazy_source(
+.gg_slice <- function(gti, s, graph, dtype = "f32") lazy_source(
   paste0("GTI:", gti), graph = graph,
   open_options = gti_open_options(.gg_grid, filter = sprintf("slice = '%s'", s),
                                   sort_field = "datetime"),
-  grid = .gg_grid, block_dim = c(60L, 40L))
+  grid = garry:::.grid_retype(.gg_grid, dtype), block_dim = c(60L, 40L))
 
 .gg_val <- function(base) outer(1:40, 1:60, function(r, c) r + c) + base
 
@@ -55,20 +55,50 @@
 # local GTIs: the canonical .cd_spec shape (band/mask MapNodes per slice,
 # shared mask chain, temporal median), built through the public dataset
 # verbs exactly as the HLS benchmark builds it.
-.gg_masked_composite <- function(open = 0L, dilate = 0L, single = FALSE) {
-  gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)))
-  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+.gg_masked_composite <- function(open = 0L, dilate = 0L, single = FALSE,
+                                 type = "Float32", dtype = "f32", overlap = FALSE) {
+  gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)), type)
+  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)), type)
   qa1 <- matrix(0, 40, 60); qa1[10:20, 10:30] <- 2
-  qa2 <- matrix(0, 40, 60); qa2[25:35, 40:55] <- 2
-  gQ <- .gg_gti(list(s1 = qa1, s2 = qa2))
+  q2 <- .gg_q2(overlap)
+  qa2 <- matrix(0, 40, 60); qa2[q2$rows, q2$cols] <- 2
+  gQ <- .gg_gti(list(s1 = qa1, s2 = qa2), type)
   g <- graph_new()
-  vars <- list(
-    V1 = list(s1 = .gg_slice(gA, "s1", g), s2 = .gg_slice(gA, "s2", g)),
-    V2 = list(s1 = .gg_slice(gB, "s1", g), s2 = .gg_slice(gB, "s2", g)),
-    Q  = list(s1 = .gg_slice(gQ, "s1", g), s2 = .gg_slice(gQ, "s2", g))
-  )
+  sl <- function(gti) list(s1 = .gg_slice(gti, "s1", g, dtype),
+                           s2 = .gg_slice(gti, "s2", g, dtype))
+  vars <- list(V1 = sl(gA), V2 = sl(gB), Q = sl(gQ))
   if (single) vars$V2 <- NULL
   ds <- as_dataset(vars, mask_asset = "Q")
   reduce_over(apply_mask(ds, where = c(2), open = open, dilate = dilate),
               "median", "t", nan_rm = TRUE)
+}
+
+# What the second slice masks. With `overlap` some cells are masked in both
+# slices, which no slice then holds; otherwise every cell has a value.
+.gg_q2 <- function(overlap) {
+  if (overlap) list(rows = 15:25, cols = 20:40) else list(rows = 25:35, cols = 40:55)
+}
+
+# What .gg_masked_composite() holds, from plain R: each band's median over
+# the slices its mask leaves, NaN where none does. `clean` is open = 1L,
+# dilate = 1L, whose disk of radius 1 is a cross; the masks stay clear of the
+# raster's edge.
+.gg_masked_want <- function(clean = FALSE, single = FALSE, overlap = FALSE) {
+  grow <- function(m) {
+    m | rbind(m[-1L, ], FALSE) | rbind(FALSE, m[-nrow(m), ]) |
+      cbind(m[, -1L], FALSE) | cbind(FALSE, m[, -ncol(m)])
+  }
+  mask <- function(rows, cols) {
+    m <- matrix(FALSE, 40L, 60L)
+    m[rows, cols] <- TRUE
+    if (clean) grow(grow(!grow(!m))) else m
+  }
+  q1 <- mask(10:20, 10:30)
+  q2 <- do.call(mask, .gg_q2(overlap))
+  band <- function(base1, base2) {
+    a <- .gg_val(base1); a[q1] <- NaN
+    b <- .gg_val(base2); b[q2] <- NaN
+    ifelse(is.nan(a), b, ifelse(is.nan(b), a, (a + b) / 2))
+  }
+  if (single) band(0, 10) else array(c(band(0, 10), band(100, 50)), c(40L, 60L, 2L))
 }

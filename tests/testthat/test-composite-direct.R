@@ -1,98 +1,17 @@
 # The DEFAULT distributed composite route (.cd_spec ->
-# .execute_composite_direct / the fetch-ordered pipeline): offline
-# equivalence gates against the single-threaded oracle on a local GTI
-# composite: the multi-band pipeline, the single-band whole-grid kernel,
-# the morphology (halo) variant, and the single-band scheduler fall-through
-# past .gd_compute_budget. Until this file, the
-# production default composite path had no offline test at all.
+# .execute_composite_direct / the fetch-ordered pipeline): what selects it
+# and how its parts fail. test-route-matrix.R holds its results to plain R;
+# the strip decomposition and morphology live in test-gd-tail.R.
 
-skip_if(!requireNamespace("garry", quietly = TRUE),
-        "garry not installed for daemons")
-
-test_that("composite_direct matches the oracle on a masked multi-band composite", {
-  local_pools(2, 2)
-  x <- .gg_masked_composite()
-  p <- collect(x, plan_only = TRUE)
-  expect_false(is.null(.cd_spec(p)))          # the fast path matches this shape
-  want <- collect(x, distributed = FALSE)
-  expect_identical(garry_last_route(), "single")
-  got <- collect(x, distributed = TRUE)
-  expect_identical(garry_last_route(), "composite_direct")
-  .gg_close(got, want)
-})
-
-test_that("a single band runs the whole-grid kernel and matches the oracle", {
-  local_pools(2, 2)
-  x <- .gg_masked_composite(single = TRUE)
-  expect_identical(.cd_spec(collect(x, plan_only = TRUE))$n_bands, 1L)
-  want <- collect(x, distributed = FALSE)
-  got <- collect(x, distributed = TRUE)
-  expect_identical(garry_last_route(), "composite_direct")
-  .gg_close(got, want)
-})
-
-test_that("composite_direct matches the oracle with morphology (halo) cleanup", {
-  local_pools(2, 2)
-  x <- .gg_masked_composite(open = 1L, dilate = 1L)
-  p <- collect(x, plan_only = TRUE)
-  spec <- .cd_spec(p)
-  expect_false(is.null(spec))
-  expect_gt(spec$halo, 0L)                    # the morphology rides in the chain
-  want <- collect(x, distributed = FALSE)
-  got <- collect(x, distributed = TRUE)
-  expect_identical(garry_last_route(), "composite_direct")
-  .gg_close(got, want)
-})
-
-test_that(".gd_compute_budget sends a heavy single band on, identically", {
-  local_pools(2, 2)
-  x <- .gg_masked_composite(single = TRUE)
-  want <- collect(x, distributed = FALSE)
+test_that(".gd_compute_budget sends a heavy single band to the scheduler", {
+  p <- collect(.gg_masked_composite(single = TRUE), plan_only = TRUE)
+  expect_identical(.cd_spec(p)$n_bands, 1L)
   # Above the budget .cd_spec refuses a single band, whose whole-grid
   # kernel would run in the host; a multi-band pipeline needs no guard.
   testthat::local_mocked_bindings(.gd_compute_budget = 1)
-  got <- collect(x, distributed = TRUE)
-  expect_identical(garry_last_route(), "scheduler")   # route changed...
-  .gg_close(got, want)                                 # ...results did not
-  y <- .gg_masked_composite()
-  expect_false(is.null(.cd_spec(collect(y, plan_only = TRUE))))
-})
-
-test_that("composite_direct writes to path identically to in-memory", {
-  local_pools(2, 2)
-  x <- .gg_masked_composite()
-  mem <- collect(x, distributed = TRUE)
-  expect_identical(garry_last_route(), "composite_direct")
-  path <- tempfile(fileext = ".tif")
-  on.exit(unlink(path), add = TRUE)
-  write_tif(x, path, nodata = -9999, distributed = TRUE)
-  cube <- gdal_read_window(path, 1:2, 0L, 0L, 60L, 40L, nodata = -9999)
-  .gg_close(aperm(cube, c(2L, 3L, 1L)), mem)
-})
-
-test_that("bands with different per-slice fns do not take the fast path", {
-  local_pools(2, 2)
-  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
-  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
-  g <- graph_new()
-  sl <- function(gti) {
-    list(.gg_slice(gti, "s1", g), .gg_slice(gti, "s2", g))
-  }
-  a <- sl(gA)
-  b <- sl(gB)
-  minus <- lazy_stack(Map(`-`, a, b))
-  times <- lazy_stack(Map(`*`, a, b))
-  x <- lazy_stack(
-    list(
-      d = reduce_over(minus, "mean", "t"),
-      p = reduce_over(times, "mean", "t")
-    ),
-    along = "band"
-  )
-  expect_null(.cd_spec(collect(x, plan_only = TRUE)))
-  want <- collect(x, distributed = FALSE)
-  got <- collect(x, distributed = TRUE)
-  .gg_close(got, want)
+  expect_null(.cd_spec(p))
+  expect_null(.gd_decompose(p))
+  expect_false(is.null(.cd_spec(collect(.gg_masked_composite(), plan_only = TRUE))))
 })
 
 test_that("GTI sources the fast routes cannot read themselves fall through", {

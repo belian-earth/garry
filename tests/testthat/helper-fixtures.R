@@ -125,6 +125,7 @@ fixture_multiband <- function() {
 # `year0` is the first year of the time coordinate.
 fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
                             shift = 0L, year0 = 2021L) {
+  testthat::skip_if_not_installed("jsonlite")
   key <- paste("zarr", epsg, x0, y1, shift, year0)
   if (!is.null(.fixture_env[[key]])) return(.fixture_env[[key]])
   store <- file.path(

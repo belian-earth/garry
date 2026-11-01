@@ -3,9 +3,6 @@
 # graph shape is identical to an unscaled read and every route (host,
 # scheduler, composite_direct) sees physical values.
 
-skip_if(!requireNamespace("garry", quietly = TRUE),
-        "garry not installed for daemons")
-
 .sr_grid <- grid_spec("EPSG:3857", extent = c(0, 0, 300, 200),
                       dims = c(x = 30L, y = 20L), dtype = "i16")
 
@@ -89,16 +86,6 @@ test_that("scale = TRUE without file metadata warns and reads raw", {
   expect_equal(matrix(collect(x), nrow = 20), ref0)
 })
 
-test_that("scaled reads are identical across host and scheduler routes", {
-  local_pools(2, 1)
-  m <- .sr_m(7)
-  f <- .sr_tile(m, scale = 2e-4, offset = 0.5)
-  x <- lazy_source(f, scale = TRUE) + 0      # force a compute stage
-  host <- collect(x, distributed = FALSE)
-  dist <- collect(x, distributed = TRUE)
-  .gg_close(dist, host, tolerance = 1e-7)
-})
-
 # -- composite_direct: the affine rides the job, applied to the DN cube ------
 
 .sr_scaled_composite <- function(scaleA = 1e-4, offsetA = -0.1,
@@ -128,37 +115,41 @@ test_that("scaled reads are identical across host and scheduler routes", {
   reduce_over(apply_mask(ds, where = c(2)), "median", "t", nan_rm = TRUE)
 }
 
-test_that("composite_direct applies the read affine on the cube path", {
-  local_pools(2, 2)
-  x <- .sr_scaled_composite()
-  p <- collect(x, plan_only = TRUE)
-  spec <- .cd_spec(p)
-  expect_false(is.null(spec))                 # affine keeps the fast path eligible
-  expect_identical(spec$band_affine[[1L]]$scale, 1e-4)
-  # the multi-band pipeline, then a single band's whole-grid kernel
-  for (y in list(x, .sr_scaled_composite(single = TRUE))) {
-    want <- collect(y, distributed = FALSE)   # host oracle scales in the read
-    got <- collect(y, distributed = TRUE)
-    expect_identical(garry_last_route(), "composite_direct")
-    .gg_close(got, want)
-  }
-})
+local({
+  local_pools(2, 1)
 
-test_that("per-slice heterogeneous affine falls through, identically", {
-  local_pools(2, 2)
-  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
-  g <- graph_new()
-  sl <- function(s, sc) lazy_source(
-    paste0("GTI:", gA), graph = g,
-    open_options = gti_open_options(.gg_grid,
-                                    filter = sprintf("slice = '%s'", s),
-                                    sort_field = "datetime"),
-    grid = .gg_grid, block_dim = c(60L, 40L), scale = sc, offset = 0.5)
-  x <- reduce_over(lazy_stack(list(sl("s1", 1e-4), sl("s2", 2e-4))),
-                   "median", "t", nan_rm = TRUE)
-  p <- collect(x, plan_only = TRUE)
-  expect_null(.cd_spec(p))                    # heterogeneous slices: ineligible
-  want <- collect(x, distributed = FALSE)
-  got <- collect(x, distributed = TRUE)       # whatever route it lands on
-  .gg_close(got, want)
+  test_that("composite_direct applies the read affine on the cube path", {
+    x <- .sr_scaled_composite()
+    p <- collect(x, plan_only = TRUE)
+    spec <- .cd_spec(p)
+    expect_false(is.null(spec))                 # affine keeps the fast path eligible
+    expect_identical(spec$band_affine[[1L]]$scale, 1e-4)
+    # the multi-band pipeline, then a single band's whole-grid kernel
+    for (single in c(FALSE, TRUE)) {
+      y <- .sr_scaled_composite(single = single)
+      want <- .gg_masked_want(single = single) * 1e-4 - 0.1
+      .gg_close(collect(y, distributed = FALSE), want) # the read scales on the host
+      got <- collect(y, distributed = TRUE)
+      expect_identical(garry_last_route(), "composite_direct")
+      .gg_close(got, want)
+    }
+  })
+
+  test_that("per-slice heterogeneous affine falls through, identically", {
+    gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+    g <- graph_new()
+    sl <- function(s, sc) lazy_source(
+      paste0("GTI:", gA), graph = g,
+      open_options = gti_open_options(.gg_grid,
+                                      filter = sprintf("slice = '%s'", s),
+                                      sort_field = "datetime"),
+      grid = .gg_grid, block_dim = c(60L, 40L), scale = sc, offset = 0.5)
+    x <- reduce_over(lazy_stack(list(sl("s1", 1e-4), sl("s2", 2e-4))),
+                     "median", "t", nan_rm = TRUE)
+    p <- collect(x, plan_only = TRUE)
+    expect_null(.cd_spec(p))                    # heterogeneous slices: ineligible
+    want <- (.gg_val(0) * 1e-4 + 0.5 + .gg_val(10) * 2e-4 + 0.5) / 2
+    .gg_close(collect(x, distributed = FALSE), want)
+    .gg_close(collect(x, distributed = TRUE), want) # whatever route it lands on
+  })
 })

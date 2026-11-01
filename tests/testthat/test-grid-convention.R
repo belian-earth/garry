@@ -52,24 +52,13 @@ test_that("a rotated file's error names the file and the way out", {
   expect_match(conditionMessage(err), "gdalwarp", fixed = TRUE)
 })
 
-test_that("vaster round-trip agrees with garry's transform math", {
-  g <- grid_spec("EPSG:4326", extent = c(0, -10, 10, 0), dims = c(10L, 10L))
-  ve <- g@extent[c(1L, 3L, 2L, 4L)] # vaster's (xmin, xmax, ymin, ymax)
-  d  <- unname(g@dims[1:2])
-
-  # Centre of the top-left pixel: vaster cell 1 (row-major from top-left).
-  expect_equal(vaster::cell_from_xy(d, ve, cbind(0.5, -0.5)), 1L)
-  # Centre of pixel (col 3, row 2) -> cell (2-1)*10 + 3.
-  expect_equal(vaster::cell_from_xy(d, ve, cbind(2.5, -1.5)), 13L)
-  # xy_from_cell inverts.
-  expect_equal(as.numeric(vaster::xy_from_cell(d, ve, 13L)), c(2.5, -1.5))
-  # vaster's geotransform from the reordered extent equals ours.
-  expect_equal(as.numeric(vaster::extent_dim_to_gt(ve, d)), g@transform)
-})
-
 test_that("grid_spec derives a coherent transform", {
   g <- grid_spec("EPSG:3857", extent = c(-100, -200, 300, 200),
                  dims = c(40L, 40L), dtype = "f64")
   expect_identical(g@transform, c(-100, 10, 0, 200, 0, -10))
   expect_identical(g@dtype, "f64")
+
+  # an extent reaching down from y = 0: the top edge stays the origin
+  g <- grid_spec("EPSG:4326", extent = c(0, -10, 10, 0), dims = c(10L, 10L))
+  expect_identical(g@transform, c(0, 1, 0, 0, 0, -1))
 })

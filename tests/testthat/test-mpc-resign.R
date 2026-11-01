@@ -60,7 +60,36 @@ test_that("a failed re-sign warns once while the URL lasts, and aborts past it",
   expect_match(conditionMessage(err), "MPC down", fixed = TRUE)
 })
 
-test_that("signing and re-signing take the key from one place", {
-  expect_named(formals(stac_sign_mpc), "items")
-  expect_false("subscription_key" %in% names(formals(garry:::.mpc_token)))
+test_that("a re-sign at run time names httr2 when it is missing", {
+  testthat::local_mocked_bindings(.mpc_token_lookup = function(...) NULL, .package = "garry")
+  testthat::local_mocked_bindings(
+    check_installed = function(pkg, ...) stop("package ", pkg, " is missing"),
+    .package = "rlang"
+  )
+  err <- expect_error(garry:::.mpc_resign(.mr_url(-60), margin = 600), class = "garry_read_error")
+  expect_match(conditionMessage(err), "httr2", fixed = TRUE)
+})
+
+test_that("signing and re-signing both send the MPC_TOKEN key", {
+  skip_if_not_installed("rstac")
+  skip_if_not_installed("httr2", "1.1.0")
+  withr::local_envvar(MPC_TOKEN = "the-key")
+  sent <- character(0)
+  httr2::local_mocked_responses(function(req) {
+    sent <<- c(sent, req$headers[["Ocp-Apim-Subscription-Key"]])
+    httr2::response_json(body = list(token = "st=1"))
+  })
+  testthat::local_mocked_bindings(
+    .mpc_token_lookup = function(...) NULL,
+    .cache_save = function(...) invisible(),
+    .package = "garry"
+  )
+  held <- garry:::.mpc_token_cache
+  withr::defer(rm(list = intersect(c("coll", "acc/cont"), ls(held)), envir = held))
+  stac_sign_mpc(list(features = list(list(
+    collection = "coll",
+    assets = list(a = list(href = "https://acc.blob.core.windows.net/cont/a.tif"))
+  ))))
+  garry:::.mpc_resign(.mr_url(-60), margin = 600)
+  expect_identical(sent, c("the-key", "the-key"))
 })

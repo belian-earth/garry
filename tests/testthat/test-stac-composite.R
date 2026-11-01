@@ -173,6 +173,7 @@ test_that("the full benchmark shape runs: mask -> stack -> median", {
     md <- median(v, na.rm = TRUE); if (is.na(md)) NaN else md
   })
   got <- gdal_read_window(outfile, 1L, 0L, 0L, 50L, 40L)
+  expect_identical(is.nan(got), is.nan(want))
   ok <- !is.nan(want)
   expect_equal(got[ok], want[ok], tolerance = 1e-5)
 })

@@ -1,36 +1,14 @@
 # bilateral_focal(): the edge-preserving 3x3 filter as a fused focal body.
-# Gates: exact parity with rustyfilters::rf_bilateral (edge = "shrink",
-# na_policy = "omit") on dense, NaN-holed, and edge pixels -- untraced and
-# through a full traced plan.
-
-# pure-R reference mirroring rf_bilateral's cell loop
-.ref_bilateral <- function(m, sigma_d, sigma_r) {
-  ny <- nrow(m); nx <- ncol(m)
-  out <- matrix(NaN, ny, nx)
-  for (i in seq_len(ny)) for (j in seq_len(nx)) {
-    x0 <- m[i, j]
-    if (is.na(x0)) next
-    num <- 0; den <- 0
-    for (di in -1:1) for (dj in -1:1) {
-      ii <- i + di; jj <- j + dj
-      if (ii < 1 || ii > ny || jj < 1 || jj > nx) next
-      v <- m[ii, jj]
-      if (is.na(v)) next
-      w <- exp(-(di^2 + dj^2) / (2 * sigma_d^2)) *
-        exp(-(v - x0)^2 / (2 * sigma_r^2))
-      num <- num + w * v; den <- den + w
-    }
-    out[i, j] <- num / den
-  }
-  out
-}
+# Gates: exact parity with rustyfilters' rf_bilateral (edge = "shrink",
+# na_policy = "omit") on dense, NaN-holed, and edge pixels, untraced and
+# through a full traced plan. rf_bilateral's answer is saved in
+# fixtures/rustyfilters/ by tools/rustyfilters_make_fixture.R. .ref_bilateral()
+# is in helper-kernels.R; test-route-kernels.R holds a plan to it on daemons.
 
 test_that("bilateral_focal matches the reference and rf_bilateral (untraced)", {
-  set.seed(31)
-  m <- matrix(rnorm(40 * 30), 40, 30)
-  m[10, 10] <- 8                      # sharp spike (edge preservation)
-  m[c(5, 20), c(7, 15)] <- NaN        # holes
-  sr <- 1.3; sd_ <- 1
+  fx <- oracle_cases("rustyfilters", "bilateral")
+  m <- fx$m
+  sr <- fx$sigma_r; sd_ <- fx$sigma_d
 
   fn <- bilateral_focal(sigma_r = sr, sigma_d = sd_)
   # drive the body exactly as .eval_node does: NaN-padded shifts
@@ -43,24 +21,18 @@ test_that("bilateral_focal matches the reference and rf_bilateral (untraced)", {
   want <- .ref_bilateral(m, sd_, sr)
   expect_equal(got, want, tolerance = 1e-12)
   expect_identical(is.na(got), is.na(want))
-
-  skip_if_not_installed("rustyfilters")
-  rf <- rustyfilters::rf_bilateral(m, sigma_d = sd_, sigma_r = sr,
-                                   window = 3L)
-  expect_equal(as.numeric(got), as.numeric(rf), tolerance = 1e-10)
+  expect_equal(as.numeric(got), as.numeric(fx$rf), tolerance = 1e-10)
+  expect_equal(as.numeric(want), as.numeric(fx$rf), tolerance = 1e-10)
 })
 
-test_that("bilateral_focal through a traced plan matches rf_bilateral", {
-  skip_if_not_installed("rustyfilters")
-  f <- fixture_gradient_f32()
-  lr <- lazy_source(f)
-  sr <- 2.5
+test_that("bilateral_focal through a traced plan matches the reference", {
+  sr <- 3
   out <- execute_plan(plan_lazy(
-    focal_map(lr, fn = bilateral_focal(sigma_r = sr), radius = 1L)))
+    focal_map(.bilateral_source(), fn = bilateral_focal(sigma_r = sr), radius = 1L)))
 
-  m <- execute_plan(plan_lazy(lr))
-  rf <- rustyfilters::rf_bilateral(m, sigma_d = 1, sigma_r = sr, window = 3L)
-  expect_equal(as.numeric(out), as.numeric(rf), tolerance = 1e-4)  # f32 kernel
+  m <- .bilateral_plane()
+  .expect_partial_nan(m)
+  .expect_cells(unclass(out), .ref_bilateral(m, 1, sr), tolerance = 1e-4) # f32 kernel
 })
 
 test_that("bilateral_focal validates", {
@@ -73,7 +45,7 @@ test_that("bilateral_focal validates", {
 test_that("bilateral_focal: per-channel sigma_r filters a cube in one node", {
   set.seed(41)
   nch <- 3L; ny <- 24L; nx <- 20L
-  cube <- array(rnorm(nch * ny * nx), c(nch, ny, nx))
+  cube <- .as_f32(array(rnorm(nch * ny * nx), c(nch, ny, nx)))
   sig <- c(0.6, 1.4, 2.5)
   g <- graph_new()
   slices <- lapply(1:nch, function(k) {
@@ -89,9 +61,7 @@ test_that("bilateral_focal: per-channel sigma_r filters a cube in one node", {
   got <- execute_plan(plan_lazy(
     focal_map(stk, fn = bilateral_focal(sigma_r = sig), radius = 1L)))
   for (k in 1:nch) {
-    ref <- execute_plan(plan_lazy(
-      focal_map(slices[[k]], fn = bilateral_focal(sigma_r = sig[k]), radius = 1L)))
-    expect_equal(got[k, , ], ref, tolerance = 1e-5,
+    expect_equal(got[k, , ], .ref_bilateral(cube[k, , ], 1, sig[k]), tolerance = 1e-5,
                  ignore_attr = TRUE, label = paste("channel", k))
   }
 })

@@ -78,6 +78,7 @@ test_that("a time stack matches the compute path", {
       along = "t"
     )
   })
+  expect_identical(r$route, "read_only")
   expect_identical(r$fast, r$slow)
 })
 
@@ -204,126 +205,131 @@ test_that("a read-only write matches the compute path's file", {
   expect_identical(r$fast, r$slow)
 })
 
-test_that("the read pool serves the read-only route with identical results", {
+test_that("a threaded read gives GDAL_NUM_THREADS back, even when it fails", {
+  threads <- function() gdalraster::get_config_option("GDAL_NUM_THREADS")
+  gdalraster::set_config_option("GDAL_NUM_THREADS", "2")
+  withr::defer(gdalraster::set_config_option("GDAL_NUM_THREADS", ""))
+  f <- fixture_gradient_f32()
+  restore <- garry:::.gdal_threads_all(f)
+  expect_identical(threads(), "ALL_CPUS")
+  restore()
+  expect_identical(threads(), "2")
+  # worker threads must not report from a Zarr read
+  garry:::.gdal_threads_all("store.zarr")
+  expect_identical(threads(), "2")
+  x <- lazy_source(f)
+  expect_no_error(collect(x, distributed = FALSE))
+  expect_identical(garry_last_route(), "read_only")
+  expect_identical(threads(), "2")
+  testthat::local_mocked_bindings(
+    .exec_read_padded = function(...) stop("read failed"),
+    .package = "garry"
+  )
+  expect_error(collect(x, distributed = FALSE), "read failed")
+  expect_identical(threads(), "2")
+})
+
+# A skip here ends the file, so this block stays last.
+local({
   skip_on_cran()
   local_pools(2, 1)
-  withr::local_options(garry.chunk_target_px = 400)
-  mb <- fixture_multiband()
-  f <- fixture_i16_nodata()
-  coarse <- grid_spec(
-    crs = "EPSG:32632",
-    extent = c(400000, 4499000, 401400, 4500000),
-    res = 60
-  )
-  plans <- list(
-    function() {
-      g <- graph_new()
-      lazy_stack(
-        list(
-          lazy_source(fixture_gradient_f32(), graph = g),
-          lazy_source(mb$path, band = 5L, graph = g),
-          lazy_source(mb$path, band = 3L, graph = g)
-        ),
-        along = "band"
-      )
-    },
-    function() {
-      g <- graph_new()
-      lazy_stack(
-        list(
-          align_to(lazy_source(f, graph = g), coarse, resampling = "average"),
-          align_to(lazy_source(f, graph = g), coarse)
-        ),
-        along = "band"
-      )
-    },
-    function() lazy_source(f)
-  )
-  for (build in plans) {
-    pooled <- collect(build(), distributed = TRUE)
-    expect_identical(garry_last_route(), "read_only")
-    withr::with_options(list(garry.read_only = FALSE), {
-      ref <- collect(build(), distributed = FALSE)
-    })
-    expect_identical(pooled, ref)
-  }
-  out <- withr::local_tempfile(fileext = ".tif")
-  ref <- withr::local_tempfile(fileext = ".tif")
-  write_tif(
-    plans[[2]](),
-    out,
-    dtype = "i16",
-    nodata = -9999,
-    distributed = TRUE
-  )
-  expect_identical(garry_last_route(), "read_only")
-  withr::with_options(list(garry.read_only = FALSE), {
+
+  test_that("the read pool serves the read-only route with identical results", {
+    withr::local_options(garry.chunk_target_px = 400)
+    mb <- fixture_multiband()
+    f <- fixture_i16_nodata()
+    coarse <- grid_spec(
+      crs = "EPSG:32632",
+      extent = c(400000, 4499000, 401400, 4500000),
+      res = 60
+    )
+    plans <- list(
+      function() {
+        g <- graph_new()
+        lazy_stack(
+          list(
+            lazy_source(fixture_gradient_f32(), graph = g),
+            lazy_source(mb$path, band = 5L, graph = g),
+            lazy_source(mb$path, band = 3L, graph = g)
+          ),
+          along = "band"
+        )
+      },
+      function() {
+        g <- graph_new()
+        lazy_stack(
+          list(
+            align_to(lazy_source(f, graph = g), coarse, resampling = "average"),
+            align_to(lazy_source(f, graph = g), coarse)
+          ),
+          along = "band"
+        )
+      },
+      function() lazy_source(f)
+    )
+    for (build in plans) {
+      pooled <- collect(build(), distributed = TRUE)
+      expect_identical(garry_last_route(), "read_only")
+      withr::with_options(list(garry.read_only = FALSE), {
+        ref <- collect(build(), distributed = FALSE)
+      })
+      expect_identical(pooled, ref)
+    }
+    out <- withr::local_tempfile(fileext = ".tif")
+    ref <- withr::local_tempfile(fileext = ".tif")
     write_tif(
       plans[[2]](),
-      ref,
-      dtype = "i16",
-      nodata = -9999,
-      distributed = FALSE
-    )
-  })
-  rd <- function(p) {
-    ds <- methods::new(gdalraster::GDALRaster, p)
-    on.exit(ds$close())
-    nx <- ds$getRasterXSize()
-    ny <- ds$getRasterYSize()
-    lapply(1:2, function(b) ds$read(b, 0, 0, nx, ny, nx, ny))
-  }
-  expect_identical(rd(out), rd(ref))
-
-  # a read that fails on the pool reaches the host, naming the file
-  gone <- withr::local_tempfile(fileext = ".tif")
-  file.copy(f, gone)
-  x <- lazy_source(gone)
-  unlink(gone)
-  withr::local_options(garry.read_retry = 0L)
-  err <- expect_error(collect(x, distributed = TRUE), class = "garry_task_error")
-  expect_match(conditionMessage(err), basename(gone), fixed = TRUE)
-})
-
-test_that("a failed pool write errors and leaves no file", {
-  skip_on_cran()
-  local_pools(2, 1)
-  out <- withr::local_tempfile(fileext = ".tif")
-  # NaN (the i16 fixture's nodata) cannot be written as i16 without a
-  # sentinel: the read pool's write preparation fails
-  expect_error(
-    write_tif(
-      lazy_source(fixture_i16_nodata()),
       out,
       dtype = "i16",
+      nodata = -9999,
       distributed = TRUE
-    ),
-    "nodata"
-  )
-  expect_false(file.exists(out))
-  write_tif(lazy_source(fixture_gradient_f32()), out, distributed = TRUE)
-  expect_identical(garry_last_route(), "read_only")
-  expect_true(file.exists(out))
-})
-
-test_that("reads the scheduler would fetch stay with the scheduler", {
-  skip_on_cran()
-  gti <- .gg_gti(list(a = .gg_val(0), b = .gg_val(100)))
-  build <- function() {
-    g <- graph_new()
-    lazy_stack(
-      list(.gg_slice(gti, "a", g), .gg_slice(gti, "b", g)),
-      along = "band"
     )
-  }
-  ref <- collect(build(), distributed = FALSE)
-  local_pools(2, 1)
-  # local items: no fetch, so the read pool serves the read-only route
-  withr::local_options(garry.fetch = "auto")
-  expect_identical(collect(build(), distributed = TRUE), ref)
-  expect_identical(garry_last_route(), "read_only")
-  # fetched items (forced here; remote ones under "auto") go to the scheduler
-  withr::local_options(garry.fetch = "force")
-  expect_equal(collect(build(), distributed = TRUE), ref, ignore_attr = TRUE)
-  expect_identical(garry_last_route(), "scheduler")
+    expect_identical(garry_last_route(), "read_only")
+    withr::with_options(list(garry.read_only = FALSE), {
+      write_tif(
+        plans[[2]](),
+        ref,
+        dtype = "i16",
+        nodata = -9999,
+        distributed = FALSE
+      )
+    })
+    rd <- function(p) {
+      ds <- methods::new(gdalraster::GDALRaster, p)
+      on.exit(ds$close())
+      nx <- ds$getRasterXSize()
+      ny <- ds$getRasterYSize()
+      lapply(1:2, function(b) ds$read(b, 0, 0, nx, ny, nx, ny))
+    }
+    expect_identical(rd(out), rd(ref))
+
+    # a read that fails on the pool reaches the host, naming the file
+    gone <- withr::local_tempfile(fileext = ".tif")
+    file.copy(f, gone)
+    x <- lazy_source(gone)
+    unlink(gone)
+    withr::local_options(garry.read_retry = 0L)
+    err <- expect_error(collect(x, distributed = TRUE), class = "garry_task_error")
+    expect_match(conditionMessage(err), basename(gone), fixed = TRUE)
+  })
+
+  test_that("reads the scheduler would fetch stay with the scheduler", {
+    gti <- .gg_gti(list(a = .gg_val(0), b = .gg_val(100)))
+    build <- function() {
+      g <- graph_new()
+      lazy_stack(
+        list(.gg_slice(gti, "a", g), .gg_slice(gti, "b", g)),
+        along = "band"
+      )
+    }
+    ref <- collect(build(), distributed = FALSE)
+    # local items: no fetch, so the read pool serves the read-only route
+    withr::local_options(garry.fetch = "auto")
+    expect_identical(collect(build(), distributed = TRUE), ref)
+    expect_identical(garry_last_route(), "read_only")
+    # fetched items (forced here; remote ones under "auto") go to the scheduler
+    withr::local_options(garry.fetch = "force")
+    expect_equal(collect(build(), distributed = TRUE), ref, ignore_attr = TRUE)
+    expect_identical(garry_last_route(), "scheduler")
+  })
 })

@@ -3,10 +3,10 @@
 # residency, not concurrency. Two mechanisms bound it: the planner
 # shrinks the coarse read window as the widest stage's input count
 # grows, and the scheduler gates read launches on resident bytes.
-# Gates: the window shrinks with band count, a budget far below one
-# stage's input set still completes (escape hatch, no deadlock), and
-# results are identical to single-threaded whatever the budget.
-
+# Gates: the window shrinks with band count, and a starved gate
+# serialises reads (one region at a time, in the task log) without a
+# deadlock or a changed answer. The store's price of a region is in
+# test-store-residency.R, the fit to available RAM in test-mem-admission.R.
 
 test_that("coarse read window shrinks with the widest stage's inputs", {
   f <- fixture_gradient_f32()
@@ -20,64 +20,15 @@ test_that("coarse read window shrinks with the widest stage's inputs", {
     s <- Filter(function(s) s@kind == "source_read", p@stages)[[1L]]
     prod(as.numeric(s@chunks@chunk_dim))
   }
-  old <- options(garry.chunk_target_px = 400, garry.read_budget_mb = 1)
-  on.exit(options(old), add = TRUE)
+  withr::local_options(garry.chunk_target_px = 400, garry.read_budget_mb = 1)
 
   narrow <- read_px(plan_lazy(wide(2)))
   broad <- read_px(plan_lazy(wide(32)))
-  expect_true(broad < narrow)
+  expect_lt(broad, narrow)
 
   # Residency, not window size, is what the cap holds constant: bands x
   # window stays inside the budget in both plans.
   expect_lte(32 * broad * 4 / 2^20, 1)
-})
-
-test_that("eager release: cross-stage intermediates drop, results identical", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  local_pools(2, 1, gdal_config = TRUE)
-
-  # A stage-crossing pipeline (map -> t-reduce -> map) whose
-  # intermediate compute outputs must be droppable mid-run without
-  # perturbing the streamed result.
-  f <- fixture_gradient_f32()
-  g <- graph_new()
-  stk <- lazy_stack(lapply(1:6, function(i)
-    lazy_source(f, graph = g) * i), along = "t")
-  out <- reduce_over(stk, "median", "t", nan_rm = TRUE) * 2 + 1
-  dir <- withr::local_tempdir("relstream")
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  write_tif(out, file.path(dir, "out.tif"), distributed = TRUE)
-  mem <- collect(out, distributed = FALSE)
-  d <- methods::new(gdalraster::GDALRaster, file.path(dir, "out.tif"))
-  got <- matrix(d$read(1, 0, 0, 60, 40, 60, 40), 40, 60, byrow = TRUE)
-  d$close()
-  expect_equal(got, unclass(mem), tolerance = 1e-6, ignore_attr = TRUE)
-})
-
-test_that("a read budget below one stage's input set still completes", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  local_pools(2, 1, gdal_config = TRUE)
-
-  f <- fixture_gradient_f32()
-  g <- graph_new()
-  lr <- reduce_over(lazy_stack(lapply(1:8, function(i)
-    lazy_source(f, graph = g) * i), along = "band"),
-    "sum", "band", nan_rm = TRUE)
-  p <- plan_lazy(lr)
-  single <- execute_plan(p)
-
-  for (budget in c(1e-6, 1e6)) {
-    old <- options(garry.chunk_target_px = 400,
-                   garry.read_budget_mb = budget)
-    dist <- execute_plan_mirai(plan_lazy(lr))
-    options(old)
-    expect_equal(dist, single, tolerance = 1e-12,
-                 label = sprintf("read_budget_mb = %g", budget))
-  }
 })
 
 test_that("the store budget follows RAM, /dev/shm and the cgroup", {
@@ -112,37 +63,68 @@ test_that("the store budget follows RAM, /dev/shm and the cgroup", {
   expect_null(mem(NA_real_, 1e5, NA_real_))
 })
 
-test_that("a read-only pool write keeps its reads inside the read budget", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  skip_on_cran()
+local({
   local_pools(2, 1)
   f <- fixture_gradient_f32()
-  rd <- function(p) gdal_read_window(p, 1L, 0L, 0L, 60L, 40L)
-  max_reads <- function(tlog) {
-    d <- read.csv(tlog)
-    d <- d[d$event %in% c("launch", "done") & startsWith(d$key, "s"), ]
-    max(cumsum(ifelse(d$event == "launch", 1L, -1L)))
-  }
-  out <- withr::local_tempfile(fileext = ".tif")
-  log1 <- withr::local_tempfile(fileext = ".csv")
-  withr::local_options(garry.chunk_target_px = 400, garry.task_log = log1)
-  write_tif(lazy_source(f), out, distributed = TRUE)
-  expect_identical(garry_last_route(), "read_only")
-  want <- rd(out)
-  expect_gt(max_reads(log1), 1L)
 
-  # one region at a time, whether the option or the machine says so
-  log2 <- withr::local_tempfile(fileext = ".csv")
-  withr::local_options(garry.read_budget_mb = 1e-6, garry.task_log = log2)
-  write_tif(lazy_source(f), out, distributed = TRUE)
-  expect_identical(max_reads(log2), 1L)
-  expect_identical(rd(out), want)
+  test_that("a read-only pool write keeps its reads inside the read budget", {
+    skip_on_cran()
+    rd <- function(p) gdal_read_window(p, 1L, 0L, 0L, 60L, 40L)
+    out <- withr::local_tempfile(fileext = ".tif")
+    log1 <- withr::local_tempfile(fileext = ".csv")
+    withr::local_options(garry.chunk_target_px = 400, garry.task_log = log1)
+    write_tif(lazy_source(f), out, distributed = TRUE)
+    expect_identical(garry_last_route(), "read_only")
+    want <- rd(out)
+    expect_gt(.max_in_flight(log1), 1L)
 
-  log3 <- withr::local_tempfile(fileext = ".csv")
-  withr::local_options(garry.read_budget_mb = 4096, garry.task_log = log3)
-  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1e-6)
-  write_tif(lazy_source(f), out, distributed = TRUE)
-  expect_identical(max_reads(log3), 1L)
-  expect_identical(rd(out), want)
+    # one region at a time, whether the option or the machine says so
+    log2 <- withr::local_tempfile(fileext = ".csv")
+    withr::local_options(garry.read_budget_mb = 1e-6, garry.task_log = log2)
+    write_tif(lazy_source(f), out, distributed = TRUE)
+    expect_identical(.max_in_flight(log2), 1L)
+    expect_identical(rd(out), want)
+
+    log3 <- withr::local_tempfile(fileext = ".csv")
+    withr::local_options(garry.read_budget_mb = 4096, garry.task_log = log3)
+    testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1e-6)
+    write_tif(lazy_source(f), out, distributed = TRUE)
+    expect_identical(.max_in_flight(log3), 1L)
+    expect_identical(rd(out), want)
+  })
+
+  test_that("a starved gate serialises a run's reads and its answer holds", {
+    # Rules placement keeps the maps on the compute pool, so compute outputs
+    # feed the store gate that reads wait on; a run the gates wedged ends in
+    # .scheduler_deadlock().
+    g <- graph_new()
+    x <- reduce_over(
+      lazy_stack(lapply(1:4, function(i) lazy_source(f, graph = g) * i), along = "t"),
+      "sum",
+      "t",
+      nan_rm = TRUE
+    )
+    want <- .fixture_values(60, 40) * (1 + 2 + 3 + 4)
+    reads_at_once <- function(...) {
+      tlog <- withr::local_tempfile(fileext = ".csv")
+      withr::local_options(
+        garry.placement = "rules",
+        garry.chunk_target_px = 400,
+        garry.task_log = tlog,
+        ...
+      )
+      # a chunk over the execution budget warns, depending on free RAM
+      got <- suppressWarnings(suppressMessages(collect(x, distributed = TRUE)))
+      expect_equal(unclass(got), want, tolerance = 0, ignore_attr = TRUE)
+      .max_in_flight(tlog)
+    }
+    expect_gt(reads_at_once(), 1L)
+    # no budget holds less than the widest stage's input set
+    expect_gt(reads_at_once(garry.read_budget_mb = 1e-6), 1L)
+    # the fit to RAM drives each gate to its floor: one region
+    expect_identical(reads_at_once(garry.exec_ram_fraction = 1e-6), 1L)
+    # as does a /dev/shm with no room for the store
+    testthat::local_mocked_bindings(.garry_shm_free_mb = function() 1)
+    expect_identical(reads_at_once(), 1L)
+  })
 })

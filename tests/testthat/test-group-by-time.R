@@ -71,8 +71,9 @@ test_that("collect writes one file per group via a {group} placeholder", {
   tmpl <- file.path(tempdir(), "comp_{group}.tif")
   out <- write_tif(comps, tmpl, nodata = -9999)
   expect_named(out, c("2023-01", "2023-02"))
-  expect_true(all(file.exists(out)))
   expect_match(out[["2023-01"]], "comp_2023-01\\.tif$")
+  expect_true(all(gdal_read_window(out[["2023-01"]], 1L, 0L, 0L, 8L, 6L) == 1))
+  expect_true(all(gdal_read_window(out[["2023-02"]], 1L, 0L, 0L, 8L, 6L) == 2))
 })
 
 test_that("ragged bands: a band absent in a group is dropped from that group", {

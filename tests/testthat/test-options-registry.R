@@ -1,7 +1,7 @@
 # Option registry (garry_options()) and value validation
 # (.garry_opt_check at execute entry): every option carries a tier and
-# description, every default validates, and a typo'd VALUE fails loudly
-# instead of silently meaning something else.
+# description, every default validates, and a typo'd name or VALUE fails
+# loudly instead of silently meaning something else.
 
 test_that("every option is registered and every default validates", {
   expect_setequal(names(garry:::.garry_options_table),
@@ -35,6 +35,35 @@ test_that("collect refuses to run under an invalid option", {
   f <- fixture_gradient_f32()
   expect_error(collect(lazy_source(f) + 1, distributed = FALSE),
                class = "garry_option_error")
+})
+
+test_that("an out-of-range integer option is a classed option error", {
+  withr::local_options(garry.read_handles = 1e12)
+  expect_error(garry:::.garry_opt_check(), class = "garry_option_error")
+})
+
+test_that("a garry option with no such name fails, it does not mean the default", {
+  withr::local_options(garry.read_retyr = 5, garry.zzz = TRUE)
+  err <- expect_error(garry:::.garry_opt_check(), class = "garry_option_error")
+  expect_match(conditionMessage(err), "garry.read_retyr", fixed = TRUE)
+  expect_match(conditionMessage(err), "garry.zzz", fixed = TRUE)
+})
+
+test_that("every option the package reads is registered", {
+  expect_false(garry_opt("warp_exact")) # exactness is opted into
+  # garry_opt() fails on an unknown name only when a run reaches that line
+  r_dir <- testthat::test_path("..", "..", "R")
+  skip_if(!dir.exists(r_dir), "package sources not available")
+  code <- unlist(lapply(
+    list.files(r_dir, pattern = "\\.R$", full.names = TRUE),
+    readLines,
+    warn = FALSE
+  ))
+  code <- sub("^\\s*#.*$", "", code) # roxygen and comments
+  m <- regmatches(code, gregexpr('garry_opt\\("[a-z0-9_]+"\\)', code))
+  read <- unique(gsub('^garry_opt\\("|"\\)$', "", unlist(m)))
+  expect_gt(length(read), 20L)
+  expect_identical(setdiff(read, names(garry:::.garry_defaults)), character(0))
 })
 
 test_that("garry_options reports session overrides", {

@@ -1,9 +1,9 @@
 # GridSpec labels: optional per-axis labels for the non-spatial dims
-# (slice dates on t, band names on band). Labels are metadata — no
-# planner pass reads them, grid_equal ignores them — carried by
-# lazy_stack (layer names), dropped by reduce, and unlocking labelled
-# output, label selection (time_sel/band_sel), group_by_time on bare
-# cubes, and dt-aware scan bodies.
+# (slice dates on t, band names on band). Labels are metadata: no planner
+# pass reads them and grid_equal ignores them. lazy_stack carries them from
+# layer names and reduce drops them. They unlock labelled output, label
+# selection (time_sel/band_sel), group_by_time on bare cubes, and dt-aware
+# scan bodies.
 
 .gl_base <- function() {
   g <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400), dims = c(60L, 40L))
@@ -40,7 +40,7 @@ test_that("lazy_stack layer names become labels; reduce drops them; scan keeps t
   expect_null(r@grid@labels$t)
   sc <- scan_over(s, function(xs, margin) xs[[1L]], over = "t")
   expect_identical(sc@grid@labels$t, s@grid@labels$t)
-  # unnamed layers stay unlabelled, as before
+  # unnamed layers stay unlabelled
   s2 <- lazy_stack(list(a + 0, a * 2), along = "t")
   expect_length(s2@grid@labels, 0L)
 })
@@ -56,6 +56,8 @@ test_that("time_sel selects by exact label, prefix, and position", {
   expect_identical(unname(june@grid@dims[["t"]]), 2L)
   one <- time_sel(s, "2023-01-05")           # single match -> bare layer
   expect_identical(unname(one@grid@dims), c(60L, 40L))
+  expect_equal(collect(one), .fixture_values(60, 40) + 1, tolerance = 1e-6,
+               ignore_attr = TRUE)
   pos <- time_sel(s, c(1L, 3L))
   expect_identical(pos@grid@labels$t, c("2023-01-05", "2023-06-20"))
   expect_error(time_sel(s, "2024"), "match")
@@ -74,6 +76,9 @@ test_that("stack_bands carries band labels; band_sel selects", {
   expect_identical(x@grid@labels$band, c("V1", "V2"))
   v2 <- band_sel(x, "V2")
   expect_identical(unname(v2@grid@dims), c(60L, 40L))
+  # V2 is the mean of 3 and 4 times the source
+  expect_equal(collect(v2), 3.5 * .fixture_values(60, 40), tolerance = 1e-6,
+               ignore_attr = TRUE)
 })
 
 test_that("group_by_time works on a bare labelled cube", {
@@ -86,7 +91,7 @@ test_that("group_by_time works on a bare labelled cube", {
   expect_identical(names(gr@groups), c("2023-01", "2023-02"))
   out <- collect(reduce_over(gr, "mean", "t"))
   expect_identical(names(out), c("2023-01", "2023-02"))
-  base <- collect(a + 1)
+  base <- .fixture_values(60, 40) + 1
   expect_equal(out[["2023-01"]], base, tolerance = 1e-6,
                ignore_attr = "gis")
   expect_equal(out[["2023-02"]], base + 1.5, tolerance = 1e-6,
@@ -117,7 +122,8 @@ test_that("a 3-formal scan body receives the axis labels", {
     if (identical(labels, c("d1", "d2"))) xs[[1L]] + 100 else xs[[1L]]
   }
   got <- collect(scan_over(s, body, over = "t"))
-  want <- collect(s) + 100
+  m <- .fixture_values(60, 40)
+  want <- array(c(m, m * 2), c(40L, 60L, 2L)) + 100
   expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
 })
 

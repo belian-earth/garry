@@ -10,11 +10,7 @@ test_that("kernel gradient is identical across chunk sizes", {
   fk <- focal_kernel(a / 1000, k0)
   loss <- reduce_over(fk, "mean", c("x", "y"))
 
-  run <- function(px) {
-    old <- options(garry.chunk_target_px = px)
-    on.exit(options(old))
-    lazy_value_and_grad(loss, fk)
-  }
+  run <- function(px) .with_chunk_px(px, lazy_value_and_grad(loss, fk))
 
   whole <- run(1e6)
   for (px in c(17 * 13, 29 * 23)) {
@@ -32,11 +28,7 @@ test_that("sum-loss gradients are chunk-invariant on nodata rasters", {
   fk <- focal_kernel(a / 1000, k0)
   loss <- reduce_over(fk, "sum", c("x", "y"))
 
-  run <- function(px) {
-    old <- options(garry.chunk_target_px = px)
-    on.exit(options(old))
-    lazy_value_and_grad(loss, fk)
-  }
+  run <- function(px) .with_chunk_px(px, lazy_value_and_grad(loss, fk))
   whole <- run(1e6)
   got <- run(19 * 17)
   expect_equal(got$grad, whole$grad, tolerance = 1e-5)

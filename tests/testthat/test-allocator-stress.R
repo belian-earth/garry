@@ -1,32 +1,33 @@
 # Risk gate (plan risk register): AnvlArray allocator behaviour under
 # sustained chunk throughput, before Phase 7 multiplies it by N daemons.
-# Asserts bounded growth of R-visible memory across hundreds of
-# upload/run/download cycles.
+# Asserts bounded growth of this process's anonymous memory, which holds
+# PJRT's buffers as well as the R heap, across upload/run/download cycles.
 
 skip_on_cran()
+skip_on_os(c("windows", "mac")) # RssAnon is Linux-only
 
-test_that("500 chunk cycles do not leak R-visible memory", {
-  skip_if(nzchar(Sys.getenv("GARRY_SKIP_STRESS")), "stress test skipped")
-
+test_that("chunk cycles do not leak", {
   kernel <- g_jit(function(inputs) {
     a <- inputs[[1L]]
     list(out = (a * 2 + 1) / (a + 3))
   })
   m <- matrix(runif(256 * 256), 256, 256)
+  cycle <- function() invisible(g_download(kernel(list(g_upload(m, "f32")))))
+  # the second pass returns to the OS what the first one freed
+  anon_mb <- function() {
+    for (i in 1:2) {
+      gc(full = TRUE)
+      garry:::.garry_malloc_trim()
+    }
+    garry:::.garry_fleet_anon_mb(Sys.getpid())
+  }
 
   # Warm up: compile + settle allocations.
-  for (i in 1:20) invisible(g_download(kernel(list(g_upload(m, "f32")))))
-  gc(full = TRUE)
-  base <- sum(gc()[, 2L])   # "(Mb)" used column
+  for (i in 1:120) cycle()
+  base <- anon_mb()
+  for (i in 1:100) cycle()
 
-  for (i in 1:500) {
-    invisible(g_download(kernel(list(g_upload(m, "f32")))))
-    if (i %% 100 == 0) gc(full = TRUE)
-  }
-  gc(full = TRUE)
-  after <- sum(gc()[, 2L])
-
-  # Allow modest jitter; catch monotonic per-chunk leaks (500 chunks x
-  # 256 KB would be ~130 MB if buffers leaked).
-  expect_lt(after - base, 20)
+  # A leaked buffer per chunk is 26 MB (100 chunks x 256 KB) and a leaked R
+  # copy twice that; clean cycles measure under 7 MB.
+  expect_lt(anon_mb() - base, 13)
 })

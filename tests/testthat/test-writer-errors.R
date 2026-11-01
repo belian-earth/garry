@@ -4,9 +4,6 @@
 # unlink (defect hunt L3) and closes the output; and a dead writer fails
 # the write, which never moves to the host.
 
-skip_if(!requireNamespace("garry", quietly = TRUE),
-        "garry not installed for daemons")
-
 # Replace the installed .daemon_write_chunk ON THE WRITER DAEMON (tasks
 # resolve .daemon_write_chunk from the daemon's namespace, so a
 # host-side mock never ships). Fails from the `from`-th call on; earlier
@@ -40,10 +37,9 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
   x <- lazy_source(f) + 1
   path <- withr::local_tempfile(fileext = ".tif")
 
-  # Cache the ABI check on clean pools first: the mock below changes
-  # .daemon_write_chunk's formals, which the skew guard would (rightly)
-  # refuse.
-  invisible(collect(x, distributed = TRUE))
+  # The mock below changes .daemon_write_chunk's formals, which the skew
+  # guard would (rightly) refuse: settle the check on clean pools first.
+  garry:::.garry_abi_check("garry_write")
   .we_break_writer(from = 2L)
   err <- expect_error(
     suppressWarnings(write_tif(x, path, distributed = TRUE)),
@@ -57,30 +53,17 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
   .we_fix_writer()
   path2 <- withr::local_tempfile(fileext = ".tif")
   write_tif(x, path2, distributed = TRUE)
-  want <- collect(x, distributed = FALSE)
   got <- gdal_read_window(path2, 1L, 0L, 0L, 60L, 40L)
-  expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
+  expect_equal(got, .fixture_values(60, 40) + 1, tolerance = 0, ignore_attr = TRUE)
 })
 
-test_that("a dead writer fails a write, and only a write", {
-  local_pools(2, 1)
-  mirai::daemons(0, .compute = "garry_write")
-  f <- fixture_gradient_f32()
-  x <- lazy_source(f) + 1
-  path <- withr::local_tempfile(fileext = ".tif")
-  expect_error(write_tif(x, path, distributed = TRUE), class = "garry_pool_error")
-  expect_error(write_tif(lazy_source(f), path, distributed = TRUE), class = "garry_pool_error")
-  expect_false(file.exists(path))
-  want <- collect(x, distributed = FALSE)
-  expect_equal(collect(x, distributed = TRUE), want, tolerance = 1e-6, ignore_attr = TRUE)
-})
-
-test_that("a close that fails or dies on the writer fails the write", {
+test_that("a close that fails or dies on the writer fails the write, and only a write", {
   skip_on_os("windows") # tools::pskill semantics
   local_pools(2, 1)
   withr::local_options(garry.chunk_target_px = 600)
-  x <- lazy_source(fixture_gradient_f32()) + 1
-  invisible(collect(x, distributed = TRUE)) # cache the ABI check first
+  f <- fixture_gradient_f32()
+  x <- lazy_source(f) + 1
+  garry:::.garry_abi_check("garry_write") # the guard would refuse the mocks below
   # the pools are torn down at the end of the test, mocks included
   mock_close <- function(fn) {
     mirai::everywhere({
@@ -103,6 +86,13 @@ test_that("a close that fails or dies on the writer fails the write", {
   mock_close(function() tools::pskill(Sys.getpid(), tools::SIGKILL))
   expect_error(write_tif(x, path, distributed = TRUE), "daemon")
   expect_false(file.exists(path))
+
+  # with the writer gone, a write fails on either route and a collect runs
+  expect_error(write_tif(x, path, distributed = TRUE), class = "garry_pool_error")
+  expect_error(write_tif(lazy_source(f), path, distributed = TRUE), class = "garry_pool_error")
+  expect_false(file.exists(path))
+  got <- collect(x, distributed = TRUE)
+  expect_equal(unclass(got), .fixture_values(60, 40) + 1, tolerance = 0, ignore_attr = TRUE)
 })
 
 # /dev/full takes any file open and fails every write with ENOSPC at the
@@ -147,6 +137,16 @@ test_that("a write GDAL reports failed stops the write, naming the file", {
   expect_match(conditionMessage(err), basename(p), fixed = TRUE)
 })
 
+test_that("a GDAL failure is heard through either process error handler", {
+  # gdalraster's handler alerts through cli; sf's and terra's, once loaded, warn
+  said <- suppressMessages(.gdal_attempt(message("GDAL FAILURE 1: no room")))
+  expect_identical(said$failed, "no room")
+  warned <- suppressWarnings(.gdal_attempt(warning("no room (GDAL error 1)")))
+  expect_identical(warned$failed, "no room (GDAL error 1)")
+  # a warning that is not GDAL's is no failure
+  expect_length(suppressWarnings(.gdal_attempt(warning("slow")))$failed, 0L)
+})
+
 test_that("a closed output with data past its end is incomplete", {
   p <- withr::local_tempfile(fileext = ".tif")
   ds <- gdal_create_output(p, .we_grid)
@@ -164,8 +164,8 @@ test_that("the end of a GTiff's data reads in every layout", {
     "COMPRESS=DEFLATE",
     "COMPRESS=NONE",
     c("BIGTIFF=YES", "COMPRESS=DEFLATE"),
-    "ENDIAN=BIG",
-    c("BIGTIFF=YES", "ENDIAN=BIG"),
+    "ENDIANNESS=BIG",
+    c("BIGTIFF=YES", "ENDIANNESS=BIG"),
     "BLOCKYSIZE=4",
     tiled
   )
@@ -174,6 +174,10 @@ test_that("the end of a GTiff's data reads in every layout", {
     ds <- gdal_create_output(p, .we_grid, options = o)
     gdal_write_window(ds, 0L, 0L, matrix(runif(256), 16L, 16L), "f32")
     ds$close()
+    expect_identical(
+      rawToChar(readBin(p, "raw", 2L)),
+      if ("ENDIANNESS=BIG" %in% o) "MM" else "II"
+    )
     end <- .gtiff_data_end(p)
     expect_gt(end, 100)
     expect_lte(end, file.size(p))
@@ -211,6 +215,6 @@ test_that("a failed write leaves no half-written file", {
     stop("boom")
   }, dtype = "f32")
   path <- withr::local_tempfile(fileext = ".tif")
-  expect_error(write_tif(x, path, distributed = FALSE))
+  expect_error(write_tif(x, path, distributed = FALSE), "boom", fixed = TRUE)
   expect_false(file.exists(path))
 })

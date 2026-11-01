@@ -38,7 +38,9 @@
     seek(con, a)
     res$set_type("application/octet-stream")$send(readBin(con, "raw", b - a + 1))
   })
-  srv <- webfakes::new_app_process(app)
+  # the server starts an R session of its own, inside this limit: webfakes'
+  # 5 s is not enough when every core is busy with other test workers
+  srv <- webfakes::new_app_process(app, process_timeout = 60000L)
   withr::defer(srv$stop(), envir = env)
   list(
     prefix = paste0("/vsicurl/", srv$url("/")),
@@ -57,17 +59,18 @@
 
 # A tiled Float32 GeoTIFF per name in `names`, 2048 x 2048 in 256-pixel
 # blocks (16 MB): larger than the 4 MB garry ingests when the host opens
-# a remote file, so reads past the header still cost range requests.
-.http_tiffs <- function(dir, names) {
+# a remote file, so reads past the header still cost range requests. A
+# file no host opens does not need that: `size` makes it smaller.
+.http_tiffs <- function(dir, names, size = 2048L) {
   for (nm in names) {
     ds <- gdalraster::create(
-      "GTiff", file.path(dir, nm), 2048, 2048, 1, "Float32",
+      "GTiff", file.path(dir, nm), size, size, 1, "Float32",
       options = c("TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256"),
       return_obj = TRUE
     )
     ds$setGeoTransform(c(0, 10, 0, 20480, 0, -10))
     ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
-    ds$write(1, 0, 0, 2048, 2048, as.numeric(seq_len(2048 * 2048)))
+    ds$write(1, 0, 0, size, size, as.numeric(seq_len(size * size)))
     ds$close()
   }
   invisible(file.path(dir, names))

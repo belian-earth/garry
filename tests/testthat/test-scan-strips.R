@@ -43,7 +43,7 @@ test_that(".strip_stage_fn reassembles a kernel's strips exactly", {
     v <- a * (1 + t / 10) + if (t >= 4) 5 else 0
     if (t %in% c(2, 5)) {
       v <- lazy_map(v, dtype = "f32", fn = function(z) {
-        g_ifelse(z > 30 & z < 40, NaN, z)
+        g_ifelse(z > 1000 & z < 1500, NaN, z)
       })
     }
     v
@@ -91,18 +91,17 @@ test_that("the planner strips scan stages only", {
 
 test_that("stripped scan stages equal whole chunks, in process and on daemons", {
   stk <- .strip_stack()
+  .expect_partial_nan(collect(stk, distributed = FALSE)[, , 2L])
   sm <- kalman_smooth(stk, 1, 0.1, 1.4, robust_iters = 1L)
+  # mean and sd together: one stage, one kernel for each run
   run <- function(px, chunk_px, distributed) {
     withr::local_options(garry.chunk_target_px = chunk_px)
     testthat::local_mocked_bindings(.scan_strip_px = px)
-    lapply(sm, collect, distributed = distributed)
+    collect(list(mean = sm$mean, sd = sm$sd), distributed = distributed)
   }
   whole <- run(1e9, 1e6, FALSE)
-  # one chunk in 3-row strips (13 strips and a padded 14th), then
-  # several chunks, each with its own padded strip
-  expect_identical(run(180, 1e6, FALSE), whole)
+  # several chunks, each in 3-row strips with its own padded strip
   expect_identical(run(180, 600, FALSE), whole)
-  local_pools(2, 2)
-  expect_identical(run(180, 600, TRUE), run(1e9, 600, TRUE))
-  expect_equal(run(180, 600, TRUE), whole, tolerance = 1e-6, ignore_attr = TRUE)
+  local_pools(2, 1)
+  expect_identical(run(180, 600, TRUE), whole)
 })

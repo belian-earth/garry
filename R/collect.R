@@ -569,7 +569,8 @@ garry_last_route <- function() .garry_state$route
   if (distributed) {
     return(.read_only_each_pool(spec, ra, emit, ...))
   }
-  .with_gdal_threads(unique(unlist(lapply(ra, `[[`, "path"))))
+  restore_threads <- .gdal_threads_all(unique(unlist(lapply(ra, `[[`, "path"))))
+  on.exit(restore_threads(), add = TRUE)
   for (k in seq_along(spec$read_stage)) {
     s <- spec$read_stage[[k]]
     a <- ra[[k]]

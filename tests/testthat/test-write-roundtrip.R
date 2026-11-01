@@ -1,6 +1,5 @@
 # Phase 4b gate: write sinks. Roundtrips are bit-exact; NaN demotes to
-# the sentinel on write (D8 reversed); integer output with NaN and no
-# sentinel errors.
+# the sentinel on write (D8 reversed); a scalar is no raster to write.
 
 
 test_that("f32 pipeline writes and reads back bit-exactly", {
@@ -68,7 +67,7 @@ test_that("pure-source write copies the raster (i16 in, i16 out)", {
                    gdal_read_window(f, 1L, 0L, 0L, 20L, 15L))
 })
 
-test_that("integer output with NaN and no sentinel errors; scalars refuse", {
+test_that("a scalar refuses a file sink", {
   f <- fixture_i16_nodata()
   a <- lazy_source(f)
   expect_error(

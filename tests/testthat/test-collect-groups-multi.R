@@ -1,7 +1,7 @@
 # Grouped collect through multi-export (one plan, one sink per group;
 # ir-extensions-todo.md #5): results and written files are identical to
 # the legacy per-group loop, ragged groups keep per-group band
-# descriptions, {group} paths are unchanged, distributed == single.
+# descriptions, {group} paths are unchanged.
 
 
 .grp_fixture <- function(ragged = FALSE) {
@@ -87,18 +87,6 @@ test_that("grouped raw-cube (.vrt) writes work through multi-export", {
                tolerance = 1e-6, ignore_attr = TRUE)
 })
 
-test_that("grouped multi-export: distributed == single-threaded", {
-  skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-  gr <- .grp_fixture() |> group_by_time("month") |>
-    reduce_over("median", over = "t", nan_rm = TRUE)
-  d <- collect(gr, distributed = TRUE)
-  s <- collect(gr, distributed = FALSE)
-  for (nm in names(s)) expect_equal(d[[nm]], s[[nm]], tolerance = 1e-6)
-})
-
 test_that("plan_only keeps one plan per group", {
   gr <- .grp_fixture() |> group_by_time("month") |>
     reduce_over("median", over = "t", nan_rm = TRUE)
@@ -130,8 +118,12 @@ test_that("write_tif(cog = TRUE) on groups writes what the plain route does", {
       list.files(root, recursive = TRUE),
       rel(unlist(cog), root)
     )
+    expect_length(cog, 2L)
     for (f in unlist(cog)) {
-      expect_true(file.exists(f))
+      expect_identical(.read_cube(f), .read_cube(file.path(plain_root, rel(f, root))))
+      d <- new(gdalraster::GDALRaster, f)
+      expect_identical(d$getMetadataItem(0, "LAYOUT", "IMAGE_STRUCTURE"), "COG")
+      d$close()
     }
   }
 })

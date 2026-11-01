@@ -2,7 +2,7 @@
 # reduce decomposition (.gd_decompose, .execute_gd_reduce) must agree with the
 # general scheduler (execute_plan_mirai) and, byte for byte, with the WHOLE
 # reachable IR compiled into one kernel, on derived bands, band math, focal,
-# and nested reduce -> map -> reduce.
+# and nested reduce -> map -> reduce. All three answer to a value from plain R.
 
 
 # GTI fixtures (.gg_grid / .gg_gti / .gg_slice / .gg_val) and the strict
@@ -19,6 +19,10 @@
        B = reduce_over(lazy_stack(list(.gg_slice(gB, "s1", g),
                                        .gg_slice(gB, "s2", g))), "median", "t"))
 }
+
+# What those composites hold: each cell's median of its two slices.
+.gg_a <- .gg_val(5)
+.gg_b <- .gg_val(75)
 
 # The oracle: every source warped, the whole IR replayed in one kernel.
 .gg_whole_ir <- function(plan, gspec) {
@@ -46,15 +50,14 @@
   .gd_write_stack(res, gspec$grid, NULL, NULL, NULL, NULL)
 }
 
-.gg_equal <- function(x) {
+.gg_equal <- function(x, want) {
   p <- plan_lazy(x)
   gsp <- .gd_spec(p)
   expect_false(is.null(gsp))                          # takes the general path
-  expect_true(is.null(.cd_spec(p)))                   # NOT the composite fast path
+  expect_null(.cd_spec(p))                            # NOT the composite fast path
   gen   <- .gg_whole_ir(p, gsp)
-  sched <- execute_plan_mirai(p)
-  ok <- !is.nan(as.numeric(sched))
-  expect_equal(as.numeric(gen)[ok], as.numeric(sched)[ok], tolerance = 1e-5)
+  .gg_close(gen, want)
+  .gg_close(gen, execute_plan_mirai(p), 1e-5)
   # Reduce-decomposition (the general path): compute the leaf temporal reduces
   # via the overlapped per-band pipeline, then run the upper IR on the 2D results
   # -- byte-identical to the whole-grid kernel.
@@ -63,34 +66,30 @@
   .gg_identical(.execute_gd_reduce(p, dc), gen)
 }
 
-test_that("a derived band (map over reduces) runs warp-on-read == scheduler", {
-  local_pools(2, 2)
-  cs <- .gg_composites()
-  .gg_equal((cs$A - cs$B) / (cs$A + cs$B))            # ndvi shape
-})
+local({
+  local_pools(2, 1)
 
-test_that("nested reduce -> map -> reduce runs warp-on-read == scheduler", {
-  local_pools(2, 2)
-  cs <- .gg_composites()
-  ndvi <- (cs$A - cs$B) / (cs$A + cs$B)
-  # a second derived band, then reduce over the band axis of the two
-  top <- reduce_over(lazy_stack(list(ndvi, cs$A * 2 - cs$B), along = "band"),
-                     "sum", "band")
-  .gg_equal(top)
-})
+  test_that("a derived band (map over reduces) runs warp-on-read == scheduler", {
+    cs <- .gg_composites()
+    .gg_equal((cs$A - cs$B) / (cs$A + cs$B),            # ndvi shape
+              (.gg_a - .gg_b) / (.gg_a + .gg_b))
+  })
 
-test_that("a focal on a composite runs warp-on-read == scheduler", {
-  local_pools(2, 2)
-  cs <- .gg_composites()
-  .gg_equal(focal_map(cs$A, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)))
-})
+  test_that("nested reduce -> map -> reduce runs warp-on-read == scheduler", {
+    cs <- .gg_composites()
+    ndvi <- (cs$A - cs$B) / (cs$A + cs$B)
+    # a second derived band, then reduce over the band axis of the two
+    top <- reduce_over(lazy_stack(list(ndvi, cs$A * 2 - cs$B), along = "band"),
+                       "sum", "band")
+    .gg_equal(top, (.gg_a - .gg_b) / (.gg_a + .gg_b) + .gg_a * 2 - .gg_b)
+  })
 
-test_that("collect() routes a derived band through the general path", {
-  local_pools(2, 2)
-  cs <- .gg_composites()
-  ndvi <- (cs$A - cs$B) / (cs$A + cs$B)
-  got  <- collect(ndvi, distributed = TRUE)
-  want <- collect(ndvi, distributed = FALSE)
-  ok <- !is.nan(as.numeric(want))
-  expect_equal(as.numeric(got)[ok], as.numeric(want)[ok], tolerance = 1e-5)
+  test_that("a focal on a composite runs warp-on-read == scheduler", {
+    cs <- .gg_composites()
+    # a 3 x 3 mean of a plane is its centre, and NaN where it leaves the raster
+    want <- .gg_a
+    want[c(1L, 40L), ] <- NaN
+    want[, c(1L, 60L)] <- NaN
+    .gg_equal(focal_map(cs$A, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh)), want)
+  })
 })

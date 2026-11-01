@@ -560,6 +560,18 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 # Operators
 # ---------------------------------------------------------------------------
 
+# R's int^int is double, and the node declares so. anvl's power stays at the
+# integer dtype, where it wraps and truncates a negative exponent, so an
+# integer operand takes the declared float first.
+.float_pow <- function(dtype) {
+  force(dtype)
+  function(x, y) {
+    if (.g_is_integer(x)) x <- g_cast(x, dtype)
+    if (.g_is_integer(y)) y <- g_cast(y, dtype)
+    x^y
+  }
+}
+
 # Binary op helper. Grid mismatch errors (align stays explicit, decision
 # D8's cousin); graph mismatch auto-merges by importing b's subgraph into
 # a's graph (decision D6): users never manage graphs by hand.
@@ -581,7 +593,7 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
     MapNode,
     parents = c(a@node_id, b_id),
     grid = grid,
-    fn = op
+    fn = if (identical(op, `^`)) .float_pow(grid@dtype) else op
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
@@ -607,13 +619,13 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   if (is.logical(s)) {
     s <- as.integer(s)
   }
-  fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
   floats <- divide || is.double(s)
-  .arith_map(
-    lr,
-    fn,
-    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
-  )
+  declared <- dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
+  if (identical(op, `^`)) {
+    op <- .float_pow(declared)
+  }
+  fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
+  .arith_map(lr, fn, declared)
 }
 
 # A map whose dtype is already known, so nothing is traced.
@@ -1128,8 +1140,8 @@ lazy_patch <- function(
 #' as `focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
 #'
 #' A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
-#' outside the raster) drop out of the weighted mean (the semantics of
-#' `rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")`).
+#' outside the raster) drop out of the weighted mean, so the window shrinks
+#' at raster edges and around holes.
 #' `sigma_r` must be supplied: the parameter-free per-band default
 #' (the band's own sd) is a whole-raster statistic, so compute it in a
 #' separate reduce pass (or reuse fitted values) and pass it in.

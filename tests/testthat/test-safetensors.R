@@ -1,7 +1,8 @@
 # P1: safetensors reader + OCM weight folding. Gates: reader round-trip
 # on a hand-built file (torch index order preserved); BN folding equals
-# conv-then-batchnorm via torch; real OCM state dicts parse into the
-# expected structure (gated on the weights being present locally).
+# conv-then-batchnorm in torch, whose output is saved in fixtures/torch/ by
+# tools/torch_make_fixture.R; real OCM state dicts parse into the expected
+# structure (gated on the weights being present locally).
 
 skip_if_not_installed("jsonlite")
 
@@ -46,29 +47,12 @@ test_that("safetensors_read round-trips torch index order", {
 })
 
 test_that("BN folding equals conv-then-batchnorm (torch referee)", {
-  skip_if_not_installed("torch")
-  skip_if(!torch::torch_is_installed(), "libtorch not installed")
-  set.seed(2)
-  co <- 5L; ci <- 3L
-  w  <- array(runif(co * ci * 9, -1, 1), c(co, ci, 3, 3))
-  g  <- runif(co, 0.5, 2); b <- runif(co, -1, 1)
-  mu <- runif(co, -1, 1); v <- runif(co, 0.5, 2)
-  std <- list("c.weight" = w, "bn.weight" = g, "bn.bias" = b,
-              "bn.running_mean" = mu, "bn.running_var" = v)
+  fx <- oracle_cases("torch", "conv-bn-mlp")$bn
+  std <- list("c.weight" = fx$w, "bn.weight" = fx$gamma, "bn.bias" = fx$beta,
+              "bn.running_mean" = fx$mu, "bn.running_var" = fx$var)
   fold <- garry:::.ocm_fold_conv_bn(std, "c.weight", "bn")
-
-  x <- array(runif(ci * 11 * 13, -1, 1), c(ci, 11, 13))
-  got <- g_conv2d(x, fold$w, fold$b, padding = 1L)
-
-  ref <- torch::nnf_batch_norm(
-    torch::nnf_conv2d(torch::torch_tensor(array(x, c(1L, dim(x)))),
-                      torch::torch_tensor(w), padding = 1L),
-    running_mean = torch::torch_tensor(mu),
-    running_var = torch::torch_tensor(v),
-    weight = torch::torch_tensor(g), bias = torch::torch_tensor(b),
-    training = FALSE, eps = 1e-5)
-  expect_equal(got, as.array(ref)[1, , , , drop = TRUE],
-               tolerance = 1e-5, ignore_attr = TRUE)
+  got <- g_conv2d(fx$x, fold$w, fold$b, padding = 1L)
+  expect_equal(got, fx$ref, tolerance = 1e-5, ignore_attr = TRUE)
 })
 
 test_that("real OCM regnety state dict parses into the expected structure", {

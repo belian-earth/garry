@@ -63,7 +63,12 @@ g_jit <- function(f, device = NULL) {
 #' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
 #' @keywords internal
 g_value_and_gradient <- function(f, wrt) {
-  anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
+  anvl::jit(.g_value_and_gradient_fn(f, wrt))
+}
+
+# The same before its jit, for .host_kernel(), which jits what it keeps.
+.g_value_and_gradient_fn <- function(f, wrt) {
+  anvl::value_and_gradient(f, wrt = wrt)
 }
 
 # The dtype a stored value reaches a kernel as: unsigned values upload

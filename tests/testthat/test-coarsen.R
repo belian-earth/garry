@@ -46,33 +46,9 @@
   grid_spec("EPSG:32736", c(500000, 8600000, 500150, 8600060), res = 30)
 }
 
-.f32c <- function(v) {
-  readBin(
-    writeBin(as.numeric(v), raw(), size = 4L),
-    "numeric",
-    length(v),
-    size = 4L
-  )
-}
-
-# R reference: k x k block means (row by row, in order) of a [y, x]
-# matrix, NaN where no value is valid.
-.block_mean <- function(m, k) {
-  out <- matrix(NaN, nrow(m) %/% k, ncol(m) %/% k)
-  for (r in seq_len(nrow(out))) {
-    for (q in seq_len(ncol(out))) {
-      blk <- t(m[(k * r - k + 1):(k * r), (k * q - k + 1):(k * q)])
-      ok <- !is.nan(blk)
-      if (any(ok)) out[r, q] <- .f32c(Reduce(`+`, blk[ok]) / sum(ok))
-    }
-  }
-  out
-}
-
 .decode_m <- function(m) {
-  out <- .f32c(dequantize_aef(m))
+  out <- .as_f32(dequantize_aef(m))
   out[is.nan(m)] <- NaN
-  dim(out) <- dim(m)
   out
 }
 
@@ -184,7 +160,6 @@ test_that("a tile in another projection is warped alone, as the 10 m read warps 
 })
 
 test_that("an N-D dataset coarsens slice by slice", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd()
   g <- grid_spec("EPSG:32632", c(500000, 4599800, 500300, 4600000), res = 10)
   ds <- time_sel(lazy_dataset(fx$path, g), "2023")

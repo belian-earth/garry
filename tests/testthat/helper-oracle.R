@@ -1,3 +1,46 @@
+# A saved oracle: `$cases` of tests/testthat/fixtures/<oracle>/<subject>.rds,
+# written by tools/<oracle>_make_fixture.R. The oracle package is not needed to
+# read it, and nothing skips: a missing or empty fixture fails the test, so a
+# loop over its cases cannot pass by running zero times.
+oracle_cases <- function(oracle, subject) {
+  cases <- readRDS(testthat::test_path("fixtures", oracle, paste0(subject, ".rds")))$cases
+  stopifnot(length(cases) > 0L)
+  cases
+}
+
+# gdalwarp of `f` onto `grid`, as a [y, x] matrix with empty pixels NaN. GDAL is
+# also what garry warps with, so this checks garry's wiring of grid, resampling
+# and nodata, not GDAL. `-et 0` is the exact transformer gdal_warp_vrt() uses;
+# gdalwarp's default interpolates it and moves picks near a cell edge.
+.geo_oracle <- function(f, grid, resampling = "near") {
+  out <- tempfile(fileext = ".tif")
+  nx <- grid@dims[["x"]]
+  ny <- grid@dims[["y"]]
+  gdalraster::warp(f, out, t_srs = grid@crs, cl_arg = c(
+    "-te", format(grid@extent, digits = 17L, trim = TRUE), "-ts", nx, ny,
+    "-r", resampling, "-et", "0", "-ot", "Float32", "-dstnodata", "nan", "-q"
+  ))
+  r <- methods::new(gdalraster::GDALRaster, out)
+  on.exit(r$close())
+  v <- r$read(1, 0, 0, nx, ny, nx, ny)
+  v[is.na(v)] <- NaN
+  matrix(v, ny, nx, byrow = TRUE)
+}
+
+# k x k block means of a [y, x] matrix, NaN where no value is valid. Each block
+# is summed row by row in double, as the reader sums, then rounded to f32.
+.block_mean <- function(m, k) {
+  out <- matrix(NaN, nrow(m) %/% k, ncol(m) %/% k)
+  for (r in seq_len(nrow(out))) {
+    for (q in seq_len(ncol(out))) {
+      blk <- t(m[(k * r - k + 1):(k * r), (k * q - k + 1):(k * q)])
+      ok <- !is.nan(blk)
+      if (any(ok)) out[r, q] <- .as_f32(Reduce(`+`, blk[ok]) / sum(ok))
+    }
+  }
+  out
+}
+
 # Mini-executor over the pure-R oracle: runs a Plan chunk by chunk with
 # source data supplied as R matrices ([y, x], decision D13). This is the
 # Phase 3 proof that chunked execution equals whole-array execution,

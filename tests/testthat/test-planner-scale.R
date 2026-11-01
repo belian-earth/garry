@@ -81,7 +81,6 @@ test_that("read windows are budgeted per source stage, not plan-wide", {
 })
 
 test_that("warp sinks read by their bands, at compute chunks when read directly", {
-  skip_if_not_installed("jsonlite")
   fx <- fixture_zarr_nd() # 4 bands a year
   budget <- 0.005
   old <- options(

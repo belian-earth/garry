@@ -20,7 +20,7 @@ test_that("names(), length() and $ / $<- work on a dataset", {
   expect_identical(collect(ds$b), collect(ds[["b"]]))
   ds$c <- ds$a + ds$b
   expect_identical(names(ds), c("a", "b", "c"))
-  expect_equal(collect(ds$c), 3 * collect(r))
+  expect_equal(collect(ds$c), 3 * .fixture_values(60, 40), ignore_attr = TRUE)
 })
 
 test_that("time_labels() reads the t axis of rasters and datasets", {

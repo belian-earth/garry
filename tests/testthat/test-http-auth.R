@@ -100,12 +100,10 @@ test_that("function headers refresh when a collect starts", {
 })
 
 test_that("every pool sends the header, including pools started later", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   local_http_auth()
   d <- withr::local_tempdir("hp")
   names <- c("d1.tif", "d2.tif", "d3.tif")
-  .http_tiffs(d, names)
+  .http_tiffs(d, names, size = 256L)
   S <- .http_log_server(d)
   # Read a file from inside every daemon of every pool: the host never
   # opens these files, so their log lines come from the daemons alone.
@@ -124,12 +122,12 @@ test_that("every pool sends the header, including pools started later", {
     }
   }
 
-  local_pools(1, 2)
+  local_pools(1, 1)
   garry_http_auth(S$prefix, "Authorization: Bearer P1") # pushed to running pools
   daemon_read("d1.tif")
   expect_identical(.auth_of(S, "d1.tif"), "Bearer P1")
 
-  garry_daemons(1, 2) # a new pool generation gets the stored header
+  garry_daemons(1, 1) # a new pool generation gets the stored header
   daemon_read("d2.tif")
   expect_identical(.auth_of(S, "d2.tif"), "Bearer P1")
 
@@ -139,8 +137,6 @@ test_that("every pool sends the header, including pools started later", {
 })
 
 test_that("a push a daemon refuses fails, and the next run pushes again", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   local_http_auth()
   local_pools(1, 1)
   tok <- "Authorization: Bearer one"

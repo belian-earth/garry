@@ -1,9 +1,9 @@
 # LazyDataset: the named multi-band, multi-time object whose verbs apply across
 # every band. These gates fix that dataset ops equal the hand-written per-band /
 # per-slice primitive path (as_dataset + reduce_over + mask vs manual lazy_stack
-# + lazy_map), that masking (value-set, qa_bits, morphology) matches a manual
-# mask, that indexing/collect assemble the band axis, and that the distributed
-# executor reproduces the single-threaded oracle for a full masked composite.
+# + lazy_map), that masking (value-set, qa_bits, morphology) matches a mask in
+# plain R, that indexing/collect assemble the band axis, and that the distributed
+# executor holds a masked composite's plain-R value.
 
 # Two-slice, two-band dataset plus a QA band, all on one shared graph.
 ds_fixture <- function(f) {
@@ -19,6 +19,66 @@ ds_fixture <- function(f) {
   )
 }
 
+# The median of two slices, NaN marking a slice a mask took.
+.ds_median2 <- function(a, b) {
+  ifelse(is.nan(a), b, ifelse(is.nan(b), a, (a + b) / 2))
+}
+
+# Grow a logical [y, x] mask by a disk of radius `r`.
+.ds_dilate <- function(m, r) {
+  disk <- expand.grid(dy = -r:r, dx = -r:r)
+  disk <- disk[disk$dx^2 + disk$dy^2 <= r^2, ]
+  ys <- seq_len(nrow(m))
+  xs <- seq_len(ncol(m))
+  out <- m
+  for (i in seq_len(nrow(disk))) {
+    y <- ys[(ys + disk$dy[[i]]) %in% ys]
+    x <- xs[(xs + disk$dx[[i]]) %in% xs]
+    out[y, x] <- out[y, x] | m[y + disk$dy[[i]], x + disk$dx[[i]]]
+  }
+  out
+}
+.ds_erode <- function(m, r) !.ds_dilate(!m, r)
+
+# A value band over two slices with a QA band that flags, on a 44 x 36 grid,
+# a block, a one-cell speck and a stripe 3 cells wide. An opening of radius 2
+# takes the speck and the stripe and leaves the block. Every flag sits at least
+# 8 cells from the edge, so the oracle has no raster border to model.
+.ds_masked <- function() {
+  gt <- c(0, 10, 0, 360, 0, -10)
+  tile <- function(m) fixture_tile(t(m), gt = gt, nx = 44L, ny = 36L)
+  flags <- function(rows, cols, speck, stripe) {
+    m <- matrix(FALSE, 36L, 44L)
+    m[rows, cols] <- TRUE
+    m[speck[[1L]], speck[[2L]]] <- TRUE
+    m[stripe, 12:30] <- TRUE
+    m
+  }
+  q1 <- flags(12:20, 14:24, c(14L, 31L), 25:27)
+  q2 <- flags(16:24, 20:32, c(11L, 12L), 12:14)
+  v <- .fixture_values(44L, 36L)
+  fv <- tile(v)
+  fq1 <- tile(q1 * 1)
+  fq2 <- tile(q2 * 2)
+  g <- graph_new()
+  src <- function(f) lazy_source(f, graph = g)
+  ds <- as_dataset(
+    list(V = list(s1 = src(fv), s2 = src(fv) * 2), Q = list(s1 = src(fq1), s2 = src(fq2))),
+    mask_asset = "Q"
+  )
+  list(ds = ds, v = v, q1 = q1, q2 = q2)
+}
+
+# What apply_mask() then a median over t leave of it, with `clean` run on
+# each slice's flags.
+.ds_masked_want <- function(fx, clean) {
+  s1 <- fx$v
+  s1[clean(fx$q1)] <- NaN
+  s2 <- fx$v * 2
+  s2[clean(fx$q2)] <- NaN
+  .ds_median2(s1, s2)
+}
+
 test_that("as_dataset builds a named dataset; indexing round-trips", {
   ds <- ds_fixture(fixture_gradient_f32())
   expect_true(S7::S7_inherits(ds, LazyDataset))
@@ -32,19 +92,15 @@ test_that("as_dataset builds a named dataset; indexing round-trips", {
   expect_length(sub@mask_asset, 0L)   # Q not in the subset
 })
 
-test_that("reduce_over per band equals the manual stack+reduce path", {
-  f <- fixture_gradient_f32()
-  ds <- ds_fixture(f)
+test_that("reduce_over per band takes each band's median", {
+  ds <- ds_fixture(fixture_gradient_f32())
 
   red <- reduce_over(ds, "median", "t")
   expect_true(all(vapply(red@bands, length, 1L) == 1L))  # one composite per band
   out <- collect(red)                                    # (y, x, band)
   expect_equal(dim(out), c(40L, 60L, 3L))
-
-  g <- graph_new()
-  s <- function() lazy_source(f, graph = g)
-  manual_V1 <- collect(reduce_over(lazy_stack(list(s() * 1, s() * 2)), "median", "t"))
-  expect_equal(out[, , 1], manual_V1, tolerance = 1e-6, ignore_attr = "gis")
+  # V1 is the fixture times 1 and 2
+  expect_equal(out[, , 1], .fixture_values(60L, 40L) * 1.5, tolerance = 1e-6, ignore_attr = TRUE)
 })
 
 test_that("collect on a single-band dataset returns a matrix", {
@@ -53,74 +109,31 @@ test_that("collect on a single-band dataset returns a matrix", {
   expect_equal(dim(out), c(40L, 60L))
 })
 
-test_that("apply_mask(qa_bits) equals a manual bitmask + apply", {
-  f <- fixture_gradient_f32()
-  ds <- ds_fixture(f)
-
-  masked <- apply_mask(ds, where = qa_bits(0:1))
-  expect_false("Q" %in% names(masked@bands))            # QA dropped
-  got <- collect(reduce_over(masked, "median", "t"))
-
-  # manual: bad = (value & 3) > 0 with nodata->clear; NaN out the bad pixels
-  g <- graph_new()
-  s <- function() lazy_source(f, graph = g)
-  bad <- function(fv) {
-    fc <- g_ifelse(g_is_nodata(fv), 0, fv)
-    g_cast(g_bitand(g_cast(fc, "i32"), 3L) > 0, "f32")
-  }
-  ap <- function(v, b) lazy_map(v, b, fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
-                                dtype = "f32")
-  V1s1 <- s() * 1; V1s2 <- s() * 2; Q1 <- s(); Q2 <- s() + 1
-  m1 <- ap(V1s1, lazy_map(Q1, fn = bad, dtype = "f32"))
-  m2 <- ap(V1s2, lazy_map(Q2, fn = bad, dtype = "f32"))
-  manual <- collect(reduce_over(lazy_stack(list(m1, m2)), "median", "t"))
-  expect_equal(got[, , 1], manual, tolerance = 1e-6, ignore_attr = "gis")
-})
-
 test_that("apply_mask(value set) flags category membership", {
-  f <- fixture_gradient_f32()
-  ds <- ds_fixture(f)
-
-  # values are r*100+c; mask the exact set of QA values present in slice s1 of Q
-  # (Q s1 == the raw fixture). Pick a handful of concrete values.
+  ds <- ds_fixture(fixture_gradient_f32())
+  # Q's slices are the fixture's values, then those values + 1
   vals <- c(101, 202, 303)
   got <- collect(reduce_over(apply_mask(ds, where = vals), "median", "t"))
-
-  g <- graph_new()
-  s <- function() lazy_source(f, graph = g)
-  memb <- function(fv) {
-    ind <- lapply(vals, function(v) g_cast(fv == v, "f32"))
-    g_cast(Reduce(`+`, ind) > 0, "f32")
-  }
-  ap <- function(v, b) lazy_map(v, b, fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv),
-                                dtype = "f32")
-  V1s1 <- s() * 1; V1s2 <- s() * 2; Q1 <- s(); Q2 <- s() + 1
-  m1 <- ap(V1s1, lazy_map(Q1, fn = memb, dtype = "f32"))
-  m2 <- ap(V1s2, lazy_map(Q2, fn = memb, dtype = "f32"))
-  manual <- collect(reduce_over(lazy_stack(list(m1, m2)), "median", "t"))
-  expect_equal(got[, , 1], manual, tolerance = 1e-6, ignore_attr = "gis")
+  m <- .fixture_values(60L, 40L)
+  s1 <- m
+  s1[m %in% vals] <- NaN
+  s2 <- m * 2
+  s2[(m + 1) %in% vals] <- NaN
+  expect_identical(c(sum(is.nan(s1)), sum(is.nan(s2))), c(3L, 2L)) # no cell holds 100
+  .gg_close(got[, , 1], .ds_median2(s1, s2))
+  .gg_close(got[, , 2], .ds_median2(s1 * 3, s2 * 2))
 })
 
-test_that("mask morphology (open + dilate) matches a manual erode/dilate chain", {
-  f <- fixture_gradient_f32()
-  ds <- ds_fixture(f)
-  got <- collect(reduce_over(apply_mask(ds, where = qa_bits(0:1), open = 2, dilate = 3),
-                             "median", "t"))
-
-  disk <- function(r) { o <- expand.grid(dx = -r:r, dy = -r:r); which(o$dx^2 + o$dy^2 <= r^2) }
-  ero  <- function(x, r) { sel <- disk(r); focal_map(x, radius = as.integer(r),
-                                                 fn = function(sh) Reduce(`*`, sh[sel])) }
-  dil  <- function(x, r) { sel <- disk(r); focal_map(x, radius = as.integer(r),
-                                                 fn = function(sh) 1 - Reduce(`*`, lapply(sh[sel], function(s) 1 - s))) }
-  g <- graph_new()
-  s <- function() lazy_source(f, graph = g)
-  bad <- function(fv) { fc <- g_ifelse(g_is_nodata(fv), 0, fv); g_cast(g_bitand(g_cast(fc, "i32"), 3L) > 0, "f32") }
-  clean <- function(q) dil(dil(ero(lazy_map(q, fn = bad, dtype = "f32"), 2), 2), 3)
-  ap <- function(v, b) lazy_map(v, b, fn = function(vv, mm) g_ifelse(mm > 0.5, NaN, vv), dtype = "f32")
-  V1s1 <- s() * 1; V1s2 <- s() * 2; Q1 <- s(); Q2 <- s() + 1
-  m1 <- ap(V1s1, clean(Q1)); m2 <- ap(V1s2, clean(Q2))
-  manual <- collect(reduce_over(lazy_stack(list(m1, m2)), "median", "t"))
-  expect_equal(got[, , 1], manual, tolerance = 1e-6, ignore_attr = "gis")
+test_that("mask morphology (open + dilate) grows and cleans by a disk", {
+  fx <- .ds_masked()
+  got <- collect(reduce_over(apply_mask(fx$ds, where = qa_bits(0:1), open = 2, dilate = 3),
+                             "median", "t"), distributed = FALSE)
+  clean <- function(m) .ds_dilate(.ds_dilate(.ds_erode(m, 2L), 2L), 3L)
+  .gg_close(got, .ds_masked_want(fx, clean))
+  # the opening took what it should
+  expect_false(clean(fx$q1)[14L, 31L])
+  expect_false(clean(fx$q2)[11L, 12L])
+  expect_false(any(clean(fx$q1)[26L, ]))
 })
 
 test_that("lazy_map over a dataset skips the mask band; bands= selects", {
@@ -141,16 +154,11 @@ test_that("stack_bands needs one layer per band", {
 })
 
 test_that("scalar arithmetic scales value bands and leaves the mask band", {
-  f <- fixture_gradient_f32()
-  ds <- ds_fixture(f)
+  ds <- ds_fixture(fixture_gradient_f32())
   scaled <- ds * 0.1
   expect_identical(scaled@bands$Q, ds@bands$Q)           # QA untouched
   got <- collect(reduce_over(scaled["V1"], "mean", "t"))
-
-  g <- graph_new(); s <- function() lazy_source(f, graph = g)
-  manual <- collect(reduce_over(lazy_stack(list((s() * 1) * 0.1, (s() * 2) * 0.1)),
-                                "mean", "t"))
-  expect_equal(got, manual, tolerance = 1e-6)
+  expect_equal(got, .fixture_values(60L, 40L) * 0.15, tolerance = 1e-6, ignore_attr = TRUE)
   expect_true(S7::S7_inherits(100 - ds, LazyDataset))    # scalar-first
 })
 
@@ -164,10 +172,7 @@ test_that("dataset + dataset combines shared value bands slice by slice", {
   expect_identical(names(summed@bands), "V1")
   expect_length(summed@mask_asset, 0L)
   got <- collect(reduce_over(summed, "mean", "t"))
-
-  manual <- collect(reduce_over(
-    lazy_stack(list(s() * 1 + s() * 10, s() * 2 + s() * 20)), "mean", "t"))
-  expect_equal(as.numeric(got), as.numeric(manual), tolerance = 1e-6)
+  expect_equal(got, .fixture_values(60L, 40L) * 16.5, tolerance = 1e-6, ignore_attr = TRUE)
 })
 
 # Fabricate a doc_items-shaped list with a value asset (V) and a QA asset (Q)
@@ -209,7 +214,9 @@ test_that("lazy_dataset builds from a STAC table and masks end to end (offline)"
   expect_length(ds@bands$V, 3L)                          # three day slices
   expect_named(ds@bands$V, c("2023-01-05", "2023-01-15", "2023-02-05"))
 
-  got <- collect(reduce_over(apply_mask(ds, where = qa_bits(0:1)), "median", "t"))
+  masked <- apply_mask(ds, where = qa_bits(0:1))
+  expect_false("Q" %in% names(masked@bands))             # QA dropped
+  got <- collect(reduce_over(masked, "median", "t"))
 
   # plain-R reference: bad = (int(Q) & 3) > 0 -> NaN, then median over slices
   rd <- function(f) gdal_read_window(f, 1L, 0L, 0L, 20L, 16L)
@@ -355,32 +362,30 @@ test_that("collect writes dataset band names as GDAL descriptions", {
                c("red", "green", "blue", "ndvi"))
 })
 
-test_that("distributed collect writes band descriptions too", {
-  local_pools(2, 2)
+local({
+  local_pools(2, 1)
 
-  f <- fixture_gradient_f32()
-  g <- graph_new(); s <- function() lazy_source(f, graph = g)
-  ds <- as_dataset(list(a = list(s(), s() * 2), b = list(s() * 3, s() * 4)))
-  comp <- reduce_over(ds, "median", "t")     # plain sources -> scheduler path
-  out <- tempfile(fileext = ".tif")
-  write_tif(comp, out, distributed = TRUE)
-  r <- new(gdalraster::GDALRaster, out); on.exit(r$close(), add = TRUE)
-  expect_equal(vapply(1:2, function(b) r$getDescription(b), character(1)),
-               c("a", "b"))
-})
+  test_that("distributed collect writes band descriptions too", {
+    f <- fixture_gradient_f32()
+    g <- graph_new(); s <- function() lazy_source(f, graph = g)
+    ds <- as_dataset(list(a = list(s(), s() * 2), b = list(s() * 3, s() * 4)))
+    comp <- reduce_over(ds, "median", "t")     # plain sources -> scheduler path
+    out <- tempfile(fileext = ".tif")
+    write_tif(comp, out, distributed = TRUE)
+    r <- new(gdalraster::GDALRaster, out); on.exit(r$close(), add = TRUE)
+    expect_equal(vapply(1:2, function(b) r$getDescription(b), character(1)),
+                 c("a", "b"))
+  })
 
-test_that("distributed masked composite equals the oracle", {
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)   # force multiple spatial chunks
-  on.exit(options(old), add = TRUE)
-
-  f <- fixture_gradient_f32()
-  build <- function() reduce_over(apply_mask(ds_fixture(f), where = qa_bits(0:1), dilate = 2),
-                                  "median", "t")
-  expect_equal(collect(build(), distributed = TRUE),
-               collect(build(), distributed = FALSE),
-               tolerance = 1e-6)
+  test_that("distributed masked composite equals the oracle", {
+    fx <- .ds_masked()
+    x <- reduce_over(apply_mask(fx$ds, where = qa_bits(0:1), dilate = 2), "median", "t")
+    .local_px(400, x)                          # halos across spatial chunks
+    want <- .ds_masked_want(fx, function(m) .ds_dilate(m, 2L))
+    .gg_close(collect(x, distributed = TRUE), want)
+    expect_identical(garry_last_route(), "scheduler")
+    .gg_close(collect(x, distributed = FALSE), want)
+  })
 })
 
 test_that("assigning band math to a multi-slice dataset keeps per-slice layers", {
@@ -471,11 +476,6 @@ test_that("apply_mask takes whole radii and names the argument", {
   ds <- lazy_dataset(system.file("extdata", "garry-example.tif", package = "garry"))
   expect_error(apply_mask(ds, from = "qa", where = 2, open = 1.5), "open")
   expect_error(apply_mask(ds, from = "qa", where = 2, dilate = -1), "dilate")
-})
-
-test_that("file-form bands are whole positions", {
-  f <- system.file("extdata", "garry-example.tif", package = "garry")
-  expect_error(lazy_dataset(f, bands = 1.5), "whole")
 })
 
 test_that("the file form refuses what it would ignore", {

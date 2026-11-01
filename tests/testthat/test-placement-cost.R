@@ -156,21 +156,16 @@ test_that("cost mode caps read windows to the fused working set at plan time", {
     s <- Find(function(s) s@kind == "source_read", p@stages)
     prod(as.numeric(s@chunks@chunk_dim))
   }
-  act <- 4 * (fx$nb + 2 * 64)                # .stage_fuse_act_bytes_px
+  act <- 536                 # bytes a px: 4 on 6 inputs and 2 layers of 64
   old <- options(garry.chunk_target_px = 100)
   on.exit(options(old), add = TRUE)
 
-  old_r <- options(garry.placement = "rules")
-  big <- src_chunk(plan_lazy(build()))
-  options(old_r)
+  big <- withr::with_options(list(garry.placement = "rules"), src_chunk(plan_lazy(build())))
 
   # budget sized for a ~400 px window: reads come out capped, floored
   # at one compute chunk (coarse windows are integer multiples of it)
-  old_c <- options(garry.placement = "cost")
   testthat::local_mocked_bindings(.fuse_reader_mb = 400 * act / 2^20)
-  p_cost <- plan_lazy(build())
-  small <- src_chunk(p_cost)
-  options(old_c)
+  small <- withr::with_options(list(garry.placement = "cost"), src_chunk(plan_lazy(build())))
 
   # floored at one full-width row band (strip source): 60 x 10 px
   expect_lt(small, big)

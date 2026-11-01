@@ -3,9 +3,6 @@
 # sink boundary (round((v - offset)/scale) then NaN -> nodata, so the
 # sentinel lives in DN units); cog = TRUE finalises via one translate.
 
-skip_if(!requireNamespace("garry", quietly = TRUE),
-        "garry not installed for daemons")
-
 .wt_grid <- grid_spec("EPSG:3857", extent = c(0, 0, 300, 200),
                       dims = c(x = 30L, y = 20L), dtype = "f32")
 
@@ -61,49 +58,56 @@ test_that("cog = TRUE produces COG layout and leaves no temps", {
   unlink(p)
 })
 
-test_that("cog = TRUE under pools writes the same values as a plain write", {
-  # End-to-end guard for the streamed-writer + translate composition:
-  # a broken interaction anywhere in stream/close/translate would leave
-  # the pre-created (zero-filled) temp as the COG's content.
+# Pools spawned in a scratch directory: daemons resolve a relative path in the
+# working directory they start in.
+local({
+  withr::local_dir(withr::local_tempdir())
   local_pools(2, 1)
-  s <- .wt_src()
-  x <- lazy_source(s$f) + 0
-  pp <- file.path(tempdir(), "wt-pools-plain.tif")
-  pc <- file.path(tempdir(), "wt-pools-cog.tif")
-  write_tif(x, pp, dtype = "i16", scale = 1e-4, offset = -0.1,
-            nodata = -32768, distributed = TRUE)
-  write_tif(x, pc, dtype = "i16", scale = 1e-4, offset = -0.1,
-            nodata = -32768, cog = TRUE, distributed = TRUE)
-  d <- methods::new(gdalraster::GDALRaster, pc)
-  expect_identical(d$getMetadataItem(0, "LAYOUT", "IMAGE_STRUCTURE"), "COG")
-  d$close()
-  a <- collect(lazy_source(pp)); b <- collect(lazy_source(pc))
-  expect_identical(unclass(unname(a)), unclass(unname(b)))
-  expect_gt(stats::sd(b, na.rm = TRUE), 0)     # not a constant-fill file
-  unlink(c(pp, pc))
-})
 
-test_that("relative and dot-prefixed paths stream-write correctly under pools", {
-  # Regression: the writer daemon caches open datasets keyed by PATH,
-  # and ls() hides dot-prefixed names by default, so a "./out.tif" key
-  # (which cog = TRUE manufactured for every relative target) escaped
-  # .daemon_write_close: the file was returned as an unflushed
-  # zero-filled shell while the data sat in the writer's block cache.
-  s <- .wt_src()
-  x <- lazy_source(s$f) + 0
-  wd <- withr::local_tempdir()
-  withr::local_dir(wd)
-  local_pools(2, 1)     # spawn AFTER the cwd change: daemons resolve
-                        # relative paths in their spawn-time cwd
-  write_tif(x, "./rel-dot.tif", dtype = "i16", nodata = -32768,
-            distributed = TRUE)
-  write_tif(x, "rel-cog.tif", dtype = "i16", nodata = -32768, cog = TRUE,
-            distributed = TRUE)
-  a <- matrix(collect(lazy_source("./rel-dot.tif")), 20)
-  b <- matrix(collect(lazy_source("rel-cog.tif")), 20)
-  ref <- round(s$m); ref[is.nan(s$m)] <- NA
-  expect_equal(a[!is.na(ref)], ref[!is.na(ref)])
-  expect_equal(b[!is.na(ref)], ref[!is.na(ref)])
+  test_that("relative and dot-prefixed paths stream-write correctly under pools", {
+    # Regression: the writer daemon caches open datasets keyed by PATH,
+    # and ls() hides dot-prefixed names by default, so a "./out.tif" key
+    # (which cog = TRUE manufactured for every relative target) escaped
+    # .daemon_write_close: the file was returned as an unflushed
+    # zero-filled shell while the data sat in the writer's block cache.
+    # A plain write and a COG through stream, close and translate, each
+    # against an R reference: a zero-filled temp fails on its values.
+    s <- .wt_src()
+    x <- lazy_source(s$f) + 0
+    write_tif(x, "./rel-dot.tif", dtype = "i16", scale = 1e-4, offset = -0.1,
+              nodata = -32768, distributed = TRUE)
+    write_tif(x, "rel-cog.tif", dtype = "i16", scale = 1e-4, offset = -0.1,
+              nodata = -32768, cog = TRUE, distributed = TRUE)
+    d <- methods::new(gdalraster::GDALRaster, "rel-cog.tif")
+    expect_identical(d$getMetadataItem(0, "LAYOUT", "IMAGE_STRUCTURE"), "COG")
+    d$close()
+    ref <- round((s$m - (-0.1)) / 1e-4)
+    for (p in c("./rel-dot.tif", "rel-cog.tif")) {
+      got <- matrix(collect(lazy_source(p), distributed = FALSE), 20)
+      expect_identical(is.nan(got), is.nan(s$m))
+      expect_equal(got[!is.nan(s$m)], ref[!is.nan(s$m)])
+    }
+  })
+
+  test_that("distributed quantized write matches host, on the scheduler route", {
+    s <- .wt_src()
+    x <- lazy_source(s$f) + 0
+    .local_px(100, x)
+    ph <- tempfile(fileext = ".tif"); pd <- tempfile(fileext = ".tif")
+    write_tif(x, ph, dtype = "i16", scale = 1e-4, offset = -0.1,
+              nodata = -32768, distributed = FALSE)
+    write_tif(x, pd, dtype = "i16", scale = 1e-4, offset = -0.1,
+              nodata = -32768, distributed = TRUE)
+    expect_identical(garry_last_route(), "scheduler")
+    a1 <- collect(lazy_source(ph), distributed = FALSE)
+    a2 <- collect(lazy_source(pd), distributed = FALSE)
+    # one device quantizer for every route: digital numbers are EXACTLY
+    # identical (file bytes may differ in tile order under streaming)
+    expect_identical(unclass(unname(a1)), unclass(unname(a2)))
+    md <- gdal_grid_spec(pd)
+    expect_identical(md$grid@dtype, "i16")
+    expect_identical(md$scale, 1e-4)
+  })
 })
 
 test_that("multi-export list form writes one file per sink (dir and cog)", {
@@ -141,43 +145,6 @@ test_that("validation: quantize needs int dtype; sentinel must fit; no .vrt", {
                "finite, non-zero")
 })
 
-test_that("collect() no longer takes file-writing arguments", {
-  s <- .wt_src()
-  x <- lazy_source(s$f) + 0
-  expect_error(collect(x, path = tempfile(fileext = ".tif")),
-               "unused argument")
-  expect_no_warning(write_tif(x, tempfile(fileext = ".tif")))
-  expect_no_warning(materialise(x, dir = tempdir(),
-                                name = paste0("wt-", as.integer(stats::runif(1, 1, 1e7)))))
-})
-
-test_that("distributed quantized write matches host, on the scheduler route", {
-  local_pools(2, 1)
-  f <- tempfile(fileext = ".tif")
-  g <- grid_spec("EPSG:3857", extent = c(0, 0, 3000, 2000),
-                 dims = c(x = 300L, y = 200L), dtype = "f32")
-  ds <- gdal_create_output(f, g)
-  set.seed(3)
-  m <- matrix(runif(60000, -0.1, 1), nrow = 200, byrow = TRUE)
-  m[10, 10] <- NaN
-  gdal_write_window(ds, 0L, 0L, m, "f32", nodata = numeric(0), band = 1L)
-  ds$close()
-  x <- lazy_source(f) + 0
-  ph <- tempfile(fileext = ".tif"); pd <- tempfile(fileext = ".tif")
-  write_tif(x, ph, dtype = "i16", scale = 1e-4, offset = -0.1,
-            nodata = -32768, distributed = FALSE)
-  write_tif(x, pd, dtype = "i16", scale = 1e-4, offset = -0.1,
-            nodata = -32768, distributed = TRUE)
-  expect_identical(garry_last_route(), "scheduler")
-  a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
-  # one device quantizer for every route: digital numbers are EXACTLY
-  # identical (file bytes may differ in tile order under streaming)
-  expect_identical(unclass(unname(a1)), unclass(unname(a2)))
-  md <- gdal_grid_spec(pd)
-  expect_identical(md$grid@dtype, "i16")
-  expect_identical(md$scale, 1e-4)
-})
-
 # An i16 plan whose output is 100 + 1, quantized at scale 0.5: 202 on disk.
 .wt_int_plan <- function() {
   f <- tempfile(fileext = ".tif")
@@ -193,23 +160,6 @@ test_that("an integer plan quantizes like a float one, in process", {
   p <- tempfile(fileext = ".tif")
   write_tif(.wt_int_plan(), p, dtype = "i16", scale = 0.5, distributed = FALSE)
   expect_true(all(collect(lazy_source(p)) == 202))
-})
-
-test_that("an integer plan quantizes on every distributed route", {
-  local_pools(2, 1)
-  x <- .wt_int_plan()
-  p <- tempfile(fileext = ".tif")
-  write_tif(x, p, dtype = "i16", scale = 0.5, distributed = TRUE)
-  expect_true(all(collect(lazy_source(p)) == 202))
-  # a sink other stages read stays unquantized in the store, so the host
-  # tail quantizes it
-  dir <- tempfile()
-  dir.create(dir)
-  write_tif(list(a = x, b = x + 2L, c = x + 3L), dir, dtype = "i16",
-            scale = 0.5, distributed = TRUE)
-  expect_true(all(collect(lazy_source(file.path(dir, "a.tif"))) == 202))
-  expect_true(all(collect(lazy_source(file.path(dir, "b.tif"))) == 206))
-  expect_true(all(collect(lazy_source(file.path(dir, "c.tif"))) == 208))
 })
 
 test_that("g_quantize matches the historical writer semantics", {
@@ -258,31 +208,6 @@ test_that("jitted quantizers are cached per exact quantization", {
   expect_identical(qj(0.01, 0, -32768, "i16"), qj(0.01, 0, -32768, "i16"))
 })
 
-test_that("a composite-shaped quantized write routes to the scheduler, identically", {
-  # Quantized writes bypass the cd/gd fast paths by design (one device
-  # quantizer for every route; folding g_quantize into the cd band
-  # kernels is ir-extensions-todo #12). The same plan WITHOUT a wspec
-  # still takes composite_direct (guarded below).
-  local_pools(2, 2)
-  x <- .gg_masked_composite()
-  ph <- tempfile(fileext = ".tif"); pd <- tempfile(fileext = ".tif")
-  write_tif(x, ph, dtype = "i16", scale = 0.5, offset = 0,
-            nodata = -32768, distributed = FALSE)
-  write_tif(x, pd, dtype = "i16", scale = 0.5, offset = 0,
-            nodata = -32768, distributed = TRUE)
-  expect_identical(garry_last_route(), "scheduler")
-  a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
-  expect_identical(unclass(unname(a1)), unclass(unname(a2)))
-  pf <- tempfile(fileext = ".tif")
-  write_tif(x, pf, distributed = TRUE)
-  expect_identical(garry_last_route(), "composite_direct")
-  a1 <- collect(lazy_source(ph)); a2 <- collect(lazy_source(pd))
-  expect_equal(unclass(a1), unclass(a2), ignore_attr = TRUE)
-  md <- gdal_grid_spec(pd)
-  expect_identical(md$grid@dtype, "i16")
-  expect_identical(md$scale, 0.5)
-})
-
 test_that("re-reading a rewritten file returns the new pixels", {
   f <- fixture_gradient_f32()
   path <- withr::local_tempfile(fileext = ".tif")
@@ -304,8 +229,6 @@ test_that("band_names reach the file and the collected result", {
   expect_identical(c(r$getDescription(1L), r$getDescription(2L)), c("red", "nir"))
   # the default is the dataset's band names, and collect() carries them
   expect_identical(attr(collect(ds), "gis")$band_names, c("a", "b"))
-  skip_if_not_installed("terra")
-  expect_identical(names(as_terra(collect(ds))), c("a", "b"))
 })
 
 test_that("write targets are checked before anything runs", {

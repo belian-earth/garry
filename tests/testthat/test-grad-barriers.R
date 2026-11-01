@@ -29,7 +29,6 @@ test_that("arbitrary-fn focal on the tape is rejected", {
 })
 
 test_that("non sum/mean losses are rejected", {
-  lp <- .simple_kernel_loss()
   a <- lazy_source(fixture_gradient_f32())
   fk <- focal_kernel(a / 1000, matrix(1 / 9, 3, 3))
   loss_max <- reduce_over(fk, "max", c("x", "y"))

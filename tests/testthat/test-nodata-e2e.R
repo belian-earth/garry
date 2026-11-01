@@ -1,31 +1,33 @@
 # Decision D8 end-to-end: i16 + nodata source through map, focal, and
-# nan_rm reductions vs terra's na.rm = TRUE as the independent oracle.
+# nan_rm reductions vs plain R's na.rm = TRUE on the fixture's own cells.
 
+# fixture_i16_nodata()'s cells, its nodata as NaN.
+.i16_cells <- function() {
+  m <- .fixture_values(70, 50)
+  m[10:14, 20:24] <- NaN
+  m[1, 1] <- NaN
+  m
+}
 
-test_that("nodata flows as NaN through map and reduce, matches terra", {
-  skip_if_not_installed("terra")
+test_that("nodata flows as NaN through map and reduce, matches plain R", {
   f <- fixture_i16_nodata()
   a <- lazy_source(f)                       # f32 with NaN (D8)
   r <- reduce_over(a * 2, "mean", c("x", "y"), nan_rm = TRUE)
 
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old))
+  withr::local_options(garry.chunk_target_px = 400)
   got <- collect(r)
 
-  rt <- terra::rast(f) * 2
-  want <- terra::global(rt, "mean", na.rm = TRUE)[1, 1]
+  want <- mean(.i16_cells() * 2, na.rm = TRUE)
   expect_equal(got, want, tolerance = 1e-6)
 })
 
 test_that("focal over nodata: NaN propagates without nan-aware kernel", {
   f <- fixture_i16_nodata()
-  m <- gdal_read_window(f, 1L, 0L, 0L, 70L, 50L,
-                        nodata = gdal_grid_spec(f)$nodata)
+  m <- .i16_cells()
   a <- lazy_source(f)
   expr <- focal_map(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old))
+  withr::local_options(garry.chunk_target_px = 400)
   got <- collect(expr)
 
   # Reference: 3x3 mean, NaN boundary, NaN propagation.
@@ -42,8 +44,7 @@ test_that("focal over nodata: NaN propagates without nan-aware kernel", {
 
 test_that("nan-aware focal kernel shrinks the window instead", {
   f <- fixture_i16_nodata()
-  m <- gdal_read_window(f, 1L, 0L, 0L, 70L, 50L,
-                        nodata = gdal_grid_spec(f)$nodata)
+  m <- .i16_cells()
   a <- lazy_source(f)
   nanmean9 <- function(sh) {
     vals <- Reduce(`+`, lapply(sh, function(s) g_ifelse(g_is_nodata(s), 0, s)))
@@ -91,16 +92,18 @@ test_that("a focal over integer data without nodata has NaN edges", {
 test_that("comparisons keep nodata as nodata", {
   f <- fixture_i16_nodata() # has nodata cells
   x <- lazy_source(f, nodata = -9999)
-  v <- collect(x)
-  m <- collect(x > 50)
-  expect_identical(is.nan(m), is.nan(v))
-  expect_true(all(m[!is.nan(v)] %in% c(0, 1)))
+  v <- .i16_cells()
+  # a threshold inside the fixture's range, so the valid cells fall both ways
+  hit <- v * 0
+  hit[which(v > 2000)] <- 1
+  expect_true(all(c(0, 1) %in% hit))
+  .expect_cells(unclass(collect(x > 2000)), hit)
   mm <- collect(x == x)
   expect_identical(is.nan(mm), is.nan(v))
   # the masked fraction skips nodata rather than counting it as "no"
   st <- lazy_stack(list(x, x))
-  frac <- collect(reduce_over(st > 50, "mean", "t"))
-  expect_identical(is.nan(frac), is.nan(v))
+  frac <- collect(reduce_over(st > 2000, "mean", "t"))
+  .expect_cells(unclass(frac), hit)
 })
 
 test_that("a given nodata replaces the file's own on every read", {

@@ -28,9 +28,6 @@ Imports:
     rlang,
     stablehlo (>= 0.5.0),
     wk
-Remotes:
-    hypertidy/vaster,
-    belian-earth/rustyfilters
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
@@ -38,22 +35,18 @@ Suggests:
     htmlwidgets,
     httr2,
     jsonlite,
-    KFAS,
     knitr,
     rmarkdown,
-    rustyfilters,
-    torch,
     rstac,
     terra,
     testthat (>= 3.0.0),
-    vaster,
     visNetwork,
     webfakes,
     withr
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 Config/testthat/parallel: true
-Config/testthat/start-first: grad-convergence, routed-dispatch, route-matrix, gd-general, mirai-equivalence, composite-direct, ocm-golden, raw-store, ocm-mask, scheduler-failures
+Config/testthat/start-first: route-dtype, pool-liveness, http-auth, route-matrix, ocm-mask, ocm-golden, missing-cells, routed-dispatch, edge-chunks, scheduler-failures
 Config/roxygen2/version: 8.0.0
 Collate: 
     'grid.R'

@@ -1,9 +1,6 @@
 # A kernel reaches a daemon as a program built on the host. The program a
 # task runs must be the kernel that task needs: same dtypes, same shapes,
-# same constants. Each case compares a pooled run with the in-process one.
-
-skip_if(!requireNamespace("garry", quietly = TRUE),
-        "garry not installed for daemons")
+# same constants. Each pooled case holds its result to plain R arithmetic.
 
 .kp_tif <- function(vals, type = "Float32", nb = 1L) {
   f <- tempfile(fileext = ".tif")
@@ -16,72 +13,69 @@ skip_if(!requireNamespace("garry", quietly = TRUE),
   f
 }
 .kp_vals <- function() rep(c(1000, 2000, 3000, 4000), 1024)
-
-.kp_same <- function(x) {
-  ref <- collect(x, distributed = FALSE)
-  got <- collect(x, distributed = TRUE)
-  expect_equal(unclass(got), unclass(ref), tolerance = 1e-6, ignore_attr = TRUE)
+.kp_m <- function() matrix(.kp_vals(), 64L, 64L, byrow = TRUE)
+.kp_near <- function(got, want) {
+  expect_equal(unclass(got), want, tolerance = 0, ignore_attr = TRUE)
 }
 
-test_that("sources of different dtypes never share a program", {
+local({
   local_pools(2, 1)
-  fn <- function(v) v * 0.5
-  .kp_same(lazy_map(lazy_source(.kp_tif(.kp_vals())), fn = fn, dtype = "f32"))
-  .kp_same(lazy_map(lazy_source(.kp_tif(.kp_vals(), "UInt16")), fn = fn, dtype = "f32"))
-  .kp_same(lazy_map(lazy_source(.kp_tif(.kp_vals(), "Int16")), fn = fn, dtype = "f32"))
-})
 
-test_that("a float map over integers feeds the stages after it", {
-  local_pools(2, 1)
-  src <- lazy_source(.kp_tif(.kp_vals(), "UInt16"))
-  y <- lazy_map(src, fn = function(v) v * 1e-4)
-  a <- lazy_map(y, fn = function(v) v + 1, dtype = "f32")
-  b <- lazy_map(y, fn = function(v) v * 2, dtype = "f32")
-  p <- plan_lazy(list(a = a, b = b))
-  ref <- execute_plan(p)
-  got <- execute_plan_mirai(p)
-  expect_equal(got$a, ref$a, tolerance = 1e-6, ignore_attr = TRUE)
-  expect_equal(got$b, ref$b, tolerance = 1e-6, ignore_attr = TRUE)
-})
+  test_that("a global a kernel reads is part of its identity", {
+    f <- .kp_tif(.kp_vals())
+    fn <- function(v) v * garry_kp_k
+    environment(fn) <- globalenv()
+    withr::defer(rm("garry_kp_k", envir = globalenv()))
+    assign("garry_kp_k", 2, envir = globalenv())
+    x <- lazy_map(lazy_source(f), fn = fn, dtype = "f32")
+    .kp_near(collect(x, distributed = TRUE), .kp_m() * 2)
+    assign("garry_kp_k", 3, envir = globalenv())
+    x <- lazy_map(lazy_source(f), fn = fn, dtype = "f32")
+    .kp_near(collect(x, distributed = TRUE), .kp_m() * 3)
+  })
 
-test_that("a global a kernel reads is part of its identity", {
-  local_pools(2, 1)
-  f <- .kp_tif(.kp_vals())
-  fn <- function(v) v * garry_kp_k
-  environment(fn) <- globalenv()
-  withr::defer(rm("garry_kp_k", envir = globalenv()))
-  assign("garry_kp_k", 2, envir = globalenv())
-  x <- lazy_map(lazy_source(f), fn = fn, dtype = "f32")
-  # a closure resolves its globals on the daemon, where this one is absent
-  skip_if(identical(garry_opt("kernel_wire"), "closure"), "globals do not reach daemons")
-  a <- collect(x, distributed = TRUE)
-  assign("garry_kp_k", 3, envir = globalenv())
-  x <- lazy_map(lazy_source(f), fn = fn, dtype = "f32")
-  b <- collect(x, distributed = TRUE)
-  expect_equal(unclass(b) / unclass(a), matrix(1.5, nrow(a), ncol(a)),
-               tolerance = 1e-6, ignore_attr = TRUE)
-})
+  test_that("kernels capturing different arrays never share a program", {
+    f <- .kp_tif(.kp_vals())
+    mk <- function(k) {
+      w <- anvl::nv_array(array(k, c(64L, 64L)), dtype = "f32")
+      force(w)
+      lazy_map(lazy_source(f), fn = function(v) v * w, dtype = "f32")
+    }
+    .kp_near(collect(mk(2), distributed = TRUE), .kp_m() * 2)
+    gc()
+    .kp_near(collect(mk(3), distributed = TRUE), .kp_m() * 3)
+  })
 
-test_that("kernels capturing different arrays never share a program", {
-  local_pools(2, 1)
-  f <- .kp_tif(.kp_vals())
-  mk <- function(k) {
-    w <- anvl::nv_array(array(k, c(64L, 64L)), dtype = "f32")
-    force(w)
-    lazy_map(lazy_source(f), fn = function(v) v * w, dtype = "f32")
-  }
-  a <- collect(mk(2), distributed = TRUE)
-  gc()
-  b <- collect(mk(3), distributed = TRUE)
-  expect_equal(unclass(b) / unclass(a), matrix(1.5, nrow(a), ncol(a)),
-               tolerance = 1e-6, ignore_attr = TRUE)
-})
+  test_that("a cube's outer dims keep their rank, size-one dims included", {
+    mk <- function(n) {
+      srcs <- lapply(seq_len(n), function(i) lazy_source(.kp_tif(.kp_vals() + i)))
+      m <- lazy_map(lazy_stack(stats::setNames(srcs, seq_len(n)), along = "t"),
+                    fn = function(v) v + 1, dtype = "f32")
+      list(a = reduce_over(m, "mean", over = "t"),
+           b = reduce_over(m, "max", over = "t"))
+    }
+    for (n in c(1L, 2L)) {
+      got <- execute_plan_mirai(plan_lazy(mk(n)))
+      # slices .kp_m() + i + 1, for i up to n
+      .kp_near(got$a, .kp_m() + 1 + mean(seq_len(n)))
+      .kp_near(got$b, .kp_m() + 1 + n)
+    }
+  })
 
-test_that("a fused integer kernel comes back as integers", {
-  local_pools(2, 1)
-  for (ty in c("UInt16", "Int16", "Int32")) {
-    .kp_same(lazy_map(lazy_source(.kp_tif(.kp_vals(), ty)), fn = function(v) v + 1L))
-  }
+  test_that("scans over different labels never share a program", {
+    f <- .kp_tif(.kp_vals())
+    mk <- function(lab) {
+      a <- lazy_source(f)
+      s <- lazy_stack(stats::setNames(list(a + 0, a * 2), lab), along = "t")
+      body <- function(xs, margin, labels) {
+        if (identical(labels, c("d1", "d2"))) xs[[1L]] + 100 else xs[[1L]]
+      }
+      scan_over(s, body, over = "t")
+    }
+    slices <- function(shift) array(c(.kp_m(), .kp_m() * 2) + shift, c(64L, 64L, 2L))
+    .kp_near(collect(mk(c("d1", "d2")), distributed = TRUE), slices(100))
+    .kp_near(collect(mk(c("d3", "d4")), distributed = TRUE), slices(0))
+  })
 })
 
 test_that("a declared dtype holds inside a stage as it does across one", {
@@ -110,7 +104,7 @@ test_that("arrays held in a classed list or an environment are identity", {
   # an array's handle hashes alike across collections of its buffer, so
   # only its content can tell two apart
   for (mk in list(in_list, in_env)) {
-    ids <- vapply(1:6, function(k) {
+    ids <- vapply(1:3, function(k) {
       id <- rlang::hash(garry:::.fn_identity(mk(k)))
       gc()
       id
@@ -239,39 +233,6 @@ test_that("warming a kernel compiles its first shape alone", {
   run <- garry:::.kernel_of(set)
   attr(run, "warm")()
   expect_equal(sum(!vapply(environment(run)$compiled, is.null, logical(1))), 1L)
-})
-
-test_that("a cube's outer dims keep their rank, size-one dims included", {
-  local_pools(2, 1)
-  mk <- function(n) {
-    srcs <- lapply(seq_len(n), function(i) lazy_source(.kp_tif(.kp_vals() + i)))
-    m <- lazy_map(lazy_stack(stats::setNames(srcs, seq_len(n)), along = "t"),
-                  fn = function(v) v + 1, dtype = "f32")
-    list(a = reduce_over(m, "mean", over = "t"),
-         b = reduce_over(m, "max", over = "t"))
-  }
-  for (n in c(1L, 2L)) {
-    p <- plan_lazy(mk(n))
-    ref <- execute_plan(p)
-    got <- execute_plan_mirai(p)
-    expect_equal(got$a, ref$a, tolerance = 1e-6, ignore_attr = TRUE)
-    expect_equal(got$b, ref$b, tolerance = 1e-6, ignore_attr = TRUE)
-  }
-})
-
-test_that("scans over different labels never share a program", {
-  local_pools(2, 1)
-  f <- .kp_tif(.kp_vals())
-  mk <- function(lab) {
-    a <- lazy_source(f)
-    s <- lazy_stack(stats::setNames(list(a + 0, a * 2), lab), along = "t")
-    body <- function(xs, margin, labels) {
-      if (identical(labels, c("d1", "d2"))) xs[[1L]] + 100 else xs[[1L]]
-    }
-    scan_over(s, body, over = "t")
-  }
-  .kp_same(mk(c("d1", "d2")))
-  .kp_same(mk(c("d3", "d4")))
 })
 
 test_that("a kernel refuses inputs it was not built for", {

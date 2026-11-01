@@ -233,16 +233,23 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
   w <- if (is.null(weights)) parts$focal@weights else as.numeric(t(weights))
   stopifnot(length(w) == k * k)
 
-  vg <- g_value_and_gradient(
-    function(w, inputs) {
-      r <- .grad_chunk_fn(graph, compute, wrt@node_id)(w, inputs)
-      r$s
-    },
-    wrt = "w"
+  # The weights reach the kernels as an argument, so a loop that passes
+  # new ones runs the same program: keep it as a stage's kernel is kept,
+  # by content, or every step recompiles (0.31 s a step against 7 ms on
+  # an 80 x 60 raster).
+  chunk_fn <- .grad_chunk_fn(graph, compute, wrt@node_id)
+  sig <- .stage_kernel_sig(graph, compute)
+  ck <- .glue("{sig}@{compute@device}_wrt{match(wrt@node_id, compute@members)}")
+  vg <- .host_kernel(
+    .glue("value_grad_{ck}"),
+    .g_value_and_gradient_fn(function(w, inputs) chunk_fn(w, inputs)$s, wrt = "w"),
+    NULL
   )
-  cfn <- g_jit(function(w, inputs) {
-    .grad_chunk_fn(graph, compute, wrt@node_id)(w, inputs)$c
-  })
+  cfn <- .host_kernel(
+    .glue("valid_count_{ck}"),
+    function(w, inputs) chunk_fn(w, inputs)$c,
+    NULL
+  )
 
   # Source chunk reads mirror the executor's source_read stages.
   src_meta <- lapply(compute@input_nodes, function(nid) {

@@ -1,7 +1,8 @@
-# The file form of lazy_dataset(): multi-band rasters read band-by-band over
-# the reader pool (design/gdal-multiband-fanout.md), exercised end to end on
-# LOCAL tiled COGs (no network). The raw-VRT bridge and the quantiser decodes
-# are unit-tested alongside (they shipped with the same read path).
+# The file form of lazy_dataset(): multi-band rasters read band by band
+# (design/gdal-multiband-fanout.md), exercised end to end on LOCAL tiled COGs
+# (no network). The raw-VRT bridge and the quantiser decodes are unit-tested
+# alongside (they shipped with the same read path). test-band-coalesce.R and
+# test-zarr-nd.R run these reads on the pools.
 
 test_that("dequantize_aef matches the reference decode on plain numerics", {
   x <- c(-127, -100, -50, 0, 50, 100, 127)
@@ -185,21 +186,6 @@ test_that("lazy_dataset(paths) mosaics a vector of same-CRS tiles", {
   expect_equal(dim(got), c(4L, 4L))                        # one band -> 2D matrix
   expect_true(all(got[, 1:2] == -40))                      # left cols from tile L
   expect_true(all(got[, 3:4] ==  90))                      # right cols from tile R
-})
-
-test_that("lazy_dataset(path) reads under distributed daemons (band fan-out)", {
-  dir <- withr::local_tempdir("mbdist")
-  f <- .mb_cog(dir)
-  grid <- grid_spec("EPSG:3857", extent = c(0, 0, 5120, 5120),
-                    dims = c(128L, 128L), dtype = "f32")
-  local_pools(2, 1, gdal_config = TRUE)
-  got <- collect(lazy_map(lazy_dataset(f, grid), fn = dequantize_aef,
-                          dtype = "f32"),
-                 distributed = TRUE)
-  ref <- function(x) ((x / 127.5)^2) * sign(x)
-  expect_equal(dim(got), c(128L, 128L, 3L))
-  expect_equal(unname(got[1, 1, 1]), ref(-40), tolerance = 1e-4)
-  expect_equal(unname(got[64, 64, 3]), ref(90), tolerance = 1e-4)
 })
 
 test_that("lazy_dataset(path) survives no-nodata float sources holding exact zeros", {

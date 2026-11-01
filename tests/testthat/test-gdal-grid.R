@@ -1,20 +1,17 @@
-# Phase 4a gate: gdal_grid_spec metadata vs terra as an independent
-# reference, and lazy_source wiring (block_dim, nodata promotion).
+# Phase 4a gate: gdal_grid_spec metadata vs the values the fixture was written
+# with, and lazy_source wiring (block_dim, nodata promotion).
 
-test_that("gdal_grid_spec matches terra metadata (f32 fixture)", {
-  skip_if_not_installed("terra")
+test_that("gdal_grid_spec reads the f32 fixture's metadata", {
   f <- fixture_gradient_f32()
   meta <- gdal_grid_spec(f)
-  r <- terra::rast(f)
 
   g <- meta$grid
-  e <- as.vector(terra::ext(r))   # terra order: xmin, xmax, ymin, ymax
-  expect_equal(unname(grid_bbox(g)[c("xmin", "xmax", "ymin", "ymax")]),
-               unname(e[c("xmin", "xmax", "ymin", "ymax")]))
-  expect_equal(unname(g@dims[c("x", "y")]),
-               c(terra::ncol(r), terra::nrow(r)))
-  expect_equal(unname(grid_res(g)), terra::res(r))
-  expect_true(crs_equal(g@crs, terra::crs(r)))
+  expect_identical(g@transform, c(500000, 10, 0, 4600000, 0, -10))
+  expect_identical(unname(grid_bbox(g)[c("xmin", "ymin", "xmax", "ymax")]),
+                   c(500000, 4599600, 500600, 4600000))
+  expect_identical(unname(g@dims[c("x", "y")]), c(60L, 40L))
+  expect_identical(unname(grid_res(g)), c(10, 10))
+  expect_true(crs_equal(g@crs, "EPSG:32632"))
   expect_identical(g@dtype, "f32")
   expect_length(meta$nodata, 0L)
 })
@@ -93,7 +90,7 @@ test_that("declared-grid lazy_source matches discovery and skips the open", {
   ghost <- lazy_source(file.path(tempdir(), "garry-no-such-file.tif"),
                        grid = meta$grid)
   expect_s3_class(ghost, "garry::LazyRaster")
-  suppressWarnings(expect_error(collect(ghost)))
+  expect_error(collect(ghost), class = "garry_read_error")
 
   # With a declared grid, file nodata is not consulted: the i16
   # fixture's -9999 stays raw unless passed explicitly.

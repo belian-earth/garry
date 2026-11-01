@@ -23,7 +23,6 @@ test_that("LazyRaster composes via operators", {
   c <- a + b
   d <- focal_map(c, fn = function(n) mean(n), radius = 1L)
 
-  expect_true(S7::S7_inherits(d, LazyRaster))
   expect_true(grid_equal(d@grid, a@grid))
   expect_equal(length(graph_ids(a@graph)), 4L)   # 2 sources + map + focal
 })

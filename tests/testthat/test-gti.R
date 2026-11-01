@@ -32,14 +32,39 @@
   entries
 }
 
+# An index over tiles, built once a run: every test that reads it can name
+# it, and a build that fails fails them all.
+.gti_index <- function(tag, entries) {
+  key <- paste0("gti-", tag)
+  if (is.null(.fixture_env[[key]])) {
+    idx <- file.path(tempdir(), paste0("garry-gti-", tag, ".gti.gpkg"))
+    e <- entries()
+    gti_index_create(e, idx, crs = gdal_grid_spec(fixture_gradient_f32())$grid@crs)
+    .fixture_env[[key]] <- list(idx = idx, entries = e)
+  }
+  .fixture_env[[key]]
+}
+
+# The gradient fixture cut into tiles.
+.plain_index <- function() .gti_index("plain", function() .make_tiles("plain"))
+
+# Those tiles at two dates, the second offset by 1000.
+.time_index <- function() {
+  .gti_index("time", function() {
+    e1 <- .make_tiles("d1", add = 0)
+    e2 <- .make_tiles("d2", add = 1000)
+    e1$datetime <- "2023-01-05T00:00:00Z"
+    e2$datetime <- "2023-02-05T00:00:00Z"
+    rbind(e1, e2)
+  })
+}
+
 test_that("GTI mosaic reproduces the source raster and matches VRT", {
   src <- fixture_gradient_f32()
   grid <- gdal_grid_spec(src)$grid
-  entries <- .make_tiles("plain")
-
-  idx <- file.path(tempdir(), "garry-gti-plain.gti.gpkg")
-  unlink(idx)
-  gti_index_create(entries, idx, crs = grid@crs)
+  plain <- .plain_index()
+  idx <- plain$idx
+  entries <- plain$entries
 
   m <- gdal_read_window(paste0("GTI:", idx), 1L, 0L, 0L, 60L, 40L,
                         open_options = gti_open_options(grid))
@@ -55,13 +80,7 @@ test_that("GTI mosaic reproduces the source raster and matches VRT", {
 
 test_that("FILTER slices a datetime-attributed index", {
   grid <- gdal_grid_spec(fixture_gradient_f32())$grid
-  e1 <- .make_tiles("d1", add = 0)
-  e2 <- .make_tiles("d2", add = 1000)
-  e1$datetime <- "2023-01-05T00:00:00Z"
-  e2$datetime <- "2023-02-05T00:00:00Z"
-  idx <- file.path(tempdir(), "garry-gti-time.gti.gpkg")
-  unlink(idx)
-  gti_index_create(rbind(e1, e2), idx, crs = grid@crs)
+  idx <- .time_index()$idx
 
   base <- gdal_read_window(fixture_gradient_f32(), 1L, 0L, 0L, 60L, 40L)
   s1 <- gdal_read_window(paste0("GTI:", idx), 1L, 0L, 0L, 60L, 40L,
@@ -76,8 +95,7 @@ test_that("FILTER slices a datetime-attributed index", {
 
 test_that("lazy time slices over one GTI index stack and reduce", {
   grid <- gdal_grid_spec(fixture_gradient_f32())$grid
-  idx <- file.path(tempdir(), "garry-gti-time.gti.gpkg")
-  skip_if(!file.exists(idx))
+  idx <- .time_index()$idx
 
   slices <- lapply(c("2023-01-05T00:00:00Z", "2023-02-05T00:00:00Z"),
                    function(d) {
@@ -88,9 +106,7 @@ test_that("lazy time slices over one GTI index stack and reduce", {
   st <- lazy_stack(slices)
   expect_identical(unname(st@grid@dims[["t"]]), 2L)
 
-  old <- options(garry.chunk_target_px = 300)
-  on.exit(options(old))
-  mn <- collect(reduce_over(st, "mean", "t"))
+  mn <- .with_chunk_px(300, collect(reduce_over(st, "mean", "t")))
   base <- gdal_read_window(fixture_gradient_f32(), 1L, 0L, 0L, 60L, 40L)
   expect_equal(mn, base + 500, tolerance = 1e-3, ignore_attr = "gis")
 })
@@ -130,9 +146,12 @@ test_that("mixed-CRS tiles mosaic onto a pinned grid", {
   m <- gdal_read_window(paste0("GTI:", idx), 1L, 0L, 0L, 120L, 41L,
                         open_options = gti_open_options(target))
 
+  # filled, not just right where filled: a dropped tile reads as nodata
   east <- m[5:35, 70:115]
+  expect_gt(mean(!is.na(east)), 0.9)
   expect_gt(mean(east == 7777, na.rm = TRUE), 0.9)
   west <- m[5:35, 5:50]
+  expect_gt(mean(!is.na(west)), 0.9)
   expect_gt(mean(west >= 101 & west <= 4060, na.rm = TRUE), 0.9)
 })
 
@@ -169,20 +188,14 @@ test_that("SORT_FIELD controls overlap winners deterministically", {
 
 test_that("lazy pipelines on GTI sources are chunk-invariant", {
   grid <- gdal_grid_spec(fixture_gradient_f32())$grid
-  idx <- file.path(tempdir(), "garry-gti-plain.gti.gpkg")
-  skip_if(!file.exists(idx))
+  idx <- .plain_index()$idx
 
   a <- lazy_source(paste0("GTI:", idx),
                    open_options = gti_open_options(grid))
   expr <- focal_map(a * 2, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
 
-  run <- function(px) {
-    old <- options(garry.chunk_target_px = px)
-    on.exit(options(old))
-    collect(expr)
-  }
-  whole <- run(1e6)
-  got <- run(13 * 11)
+  whole <- .with_chunk_px(1e6, collect(expr))
+  got <- .with_chunk_px(13 * 11, collect(expr))
   expect_identical(is.nan(got), is.nan(whole))
   ok <- !is.nan(whole)
   expect_equal(got[ok], whole[ok], tolerance = 1e-7)
@@ -250,6 +263,19 @@ test_that("GTI reads the matching overview when the pinned grid is
     expect_gt(read_mean(idxw, g("EPSG:3857", bb, 256)), 1.9)
     expect_lt(read_mean(idxw, g("EPSG:3857", bb, 512)), 1.1)
   }
+})
+
+test_that("a scoped GDAL option leaves nothing behind when the environment set it", {
+  # as a config option it would outlive the variable, and local reads would
+  # lose their sidecars: .ovr overviews among them
+  key <- "GDAL_DISABLE_READDIR_ON_OPEN"
+  withr::defer(gdalraster::set_config_option(key, ""))
+  withr::with_envvar(stats::setNames("EMPTY_DIR", key), {
+    expect_identical(gdalraster::get_config_option(key), "EMPTY_DIR")
+    garry:::.gdal_quiet_remote(NULL)
+    expect_identical(gdalraster::get_config_option(key), "EMPTY_DIR")
+  })
+  expect_identical(gdalraster::get_config_option(key), "")
 })
 
 test_that("a GTI index over remote tiles counts as a remote open", {

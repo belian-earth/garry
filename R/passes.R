@@ -1255,19 +1255,17 @@ plan_lazy <- function(x) {
   # execution and several sinks (design/multi-export-collect.md).
   if (is.list(x) && !S7::S7_inherits(x, LazyRaster)) {
     stopifnot(length(x) >= 1L, !is.null(names(x)), all(nzchar(names(x))))
+    for (i in seq_along(x)) {
+      if (!S7::S7_inherits(x[[i]], LazyRaster)) {
+        cli::cli_abort("sink {i} must be a {.cls LazyRaster}")
+      }
+    }
     graph <- x[[1L]]@graph
     sink_ids <- vapply(
-      seq_along(x),
-      function(i) {
-        lr <- x[[i]]
-        if (!S7::S7_inherits(lr, LazyRaster)) {
-          cli::cli_abort("sink {i} must be a {.cls LazyRaster}")
-        }
-        graph_import(graph, lr@graph, lr@node_id)
-      },
+      x,
+      function(lr) graph_import(graph, lr@graph, lr@node_id),
       integer(1)
     )
-    names(sink_ids) <- names(x)
     # The primary sink must be the id IN THE MERGED GRAPH: a sink built
     # on its own graph is renumbered by graph_import above, so
     # `x[[k]]@node_id` is a stale id from the source graph and matches a

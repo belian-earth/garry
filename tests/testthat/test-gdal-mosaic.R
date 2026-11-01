@@ -5,7 +5,6 @@
 }
 
 test_that("gdal_mosaic_vrt refuses a mosaic that lost a source instead of leaving a hole", {
-  skip_if_not_installed("gdalraster")
   dir <- withr::local_tempdir()
   srs <- gdalraster::epsg_to_wkt(32722)
   south_up <- function(path, x0, value) {
@@ -23,7 +22,6 @@ test_that("gdal_mosaic_vrt refuses a mosaic that lost a source instead of leavin
 })
 
 test_that("tiles the mosaic cannot hold stay a multi-path node the warper reads together", {
-  skip_if_not_installed("gdalraster")
   dir <- withr::local_tempdir()
   srs <- gdalraster::epsg_to_wkt(32722)
   south_up <- function(path, x0, values) {   # 3 bands, 4 x 4, one value per band
@@ -130,12 +128,11 @@ test_that("several sources on their planning grid read by the given resampling",
   # a tile in another projection, just east of the first
   b <- fixture_tile(c(1, 9), gt = c(0.00036, 0.00009, 0, 0.00036, 0, -0.00009),
                     crs = "EPSG:4326")
-  bil <- lazy_dataset(c(a, b), resampling = "bilinear")
-  near <- lazy_dataset(c(a, b))
-  expect_identical(graph_get(bil[[1L]]@graph, bil[[1L]]@node_id)@resampling, "bilinear")
-  m_b <- collect(bil, distributed = FALSE)
-  m_n <- collect(near, distributed = FALSE)
-  expect_false(isTRUE(all.equal(as.numeric(m_b), as.numeric(m_n))))
+  for (resampling in c("bilinear", "near")) {
+    d <- lazy_dataset(c(a, b), resampling = resampling)
+    expect_equal(collect(d, distributed = FALSE), .geo_oracle(c(a, b), d[[1L]]@grid, resampling),
+                 tolerance = 1e-6, ignore_attr = TRUE, info = resampling)
+  }
 })
 
 test_that("a gap between tiles with no sentinel is missing, not 0", {

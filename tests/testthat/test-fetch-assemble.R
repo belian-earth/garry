@@ -1,8 +1,14 @@
 # Phase 12: fetch/assemble split. Gates: fetch-backed distributed
 # reads are identical to direct reads; "auto" leaves local sources
-# alone; a failed fetch aborts the run, naming the object; the tmpfs
-# cache cleans up.
+# alone; the tmpfs cache cleans up. test-failure-routes.R holds a failed
+# fetch to its error.
 
+# Slice `i` of the fixture, in plain R: noise above `i`, so the median of
+# slices 1, 2 and 3 is slice 2.
+.fa_values <- function(i) {
+  set.seed(i)
+  matrix(runif(60 * 40) + i, 40, 60)
+}
 
 .fa_fixture <- function(dir, n_slices = 3L) {
   grid <- grid_spec("EPSG:3857", extent = c(0, 0, 600, 400),
@@ -10,9 +16,7 @@
   entries <- do.call(rbind, lapply(seq_len(n_slices), function(i) {
     f <- file.path(dir, sprintf("tile%d.tif", i))
     ds <- garry:::gdal_create_output(f, grid, nodata = numeric(0))
-    set.seed(i)
-    garry:::gdal_write_window(ds, 0L, 0L,
-                              matrix(runif(60 * 40) + i, 40, 60),
+    garry:::gdal_write_window(ds, 0L, 0L, .fa_values(i),
                               dtype = "f32", nodata = numeric(0))
     ds$close()
     data.frame(location = f, datetime = sprintf("2023-01-%02d", i),
@@ -34,72 +38,6 @@
   })
   reduce_over(lazy_stack(layers), "median", "t", nan_rm = TRUE)
 }
-
-test_that("fetch-backed distributed reads match direct reads", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  dir <- withr::local_tempdir("fa")
-  fx <- .fa_fixture(dir)
-  expect_true(file.exists(paste0(fx$idx, ".meta.rds")))
-
-  expr <- .fa_stack(fx)
-  p <- plan_lazy(expr)
-  direct <- execute_plan(p)
-
-  local_pools(2, 1, gdal_config = TRUE)
-
-  tlog <- tempfile(fileext = ".csv")
-  old <- options(garry.fetch = "force", garry.task_log = tlog,
-                 garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  got <- execute_plan_mirai(p)
-  expect_equal(got, direct, tolerance = 1e-12)
-
-  # fetch tasks actually ran (one per tile), before their assembles
-  tl <- read.csv(tlog)
-  fkeys <- unique(tl$key[grepl("^f\\d+_", tl$key)])
-  expect_identical(length(fkeys), nrow(fx$entries))
-  # cache cleaned up (fetch root removed on exit)
-  expect_identical(length(list.files("/dev/shm",
-                                     pattern = "^garry-fetch-")), 0L)
-
-  # auto mode: local locations -> no fetch tasks
-  tlog2 <- tempfile(fileext = ".csv")
-  options(garry.fetch = "auto", garry.task_log = tlog2)
-  got2 <- execute_plan_mirai(p)
-  expect_equal(got2, direct, tolerance = 1e-12)
-  tl2 <- read.csv(tlog2)
-  expect_false(any(grepl("^f\\d+_", tl2$key)))
-})
-
-test_that("a failed fetch aborts the run, naming the object", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  dir <- withr::local_tempdir("fa2")
-  fx <- .fa_fixture(dir, n_slices = 2L)
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.fetch = "force", garry.read_retry = 0L,
-                 garry.chunk_target_px = 1e6)
-  on.exit(options(old), add = TRUE)
-
-  layers <- lapply(fx$entries$slice, function(sl) {
-    lazy_source(paste0("GTI:", fx$idx), nodata = -9999,
-                open_options = gti_open_options(
-                  fx$grid, filter = sprintf("slice = '%s'", sl),
-                  sort_field = "datetime"))
-  })
-  p <- plan_lazy(lazy_stack(layers))
-  # the object vanishes AFTER planning (expired token / deleted blob)
-  unlink(fx$entries$location[[2L]])
-  err <- expect_error(execute_plan_mirai(p), class = "garry_task_error")
-  expect_match(conditionMessage(err), "fetch failed", fixed = TRUE)
-  expect_match(conditionMessage(err), "tile2.tif", fixed = TRUE)
-  # GDAL's own cause and the daemon's class cross with it
-  expect_match(conditionMessage(err), "No such file or directory", fixed = TRUE)
-  expect_s3_class(err, "garry_read_error")
-})
 
 test_that("a tile off the grid fetches nothing a warp could use", {
   dir <- withr::local_tempdir("fa")
@@ -143,25 +81,71 @@ test_that("gdal_fetch_window decimates to the target resolution via overviews", 
   expect_gt(native$sd, 0.4)                        # checkerboard preserved
 })
 
-test_that("two stages sharing fetched files both read them", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  dir <- withr::local_tempdir("fa")
-  fx <- .fa_fixture(dir, n_slices = 1L)
-  sl <- fx$entries$slice[[1L]]
-  src <- function(scale) {
-    lazy_source(paste0("GTI:", fx$idx),
-                open_options = gti_open_options(
-                  fx$grid, filter = sprintf("slice = '%s'", sl),
-                  sort_field = "datetime"),
-                scale = scale, offset = 0)
-  }
-  # same index and slice, different affine: two source stages, one fetch
-  expr <- src(1) + src(2)
-  direct <- collect(expr, distributed = FALSE)
+local({
   local_pools(2, 1, gdal_config = TRUE)
-  withr::local_options(garry.fetch = "force", garry.chunk_target_px = 400)
-  got <- collect(expr, distributed = TRUE)
-  expect_equal(got, direct, tolerance = 1e-6, ignore_attr = TRUE)
-  expect_false(anyNA(got))
+
+  test_that("fetch-backed distributed reads match direct reads", {
+    dir <- withr::local_tempdir("fa")
+    fx <- .fa_fixture(dir)
+    expect_true(file.exists(paste0(fx$idx, ".meta.rds")))
+
+    p <- plan_lazy(.fa_stack(fx))
+    want <- .as_f32(.fa_values(2L))
+    expect_equal(execute_plan(p), want, tolerance = 1e-12, ignore_attr = TRUE)
+
+    # a fetch run writes its local index into its own fetch directory
+    made <- character(0)
+    real <- garry:::gti_index_create
+    testthat::local_mocked_bindings(
+      gti_index_create = function(entries, path, ...) {
+        made <<- c(made, path)
+        real(entries, path, ...)
+      },
+      .package = "garry"
+    )
+    tlog <- tempfile(fileext = ".csv")
+    withr::local_options(garry.fetch = "force", garry.task_log = tlog,
+                         garry.chunk_target_px = 400)
+    got <- execute_plan_mirai(p)
+    expect_equal(got, want, tolerance = 1e-12, ignore_attr = TRUE)
+
+    # fetch tasks actually ran (one per tile), before their assembles
+    tl <- read.csv(tlog)
+    fkeys <- unique(tl$key[grepl("^f\\d+_", tl$key)])
+    expect_identical(length(fkeys), nrow(fx$entries))
+    # cache cleaned up (fetch root removed on exit)
+    root <- unique(dirname(dirname(made)))
+    expect_length(root, 1L)
+    expect_match(basename(root), "^garry-fetch-")
+    expect_false(dir.exists(root))
+
+    # auto mode: local locations -> no fetch tasks
+    tlog2 <- tempfile(fileext = ".csv")
+    withr::local_options(garry.fetch = "auto", garry.task_log = tlog2)
+    got2 <- execute_plan_mirai(p)
+    expect_equal(got2, want, tolerance = 1e-12, ignore_attr = TRUE)
+    tl2 <- read.csv(tlog2)
+    expect_false(any(grepl("^f\\d+_", tl2$key)))
+  })
+
+  test_that("two stages sharing fetched files both read them", {
+    dir <- withr::local_tempdir("fa")
+    fx <- .fa_fixture(dir, n_slices = 1L)
+    sl <- fx$entries$slice[[1L]]
+    src <- function(scale) {
+      lazy_source(paste0("GTI:", fx$idx),
+                  open_options = gti_open_options(
+                    fx$grid, filter = sprintf("slice = '%s'", sl),
+                    sort_field = "datetime"),
+                  scale = scale, offset = 0)
+    }
+    # same index and slice, different affine: two source stages, one fetch
+    expr <- src(1) + src(2)
+    want <- .as_f32(.fa_values(1L)) * 3
+    expect_equal(collect(expr, distributed = FALSE), want, tolerance = 1e-6, ignore_attr = TRUE)
+    withr::local_options(garry.fetch = "force", garry.chunk_target_px = 400)
+    got <- collect(expr, distributed = TRUE)
+    expect_equal(got, want, tolerance = 1e-6, ignore_attr = TRUE)
+    expect_false(anyNA(got))
+  })
 })

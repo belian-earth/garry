@@ -74,7 +74,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache-version: 3
-          extra-packages: any::pkgdown, local::., terra=?ignore, rstac=?ignore, rustyfilters=?ignore
+          extra-packages: any::pkgdown, local::., terra=?ignore, rstac=?ignore
           needs: website
 
       # Force a source rebuild of gdalraster against the PPA GDAL

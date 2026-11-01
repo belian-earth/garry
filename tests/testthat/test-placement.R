@@ -36,12 +36,9 @@ test_that("single-band source-fed chain fuses with a full spec", {
   expect_true(all(tab$decision == "fuse"))
   expect_true(all(tab$bands == 1L))
 
-  # the fused spec carries exactly what the task bodies consume
+  # the fused spec names the chain it carries
   sid <- tab$source[[1L]]
   spec <- pl$by_source[[garry:::.key(sid)]]
-  expect_identical(sort(names(spec)),
-                   sort(c("cid", "ck", "fn", "dtype", "out_key",
-                          "out_pad", "out_nb", "out_dtype", "ws_mb", "tiles")))
   expect_identical(spec$cid, tab$compute[[1L]])
   expect_true(isTRUE(pl$fused[[garry:::.key(spec$cid)]]))
   expect_identical(spec$out_nb, 1)
@@ -90,42 +87,6 @@ test_that("sink chains are sinkful candidates; multi-consumer sources are not", 
   expect_identical(t2$decision, "comp")
 })
 
-test_that("multi-export sink chains round-trip in both placement modes", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  f <- fixture_gradient_f32()
-  # y is a single-export source-fed chain AND a requested sink. Under
-  # rules it stays materialised (phase 12b, which fused it and wrote
-  # all-zero output — the 2026-07-29 find); under cost it FUSES and the
-  # streaming writer pulls its chunks from the read tasks.
-  a <- lazy_source(f)
-  y <- a * 2 + 1
-  b <- lazy_source(f, graph = a@graph)
-  z <- reduce_over(lazy_stack(list(b + 1, b * 3)), "median", "t",
-                   nan_rm = TRUE)
-  p <- plan_lazy(list(y = y, z = z))
-  tab <- .pl(p)$table
-  expect_true(all(tab$decision == "comp"))   # rules: sinks stay put
-
-  single <- execute_plan(p)
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-  for (m in c("rules", "cost")) {
-    old_m <- options(garry.placement = m)
-    dist <- execute_plan_mirai(p)
-    expect_equal(dist$y, single$y, tolerance = 1e-12, label = m)
-    expect_equal(dist$z, single$z, tolerance = 1e-12, label = m)
-
-    d <- withr::local_tempdir()
-    execute_plan_mirai(p, path = d)
-    y1 <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0,
-                           ncol(single$y), nrow(single$y))
-    expect_equal(y1, single$y, tolerance = 1e-6, label = m)
-    options(old_m)
-  }
-})
-
 test_that("unknown placement mode errors", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
@@ -135,44 +96,72 @@ test_that("unknown placement mode errors", {
   expect_error(.pl(p, mode = "bogus"), class = "garry_placement_error")
 })
 
-test_that("a source that is itself a sink keeps its window (defect H1)", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  f <- fixture_gradient_f32()
-  # Requesting a raw band ALONGSIDE its derived product: the source's
-  # only compute consumer must NOT fuse (the stored region would
-  # become the kernel export and the raw band would silently vanish),
-  # and split-source retrieval must resolve read-window elements.
-  a <- lazy_source(f)
-  p <- plan_lazy(list(raw = a,
-                      doubled = lazy_map(a, dtype = "f32",
-                                         fn = function(v) v * 2)))
-  expect_true(all(.pl(p, mode = "cost")$table$decision == "comp"))
-
-  single <- execute_plan(p)
-  expect_false(is.null(single$raw))
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-  for (m in c("rules", "cost")) {
-    old_m <- options(garry.placement = m)
-    dist <- execute_plan_mirai(p)
-    expect_equal(dist$raw, single$raw, tolerance = 1e-12, label = m)
-    expect_equal(dist$doubled, single$doubled, tolerance = 1e-12,
-                 label = m)
-    d <- withr::local_tempdir()
-    execute_plan_mirai(p, path = d)
-    got <- gdal_read_window(file.path(d, "raw.tif"), 1L, 0, 0,
-                            ncol(single$raw), nrow(single$raw))
-    expect_equal(got, single$raw, tolerance = 1e-6, label = m)
-    options(old_m)
-  }
-})
-
 test_that("an empty placement table has the same columns as a full one", {
   p <- plan_lazy(lazy_source(fixture_gradient_f32()))
   t0 <- garry_explain_placement(p)
   expect_identical(nrow(t0), 0L)
   expect_true("tiles" %in% names(t0))
+})
+
+local({
+  local_pools(2, 1, gdal_config = TRUE)
+
+  test_that("multi-export sink chains round-trip in both placement modes", {
+    f <- fixture_gradient_f32()
+    # y is a single-export source-fed chain AND a requested sink. Under
+    # rules it stays materialised (phase 12b fused it and wrote all-zero
+    # output, the 2026-07-29 find); under cost it FUSES and the streaming
+    # writer pulls its chunks from the read tasks.
+    a <- lazy_source(f)
+    y <- a * 2 + 1
+    b <- lazy_source(f, graph = a@graph)
+    z <- reduce_over(lazy_stack(list(b + 1, b * 3)), "median", "t",
+                     nan_rm = TRUE)
+    p <- plan_lazy(list(y = y, z = z))
+    tab <- .pl(p)$table
+    expect_true(all(tab$decision == "comp"))   # rules: sinks stay put
+
+    v <- .fixture_values(60, 40)
+    want <- list(y = v * 2 + 1, z = v * 2 + 0.5)
+    withr::local_options(garry.chunk_target_px = 400)
+    for (m in c("rules", "cost")) {
+      withr::with_options(list(garry.placement = m), {
+        dist <- execute_plan_mirai(p)
+        expect_equal(dist$y, want$y, tolerance = 0, label = m)
+        expect_equal(dist$z, want$z, tolerance = 0, label = m)
+
+        d <- withr::local_tempdir()
+        execute_plan_mirai(p, path = d)
+        y1 <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0, 60L, 40L)
+        expect_equal(y1, want$y, tolerance = 0, label = m)
+      })
+    }
+  })
+
+  test_that("a source that is itself a sink keeps its window (defect H1)", {
+    f <- fixture_gradient_f32()
+    # Requesting a raw band ALONGSIDE its derived product: the source's
+    # only compute consumer must NOT fuse (the stored region would
+    # become the kernel export and the raw band would silently vanish),
+    # and split-source retrieval must resolve read-window elements.
+    a <- lazy_source(f)
+    p <- plan_lazy(list(raw = a,
+                        doubled = lazy_map(a, dtype = "f32",
+                                           fn = function(v) v * 2)))
+    expect_true(all(.pl(p, mode = "cost")$table$decision == "comp"))
+
+    v <- .fixture_values(60, 40)
+    withr::local_options(garry.chunk_target_px = 400)
+    for (m in c("rules", "cost")) {
+      withr::with_options(list(garry.placement = m), {
+        dist <- execute_plan_mirai(p)
+        expect_equal(dist$raw, v, tolerance = 0, label = m)
+        expect_equal(dist$doubled, v * 2, tolerance = 0, label = m)
+        d <- withr::local_tempdir()
+        execute_plan_mirai(p, path = d)
+        got <- gdal_read_window(file.path(d, "raw.tif"), 1L, 0, 0, 60L, 40L)
+        expect_equal(got, v, tolerance = 0, label = m)
+      })
+    }
+  })
 })

@@ -218,9 +218,24 @@
 * A Zarr store on a reprojected grid warps window by window from its
   cached handle rather than through a warped VRT, which reopened the store
   inside GDAL for every read.
+* `garry_daemons()` loads garry on every pool at once, not one mirai
+  profile at a time. A start at 2 readers and 1 compute daemon went from
+  2.8 s to 1.3 s, and at 4 and 8 from 9.2 s to 3.0 s. Run-start broadcasts
+  gain the same way.
+* `lazy_value_and_grad()` keeps its kernels by content, as stages do, so a
+  loop passing new `weights` compiles once: 170 steps on an 80 x 60 raster
+  went from 53 s to 1.6 s, with identical results.
 
 ## Bug fixes
 
+* `^` on an integer raster computes in the float it declares. `x^2L` ran
+  at the integer dtype and wrapped (30000^2L gave -5888), and `x^-1L`
+  truncated to 0.
+* A GDAL option garry changes around a remote open or a threaded read no
+  longer stays set when it came from an environment variable. Restoring it
+  wrote the value back as a config option, so
+  `GDAL_DISABLE_READDIR_ON_OPEN=EMPTY_DIR` outlived the variable, and later
+  local reads lost their `.ovr` overviews and other sidecar files.
 * A fused integer kernel comes back as integers: under the pools its
   export was read as floats, and an `Int16` chain aborted.
 * An integer stage's ring beyond the raster is 0 at every width: `i64`
@@ -232,8 +247,23 @@
 * A stage with very many inputs no longer aborts on R's symbol limit.
 * A failed task reports its daemon's whole error, GDAL's cause and the
   next step included, under the daemon's own class. A signed URL's query
-  string stays out of GDAL's text. A daemon lost under a broadcast
+  string stays out of GDAL's text, and out of what GDAL reports to the
+  session on the way to the failure. A daemon lost under a broadcast
   reports what the broadcast was for, under its class.
+* A source that cannot be opened when it is planned or by
+  `extract_points()` retries as a read does, and fails as a
+  `garry_read_error` naming the source and GDAL's cause, where these
+  stopped at "open raster failed".
+* An integer file refused for NaN with no sentinel is a
+  `garry_write_error` on every route.
+* A reader lost with a broadcast task queued for it, such as a store drop
+  mid-run, fails the wait with a `garry_pool_error`, where the wait hung.
+  mirai's dispatcher then hands out no task at all, so the surviving
+  readers cannot be used: the pool is reset and the next run asks for
+  `garry_daemons()`.
+* An in-process read-only collect no longer needs `withr`, which garry
+  only suggests, and a token refresh during a run says so when `httr2` is
+  missing.
 * A read-only write whose writer dies between writes fails, where it
   hung. An auth error holding `{` keeps its text, and its previous header.
 * A tile off the grid fetches its corner pixel, where the run aborted.

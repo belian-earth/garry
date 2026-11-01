@@ -45,143 +45,127 @@ test_that(".sv_grow and .sv_crop pad with nodata and invert", {
   expect_error(garry:::.sv_crop(1:4, c(1L, 2L)), class = "garry_kernel_error")
 })
 
-test_that("grown edge chunks equal edge chunks run at their own shape", {
-  local_pools(2, 2)
-  g <- graph_new()
-  a <- lazy_source(fixture_gradient_f32(), graph = g) # 60 x 40
-  # a focal stage (halo ring beyond the raster's edge), a robust Kalman
-  # smoother (strips) and a plain map, on 19 x 19 chunks: right, bottom
-  # and corner edge chunks of three other shapes
-  f <- focal_map(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
-  steps <- lapply(1:5, function(t) {
-    v <- a * (1 + t / 10)
-    if (t %% 2 == 0) {
-      v <- lazy_map(v, dtype = "f32", fn = function(z) {
-        g_ifelse(z > 30 & z < 40, NaN, z)
-      })
-    }
-    v
-  })
-  sm <- kalman_smooth(
-    lazy_stack(steps, along = "t"),
-    1,
-    0.1,
-    1.4,
-    robust_iters = 1L
-  )
-  run <- function(pad) {
-    withr::local_options(
-      garry.pad_edge_chunks = pad,
-      garry.chunk_target_px = 375
-    )
-    list(
-      focal = collect(f, distributed = TRUE),
-      mean = collect(sm$mean, distributed = TRUE),
-      sd = collect(sm$sd, distributed = TRUE),
-      map = collect(a * 2 + 1, distributed = TRUE)
-    )
-  }
-  withr::with_options(list(garry.chunk_target_px = 375), {
-    p <- collect(f, plan_only = TRUE)
-  })
-  shapes <- unlist(lapply(p@stages, function(s) {
-    if (s@kind == "compute") chunk_iter(s@chunks)$shape_id
-  }))
-  expect_true(all(c("right", "bottom", "corner") %in% shapes))
-  expect_identical(run(TRUE), run(FALSE))
-  # a quantized write: the cropped integer outputs land identically
-  p1 <- withr::local_tempfile(fileext = ".tif")
-  p2 <- withr::local_tempfile(fileext = ".tif")
-  withr::with_options(
-    list(garry.pad_edge_chunks = TRUE, garry.chunk_target_px = 375),
-    write_tif(
-      f,
-      p1,
-      dtype = "i16",
-      scale = 0.01,
-      nodata = -32768,
-      distributed = TRUE
-    )
-  )
-  withr::with_options(
-    list(garry.pad_edge_chunks = FALSE, garry.chunk_target_px = 375),
-    write_tif(
-      f,
-      p2,
-      dtype = "i16",
-      scale = 0.01,
-      nodata = -32768,
-      distributed = TRUE
-    )
-  )
-  expect_identical(collect(lazy_source(p1)), collect(lazy_source(p2)))
-})
-
-test_that("spatial reductions are not grown at edge chunks", {
-  # Padding a reduction's partials with nodata would poison a sum taken
-  # without nan_rm (rules placement keeps the reduction off the reads)
-  local_pools(2, 2)
-  withr::local_options(garry.chunk_target_px = 375, garry.placement = "rules")
-  g <- graph_new()
-  a <- lazy_source(fixture_gradient_f32(), graph = g) # no nodata
-  for (r in list(
-    reduce_over(a * 1, "sum", c("x", "y"), nan_rm = FALSE),
-    reduce_over(a * 1, "mean", c("x", "y"), nan_rm = FALSE),
-    reduce_over(a * 1, "count", c("x", "y"))
-  )) {
-    got <- collect(r, distributed = TRUE)
-    expect_false(anyNA(got))
-    expect_equal(
-      got,
-      collect(r, distributed = FALSE),
-      tolerance = 1e-6,
-      ignore_attr = TRUE
-    )
-  }
-})
-
-test_that("fused read windows grow to the modal window", {
-  skip_on_os("mac") # fused-on-reader hang on macOS ARM (test-compute-on-read)
+# A kernel on grown edge chunks is built for the modal shape alone, and a task
+# meeting any other fails (.program_miss()), so a clean pooled run on a stage
+# that grows shows the padding fired on its daemon.
+local({
   local_pools(2, 1)
-  # rules placement fuses the mask chain onto its reads; small read
-  # windows give the source stage a bottom edge window
-  withr::local_options(
-    garry.chunk_target_px = 375,
-    garry.read_target_px = 1000,
-    garry.placement = "rules"
-  )
-  f <- fixture_gradient_f32()
-  qa <- lazy_source(f)
-  mask <- focal_map(
-    lazy_map(qa, dtype = "f32", fn = function(x) g_cast(x > 0.5, "f32")),
-    radius = 1L,
-    fn = function(sh) Reduce(`*`, sh)
-  )
-  b <- lazy_source(f, graph = qa@graph)
-  masked <- lazy_map(b, mask, dtype = "f32", fn = function(x, m) {
-    g_ifelse(m > 0.5, NaN, x)
+
+  # The 3 x 3 mean of the gradient plane: its centre, NaN off the raster.
+  mean3 <- .fixture_values(60, 40)
+  mean3[c(1L, 40L), ] <- NaN
+  mean3[, c(1L, 60L)] <- NaN
+
+  test_that("grown edge chunks equal edge chunks run at their own shape", {
+    g <- graph_new()
+    a <- lazy_source(fixture_gradient_f32(), graph = g) # 60 x 40
+    # a focal stage (halo ring beyond the raster's edge), a robust Kalman
+    # smoother (strips) and a plain map, on 19 x 19 chunks: right, bottom
+    # and corner edge chunks of three other shapes
+    f <- focal_map(a, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+    steps <- lapply(1:5, function(t) {
+      v <- a * (1 + t / 10)
+      if (t %% 2 == 0) {
+        v <- lazy_map(v, dtype = "f32", fn = function(z) {
+          g_ifelse(z > 1000 & z < 1500, NaN, z)
+        })
+      }
+      v
+    })
+    .expect_partial_nan(collect(steps[[2L]], distributed = FALSE))
+    sm <- kalman_smooth(
+      lazy_stack(steps, along = "t"),
+      1,
+      0.1,
+      1.4,
+      robust_iters = 1L
+    )
+    map <- a * 2 + 1
+    # mean and sd together: one stage, one kernel for each shape
+    run <- function(pad) {
+      withr::local_options(
+        garry.pad_edge_chunks = pad,
+        garry.chunk_target_px = 375
+      )
+      c(
+        list(
+          focal = collect(f, distributed = TRUE),
+          map = collect(map, distributed = TRUE)
+        ),
+        collect(list(mean = sm$mean, sd = sm$sd), distributed = TRUE)
+      )
+    }
+    withr::with_options(list(garry.chunk_target_px = 375), {
+      p <- collect(f, plan_only = TRUE)
+    })
+    stage <- Filter(function(s) s@kind == "compute", p@stages)[[1L]]
+    expect_true(all(c("right", "bottom", "corner") %in% chunk_iter(stage@chunks)$shape_id))
+    expect_true(withr::with_options(
+      list(garry.pad_edge_chunks = TRUE),
+      garry:::.stage_grows_edges(p@graph, stage)
+    ))
+    grown <- run(TRUE)
+    expect_identical(grown, run(FALSE))
+    .expect_cells(unclass(grown$focal), mean3)
+    .expect_cells(unclass(grown$map), .fixture_values(60, 40) * 2 + 1)
+    # a quantized write: the cropped integer outputs land in place
+    withr::local_options(garry.pad_edge_chunks = TRUE)
+    expect_written(f, mean3 * 2, "i16", legs = list(.leg()), scale = 0.5, nodata = -32768, px = 375)
   })
-  out <- reduce_over(
-    lazy_stack(list(masked, masked * 2)),
-    "median",
-    "t",
-    nan_rm = TRUE
-  )
-  p <- plan_lazy(out)
-  src_shapes <- unlist(lapply(p@stages, function(s) {
-    if (s@kind == "source_read") chunk_iter(s@chunks)$shape_id
-  }))
-  expect_true("bottom" %in% src_shapes)
-  run <- function(pad) {
-    withr::local_options(garry.pad_edge_chunks = pad)
-    collect(out, distributed = TRUE)
-  }
-  grown <- run(TRUE)
-  expect_identical(grown, run(FALSE))
-  expect_equal(
-    grown,
-    collect(out, distributed = FALSE),
-    tolerance = 1e-6,
-    ignore_attr = TRUE
-  )
+
+  test_that("spatial reductions are not grown at edge chunks", {
+    # Padding a reduction's partials with nodata would poison a sum taken
+    # without nan_rm, and a count would count the padding (rules placement
+    # keeps the reduction off the reads)
+    withr::local_options(garry.placement = "rules")
+    a <- lazy_source(fixture_gradient_f32()) # no nodata
+    legs <- list(.leg())
+    expect_plan(reduce_over(a * 1, "sum", c("x", "y"), nan_rm = FALSE),
+                sum(.fixture_values(60, 40)), "f32", legs = legs, px = 375)
+    expect_plan(reduce_over(a * 1, "count", c("x", "y")), 2400, "i32", legs = legs, px = 375)
+  })
+
+  test_that("fused read windows grow to the modal window", {
+    skip_on_os("mac") # fused-on-reader hang on macOS ARM (test-compute-on-read)
+    # rules placement fuses the mask chain onto its reads; small read
+    # windows give the source stage a bottom edge window
+    withr::local_options(
+      garry.chunk_target_px = 375,
+      garry.read_target_px = 1000,
+      garry.placement = "rules"
+    )
+    f <- fixture_gradient_f32()
+    qa <- lazy_source(f)
+    mask <- focal_map(
+      lazy_map(qa, dtype = "f32", fn = function(x) g_cast(x > 0.5, "f32")),
+      radius = 1L,
+      fn = function(sh) Reduce(`*`, sh)
+    )
+    b <- lazy_source(f, graph = qa@graph)
+    masked <- lazy_map(b, mask, dtype = "f32", fn = function(x, m) {
+      g_ifelse(m > 0.5, NaN, x)
+    })
+    out <- reduce_over(
+      lazy_stack(list(masked, masked * 2)),
+      "median",
+      "t",
+      nan_rm = TRUE
+    )
+    p <- plan_lazy(out)
+    src_shapes <- unlist(lapply(p@stages, function(s) {
+      if (s@kind == "source_read") chunk_iter(s@chunks)$shape_id
+    }))
+    expect_true("bottom" %in% src_shapes)
+    run <- function(pad) {
+      withr::local_options(garry.pad_edge_chunks = pad)
+      collect(out, distributed = TRUE)
+    }
+    grown <- run(TRUE)
+    expect_identical(grown, run(FALSE))
+    # every cell passes, so the mask holds off the edge ring, where its window
+    # leaves the raster: the median of (v, 2v) there, NaN inside
+    want <- .fixture_values(60, 40) * 1.5
+    want[2:39, 2:59] <- NaN
+    .expect_cells(unclass(grown), want)
+  })
 })

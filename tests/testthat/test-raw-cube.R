@@ -34,8 +34,6 @@ test_that("fast path == GDAL path on the same raw cube, all shapes", {
   # GDAL path over the SAME bytes
   gdal_copy <- file.path(dir, "cube.gdalvrt")
   file.copy(vrt, gdal_copy)
-  xml <- readLines(gdal_copy)
-  writeLines(xml, gdal_copy)   # sibling reference still resolves
   expect_null(garry:::.raw_vrt_info(gdal_copy))
 
   wins <- list(c(0L, 0L, 60L, 40L),      # full raster
@@ -90,8 +88,6 @@ test_that("a '*.vrt' sink path writes a raw cube, single-threaded", {
 })
 
 test_that("streamed distributed writes land in a raw cube via the writer", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   local_pools(2, 1)
   withr::local_options(garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()

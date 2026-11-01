@@ -1,7 +1,8 @@
 # NN ops for native OCM inference (P0): g_conv2d / g_upsample2x /
 # g_pad_rb / g_transpose / g_erf. Gates: pure-R oracle == traced (anvl)
 # on every parameterisation used by the model (stride, padding,
-# dilation, groups incl. depthwise), and conv semantics == torch.
+# dilation, groups incl. depthwise), and conv semantics == torch, whose
+# outputs are saved in fixtures/torch/ by tools/torch_make_fixture.R.
 
 
 .f32tol <- 1e-4
@@ -39,23 +40,11 @@ test_that("g_conv2d oracle matches traced across parameterisations", {
 })
 
 test_that("g_conv2d matches torch", {
-  skip_if_not_installed("torch")
-  skip_if(!torch::torch_is_installed(), "libtorch not installed")
-  x <- .arr(10, 6, 15, 11)
-  for (cs in list(list(co = 4, k = 3, stride = 1L, padding = 1L, groups = 1L),
-                  list(co = 6, k = 3, stride = 2L, padding = 1L, groups = 6L),
-                  list(co = 4, k = 5, stride = 1L, padding = 2L, groups = 2L))) {
-    cig <- 6L %/% cs$groups
-    w <- .arr(11, cs$co, cig, cs$k, cs$k)
-    b <- runif(cs$co)
-    ref <- torch::nnf_conv2d(
-      torch::torch_tensor(array(x, c(1L, dim(x)))),
-      torch::torch_tensor(w), bias = torch::torch_tensor(b),
-      stride = cs$stride, padding = cs$padding, groups = cs$groups)
-    ref <- as.array(ref)[1L, , , , drop = TRUE]
-    got <- g_conv2d(x, w, b, stride = cs$stride, padding = cs$padding,
+  fx <- oracle_cases("torch", "conv-bn-mlp")$conv
+  for (cs in fx$cases) {
+    got <- g_conv2d(fx$x, cs$w, cs$b, stride = cs$stride, padding = cs$padding,
                     groups = cs$groups)
-    expect_equal(got, ref, tolerance = 1e-6, ignore_attr = TRUE)
+    expect_equal(got, cs$ref, tolerance = 1e-6, ignore_attr = TRUE)
   }
 })
 

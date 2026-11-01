@@ -1,7 +1,6 @@
 # graph_import(): a foreign node referenced several times imports ONCE.
-# Derived nodes were previously copied per import (sources alone were
-# deduplicated), so a lazy raster built on graph A and consumed k
-# times on graph B planted k read+compute chains.
+# Otherwise a lazy raster built on graph A and consumed k times on graph B
+# plants k read+compute chains.
 
 test_that("re-importing the same foreign node reuses the local copy", {
   f <- fixture_gradient_f32()
@@ -40,7 +39,7 @@ test_that("consumers of one lazy raster on another graph share one chain", {
   expect_identical(length(maps), 4L)          # p + c1 + c2 + c3
   # and the results are right
   res <- execute_plan(pl)
-  m <- execute_plan(plan_lazy(lazy_source(f)))
+  m <- .fixture_values(60, 40)
   expect_equal(res$c1, m + m * 2, tolerance = 1e-6, ignore_attr = TRUE)
   expect_equal(res$c3, (m * 2) * m, tolerance = 1e-6, ignore_attr = TRUE)
 })
@@ -48,23 +47,30 @@ test_that("consumers of one lazy raster on another graph share one chain", {
 test_that("the memo survives a source graph's env address being recycled", {
   # Keyed on the env address this returned a dead graph's import for a
   # fresh graph allocated at the same address (24 of 3000 in a tight
-  # loop); keyed on the graph uid it never can.
+  # loop); keyed on the graph uid it never can. A graph read back is the
+  # same graph at a new address, which shows an address key on every run,
+  # where waiting for an address to recycle shows it only by luck.
   f <- fixture_gradient_f32()
+  p <- lazy_map(lazy_source(f), fn = function(x) x * 2, dtype = "f32")
+  g <- graph_new()
+  id <- graph_import(g, p@graph, p@node_id)
+  planted <- length(graph_ids(g))
+  copy <- unserialize(serialize(p@graph, NULL))
+  expect_false(identical(copy@nodes, p@graph@nodes))
+  expect_identical(graph_import(g, copy, p@node_id), id)
+  expect_identical(length(graph_ids(g)), planted)
+  # fresh graphs never share a key, though each one's node ids are the same
   proto <- graph_get(lazy_source(f)@graph, 1L)
   g <- graph_new()
-  wrong <- 0L
-  for (i in seq_len(600L)) {
+  for (i in seq_len(20L)) {
     s <- graph_new()
     n <- proto
     n@path <- paste0("p", i)
     sid <- graph_add(s, function(id, ...) { n@id <- id; n })
     did <- graph_import(g, s, sid)
-    if (!identical(graph_get(g, did)@path, paste0("p", i))) wrong <- wrong + 1L
-    rm(s)
-    if (i %% 25L == 0L) invisible(gc())
+    expect_identical(graph_get(g, did)@path, paste0("p", i))
   }
-  expect_identical(wrong, 0L)
-  expect_identical(length(graph_ids(g)), 600L)
+  expect_identical(length(graph_ids(g)), 20L)
   # uids are distinct per graph and stable for the graph's life
   a <- graph_new(); b <- graph_new()
   expect_false(identical(garry:::.graph_uid(a), garry:::.graph_uid(b)))
@@ -78,14 +84,14 @@ test_that("the memo survives a source graph's env address being recycled", {
 
 test_that("sources that read different values are not merged", {
   f <- fixture_gradient_f32()
-  raw <- collect(lazy_source(f))
+  raw <- .fixture_values(60, 40)
 
   # same file and band, different band affine
   a <- lazy_source(f, scale = 0.5, offset = 0)
   b <- lazy_source(f)
-  expect_equal(collect(a + b), 1.5 * raw)
+  expect_equal(collect(a + b), 1.5 * raw, ignore_attr = TRUE)
   c2 <- lazy_source(f, scale = 2, offset = 1)
-  expect_equal(collect(a + c2), 0.5 * raw + 2 * raw + 1)
+  expect_equal(collect(a + c2), 0.5 * raw + 2 * raw + 1, ignore_attr = TRUE)
 
   # same file on a coarser grid, different read-time resampler
   g <- lazy_source(f)@grid

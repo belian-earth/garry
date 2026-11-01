@@ -1,9 +1,9 @@
 # Custom anvl reducer on ReduceNode (IR extension): reduce_over() accepts an
-# anvl kernel fn(x, dims) that collapses the reduce axis, run identically by the
-# single-threaded oracle and the distributed scheduler. Gates: a custom reducer
-# that re-expresses a builtin op matches it; an arbitrary reducer (range) equals
-# the manual max - min; and the distributed result matches the oracle (so it
-# holds across chunked spatial tiles, each carrying the full t axis).
+# anvl kernel fn(x, dims) that collapses the reduce axis. Gates: a custom
+# reducer that re-expresses a builtin op matches it; an arbitrary reducer
+# (range) equals the manual max - min; a reduce over space has no custom
+# partial, so the plan refuses it. test-route-kernels.R holds the range across
+# chunked spatial tiles on daemons, each carrying the full t axis.
 
 build_stack <- function(f, red, nan_rm = TRUE) {
   a <- lazy_source(f)
@@ -16,6 +16,8 @@ test_that("a custom reducer re-expressing a builtin matches it", {
   sum_fn <- function(x, dims) g_sum(x, dims = dims, nan_rm = TRUE)
   custom  <- execute_plan(plan_lazy(build_stack(f, sum_fn)))
   builtin <- execute_plan(plan_lazy(build_stack(f, "sum")))
+  m <- .fixture_values(60, 40)
+  expect_equal(custom, (m + 1) + m * 2, tolerance = 1e-6, ignore_attr = TRUE)
   expect_equal(custom, builtin, tolerance = 1e-6)
 })
 
@@ -25,38 +27,18 @@ test_that("a custom reducer runs arbitrary anvl math (range = max - min)", {
     g_max(x, dims = dims, nan_rm = TRUE) - g_min(x, dims = dims, nan_rm = TRUE)
   }
   got <- execute_plan(plan_lazy(build_stack(f, range_fn)))
-  mx  <- execute_plan(plan_lazy(build_stack(f, "max")))
-  mn  <- execute_plan(plan_lazy(build_stack(f, "min")))
-  expect_equal(got, mx - mn, tolerance = 1e-6)
+  m <- .fixture_values(60, 40)
+  expect_equal(got, abs(m * 2 - (m + 1)), tolerance = 1e-6, ignore_attr = TRUE)
 })
 
-test_that("custom reducer: distributed == single-threaded oracle", {
-  skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)   # force many spatial chunks
-  on.exit(options(old), add = TRUE)
-
-  f <- fixture_gradient_f32()
-  range_fn <- function(x, dims) {
-    g_max(x, dims = dims, nan_rm = TRUE) - g_min(x, dims = dims, nan_rm = TRUE)
-  }
-  p <- plan_lazy(build_stack(f, range_fn))
-  expect_equal(execute_plan_mirai(p), execute_plan(p), tolerance = 1e-6)
-})
-
-test_that("a custom reducer cannot be distributed over spatial dims", {
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
+test_that("a custom reducer cannot be split over spatial dims", {
   f <- fixture_gradient_f32()
   spatial_mean <- function(x, dims) g_mean(x, dims = dims, nan_rm = TRUE)
-  # A custom reducer has no algebraic partial/combine, so it cannot be split
-  # across spatial chunks (unlike sum/mean/min/max/count). Over t it is fine.
+  # A custom reducer has no algebraic partial/combine, so the planner refuses
+  # to reduce it across spatial chunks (unlike sum/mean/min/max/count), on any
+  # route. Over t it is fine.
   expect_error(
-    execute_plan_mirai(plan_lazy(reduce_over(lazy_source(f), spatial_mean,
-                                             c("x", "y")))),
-    "spatial"
+    plan_lazy(reduce_over(lazy_source(f), spatial_mean, c("x", "y"))),
+    class = "garry_reduce_unsupported_error"
   )
 })

@@ -75,7 +75,22 @@ test_that("print(LazyRaster) headlines the op and hints plan_draw()", {
 test_that("plan_draw scales with the graph, not its unfolding", {
   x <- lazy_source(fixture_gradient_f32())
   for (i in 1:25) x <- x + x # 2^25 paths through 26 nodes
-  t <- system.time(out <- capture.output(plan_draw(x)))[["elapsed"]]
-  expect_lt(t, 5)
+  # Building a node and drawing a line each pass through here: a walk of
+  # the unfolding spends this budget at once, however busy the machine.
+  visits <- 0L
+  budget <- function(real) {
+    force(real)
+    function(...) {
+      visits <<- visits + 1L
+      if (visits > 1000L) stop("plan_draw walks the unfolding")
+      real(...)
+    }
+  }
+  testthat::local_mocked_bindings(
+    .node_kind = budget(garry:::.node_kind),
+    .kind_glyph = budget(garry:::.kind_glyph),
+    .package = "garry"
+  )
+  out <- capture.output(plan_draw(x))
   expect_lt(length(out), 60)
 })

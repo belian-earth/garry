@@ -25,21 +25,6 @@
   ), "day")
 }
 
-# gdalwarp of the tile onto `grid`, nearest: the oracle.
-.geo_oracle <- function(f, grid) {
-  out <- tempfile(fileext = ".tif")
-  gdalraster::warp(f, out, t_srs = grid@crs, cl_arg = c(
-    "-te", grid@extent, "-ts", grid@dims[["x"]], grid@dims[["y"]],
-    "-r", "near", "-q"
-  ))
-  r <- methods::new(gdalraster::GDALRaster, out)
-  on.exit(r$close())
-  v <- r$read(1, 0, 0, grid@dims[["x"]], grid@dims[["y"]],
-              grid@dims[["x"]], grid@dims[["y"]])
-  v[is.na(v)] <- NaN
-  matrix(v, grid@dims[["y"]], grid@dims[["x"]], byrow = TRUE)
-}
-
 .expect_matches_oracle <- function(got, want) {
   expect_identical(dim(got), dim(want))
   expect_lt(mean(is.nan(got)), 0.01)
@@ -62,8 +47,6 @@ test_that("a geographic tile reads onto a projected grid", {
 })
 
 test_that("pooled reads of a geographic tile match, fetched or direct", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   dir <- withr::local_tempdir("gfp")
   f <- .geo_tile(dir)
   grid <- grid_from_bbox(c(14.65, 1.95, 14.85, 2.15), res = 100,

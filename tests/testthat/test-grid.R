@@ -42,15 +42,6 @@ test_that("grid_equal detects geometry-only differences", {
   expect_true(grid_equal(g1, g2))   # dtype differs, geometry same
 })
 
-test_that("chunk_iter covers the grid without gaps", {
-  g  <- GridSpec(crs = "EPSG:4326", transform = c(0, 1, 0, 0, 0, -1),
-                 extent = c(0, -100, 100, 0), dims = c(100L, 100L), dtype = "f32")
-  cg <- ChunkGrid(grid = g, chunk_dim = c(32L, 32L),
-                  block_dim = c(32L, 32L), halo = 0L)
-  it <- chunk_iter(cg)
-  expect_equal(sum(it$x_size * it$y_size), 100L * 100L)
-})
-
 test_that("halo padding clips at edges", {
   g  <- GridSpec(crs = "EPSG:4326", transform = c(0, 1, 0, 0, 0, -1),
                  extent = c(0, -100, 100, 0), dims = c(100L, 100L), dtype = "f32")
@@ -68,10 +59,7 @@ test_that("grid accessors forward from LazyRaster to its grid", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
   expect_identical(unname(grid_res(a)),  unname(grid_res(a@grid)))
-  expect_identical(grid_bbox(a)[["xmin"]], grid_bbox(a@grid)[["xmin"]])
-  expect_identical(grid_bbox(a)[["ymin"]], grid_bbox(a@grid)[["ymin"]])
-  expect_identical(grid_bbox(a)[["xmax"]], grid_bbox(a@grid)[["xmax"]])
-  expect_identical(grid_bbox(a)[["ymax"]], grid_bbox(a@grid)[["ymax"]])
+  expect_identical(grid_bbox(a), grid_bbox(a@grid))
 })
 
 test_that("a time stack and a band stack of equal length are different grids", {

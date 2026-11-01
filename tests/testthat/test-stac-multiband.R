@@ -3,8 +3,7 @@
 # multi-band land products), each its own dataset band. Gates: default
 # naming and band indices, `bands =` selection and renaming, per-band
 # nodata keyed by band name or asset, values equal to direct per-band reads
-# under both executors, and a failed fetch of a multi-band item degrading
-# to a hole in every band.
+# under both executors, and one fetch per item serving all its bands.
 
 # Two day slices of a 3-band Float32 asset M (nodata -9999 in the files,
 # optional band descriptions) plus a single-band QA asset Q.
@@ -143,23 +142,26 @@ test_that("bands = is validated in the table form", {
 })
 
 test_that("distributed fetch-backed reads of a multi-band asset match", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   dir <- withr::local_tempdir("mb")
   src <- stac_sources(.mb_fake_items(dir), assets = "M")
   grid <- gdal_grid_spec(src$location[[1]])$grid
   ds <- lazy_dataset(src, grid, assets = "M")
   # all three bands in one plan, through the scheduler's fetch split
   p <- plan_lazy(ds[["M_b1"]] + ds[["M_b2"]] * 2 + ds[["M_b3"]] * 3)
-  direct <- execute_plan(p)
+  want <- .mb_direct(src, 1L) + .mb_direct(src, 2L) * 2 + .mb_direct(src, 3L) * 3
+  want <- aperm(want, c(3L, 1L, 2L)) # an executor keeps t first
+  .gg_close(execute_plan(p), want)
 
   local_pools(2, 1, gdal_config = TRUE)
   tlog <- tempfile(fileext = ".csv")
-  old <- options(garry.fetch = "force", garry.task_log = tlog)
-  on.exit(options(old), add = TRUE)
-  got <- execute_plan_mirai(p)
-  expect_equal(got, direct)
+  withr::local_options(garry.fetch = "force", garry.task_log = tlog)
+  .gg_close(execute_plan_mirai(p), want)
   # one fetch per item, shared by all three bands
   tl <- read.csv(tlog)
   expect_identical(length(unique(tl$key[grepl("^f\\d+_", tl$key)])), 2L)
+  # a composite warps each item itself, and reads the band it names: the
+  # median of two slices is their mean
+  cmp <- reduce_over(ds, "median", "t", nan_rm = TRUE)[["M_b2"]]
+  .gg_close(collect(cmp, distributed = TRUE), rowMeans(.mb_direct(src, 2L), dims = 2L))
+  expect_identical(garry_last_route(), "composite_direct")
 })

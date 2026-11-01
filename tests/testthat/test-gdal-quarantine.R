@@ -12,7 +12,7 @@ test_that("no gdalraster:: outside the adapter beyond srs_*/transform_*", {
   for (f in files) {
     lines <- readLines(f, warn = FALSE)
     code <- sub("#.*$", "", lines)
-    hits <- regmatches(code, gregexpr("gdalraster::[A-Za-z_.0-9]+", code))
+    hits <- regmatches(code, gregexpr("gdalraster:{2,3}[A-Za-z_.0-9]+", code))
     hits <- unlist(hits)
     bad <- hits[!grepl("^gdalraster::(srs_|transform_)", hits)]
     if (length(bad) > 0L)

@@ -1,7 +1,7 @@
 # Daemon memory hygiene (workstream B): .garry_malloc_trim returns
 # arena pages (glibc), .daemon_hygiene(deep) evicts the jit cache, and
-# a post-hygiene run on the same pools stays correct (the jit-miss
-# resend covers evicted key-only launches).
+# deferred passes keep each daemon's transients bounded (issue #25).
+# test-jit-key-only.R runs garry_pool_hygiene() on live pools.
 
 test_that(".garry_malloc_trim runs (glibc) and is a safe no-op elsewhere", {
   got <- garry:::.garry_malloc_trim()
@@ -10,24 +10,10 @@ test_that(".garry_malloc_trim runs (glibc) and is a safe no-op elsewhere", {
 })
 
 test_that(".daemon_hygiene deep-evicts the jit cache", {
-  e <- garry:::.daemon_cache
+  e <- .local_kernel_cache()
   e[["spike"]] <- function() 1
-  expect_true(length(ls(e)) >= 1L)
   garry:::.daemon_hygiene(deep = TRUE)
   expect_length(ls(e), 0L)
-})
-
-test_that("garry_pool_hygiene runs and the pools stay serviceable", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  local_pools(2, 1)
-  f <- fixture_gradient_f32()
-  want <- collect(lazy_source(f) + 1, distributed = FALSE)
-  got1 <- collect(lazy_source(f) + 1, distributed = TRUE)
-  garry_pool_hygiene(deep = TRUE)      # wipes every daemon jit cache
-  got2 <- collect(lazy_source(f) + 1, distributed = TRUE)
-  expect_equal(got1, want, tolerance = 1e-6, ignore_attr = TRUE)
-  expect_equal(got2, want, tolerance = 1e-6, ignore_attr = TRUE)
 })
 
 test_that(".daemon_gc_after defers the pass until the transient budget fills", {
@@ -134,12 +120,21 @@ test_that("the read-only writer's mapped planes reach the deferred pass", {
 })
 
 test_that("the writer reopens a GTiff with threaded compression", {
-  f <- fixture_gradient_f32()
   p <- tempfile(fileext = ".tif")
-  file.copy(f, p)
-  ds <- gdal_open_update(p)
+  file.copy(fixture_gradient_f32(), p)
+  # the handle does not report its options, so hold the open that sets them
+  asked <- NULL
+  real <- methods::new
+  ds <- testthat::with_mocked_bindings(
+    gdal_open_update(p),
+    new = function(...) {
+      asked <<- list(...)$open_options
+      real(...)
+    },
+    .package = "methods"
+  )
   on.exit(ds$close(), add = TRUE)
-  expect_true(inherits(ds, "Rcpp_GDALRaster"))
+  expect_identical(asked, "NUM_THREADS=ALL_CPUS")
   ds$write(1L, 0L, 0L, 60L, 40L, as.numeric(t(matrix(2, 40, 60))))
   ds$close()
   expect_equal(unique(as.vector(gdal_read_window(p, 1L, 0L, 0L, 60L, 40L))), 2)

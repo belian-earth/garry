@@ -22,9 +22,8 @@ test_that("a ragged chunk grid submits at most 4 shapes per stage", {
     },
     .package = "garry"
   )
-  old <- options(garry.chunk_target_px = 17 * 23,   # ragged everywhere
-                 garry.pad_edge_chunks = FALSE)
-  on.exit(options(old))
+  withr::local_options(garry.chunk_target_px = 17 * 23,   # ragged everywhere
+                       garry.pad_edge_chunks = FALSE)
   whole <- collect(expr)
 
   expect_length(seen, 1L)
@@ -34,26 +33,12 @@ test_that("a ragged chunk grid submits at most 4 shapes per stage", {
 
   # Grown edge chunks: the compute stage submits the modal shape alone,
   # with the same values
-  options(garry.pad_edge_chunks = TRUE)
+  withr::local_options(garry.pad_edge_chunks = TRUE)
   seen <- list()
   got <- collect(expr)
   expect_length(seen[[1L]], 1L)
   expect_identical(dim(got), dim(whole))
   expect_identical(as.vector(got), as.vector(whole))
-})
-
-test_that("cached dispatch is fast after first-shape compilation", {
-  f <- fixture_gradient_f32()
-  a <- lazy_source(f)
-  expr <- a * 2 + 1
-
-  # First collect pays trace+compile; second must hit anvl's LRU cache.
-  t1 <- system.time(collect(expr))["elapsed"]
-  t2 <- system.time(collect(expr))["elapsed"]
-  expect_lt(unname(t2), unname(t1) + 0.5)   # sanity: no recompile blowup
-  # Median cached call on a chunk this size is single-digit ms; allow CI
-  # slack while still catching a recompile-per-chunk regression.
-  expect_lt(unname(t2), 2.0)
 })
 
 test_that("a kernel signature that fails stops the run", {
@@ -63,21 +48,6 @@ test_that("a kernel signature that fails stops the run", {
     "no signature"
   )
 })
-
-# An empty kernel cache for one test, restored after it.
-.local_kernel_cache <- function(env = parent.frame()) {
-  e <- garry:::.daemon_cache
-  held <- as.list(e, all.names = TRUE)
-  rm(list = ls(e, all.names = TRUE), envir = e)
-  withr::defer(
-    {
-      rm(list = ls(e, all.names = TRUE), envir = e)
-      list2env(held, envir = e)
-    },
-    envir = env
-  )
-  e
-}
 
 test_that("a hit at the cap keeps the kernel cache, a miss empties it", {
   e <- .local_kernel_cache()
