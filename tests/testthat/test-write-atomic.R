@@ -469,6 +469,8 @@ local({
   })
 
   test_that("a pair that moved by half is named as mixed", {
+    # each file on its label's line, however long this run's temp path is
+    withr::local_options(cli.width = 1000L)
     dir <- withr::local_tempdir()
     src <- lazy_source(.wa_tif(tempfile(fileext = ".tif")))
     x <- list(a = src + 1, b = src * 2, c = src * 3)
