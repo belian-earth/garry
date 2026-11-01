@@ -233,6 +233,22 @@ NULL
 .gdal_open_bytes_most <- "4194304"
 .gdal_open_bytes_least <- "32768" # one range grabs a COG's header
 
+# Read a warped VRT (`ra$warped`) by its blocks. Past a block GDAL warps the
+# request instead, so at its default tolerance the chunks would choose which
+# source pixels a cell takes: 93 % of a Landsat band's cells moved between
+# two read layouts, p99 246 DN from exact against 17 by blocks, at the same
+# speed. Blocks hold the rows of the warp to 512 px whatever is read.
+.gdal_read_warped <- function(ra, code) {
+  if (!isTRUE(ra$warped)) {
+    return(code)
+  }
+  key <- "GDAL_VRT_WARP_USE_DATASET_RASTERIO"
+  prev <- .gdal_config_prev(key)
+  gdalraster::set_config_option(key, "NO")
+  on.exit(gdalraster::set_config_option(key, prev), add = TRUE)
+  force(code)
+}
+
 # A TIFF's tile offsets and sizes in bytes: 16 a tile a band in a BigTIFF,
 # a third more for its overviews. They sit in the header, and a remote
 # open that stops short of them walks them 16 KB at a time.
@@ -1959,7 +1975,9 @@ stage_raw_cube <- function(src, dst_vrt) {
 #' Build a warped VRT of a source onto an exact target grid.
 #'
 #' Delegates every pixel of cross-CRS math to the GDAL warper:
-#' `-te`/`-ts` pin the output grid exactly to `target_grid`.
+#' `-te`/`-ts` pin the output grid exactly to `target_grid`. GDAL's default
+#' tolerance applies, 0.125 source pixels, or none under
+#' `garry.warp_exact = TRUE`.
 #' A source nodata goes to the warper as `-srcnodata`, so it never enters
 #' resampling. Area outside the source footprint reads as nodata
 #' (`.warp_dst_nodata()`).
@@ -2008,10 +2026,11 @@ gdal_warp_vrt <- function(
     target_grid@dims[["y"]],
     "-r",
     resampling,
-    as.vector(rbind("-b", band)),
-    "-et",
-    "0"
-  ) # exact transformer: correctness over warp speed
+    as.vector(rbind("-b", band))
+  )
+  if (isTRUE(garry_opt("warp_exact"))) {
+    args <- c(args, "-et", "0")
+  }
   if (length(src_nodata) == 1L) {
     # The node's sentinel, whether the file declares it or the user did:
     # the warper must leave it out of resampling.
@@ -2049,7 +2068,8 @@ gdal_warp_vrt <- function(
 # What a warped VRT is remembered under: see gdal_warp_vrt()'s `alike`.
 .warp_vrt_key <- function(alike, band, target_grid, resampling, src_nodata, open_options) {
   if (!is.null(alike) && !length(open_options)) {
-    rlang::hash(list(alike, band, target_grid, resampling, src_nodata))
+    exact <- isTRUE(garry_opt("warp_exact"))
+    rlang::hash(list(alike, band, target_grid, resampling, src_nodata, exact))
   }
 }
 
@@ -2859,7 +2879,7 @@ gdal_warp_to_buffer <- function(
   o$setProjection(wkt)
   cl <- c("-r", resampling, "-q", "-dstnodata", "nan")
   if (exact) {
-    # the exact transformer (garry.warp_exact), as gdal_warp_vrt() warps
+    # the exact transformer (garry.warp_exact)
     cl <- c(cl, "-et", "0")
   }
   if (!overviews) {

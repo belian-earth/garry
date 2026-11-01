@@ -1514,6 +1514,10 @@ focal_kernel <- function(x, weights) {
 #' Inserts an explicit warp step, executed as a GDAL VRT warp.
 #' Alignment stays explicit: binary ops never auto-resample.
 #'
+#' A warp takes GDAL's default tolerance, 0.125 source pixels, so a cell
+#' can sit that far from where the exact transform puts it. Set
+#' `garry.warp_exact = TRUE` for exact warps, at about five times the cost.
+#'
 #' Paste fast path: when `x` is already exactly on the target grid
 #' (same CRS, transform, extent and dims; `grid_equal()`), `align_to()`
 #' is a no-op returning `x`: reads stay plain windowed reads, with no

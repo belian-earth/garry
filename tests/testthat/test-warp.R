@@ -1,7 +1,7 @@
 # Phase 4b gate: warp = lazy VRT, GDAL owns cross-CRS pixel math (D5).
 # gdalwarp through .geo_oracle() is the reference: both sides are GDAL with the
-# exact transformer, so this gates garry's wiring of grid, resampling and
-# nodata. Target grids use dims that do NOT align target pixel centres with
+# exact transformer (garry.warp_exact), so this gates garry's wiring of grid,
+# resampling and nodata. Target grids use dims that do NOT align target pixel centres with
 # source cell edges. Tie-breaking at an exact cell boundary is not contractual,
 # so nearest allows the odd pixel, but no more: losing the exact transformer
 # moves 0.2 to 0.4% of picks here, which .warp_agree is set to catch.
@@ -17,6 +17,7 @@
 }
 
 test_that("align + collect matches gdalwarp (bilinear)", {
+  withr::local_options(garry.warp_exact = TRUE)
   f <- fixture_gradient_f32()
   target <- .warp_target()
   a <- lazy_source(f)
@@ -30,6 +31,7 @@ test_that("align + collect matches gdalwarp (bilinear)", {
 })
 
 test_that("align + collect matches gdalwarp (nearest, tie-tolerant)", {
+  withr::local_options(garry.warp_exact = TRUE)
   f <- fixture_gradient_f32()
   target <- .warp_target()
   a <- lazy_source(f)
@@ -60,6 +62,7 @@ test_that("warp is chunk-invariant (VRT window reads == whole warp)", {
 })
 
 test_that("warp propagates integer nodata correctly", {
+  withr::local_options(garry.warp_exact = TRUE)
   f <- fixture_i16_nodata()
   g <- gdal_grid_spec(f)$grid
   b <- gdalraster::transform_bounds(g@extent, g@crs, "EPSG:4326")
@@ -347,6 +350,50 @@ test_that("a file on a warped file's grid takes its VRT with the source renamed"
   # no open comes with a rename, and any other `alike` opens to build
   expect_no_error(warp(gone, alike))
   expect_error(warp(gone, list("another grid")))
+
+  # an exact warp is a VRT of its own
+  expect_true(any(grepl("MaxError", readLines(first), fixed = TRUE)))
+  withr::local_options(garry.warp_exact = TRUE)
+  expect_false(any(grepl("MaxError", readLines(warp(a, alike)), fixed = TRUE)))
+  expect_length(ls(memo), 2L)
+})
+
+test_that("a warp's cells do not depend on its chunks at GDAL's tolerance", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  nx <- 1400L
+  ny <- 400L
+  ds <- gdalraster::create("GTiff", f, nx, ny, 1, "Float32", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 4600000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, nx, ny, as.numeric(t(outer(seq_len(ny), seq_len(nx), function(y, x) {
+    1000 * sin(x / 3) * cos(y / 5)
+  }))))
+  ds$close()
+  g <- gdal_grid_spec(f)$grid
+  b <- gdalraster::transform_bounds(g@extent, g@crs, "EPSG:4326")
+  target <- grid_spec("EPSG:4326", extent = b, dims = c(1300L, 380L), dtype = "f32")
+  warped <- align_to(lazy_source(f), target, resampling = "bilinear")
+
+  whole <- collect(warped, distributed = FALSE)
+  # the same VRT, read straight, shows what the chunks would do without blocks
+  vrt <- gdal_warp_vrt(f, 1L, target, "bilinear")
+  raw <- methods::new(gdalraster::GDALRaster, vrt)
+  withr::defer(raw$close())
+  one <- raw$read(1L, 0L, 0L, 1300L, 380L, 1300L, 380L)
+  two <- c(raw$read(1L, 0L, 0L, 700L, 380L, 700L, 380L), raw$read(1L, 700L, 0L, 600L, 380L, 600L, 380L))
+  expect_false(isTRUE(all.equal(sort(one), sort(two), tolerance = 0)))
+
+  withr::with_options(list(garry.read_target_px = 2^14, garry.chunk_target_px = 2^14), {
+    split <- collect(warped, distributed = FALSE)
+    stage <- collect(warped, plan_only = TRUE, distributed = FALSE)@stages[[1L]]
+  })
+  expect_lt(prod(stage@chunks@chunk_dim), 1300L * 380L)
+  expect_identical(c(split), c(whole))
+  expect_identical(gdalraster::get_config_option("GDAL_VRT_WARP_USE_DATASET_RASTERIO"), "")
+
+  # exact warps stay close to the default's cells
+  withr::local_options(garry.warp_exact = TRUE)
+  expect_lt(max(abs(c(collect(warped, distributed = FALSE)) - c(whole)), na.rm = TRUE), 200)
 })
 
 test_that("a grid that cannot align declines a direct read before any open", {

@@ -17,8 +17,9 @@ NULL
 #' @param plan_only Return the `Plan` instead of executing?
 #' @param distributed Execute across the [garry_daemons()] pools? Defaults to
 #'   [garry_daemons_set()], so `collect(x)` uses the pools when they are running
-#'   and runs single-threaded otherwise. Pass `TRUE`/`FALSE` to override; the
-#'   distributed result is identical to the single-threaded one.
+#'   and runs single-threaded otherwise. Pass `TRUE`/`FALSE` to override. One
+#'   plan gives the same cells either way; a reprojected STAC band warps by a
+#'   different route on each, so its cells can differ within GDAL's tolerance.
 #' @return With `plan_only = TRUE`, the `Plan`. Otherwise the materialised
 #'   result in the R raster convention (spatial-first, layer-last): a scalar
 #'   for global reductions, a `[y, x]` matrix for a single layer, or a

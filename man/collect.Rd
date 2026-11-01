@@ -16,8 +16,9 @@ the band axis via \code{stack_bands()} first), a named list of lazy rasters
 
 \item{distributed}{Execute across the \code{\link[=garry_daemons]{garry_daemons()}} pools? Defaults to
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, so \code{collect(x)} uses the pools when they are running
-and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override; the
-distributed result is identical to the single-threaded one.}
+and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override. One
+plan gives the same cells either way; a reprojected STAC band warps by a
+different route on each, so its cells can differ within GDAL's tolerance.}
 }
 \value{
 With \code{plan_only = TRUE}, the \code{Plan}. Otherwise the materialised

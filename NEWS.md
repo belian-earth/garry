@@ -2,6 +2,15 @@
 
 ## Breaking changes
 
+* A warp of one file takes GDAL's default tolerance, 0.125 source pixels, in
+  place of the exact transformer, so its cells move and it runs about five
+  times faster. A Landsat band warped from UTM to LAEA took 1.1 s against
+  5.7 s, with 68 % of cells moving, p99 17 DN and at most 228; a class map
+  read by nearest neighbour took 0.5 s against 5.1 s, with 0.1 % of cells
+  changing class. Cells still do not depend on chunks: a warped VRT reads by
+  fixed blocks. `garry.warp_exact = TRUE` brings exact warps back, and now
+  also governs windows, so the old mix of exact files and approximate windows
+  has no setting.
 * A `garry.*` option with no such name aborts with a `garry_option_error`,
   at run start and at `garry_daemons()`, so a typo or a retired name no
   longer means the default.
@@ -482,12 +491,11 @@
   pixel only when every band held nodata, so one band's sentinel came
   through as a value and, from a later source of a mosaic, overwrote an
   earlier source's data.
-* `garry.warp_exact = TRUE` warps windows with GDAL's exact transformer,
-  as the warped VRT of a single source already is, so which source pixel
-  a cell takes never depends on where windows fall. GDAL's default
-  interpolates the transform along each row of a window to within 0.125
-  px. It is off by default: a one-band warp across projections costs
-  3-15x more with it.
+* `garry.warp_exact = TRUE` warps plain files and windows with GDAL's exact
+  transformer, so which source pixel a cell takes never depends on where
+  windows fall. GDAL's default interpolates the transform along each row to
+  within 0.125 source pixels. It is off by default: a one-band warp across
+  projections costs 3-15x more with it.
 * A direct (unwarped) read declines a source whose band has a mask or
   alpha band, which the warper honours and a plain read did not.
 

@@ -39,7 +39,9 @@ Path to the VRT file (in \code{tempdir()}).
 }
 \description{
 Delegates every pixel of cross-CRS math to the GDAL warper:
-\code{-te}/\code{-ts} pin the output grid exactly to \code{target_grid}.
+\code{-te}/\code{-ts} pin the output grid exactly to \code{target_grid}. GDAL's default
+tolerance applies, 0.125 source pixels, or none under
+\code{garry.warp_exact = TRUE}.
 A source nodata goes to the warper as \code{-srcnodata}, so it never enters
 resampling. Area outside the source footprint reads as nodata
 (\code{.warp_dst_nodata()}).

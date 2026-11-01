@@ -61,7 +61,7 @@ iteration is planned) over grid-pinned labelled cubes. Expressions are
 written in [anvl](https://github.com/r-xla/anvl)'s vocabulary, planned
 as one graph, and executed distributed and memory-bounded. This closed
 world is what makes whole-graph fusion, cost placement and
-byte-identical distributed execution possible.
+reproducible distributed execution possible.
 
 On those primitives garry ships a growing catalogue of statistical
 verbs: `geomedian()` and `medoid()` for multivariate compositing,

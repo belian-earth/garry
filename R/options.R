@@ -94,18 +94,20 @@
     desc = "print task-completion progress during distributed drains",
     check = .opt_flag()
   ),
-  # Warp windows (several sources together, a Zarr array, a source of a
-  # mosaic read source by source) with GDAL's exact transformer, as the
-  # warped VRT of one source already is: which source pixel a cell takes
-  # then never depends on where windows fall. GDAL's default
-  # interpolates the transform along each row of the window it is given
-  # to within 0.125 px, so a cell near a pixel boundary can take the
-  # neighbouring pixel in another window layout. Off by default: a
-  # one-band window warp across projections costs 3-15x more with it.
+  # Warp with GDAL's exact transformer. GDAL's default interpolates the
+  # transform along each row to within 0.125 source pixels. A warped VRT of
+  # one source reads by fixed blocks, so its cells never depend on chunks
+  # either way. A window warp (several sources together, a Zarr array, a
+  # source of a mosaic read source by source) takes the window's rows, so
+  # there a cell near a pixel boundary can take the neighbouring pixel in
+  # another window layout unless this is on. A STAC band's warps (the GTI
+  # driver, the composite routes) always take GDAL's default. Off by
+  # default: it costs about 5x on a warped VRT and 3-15x on a one-band
+  # window warp across projections.
   warp_exact = list(
     default = FALSE,
     tier = "tuning",
-    desc = "exact transformer for window warps (window-independent picks, slower)",
+    desc = "exact transformer for warps of plain files and windows (slower)",
     check = .opt_flag()
   ),
   # Default open-handle cache depth on READ daemons (garry_daemons()'s

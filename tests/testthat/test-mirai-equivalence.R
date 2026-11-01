@@ -39,6 +39,7 @@ local({
   })
 
   test_that("a distributed warp pipeline computes what gdalwarp lands", {
+  withr::local_options(garry.warp_exact = TRUE)
     g <- gdal_grid_spec(f)$grid
     b <- gdalraster::transform_bounds(g@extent, g@crs, "EPSG:4326")
     target <- grid_spec("EPSG:4326", extent = b, dims = c(61L, 43L))

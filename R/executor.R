@@ -193,7 +193,8 @@ NULL
     open_options = character(0),
     scale = snode@scale,
     offset = snode@offset,
-    decim = NULL
+    decim = NULL,
+    warped = TRUE
   )
 }
 
@@ -272,17 +273,20 @@ NULL
   }
   .gdal_with_retry(
     function() {
-      gdal_read_int_planes(
-        ra$path,
-        ra$band,
-        core$x_off,
-        core$y_off,
-        core$x_size,
-        core$y_size,
-        nodata = ra$nodata,
-        out_nodata = nodata,
-        open_options = ra$open_options,
-        decim = ra$decim
+      .gdal_read_warped(
+        ra,
+        gdal_read_int_planes(
+          ra$path,
+          ra$band,
+          core$x_off,
+          core$y_off,
+          core$x_size,
+          core$y_size,
+          nodata = ra$nodata,
+          out_nodata = nodata,
+          open_options = ra$open_options,
+          decim = ra$decim
+        )
       )
     },
     what = "read",
@@ -424,19 +428,22 @@ NULL
         open_options = ra$open_options
       ))
     }
-    gdal_read_window(
-      ra$path,
-      ra$band,
-      w$x_off,
-      w$y_off,
-      w$x_size,
-      w$y_size,
-      nodata = ra$nodata,
-      open_options = ra$open_options,
-      out = out,
-      scale = ra$scale,
-      offset = ra$offset,
-      decim = ra$decim
+    .gdal_read_warped(
+      ra,
+      gdal_read_window(
+        ra$path,
+        ra$band,
+        w$x_off,
+        w$y_off,
+        w$x_size,
+        w$y_size,
+        nodata = ra$nodata,
+        open_options = ra$open_options,
+        out = out,
+        scale = ra$scale,
+        offset = ra$offset,
+        decim = ra$decim
+      )
     )
   }
   sub <- .gdal_with_retry(read_one, what = "read", src = ra$path)

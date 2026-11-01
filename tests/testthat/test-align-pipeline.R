@@ -3,6 +3,7 @@
 
 
 test_that("align -> map matches reference", {
+  withr::local_options(garry.warp_exact = TRUE)
   f <- fixture_gradient_f32()
   g <- gdal_grid_spec(f)$grid
   b <- gdalraster::transform_bounds(g@extent, g@crs, "EPSG:4326")
