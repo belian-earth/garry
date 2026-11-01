@@ -212,4 +212,4 @@ The same verbs work on a single raster. `lazy_source()` opens one COG or a GDAL
 mosaic; `lazy_map()` / `focal_map()` / `reduce_over()` build map-algebra graphs;
 `align_to()` reprojects onto a target grid; `collect()` brings the result into R
 and `write_tif()` streams it to disk. See
-`benchmarks/compare.sh` for the back-to-back garry-vs-ODC benchmark.
+`benchmarks/README.md` for the garry-vs-ODC benchmark suite.

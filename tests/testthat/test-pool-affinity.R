@@ -2,7 +2,7 @@
 # garry_daemons(), each daemon's Cpus_allowed_list is bounded to k CPUs
 # and the sets are disjoint within a pool; the cap is recorded for the
 # placement pass; "off" leaves readers uncapped. Spike A
-# (benchmarks/README.md 2026-07-29) established that this mask bounds
+# (design/benchmark-history.md 2026-07-29) established that this mask bounds
 # the XLA client's thread pool and that k >= 2 is a hard floor.
 
 skip_if(Sys.info()[["sysname"]] != "Linux", "affinity is Linux-only")

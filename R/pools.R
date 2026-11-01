@@ -668,7 +668,7 @@ NULL
 # its eigen pool via tsl::port::MaxParallelism() = NumSchedulableCPUs,
 # which respects sched_setaffinity, and the client inits lazily on the
 # first g_jit: so affinity applied at pool creation bounds every
-# later client (spike A, benchmarks/README.md 2026-07-29: uncapped 93
+# later client (spike A, design/benchmark-history.md 2026-07-29: uncapped 93
 # threads/daemon; k=2 -> 39 on disjoint pairs; k=1 SEGFAULTS the
 # client, hence the hard floor of 2; spike B: 10 narrow clients ~2x
 # the throughput of 2 uncapped fat ones on matmul kernels). Linux only;
@@ -855,7 +855,7 @@ garry_daemons <- function(
   if (is.null(read) || is.null(compute)) {
     cr <- .garry_cores()
     # Machine-derived defaults (the routed width/K sweep,
-    # benchmarks/README.md):
+    # design/benchmark-history.md):
     # - compute: cores/3 capped at 8 (floor 2). Scan tasks are confined
     #   to the scan_profiles daemons, so width does not multiply scan
     #   compiles or scan memory; the sweep measured the sweet spot at 6

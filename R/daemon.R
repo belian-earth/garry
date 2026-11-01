@@ -51,8 +51,8 @@ NULL
 }
 
 # Return freed heap pages to the OS (glibc malloc_trim(0); no-op
-# elsewhere). The scan-retention spike (benchmarks/scan-retention-
-# spike.R, 2026-08-01) measured a scan daemon standing at 904 MB of
+# elsewhere). The scan-retention spike (design/benchmark-history.md,
+# 2026-08-01) measured a scan daemon standing at 904 MB of
 # which 475 MB was trimmable glibc arena and 72 MB evictable jit
 # handles: the "retained scan working set" that walls off wide scan
 # pools is mostly memory nobody holds. Called after every compute/write
@@ -771,7 +771,7 @@ NULL
   # 10b: compute daemons measured at 1.2-1.7 GB anon vs a ~300 MB
   # working set). Pair with MALLOC_MMAP_THRESHOLD_/
   # MALLOC_TRIM_THRESHOLD_ in the daemon env so freed pages actually
-  # return to the OS (see benchmarks/hls-median-composite.R). The env
+  # return to the OS (see garry_daemons()). The env
   # thresholds only cover the top-of-heap path; malloc_trim(0) walks
   # every arena, and the scan-retention spike measured the difference
   # at ~475 MB of standing arena per scan daemon.

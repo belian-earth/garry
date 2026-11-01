@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "seed": 20261101,
+  "sizes": {
+    "small": {
+      "cap": "8G", "limit_s": 1200, "gen_limit_s": 1800,
+      "hls": [1259, 931], "embed": [1024, 1024], "annual": [1024, 1024]
+    },
+    "medium": {
+      "cap": "16G", "limit_s": 3600, "gen_limit_s": 7200,
+      "hls": [3660, 3660], "embed": [4096, 4096], "annual": [2048, 2048]
+    },
+    "large": {
+      "refused": "defined for scale, never generated: the disk is shared",
+      "cap": "24G", "limit_s": 7200, "gen_limit_s": 14400,
+      "hls": [7320, 7320], "embed": [8192, 8192], "annual": [4096, 4096]
+    }
+  },
+  "datasets": {
+    "hls": {
+      "t": 55,
+      "first_date": "2023-01-01",
+      "span_days": 364,
+      "utc_time": "00:30",
+      "bands": ["B02", "B03", "B04", "B08", "B11", "B12"],
+      "mask_band": "Fmask",
+      "dtype": "int16",
+      "nodata": -9999,
+      "mask_dtype": "uint8",
+      "mask_nodata": 255,
+      "scale": 0.0001,
+      "fmask_bits": {"cirrus": 0, "cloud": 1, "adjacent": 2, "shadow": 3, "snow": 4, "water": 5},
+      "target": {"crs": "EPSG:20255", "xmin": 183060, "ymax": 9172800, "res": 30},
+      "creation": {"blocksize": 512, "compress": "deflate", "predictor": 2, "zlevel": 6},
+      "variants": {
+        "warp": {
+          "tiles": {
+            "T54": {"crs": "EPSG:32754", "x": [-0.02, 0.60], "y": [-0.02, 1.02]},
+            "T55": {"crs": "EPSG:32755", "x": [0.40, 1.02], "y": [-0.02, 1.02]}
+          },
+          "single_tile_every": 9,
+          "single_tile": {"4": "T54", "8": "T55"}
+        },
+        "aligned": {
+          "tiles": {"T00": {"crs": "EPSG:20255", "x": [0, 1], "y": [0, 1]}}
+        }
+      },
+      "disk_ratio": {"reflectance": 0.7, "fmask": 0.05}
+    },
+    "hls-zarr": {
+      "from": "hls-aligned",
+      "chunks": 512,
+      "disk_ratio": 0.7
+    },
+    "embed": {
+      "bands": 64,
+      "dtype": "int8",
+      "nodata": -128,
+      "target": {"crs": "EPSG:32736", "xmin": 510000, "ymax": 8601440, "res": 10},
+      "creation": {"blocksize": 1024, "compress": "zstd", "interleave": "band"},
+      "disk_ratio": 0.95
+    },
+    "annual": {
+      "t": 15,
+      "first_year": 2010,
+      "dtype": "float32",
+      "nodata": "nan",
+      "target": {"crs": "EPSG:32755", "xmin": 500000, "ymax": 9200000, "res": 30},
+      "creation": {"blocksize": 512, "compress": "deflate", "predictor": 3, "zlevel": 6},
+      "disk_ratio": 0.76
+    }
+  }
+}

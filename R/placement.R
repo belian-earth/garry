@@ -26,8 +26,9 @@ NULL
 .cost_shm_bw_mbs <- 2000
 # Parallel efficiency of a compute pool of all-cores clients against
 # spread-out narrow ones: 2 such daemons measured 81.4 win/s vs 159.8 for
-# 10 x 2-CPU clients on the MLP kernel shape (spike B, benchmarks/README.md
-# 2026-07-29) = 0.51. Applied to the materialise route's compute term:
+# 10 x 2-CPU clients on the MLP kernel shape (spike B,
+# design/benchmark-history.md 2026-07-29) = 0.51. Applied to the materialise
+# route's compute term:
 # without it the model credits the warm pool with machine-wide throughput
 # it does not deliver and keeps wide kernels off the readers by a false
 # margin.
