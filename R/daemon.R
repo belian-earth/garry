@@ -860,9 +860,9 @@ NULL
     identity
   }
   if (masked) {
-    function(inp) .apply_reduce(op, F(adj(inp[[1L]]), inp[[2L]]), 1L, nan_rm)
+    function(inp) list(.apply_reduce(op, F(adj(inp[[1L]]), inp[[2L]]), 1L, nan_rm))
   } else {
-    function(inp) .apply_reduce(op, adj(inp[[1L]]), 1L, nan_rm)
+    function(inp) list(.apply_reduce(op, adj(inp[[1L]]), 1L, nan_rm))
   }
 }
 
@@ -872,31 +872,38 @@ NULL
 .gd_mask_fn <- function(chain, halo) {
   force(chain)
   force(halo)
-  function(inp) .gd_replay_mask(inp[[1L]], chain, halo)
+  function(inp) list(.gd_replay_mask(inp[[1L]], chain, halo))
+}
+
+# One band's kernel from its spec: the program the host traced, or the
+# closure rebuilt here, so a task and the warm-up run one kernel for one ck.
+.gd_band_kernel <- function(sp) {
+  sp$set %||% .gd_lean_fn(sp$F, sp$op, sp$nan_rm, sp$affine, sp$masked)
 }
 
 #' Daemon task body: pre-compile the pipeline lean kernels.
 #'
 #' Runs on each compute-pool daemon while the read pool owns the fetch
-#' drain: get-or-create each spec's JitFunction under the same `ck` the
-#' real band tasks use, then execute once per strip height on `g_fill`
-#' dummies (the fill is represented in the program: no host bytes move)
-#' so the XLA compile never lands on the post-fetch tail. A failure
-#' raises: the host reports it, and a band task compiles the kernel.
+#' drain, so the XLA compile never lands on the post-fetch tail. A
+#' program compiles every strip height and runs nothing. A closure
+#' compiles only by running, once per strip height on `g_fill` dummies,
+#' each as much memory as a real strip. A failure raises: the host
+#' reports it, and a band task compiles the kernel.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
-#' @param specs List of kernel specs: `ck`, `F`, `op`, `nan_rm`,
-#'   `affine`, `masked`, `dev`, `n` slice count, `hs` strip heights, `nx`.
+#' @param specs List of kernel specs: `ck`, `set` the program set or
+#'   `NULL`, `F`, `op`, `nan_rm`, `affine`, `masked`, `dev`, `n` slice
+#'   count, `hs` strip heights, `nx`.
 #' @return `NULL`, invisibly.
 #' @keywords internal
 .gd_warm_pipeline <- function(specs) {
   for (sp in specs) {
     dev <- .exec_device(sp$dev)
-    jf <- .daemon_kernel(
-      sp$ck,
-      .gd_lean_fn(sp$F, sp$op, sp$nan_rm, sp$affine, sp$masked),
-      dev
-    )
+    jf <- .daemon_kernel(sp$ck, .gd_band_kernel(sp), dev)
+    if (!is.null(attr(jf, "warm"))) {
+      attr(jf, "warm")(every = TRUE)
+      next
+    }
     for (h in sp$hs) {
       dims <- c(sp$n, h, sp$nx)
       inputs <- if (sp$masked) {
@@ -904,7 +911,7 @@ NULL
       } else {
         list(g_fill(0, dims, "f32", dev))
       }
-      invisible(g_download_raw(jf(inputs)))
+      invisible(g_download_raw(jf(inputs)[[1L]]))
       rm(inputs)
     }
   }
@@ -912,36 +919,50 @@ NULL
   invisible(NULL)
 }
 
-# Pipeline daemon task: replay the cleaned mask ONCE on the whole fmask cube
-# (morphology, cube-vectorised over time) and write the resulting f32 mask cube
-# to one .bin, so every band's median reads it instead of recomputing the
-# morphology. Runs on the compute pool while the bands are still fetching.
-#' Daemon task body: compute the shared cleaned-mask cube.
+# Rows `[y0, y0 + h)` of every slice file, as one row-major f32 cube on the
+# device. The host bytes go before the kernel runs: they are as big as the
+# buffer that replaces them.
+.gd_upload_rows <- function(bins, y0, h, nx, dev) {
+  bytes <- .Call(
+    "garry_read_rows",
+    bins,
+    as.numeric(y0) * nx * 4,
+    as.numeric(h) * nx * 4,
+    PACKAGE = "garry"
+  )
+  a <- g_upload_raw(bytes, "f32", c(length(bins), h, nx), device = dev)
+  rm(bytes)
+  gc(FALSE)
+  a
+}
+
+# Pipeline daemon task: replay the cleaned mask on one batch of slices
+# (morphology, vectorised over time, each slice on its own) and write each
+# slice's mask to its own file, so every band's median reads it instead of
+# recomputing the morphology. The batch's fmask slices are done with, and go,
+# so tmpfs holds one cube of them or of their masks. Runs on the compute pool
+# while the bands are still fetching.
+#' Daemon task body: compute one batch of the shared cleaned mask.
 #'
-#' Replays the mask-cleaning morphology once over the whole QA cube and
-#' writes the resulting f32 mask cube to a file every band task reads,
-#' instead of recomputing the morphology per band.
+#' Replays the mask-cleaning morphology over a batch of QA slices and
+#' writes one mask file per slice, which every band task reads, instead
+#' of recomputing the morphology per band.
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
+#' @param job `fmask_bins` and `out_bins`, one each per slice of the batch.
+#' @param k The batch's constants: `ny`, `nx`, `dev`, `ck`, and `kernel`,
+#'   a program set, or `chain` and `halo` for a closure.
 #' @keywords internal
-.gd_compute_mask <- function(k) {
+.gd_compute_mask <- function(job, k) {
   dev <- .exec_device(k$dev)
-  n <- length(k$fmask_bins)
-  fm <- g_upload_raw(
-    do.call(
-      c,
-      lapply(k$fmask_bins, function(f) readBin(f, "raw", n = as.numeric(k$ny) * k$nx * 4))
-    ),
-    "f32",
-    c(n, k$ny, k$nx),
-    device = dev
-  )
-  jf <- .daemon_kernel(k$ck, .gd_mask_fn(k$chain, k$halo), dev)
-  r <- g_download_raw(jf(list(fm)))
-  attributes(r) <- NULL
-  writeBin(r, k$out_bin) # whole cube, row-major f32
-  bytes <- 2 * .payload_bytes(r) # the fmask cube read, and the mask written
-  rm(fm, r)
+  fm <- .gd_upload_rows(job$fmask_bins, 0L, k$ny, k$nx, dev)
+  jf <- .daemon_kernel(k$ck, k$kernel %||% .gd_mask_fn(k$chain, k$halo), dev)
+  r <- g_download_raw(jf(list(fm))[[1L]])
+  rm(fm)
+  .Call("garry_write_parts", r, job$out_bins, PACKAGE = "garry")
+  unlink(job$fmask_bins)
+  bytes <- 2 * .payload_bytes(r) # the fmask batch read, and the mask written
+  rm(r)
   .daemon_gc_after(bytes)
   invisible(TRUE)
 }
@@ -970,62 +991,18 @@ NULL
   nx <- k$nx
   y0 <- if (is.null(job$rows)) 0L else job$rows[[1L]]
   h <- if (is.null(job$rows)) k$ny else job$rows[[2L]]
-  strip <- h < k$ny
-  read_rows <- function(f, base_rows = 0) {
-    if (!strip && base_rows == 0) {
-      return(readBin(f, "raw", n = as.numeric(h) * nx * 4))
-    }
-    con <- file(f, "rb")
-    on.exit(close(con))
-    seek(con, (base_rows + as.numeric(y0)) * nx * 4)
-    readBin(con, "raw", n = as.numeric(h) * nx * 4)
+  inputs <- list(.gd_upload_rows(job$band_bins, y0, h, nx, dev))
+  if (length(k$mask_bins)) {
+    inputs[[2L]] <- .gd_upload_rows(k$mask_bins, y0, h, nx, dev)
   }
-  cube <- function(bins) {
-    g_upload_raw(
-      do.call(c, lapply(bins, read_rows)),
-      "f32",
-      c(length(bins), h, nx),
-      device = dev
-    )
-  }
-  band <- cube(job$band_bins)
-  masked <- length(k$mask_bin) == 1L
   created0 <- .kernel_stats$creates %||% 0L
-  jf <- .daemon_kernel(
-    job$ck,
-    .gd_lean_fn(k$F, k$op, k$nan_rm, job$affine, masked),
-    dev
-  )
-  inputs <- list(band)
-  if (masked) {
-    inputs[[2L]] <- if (!strip) {
-      g_upload_raw(
-        readBin(k$mask_bin, "raw", n = as.numeric(n) * k$ny * nx * 4),
-        "f32",
-        c(n, h, nx),
-        device = dev
-      )
-    } else {
-      # one seek per slice into the whole-grid mask cube
-      g_upload_raw(
-        do.call(
-          c,
-          lapply(seq_len(n) - 1L, function(i) {
-            read_rows(k$mask_bin, base_rows = as.numeric(i) * k$ny)
-          })
-        ),
-        "f32",
-        c(n, h, nx),
-        device = dev
-      )
-    }
-  }
-  out <- g_download_raw(jf(inputs))
+  jf <- .daemon_kernel(job$ck, .gd_band_kernel(k$kernels[[job$ck]]), dev)
+  out <- g_download_raw(jf(inputs)[[1L]])
   attr(out, "gd_t") <- proc.time()[["elapsed"]] - t0
   attr(out, "gd_jit") <- (.kernel_stats$creates %||% 0L) - created0
   # the strip's cubes, read here and held on the device
   bytes <- length(inputs) * 4 * as.numeric(n) * h * nx
-  rm(inputs, band)
+  rm(inputs)
   .daemon_gc_after(bytes)
   out
 }

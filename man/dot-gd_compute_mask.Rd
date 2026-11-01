@@ -2,14 +2,20 @@
 % Please edit documentation in R/daemon.R
 \name{.gd_compute_mask}
 \alias{.gd_compute_mask}
-\title{Daemon task body: compute the shared cleaned-mask cube.}
+\title{Daemon task body: compute one batch of the shared cleaned mask.}
 \usage{
-.gd_compute_mask(k)
+.gd_compute_mask(job, k)
+}
+\arguments{
+\item{job}{\code{fmask_bins} and \code{out_bins}, one each per slice of the batch.}
+
+\item{k}{The batch's constants: \code{ny}, \code{nx}, \code{dev}, \code{ck}, and \code{kernel},
+a program set, or \code{chain} and \code{halo} for a closure.}
 }
 \description{
-Replays the mask-cleaning morphology once over the whole QA cube and
-writes the resulting f32 mask cube to a file every band task reads,
-instead of recomputing the morphology per band.
+Replays the mask-cleaning morphology over a batch of QA slices and
+writes one mask file per slice, which every band task reads, instead
+of recomputing the morphology per band.
 Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

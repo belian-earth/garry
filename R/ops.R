@@ -233,10 +233,13 @@ g_value_and_gradient <- function(f, wrt) {
   dispatch <- pjrt::dispatch
   run <- function(inputs) dispatch(disp, list(inputs))
   # A warm-up compiles the set's first shape, its modal chunk (chunk_iter()
-  # lists that first). Others compile where a task first meets them.
-  attr(run, "warm") <- function() {
-    if (is.null(compiled[[1L]])) {
-      compile(1L)
+  # lists that first), and others where a task first meets them. `every`
+  # compiles them all, for a set whose shapes are all sure to run.
+  attr(run, "warm") <- function(every = FALSE) {
+    for (i in if (every) seq_along(compiled) else 1L) {
+      if (is.null(compiled[[i]])) {
+        compile(i)
+      }
     }
     invisible(NULL)
   }

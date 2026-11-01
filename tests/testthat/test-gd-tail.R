@@ -108,6 +108,22 @@ local({
     .gg_identical(res[[2L]], .gg_masked_want(clean = TRUE))
   })
 
+  test_that("a short budget opens one band at a time, changes no byte and leaves tmpfs empty", {
+    x <- .gg_masked_composite(open = 1L, dilate = 1L)
+    want <- collect(x, distributed = TRUE)
+    testthat::local_mocked_bindings(
+      .gd_fit = function(...) list(strips = 3L, bands = 1L, work_mb = 1),
+      .package = "garry"
+    )
+    expect_identical(collect(x, distributed = TRUE), want)
+    expect_identical(garry_last_route(), "composite_direct")
+    plan <- collect(x, plan_only = TRUE)
+    tmp <- withr::local_tempdir()
+    res <- garry:::.gd_reduce_results(plan, .cd_spec(plan), tmp, garry:::.gd_log_open())
+    expect_length(res, 2L)
+    expect_length(list.files(tmp), 0L)
+  })
+
   test_that("repeat collect creates no new pipeline kernels (cache + warm)", {
     skip_on_os("mac")   # daemons start every run cold there (.daemon_jit_reset)
     withr::local_options(garry.gd_strips = 2)

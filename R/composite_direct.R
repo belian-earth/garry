@@ -410,25 +410,46 @@ NULL
   lapply(seq_len(ns) - 1L, function(i) c(i * h, min(h, ny - i * h)))
 }
 
-# Max concurrent band medians whose working sets fit the RAM budget. Each holds
-# ~3.5 cubes (band + shared mask + median scratch); cap so their combined
-# resident set stays under exec_ram_fraction of AVAILABLE RAM. Clamped to
-# [1, pool], the full pool when RAM can't be read, which
-# .garry_ram_avail_mb() warns of. This is what lets garry_daemons()
-# over-provision compute without OOM on a many-band job.
-# With strip decomposition, `ny` is the strip height and `pool` the strip-task
-# queue depth, so the cap admits proportionally more, smaller tasks.
+# How a fetch-ordered run fits the RAM budget, exec_ram_fraction of what is
+# available. Two things hold memory: cubes waiting on tmpfs (every band's, and
+# the mask's), which nothing but their own compute frees, and strip tasks, each
+# ~3.5 strip cubes (band + shared mask + median scratch). Budget to spare, or no
+# reading of it, leaves the run as wide as it can go: every band fetching, one
+# strip per compute daemon. Short of that the cubes go first, at least the mask
+# and one band, since nothing computes without them, and the strips shrink so
+# every daemon still has one in what is left. Strips always get their share of
+# the budget: when the two smallest cubes already fill it, the run goes over the
+# fraction, which is a margin, rather than stalling. Returns `strips`, how many
+# bands may be open at once, and the MB strip tasks may hold.
+.gd_fit <- function(nb, n_slices, ny, nx, masked, comp, strips = 0L) {
+  cube <- n_slices * as.numeric(ny) * nx * 4 / 2^20
+  whole <- .gd_strip_mb(n_slices, ny, nx)
+  wide <- if (strips >= 1L) strips else comp
+  budget <- garry_opt("exec_ram_fraction") * .garry_ram_avail_mb()
+  if (is.na(budget) || (nb + masked) * cube + whole <= budget) {
+    return(list(strips = wide, bands = nb, work_mb = budget))
+  }
+  bands <- min(nb, as.integer(max(1, floor(.gd_cube_share * budget / cube) - masked)))
+  work <- max(budget - (bands + masked) * cube, (1 - .gd_cube_share) * budget)
+  need <- as.integer(ceiling(comp * whole / work))
+  list(strips = if (strips >= 1L) strips else max(wide, need), bands = bands, work_mb = work)
+}
+
+# The share of a short budget that cubes may take: a second band fetching
+# while the first computes is what keeps the read pool working.
+.gd_cube_share <- 0.65
+
 .gd_strip_mb <- function(n_slices, ny, nx) 3.5 * n_slices * ny * nx * 4 / 2^20
 
-.gd_compute_cap <- function(n_slices, ny, nx, pool) {
+# Max concurrent tasks of `task_mb` in `work_mb`, clamped to [1, pool], the full
+# pool when RAM can't be read, which .garry_ram_avail_mb() warns of. This is what
+# lets garry_daemons() over-provision compute without OOM on a many-band job.
+.gd_compute_cap <- function(task_mb, work_mb, pool) {
   pool <- max(1L, as.integer(pool))
-  per_task_mb <- .gd_strip_mb(n_slices, ny, nx)
-  avail <- .garry_ram_avail_mb()
-  if (is.na(avail) || per_task_mb <= 0) {
+  if (is.na(work_mb) || task_mb <= 0) {
     return(pool)
   }
-  cap <- floor(garry_opt("exec_ram_fraction") * avail / per_task_mb)
-  max(1L, min(pool, as.integer(cap)))
+  max(1L, min(pool, as.integer(floor(work_mb / task_mb))))
 }
 
 # Fetch each GTI source's slice items and warp its f32 pixels straight into a
@@ -752,16 +773,44 @@ NULL
     vapply(ids, function(id) b$jobs[[as.character(id)]]$bin, "")
   }
 
+  # What fits: how many strips spread each band's median across the pool, so
+  # the exposed drain (the bands with no fetch left to hide behind) divides by
+  # the pool width, and how many bands may hold a cube on tmpfs at once.
+  nb <- length(spec$band_srcs)
+  n_slices <- max(lengths(spec$band_srcs))
+  fit <- .gd_fit(nb, n_slices, ny, nx, masked, .comp_n(), as.integer(garry_opt("gd_strips")))
+  bounds <- .gd_strip_bounds(ny, fit$strips)
+  ns <- length(bounds)
+  strip_mb <- .gd_strip_mb(n_slices, bounds[[1L]][[2L]], nx)
+  cap <- .gd_compute_cap(strip_mb, fit$work_mb, .daemon_depth * max(1L, .comp_n()))
+  if (progress && (cap < nb * ns || fit$bands < nb)) {
+    cli::cli_inform(.glue(
+      "[gdal-direct] RAM budget: {ns} strips a band, {cap} in flight, {fit$bands} of {nb} bands open at once"
+    ))
+  }
+
   t0 <- proc.time()[["elapsed"]]
   .gd_daemon_prep("garry_read")
   # Dispatch fmask FIRST (it drains before the bands, which queue behind it on
-  # the read pool), then the bands. All non-blocking.
+  # the read pool), then every band that may be open. All non-blocking.
   fmask_p <- if (masked) .gd_fetch(tl, b, spec$fmask_srcs) else NULL
-  band_p <- lapply(spec$band_srcs, function(ids) .gd_fetch(tl, b, ids))
+  band_p <- vector("list", nb)
+  next_band <- 1L
+  open_bands <- 0L
+  fetch_bands <- function() {
+    while (next_band <= nb && open_bands < fit$bands) {
+      band_p[[next_band]] <<- .gd_fetch(tl, b, spec$band_srcs[[next_band]])
+      next_band <<- next_band + 1L
+      open_bands <<- open_bands + 1L
+    }
+  }
+  fetch_bands()
+
   # Kernel identity for the lean band kernel: everything the traced
   # closure closes over (F, op, nan_rm, affine, masked, device). Affine
   # varies per band, so bands sharing an affine share a ck, and with it
-  # one kernel per daemon (see .daemon_kernel).
+  # one kernel per daemon (see .daemon_kernel). As a program it is traced
+  # here, once, at the strip heights.
   Fs <- .slim_fn(spec$F)
   base_sig <- rlang::hash(list(
     fn = .cd_fn_sig(spec$F),
@@ -770,31 +819,23 @@ NULL
     masked = masked,
     dev = spec$device
   ))
+  wire <- .kernel_wire_program()
+  hs <- unique(vapply(bounds, `[[`, integer(1), 2L))
+  dtypes <- rep("f32", 1L + masked)
+  shape_sets <- function(n) lapply(hs, function(h) rep(list(c(n, h, nx)), 1L + masked))
   band_ck <- vapply(
-    seq_along(spec$band_srcs),
+    seq_len(nb),
     function(bi) {
-      rlang::hash(list(base_sig, spec$band_affine[[bi]]))
+      ck <- rlang::hash(list(base_sig, spec$band_affine[[bi]]))
+      if (wire) {
+        ck <- paste0(ck, "#", .program_tag(dtypes, shape_sets(length(spec$band_srcs[[bi]]))))
+      }
+      ck
     },
     ""
   )
-
-  # Strip grid: spread each band's median across the pool so the exposed
-  # drain (the bands with no fetch left to hide behind) divides by the
-  # pool width instead of landing whole on one daemon.
-  ns_opt <- as.integer(garry_opt("gd_strips"))
-  bounds <- .gd_strip_bounds(
-    ny,
-    if (ns_opt >= 1L) ns_opt else max(1L, .comp_n())
-  )
-  ns <- length(bounds)
-
-  # Warm + attach the compute pool while the read pool fetches: hide the
-  # XLA client cold init AND the lean kernels' compiles (one per distinct
-  # ck, executed per strip height on zero-byte g_fill dummies) inside the
-  # fetch window, so no post-drain strip pays a compile.
-  hs <- unique(vapply(bounds, `[[`, integer(1), 2L))
-  wsp <- unname(lapply(which(!duplicated(band_ck)), function(bi) {
-    list(
+  kernels <- lapply(which(!duplicated(band_ck)), function(bi) {
+    sp <- list(
       ck = band_ck[[bi]],
       F = Fs,
       op = spec$op,
@@ -806,7 +847,22 @@ NULL
       hs = hs,
       nx = nx
     )
-  }))
+    if (wire) {
+      sp$set <- .trace_kernel(
+        sp$ck,
+        .gd_band_kernel(sp),
+        dtypes,
+        shape_sets(sp$n),
+        spec$band_srcs[[bi]][[1L]]
+      )
+    }
+    sp
+  })
+  names(kernels) <- unique(band_ck)
+
+  # Warm + attach the compute pool while the read pool fetches: hide the XLA
+  # client cold init AND the lean kernels' compiles inside the fetch window, so
+  # no post-drain strip pays a compile.
   warm <- stats::setNames(
     lapply(seq_along(comp_profs), function(i) {
       .task_launch(
@@ -816,7 +872,7 @@ NULL
           suppressMessages(library(garry))
           asNamespace("garry")$.gd_warm_pipeline(sp)
         }),
-        sp = wsp,
+        sp = unname(kernels),
         .compute = comp_profs[[i]],
         .pool = "comp",
         .slot = comp_profs[[i]]
@@ -825,10 +881,22 @@ NULL
     paste0("warm0_c", seq_along(comp_profs))
   )
 
-  # Mask: once fmask lands, compute the cleaned cube on the compute pool while
-  # the bands are still fetching. One mask .bin, read by every band median.
-  mask_bin <- tempfile("mask", tmpdir = tmp, fileext = ".bin")
-  mask_p <- NULL
+  # Mask: once fmask lands, compute the cleaned mask on the compute pool while
+  # the bands are still fetching, a batch of slices to a daemon, each slice to
+  # its own file, read by every band median. A slice's morphology touches no
+  # other slice, so a batch needs no halo from its neighbours.
+  mask_bins <- character(0)
+  mask_p <- list()
+  land_mask <- function() {
+    it <- mask_p[[1L]]
+    mask_p[[1L]] <<- NULL
+    v <- .await_task(it$h, comp_profs)
+    if (inherits(v, "miraiError")) {
+      .task_abort("gdal-direct mask computation failed", v)
+    }
+    .task_landed(tl$line, it$key, v)
+    tl$tick()
+  }
   if (masked) {
     fmr <- .gd_fetch_land(tl, fmask_p, "fmask")
     if (progress) {
@@ -839,34 +907,62 @@ NULL
         "sum={formatC(sum(vapply(fmr, function(r) r$tw, 0)), format = 'f', digits = 1)}s)"
       ))
     }
-    Km <- list(
-      fmask_bins = bin_of(spec$fmask_srcs),
-      out_bin = mask_bin,
-      chain = .gd_slim_chain(spec$mask_chain),
+    nf <- length(spec$fmask_srcs)
+    mask_bins <- tempfile(rep("mask", nf), tmpdir = tmp, fileext = ".bin")
+    on.exit(unlink(mask_bins), add = TRUE)
+    size <- as.integer(ceiling(nf / ns))
+    firsts <- seq(1L, nf, by = size)
+    mask_sets <- lapply(
+      unique(c(size, nf - firsts[[length(firsts)]] + 1L)),
+      function(k) list(c(k, ny, nx))
+    )
+    chain <- .gd_slim_chain(spec$mask_chain)
+    mask_ck <- rlang::hash(list(
+      chain = .cd_chain_sig(spec$mask_chain),
       halo = spec$halo,
       ny = ny,
       nx = nx,
-      dev = spec$device,
-      ck = rlang::hash(list(
-        chain = .cd_chain_sig(spec$mask_chain),
-        halo = spec$halo,
-        ny = ny,
-        nx = nx,
-        dev = spec$device
-      ))
-    )
-    mask_key <- paste0("m", spec$fmask_srcs[[1L]], "_c1")
-    p <- next_cp()
-    mask_p <- .task_launch(
-      tl,
-      mask_key,
-      quote(asNamespace("garry")$.gd_compute_mask(km)),
-      km = Km,
-      .compute = p,
-      .pool = "comp",
-      .slot = p,
-      .mb = 8 * length(spec$fmask_srcs) * as.numeric(ny) * nx / 2^20
-    )
+      dev = spec$device
+    ))
+    Km <- list(ny = ny, nx = nx, dev = spec$device)
+    if (wire) {
+      Km$ck <- paste0(mask_ck, "#", .program_tag("f32", mask_sets))
+      Km$kernel <- .trace_kernel(
+        Km$ck,
+        .gd_mask_fn(chain, spec$halo),
+        "f32",
+        mask_sets,
+        spec$fmask_srcs[[1L]]
+      )
+    } else {
+      Km$ck <- mask_ck
+      Km$chain <- chain
+      Km$halo <- spec$halo
+    }
+    mask_mb <- .gd_strip_mb(size, ny, nx)
+    mask_cap <- .gd_compute_cap(mask_mb, fit$work_mb, length(comp_profs))
+    for (i in firsts) {
+      while (length(mask_p) >= mask_cap) {
+        land_mask()
+      }
+      take <- i:min(nf, i + size - 1L)
+      key <- paste0("m", spec$fmask_srcs[[i]], "_c1")
+      p <- next_cp()
+      mask_p[[length(mask_p) + 1L]] <- list(
+        key = key,
+        h = .task_launch(
+          tl,
+          key,
+          quote(asNamespace("garry")$.gd_compute_mask(jm, km)),
+          jm = list(fmask_bins = bin_of(spec$fmask_srcs[take]), out_bins = mask_bins[take]),
+          km = Km,
+          .compute = p,
+          .pool = "comp",
+          .slot = p,
+          .mb = mask_mb
+        )
+      )
+    }
   }
 
   # Per-band medians, strip-decomposed: wait each band's fetch, then dispatch
@@ -874,27 +970,16 @@ NULL
   # remaining bands' fetches -- but never let more than `cap` strip tasks be
   # in flight, so the executing working sets stay under the RAM budget (a
   # generous / many-band pool then drains in memory-bounded waves, not a
-  # spike). Strips reassemble by raw concatenation in y order: the payloads
+  # spike). A band's cube goes as its last strip lands, which lets the next
+  # band fetch. Strips reassemble by raw concatenation in y order: the payloads
   # are row-major f32, so the result is byte-identical to a whole-band job.
   Kb <- list(
-    F = Fs,
-    op = spec$op,
-    nan_rm = spec$nan_rm,
+    kernels = kernels,
     ny = ny,
     nx = nx,
     dev = spec$device,
-    mask_bin = if (masked) mask_bin else character(0)
+    mask_bins = mask_bins
   )
-  n_slices <- length(spec$band_srcs[[1L]])
-  strip_h <- bounds[[1L]][[2L]]
-  cap <- .gd_compute_cap(n_slices, strip_h, nx, .daemon_depth * max(1L, .comp_n()))
-  nb <- length(spec$band_srcs)
-  if (progress && cap < nb * ns) {
-    cli::cli_inform(.glue(
-      "[gdal-direct] compute in-flight capped at {cap} strip task(s) (RAM budget)"
-    ))
-  }
-  mask_done <- !masked
   parts <- lapply(seq_len(nb), function(i) vector("list", ns))
   got <- integer(nb)
   res <- vector("list", nb)
@@ -932,9 +1017,16 @@ NULL
         p
       }
       parts[[it$bi]] <<- list()
+      later <- which(got < ns)
+      unlink(setdiff(bin_of(spec$band_srcs[[it$bi]]), bin_of(unlist(spec$band_srcs[later]))))
+      open_bands <<- open_bands - 1L
+      fetch_bands()
     }
   }
   for (bi in seq_len(nb)) {
+    while (is.null(band_p[[bi]])) {
+      harvest()
+    }
     .gd_fetch_land(tl, band_p[[bi]], .glue("band {bi}"))
     if (progress) {
       cli::cli_inform(.glue(
@@ -942,14 +1034,8 @@ NULL
         "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"
       ))
     }
-    if (!mask_done) {
-      mv <- .await_task(mask_p, comp_profs) # the mask .bin must exist first
-      if (inherits(mv, "miraiError")) {
-        .task_abort("gdal-direct mask computation failed", mv)
-      }
-      .task_landed(tl$line, mask_key, mv)
-      tl$tick()
-      mask_done <- TRUE
+    while (length(mask_p)) {
+      land_mask() # the mask files must exist first
     }
     for (si in seq_len(ns)) {
       while (length(inflight) >= cap) {
@@ -957,7 +1043,6 @@ NULL
       } # RAM cap: bound concurrency
       jb <- list(
         band_bins = bin_of(spec$band_srcs[[bi]]),
-        affine = spec$band_affine[[bi]],
         rows = if (ns == 1L) NULL else bounds[[si]],
         ck = band_ck[[bi]]
       )
@@ -972,7 +1057,7 @@ NULL
         .compute = p,
         .pool = "comp",
         .slot = p,
-        .mb = .gd_strip_mb(n_slices, strip_h, nx)
+        .mb = strip_mb
       )
       inflight[[length(inflight) + 1L]] <- list(bi = bi, si = si, key = key, h = h)
     }

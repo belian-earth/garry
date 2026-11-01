@@ -1944,30 +1944,28 @@ plan_lazy <- function(x) {
   if (all(req == 0L)) {
     return(0L)
   }
-  H <- stats::setNames(integer(length(members)), as.character(members))
-  for (i in rev(seq_along(members))) {
-    id <- members[[i]]
-    consumers <- Filter(
-      function(m) id %in% .node_parents(graph_get(graph, m)),
-      members
-    )
-    downstream <- if (length(consumers) == 0L) {
-      0L
-    } else {
-      max(vapply(consumers, function(m) H[[.key(m)]], integer(1)))
-    }
-    H[[.key(id)]] <- req[[i]] + downstream
-  }
-  readers <- Filter(
-    function(m) {
-      any(.node_parents(graph_get(graph, m)) %in% input_nodes)
-    },
-    members
+  # Members run in order, so a walk back reaches a member after its consumers,
+  # each of which leaves its depth on the member's `below`.
+  parents <- lapply(members, function(m) .node_parents(graph_get(graph, m)))
+  into <- split(
+    match(unlist(parents), members),
+    factor(rep(seq_along(members), lengths(parents)), levels = seq_along(members))
   )
-  if (length(readers) == 0L) {
+  below <- integer(length(members))
+  H <- integer(length(members))
+  for (i in rev(seq_along(members))) {
+    H[[i]] <- req[[i]] + below[[i]]
+    for (p in into[[i]]) {
+      if (!is.na(p) && H[[i]] > below[[p]]) {
+        below[[p]] <- H[[i]]
+      }
+    }
+  }
+  readers <- vapply(parents, function(p) any(p %in% input_nodes), logical(1))
+  if (!any(readers)) {
     return(0L)
   }
-  max(vapply(readers, function(m) H[[.key(m)]], integer(1)))
+  max(H[readers])
 }
 
 # Native block for a stage: from the SourceNode if declared, else

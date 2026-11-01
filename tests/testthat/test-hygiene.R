@@ -64,19 +64,22 @@ test_that("gd task bodies report their transients to the deferred pass", {
   fm <- bin("fm.bin", rep(1, 6))
   band <- bin("b.bin", 1:6)
   st$bytes <- 0
-  garry:::.gd_compute_mask(list(
-    fmask_bins = fm, out_bin = file.path(dir, "m.bin"), chain = list(),
-    halo = 0L, ny = 2L, nx = 3L, dev = "cpu", ck = "k-gc-mask"
-  ))
+  garry:::.gd_compute_mask(
+    list(fmask_bins = fm, out_bins = file.path(dir, "m.bin")),
+    list(chain = list(), halo = 0L, ny = 2L, nx = 3L, dev = "cpu", ck = "k-gc-mask")
+  )
   expect_gte(st$bytes, 2 * 6 * 4)
+  expect_false(file.exists(fm))
   st$bytes <- 0
   garry:::.gd_compute_masked_band(
+    list(band_bins = band, rows = NULL, ck = "k-gc-band"),
     list(
-      band_bins = band, affine = list(scale = numeric(0), offset = numeric(0)),
-      rows = NULL, ck = "k-gc-band"
-    ),
-    list(F = NULL, op = "median", nan_rm = TRUE, ny = 2L, nx = 3L, dev = "cpu",
-         mask_bin = character(0))
+      kernels = list(`k-gc-band` = list(
+        F = NULL, op = "median", nan_rm = TRUE, masked = FALSE,
+        affine = list(scale = numeric(0), offset = numeric(0))
+      )),
+      ny = 2L, nx = 3L, dev = "cpu", mask_bins = character(0)
+    )
   )
   expect_gte(st$bytes, 6 * 4)
 })

@@ -626,7 +626,55 @@ SEXP garry_coarsen_into(SEXP dst, SEXP off, SEXP src, SEXP geo, SEXP table) {
   return dst;
 }
 
+/* The same run of bytes from each file, end to end in one raw vector. A cube
+ * read this way is built once, where joining per-file reads holds it twice. */
+SEXP garry_read_rows(SEXP paths, SEXP offset, SEXP bytes) {
+  R_xlen_t n = XLENGTH(paths);
+  double off = Rf_asReal(offset), len = Rf_asReal(bytes);
+  SEXP out = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t) (n * len)));
+  unsigned char *p = RAW(out);
+  for (R_xlen_t i = 0; i < n; i++) {
+    const char *path = R_ExpandFileName(CHAR(STRING_ELT(paths, i)));
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+      Rf_error("cannot open %s", path);
+    }
+    size_t got = 0;
+    if (fseeko(f, (off_t) off, SEEK_SET) == 0) {
+      got = fread(p + (size_t) (i * len), 1, (size_t) len, f);
+    }
+    fclose(f);
+    if (got != (size_t) len) {
+      Rf_error("short read of %s: %.0f of %.0f bytes", path, (double) got, len);
+    }
+  }
+  UNPROTECT(1);
+  return out;
+}
+
+/* A raw cube cut into equal parts, one file each. */
+SEXP garry_write_parts(SEXP raw, SEXP paths) {
+  R_xlen_t n = XLENGTH(paths);
+  size_t each = (size_t) (XLENGTH(raw) / n);
+  const unsigned char *p = RAW(raw);
+  for (R_xlen_t i = 0; i < n; i++) {
+    const char *path = R_ExpandFileName(CHAR(STRING_ELT(paths, i)));
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+      Rf_error("cannot write %s", path);
+    }
+    size_t put = fwrite(p + i * each, 1, each, f);
+    int closed = fclose(f);
+    if (put != each || closed != 0) {
+      Rf_error("short write of %s", path);
+    }
+  }
+  return R_NilValue;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_read_rows", (DL_FUNC) &garry_read_rows, 3},
+  {"garry_write_parts", (DL_FUNC) &garry_write_parts, 2},
   {"garry_coarsen_into", (DL_FUNC) &garry_coarsen_into, 5},
   {"garry_decode_into", (DL_FUNC) &garry_decode_into, 5},
   {"garry_flip_rows", (DL_FUNC) &garry_flip_rows, 3},

@@ -155,6 +155,17 @@
 
 ## Performance
 
+* A masked composite stays inside its RAM budget. Medium HLS median and NDVI,
+  55 dates of 3660 x 3660 under 16 GB, ran out of memory on every run and now
+  finish in 29 to 48 s, same cells, about 1.5 GB under the cap. Three things
+  were outside the budget. The warm-up compiled each kernel by running it
+  on a dummy strip, on every compute daemon at once, and now compiles without
+  running. The mask took the whole QA cube in one task, and now takes a batch of
+  slices to a daemon. Read cubes sat on `/dev/shm` to the end of the run, and now
+  go as their strips land, with later bands waiting for room and strips
+  shrinking when the budget is short. With budget to spare a run opens every band
+  and cuts a strip per daemon as before. Small data gains too: the same median
+  took 7.0 s against 9.0 s.
 * A stack of remote files warped to another grid no longer stops at the
   host to open them. `collect()` opened each file twice, one at a time,
   and built its warped VRT twice. Now a file takes the VRT of the first

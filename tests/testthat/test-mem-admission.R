@@ -174,9 +174,90 @@ test_that("the /dev/shm probes read statvfs as df does", {
   expect_identical(garry:::.garry_shm_used_mb(), 5)
 })
 
-test_that("the pipeline's compute cap follows exec_ram_fraction", {
+test_that("the pipeline's compute cap holds what fits, and at least one", {
+  expect_identical(garry:::.gd_compute_cap(100, 950, 20L), 9L)
+  expect_identical(garry:::.gd_compute_cap(100, 50, 20L), 1L)
+  expect_identical(garry:::.gd_compute_cap(100, 1e6, 20L), 20L)
+  expect_identical(garry:::.gd_compute_cap(100, NA_real_, 20L), 20L)
+})
+
+test_that("a pipeline with budget to spare keeps every band fetching and one strip a daemon", {
+  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1e6)
+  fit <- garry:::.gd_fit(6L, 55L, 3660L, 3660L, TRUE, 6L)
+  expect_identical(fit$strips, 6L)
+  expect_identical(fit$bands, 6L)
+})
+
+test_that("a short budget holds fewer cubes and cuts smaller strips", {
+  # 2811 MB a cube: budget 7 680 MB holds the mask and one band
+  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 12800)
+  withr::local_options(garry.exec_ram_fraction = 0.6)
+  fit <- garry:::.gd_fit(6L, 55L, 3660L, 3660L, TRUE, 6L)
+  expect_identical(fit$bands, 1L)
+  expect_gt(fit$strips, 6L)
+  expect_gte(fit$work_mb, (1 - garry:::.gd_cube_share) * 7680)
+  h <- garry:::.gd_strip_bounds(3660L, fit$strips)[[1L]][[2L]]
+  expect_lte(6 * garry:::.gd_strip_mb(55L, h, 3660L), fit$work_mb * 1.02)
+})
+
+test_that("a budget below one band's cube still opens a band, and says what strips take", {
   testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1000)
-  per_task <- garry:::.gd_strip_mb(4, 100, 100)
-  withr::local_options(garry.exec_ram_fraction = 0.5)
-  expect_identical(garry:::.gd_compute_cap(4, 100, 100, 1e4L), as.integer(floor(500 / per_task)))
+  fit <- garry:::.gd_fit(6L, 55L, 3660L, 3660L, FALSE, 6L)
+  expect_identical(fit$bands, 1L)
+  expect_gt(fit$work_mb, 0)
+})
+
+test_that("an asked strip count stands under a short budget", {
+  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 12800)
+  expect_identical(garry:::.gd_fit(6L, 55L, 3660L, 3660L, TRUE, 6L, strips = 4L)$strips, 4L)
+})
+
+test_that("no reading of RAM leaves the pipeline at full width", {
+  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() NA_real_)
+  fit <- garry:::.gd_fit(6L, 55L, 3660L, 3660L, TRUE, 6L)
+  expect_identical(fit$strips, 6L)
+  expect_identical(fit$bands, 6L)
+  expect_true(is.na(fit$work_mb))
+})
+
+test_that("rows of many files join into one cube, and a cube splits back", {
+  dir <- withr::local_tempdir()
+  paths <- file.path(dir, c("a.bin", "b.bin"))
+  writeBin(as.raw(1:12), paths[[1L]])
+  writeBin(as.raw(101:112), paths[[2L]])
+  got <- .Call("garry_read_rows", paths, 4, 4, PACKAGE = "garry")
+  expect_identical(got, as.raw(c(5:8, 105:108)))
+  out <- file.path(dir, c("c.bin", "d.bin"))
+  .Call("garry_write_parts", got, out, PACKAGE = "garry")
+  expect_identical(readBin(out[[1L]], "raw", 8L), as.raw(5:8))
+  expect_identical(readBin(out[[2L]], "raw", 8L), as.raw(105:108))
+  expect_error(.Call("garry_read_rows", paths, 10, 4, PACKAGE = "garry"), "short read")
+  expect_error(.Call("garry_read_rows", file.path(dir, "no.bin"), 0, 4, PACKAGE = "garry"), "cannot open")
+})
+
+test_that("a program's warm-up compiles a shape no machine could run", {
+  fn <- garry:::.gd_lean_fn(NULL, "median", TRUE, NULL, FALSE)
+  huge <- c(64L, 20000L, 20000L) # 102 GB, far past this suite's memory
+  set <- garry:::.program_set(
+    paste0("k-warm-only-", Sys.getpid()),
+    fn,
+    "f32",
+    list(list(huge), list(c(64L, 19999L, 20000L)))
+  )
+  sp <- list(ck = paste0("k-warm-only-", Sys.getpid()), set = set, dev = "cpu")
+  expect_no_error(garry:::.gd_warm_pipeline(list(sp)))
+})
+
+test_that("a stage's halo is the deepest path from a member that reads an input", {
+  parents <- list(`11` = 10L, `12` = 11L, `13` = c(11L, 10L), `14` = c(12L, 13L))
+  testthat::local_mocked_bindings(
+    graph_get = function(graph, id) id,
+    .node_parents = function(node) parents[[as.character(node)]]
+  )
+  halos <- c(`11` = 1L, `12` = 2L, `13` = 0L, `14` = 1L)
+  expect_identical(garry:::.stage_halo(NULL, 11:14, 10L, halos), 4L)
+  # read further down, the upper members add nothing
+  expect_identical(garry:::.stage_halo(NULL, 12:14, 11L, halos[-1L]), 3L)
+  expect_identical(garry:::.stage_halo(NULL, 11:14, 99L, halos), 0L)
+  expect_identical(garry:::.stage_halo(NULL, 11:14, 10L, halos * 0L), 0L)
 })

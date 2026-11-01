@@ -7,19 +7,20 @@
 .gd_warm_pipeline(specs)
 }
 \arguments{
-\item{specs}{List of kernel specs: \code{ck}, \code{F}, \code{op}, \code{nan_rm},
-\code{affine}, \code{masked}, \code{dev}, \code{n} slice count, \code{hs} strip heights, \code{nx}.}
+\item{specs}{List of kernel specs: \code{ck}, \code{set} the program set or
+\code{NULL}, \code{F}, \code{op}, \code{nan_rm}, \code{affine}, \code{masked}, \code{dev}, \code{n} slice
+count, \code{hs} strip heights, \code{nx}.}
 }
 \value{
 \code{NULL}, invisibly.
 }
 \description{
 Runs on each compute-pool daemon while the read pool owns the fetch
-drain: get-or-create each spec's JitFunction under the same \code{ck} the
-real band tasks use, then execute once per strip height on \code{g_fill}
-dummies (the fill is represented in the program: no host bytes move)
-so the XLA compile never lands on the post-fetch tail. A failure
-raises: the host reports it, and a band task compiles the kernel.
+drain, so the XLA compile never lands on the post-fetch tail. A
+program compiles every strip height and runs nothing. A closure
+compiles only by running, once per strip height on \code{g_fill} dummies,
+each as much memory as a real strip. A failure raises: the host
+reports it, and a band task compiles the kernel.
 }
 \details{
 Internal; daemons reach it through \code{asNamespace("garry")}.
