@@ -38,7 +38,7 @@ The geomedian reference is one run of `run.py ref --size S --variant V`, which s
 
 ## Sweeps
 
-`spec/tasks.json` holds one odc-dask chunk per size and one odc-threads read pool, each swept once and its best kept. Medium has no chunk yet, because its data waits for the final run. `bench` refuses it, unless `--engine-args` passes a `--chunk`, until one is swept at that size on every task and variant:
+`spec/tasks.json` holds one odc-dask chunk per size and one odc-threads read pool, each swept once and its best kept. `bench` refuses a size with no chunk, unless `--engine-args` passes a `--chunk`, until one is swept at that size on every task and variant:
 
     for pass in 1 2; do for c in 1024 2048 4096; do
       uv run python run.py bench --size medium --arms odc-dask --reps 1 --tag chunk=$c --engine-args "--chunk $c" --results sweep.jsonl
@@ -66,7 +66,7 @@ Measured on this suite's small data on 2026-11-01, on a 20-thread workstation. L
 | Choice | Kept | Evidence |
 |---|---|---|
 | Kalman library | simdkalman | 128^2 x 15, 18 % gaps, forced edge pixels, against an 80-bit reference. simdkalman takes NaN as a gap: 8e-8 at most, exact NaN pattern. dynamax 1.0.3 spreads NaN through 97 % of the values of eligible pixels, and reaches 1e-7 only through a hand-built time-varying emission variance. garry's f32 output is 1.9e-6 from the reference. Same Q, R and diffuse start; Q drives t to t+1 on both sides, and year one takes F(kappa I)F' + Q. |
-| odc-dask chunk | 2048 at small, one block per slice. Medium unswept | Wall over the best value, 10 task variants, two passes, cold then warm: 512 1.60, 1.95; 1024 1.10, 1.18; 2048 1.00, 1.00. Warp gains as aligned does: median warm 9.6 to 7.4 s. |
+| odc-dask chunk | 2048 at small, one block per slice, and at medium | Small, wall over the best value, 10 task variants, two passes, cold then warm: 512 1.60, 1.95; 1024 1.10, 1.18; 2048 1.00, 1.00. Warp gains as aligned does: median warm 9.6 to 7.4 s. Medium, 40 phases at the 16 GB cap, phases lost to OOM or to an OOM before them: 1024 21, 2048 9, 4096 21. Geomedian runs out of memory at all three. |
 | odc-threads read pool | 4, on every task | Median, ndvi and geomedian, two passes, cold then warm: 2 reads 1.10, 1.13; 4 1.00, 1.00; 8 1.05, 1.06; 20 1.15, 1.26. |
 | ts_kalman on odc-dask | Reads on threads, kernel in processes, block side from the grid so tasks are at least 4 x workers, the threads arm's count | Wall fell from 4.6 to 2.6-3.3 s, against 2.0-2.5 s on the threads arm. |
 | Dask scheduler | Threads, as the brief fixes | LocalCluster 5 x 4, best runs (probe). Warp warm: median 6.6 against 7.3 s, ndvi 4.5 against 5.8 s. Warp first run: 24 against 15 s, 23 against 14 s. Aligned warm: 5.1 against 3.0 s, 3.1 against 2.5 s. geomedian cannot run there: `yxbt_sink`'s token refuses to pickle. |

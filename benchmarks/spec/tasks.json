@@ -4,7 +4,7 @@
   "primary_arm": "odc-dask",
   "arms": {
     "garry": {"cmd": ["Rscript", "engines/garry.R"], "route_check": true},
-    "odc-dask": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-dask"], "chunk": {"small": 2048}, "env": {"GDAL_CACHEMAX": "256"}},
+    "odc-dask": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-dask"], "chunk": {"small": 2048, "medium": 2048}, "env": {"GDAL_CACHEMAX": "256"}},
     "odc-threads": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-threads"], "read_pool": 4, "env": {"GDAL_CACHEMAX": "256"}},
     "cubed": {"cmd": ["{python}", "engines/cubed.py"], "track": "memory", "dataset": "hls-zarr", "only_variant": "aligned"},
     "terra": {"cmd": ["Rscript", "engines/terra.R"]}
