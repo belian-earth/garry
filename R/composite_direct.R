@@ -1003,6 +1003,7 @@ NULL
         shape_sets(u),
         spec$band_srcs[[units[[u]][[1L]]]][[1L]]
       )
+      sp[c("F", "reduce")] <- NULL # a daemon runs the program, so they stay here
     }
     sp
   })

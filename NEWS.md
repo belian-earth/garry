@@ -244,8 +244,11 @@
   program where the task overhead saved beats the compile. A fixture of
   hutan's SI tail, 3,225 tasks, went from 34.6 s cold and 44.7 s warm,
   peaking at 7,117 MB, to 18.1 s and 11.9 s at 5,360 MB, with every
-  output hash matching. The GPU device and the composite and reduce
-  routes keep closures. `garry.kernel_wire = "closure"` and
+  output hash matching. The composite and reduce routes send programs
+  to their daemons too, so a kernel there that cannot be traced fails on
+  the host at run start. The GPU device keeps closures, and so do the
+  kernels the host runs itself, which cross nothing.
+  `garry.kernel_wire = "closure"`, on these routes too, and
   `garry.stage_merge = "guarded"` are the switches back. A kernel that
   meets inputs its plan did not list fails with a
   `garry_no_program_error`.

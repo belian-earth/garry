@@ -7,9 +7,9 @@
 .gd_warm_pipeline(specs)
 }
 \arguments{
-\item{specs}{List of kernel specs: \code{ck}, \code{set} the program set or
-\code{NULL}, \code{F}, \code{op}, \code{nan_rm}, \code{affine}, \code{masked}, \code{dev}, \code{n} slice
-count, \code{hs} strip heights, \code{nx}.}
+\item{specs}{List of kernel specs: \code{ck}, \code{set} the program set, or
+\code{F} and \code{reduce} for a closure, \code{op}, \code{nan_rm}, \code{affine}, \code{masked},
+\code{dev}, \code{n} slice count, \code{hs} strip heights, \code{nx}.}
 }
 \value{
 \code{NULL}, invisibly.

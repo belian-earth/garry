@@ -944,9 +944,9 @@ NULL
 #' reports it, and a band task compiles the kernel.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
-#' @param specs List of kernel specs: `ck`, `set` the program set or
-#'   `NULL`, `F`, `op`, `nan_rm`, `affine`, `masked`, `dev`, `n` slice
-#'   count, `hs` strip heights, `nx`.
+#' @param specs List of kernel specs: `ck`, `set` the program set, or
+#'   `F` and `reduce` for a closure, `op`, `nan_rm`, `affine`, `masked`,
+#'   `dev`, `n` slice count, `hs` strip heights, `nx`.
 #' @return `NULL`, invisibly.
 #' @keywords internal
 .gd_warm_pipeline <- function(specs) {

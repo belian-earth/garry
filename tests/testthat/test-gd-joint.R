@@ -139,6 +139,41 @@ local({
     runs(whole / 2, NA_real_, 16L)
   })
 
+  test_that("no closure crosses to a daemon beside its program", {
+    frame <- function() {
+      held <- runif(1e6)
+      reduce <- geomedian(4L)
+      keep <- function(x) if (length(held)) x else x
+      structure(function(x, dims) keep(reduce(x, dims)), joint_cubes = 12)
+    }
+    x <- reduce_over(.gj_cube(), frame(), over = "t")
+    sent <- list()
+    real <- garry:::.task_launch
+    testthat::local_mocked_bindings(
+      .task_launch = function(.tl, .key, .expr, ...) {
+        a <- list(...)
+        sent <<- c(sent, a[intersect(names(a), c("kb", "km", "sp"))])
+        real(.tl, .key, .expr, ...)
+      },
+      .package = "garry"
+    )
+    got <- collect(x, distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    expect_setequal(names(sent), c("kb", "km", "sp"))
+    for (nm in names(sent)) {
+      expect_lt(length(serialize(sent[[nm]], NULL)), 1e6)
+    }
+    kernels <- c(sent$sp, sent$kb$kernels)
+    expect_true(all(vapply(kernels, function(k) inherits(k$set, "garry_programs"), TRUE)))
+    expect_false(any(vapply(unlist(kernels, recursive = FALSE), is.function, TRUE)))
+    # a closure wire still sends what a daemon has to trace
+    sent <- list()
+    withr::local_options(garry.kernel_wire = "closure")
+    expect_identical(collect(x, distributed = TRUE), got)
+    expect_true(is.function(sent$kb$kernels[[1L]]$reduce))
+    expect_true(is.function(sent$kb$kernels[[1L]]$F))
+  })
+
   test_that("an unmasked cube reduces jointly too", {
     x <- .gg_unmasked_cube()
     r <- reduce_over(x, geomedian(4L), over = "t")
