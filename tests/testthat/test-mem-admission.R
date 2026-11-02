@@ -110,11 +110,13 @@ test_that("cgroup headroom: a namespaced container reads its limit at the root",
   mb <- 2^20
   writeLines(as.character(240000 * mb), file.path(root, "memory.max"))
   writeLines(as.character(100000 * mb), file.path(root, "memory.current"))
-  writeLines(c("anon 1", paste("inactive_file", 20000 * mb)), file.path(root, "memory.stat"))
+  writeLines(c("anon 1", paste("inactive_file", 20000 * mb), paste("active_file", 3000 * mb)),
+             file.path(root, "memory.stat"))
   expect_equal(.garry_cgroup_avail_mb(root, self), 160000)
   cg <- garry:::.garry_cgroup_mem(root, self)
   expect_equal(cg$current, 100000)
   expect_equal(cg$limit, 240000)
+  expect_equal(cg$active_file, 3000)
   # a host's root cgroup has no limit files: still NA there
   unlink(file.path(root, c("memory.max", "memory.current")))
   expect_true(is.na(.garry_cgroup_avail_mb(root, self)))

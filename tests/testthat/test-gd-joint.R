@@ -106,10 +106,10 @@ local({
     x <- reduce_over(.gj_cube(), geomedian(4L), over = "t")
     want <- collect(x, distributed = TRUE)
     whole <- garry:::.gd_block_mb(.cd_spec(collect(x, plan_only = TRUE)), 40L, 40L)
-    room <- function(shm, cgroup, rows, env = parent.frame()) {
+    room <- function(shm, cgroup, rows, env = parent.frame(), active = 0) {
       testthat::local_mocked_bindings(
         .garry_shm_free_mb = function() shm,
-        .garry_cgroup_avail_mb = function() cgroup,
+        .garry_cgroup_mem = function(...) list(avail = cgroup, active_file = active),
         .gd_block_rows = function(spec) rows,
         .package = "garry",
         .env = env
@@ -130,6 +130,9 @@ local({
     expect_s3_class(err, "garry_error")
     # a cgroup pays for tmpfs however large the mount
     stops(1e6, whole / 2)
+    # active page cache gives way to tmpfs, so it does not stop a block that fits
+    room(1e6, whole / 2, 40L, active = whole / 2)
+    expect_null(garry:::.gd_block_check(.cd_spec(collect(x, plan_only = TRUE)), 40L, 40L))
     runs(whole, NA_real_)
     runs(1e6, whole)
     # with no tmpfs nothing is pinned on it

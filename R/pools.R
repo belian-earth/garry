@@ -79,12 +79,13 @@ NULL
     f <- c(
       "memory.limit_in_bytes",
       "memory.usage_in_bytes",
-      "total_inactive_file"
+      "total_inactive_file",
+      "total_active_file"
     )
   } else if (!is.na(v2)) {
     rel <- sub("^0::", "", v2)
     base <- root
-    f <- c("memory.max", "memory.current", "inactive_file")
+    f <- c("memory.max", "memory.current", "inactive_file", "active_file")
   } else {
     return(NULL)
   }
@@ -99,12 +100,12 @@ NULL
     v <- .cgroup_lines(p, 1L)
     if (identical(v, "max")) Inf else .cgroup_number(v, p)
   }
-  inactive_file <- function(dir) {
+  stat1 <- function(dir, name) {
     p <- file.path(dir, "memory.stat")
     if (!file.exists(p)) {
       return(0)
     }
-    key <- paste0("^", f[[3L]], " ")
+    key <- paste0("^", name, " ")
     v <- sub(key, "", grep(key, .cgroup_lines(p), value = TRUE))
     if (length(v)) .cgroup_number(v[[1L]], p) else 0
   }
@@ -123,9 +124,14 @@ NULL
     if (is.na(mx) || is.na(cur) || mx >= 2^60) {
       next
     }
-    avail <- max(0, (mx - cur + inactive_file(dir)) / 2^20)
+    avail <- max(0, (mx - cur + stat1(dir, f[[3L]])) / 2^20)
     if (is.null(best) || avail < best$avail) {
-      best <- list(avail = avail, current = cur / 2^20, limit = mx / 2^20)
+      best <- list(
+        avail = avail,
+        current = cur / 2^20,
+        limit = mx / 2^20,
+        active_file = stat1(dir, f[[4L]]) / 2^20
+      )
     }
   }
   best

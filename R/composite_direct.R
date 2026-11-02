@@ -1275,15 +1275,18 @@ NULL
 
 # A block's cubes are on tmpfs together until its strips land, so one that tmpfs
 # cannot hold is known here, ahead of its first fetch, and not as a short write
-# or a cgroup kill partway through. What tmpfs can take is as in .store_budget().
-# This reads live space, as .gd_block_rows() must not: it moves no window. With
-# no /dev/shm the cubes are on disk, which this does not bound.
+# or a cgroup kill partway through. What tmpfs can take is as in .store_budget(),
+# which throttles and can afford to leave active page cache out. This stops the
+# run, so it counts that cache too: the kernel gives it up when tmpfs grows. This
+# reads live space, as .gd_block_rows() must not: it moves no window. With no
+# /dev/shm the cubes are on disk, which this does not bound.
 .gd_block_check <- function(spec, rows, mask_rows) {
   free <- .garry_shm_free_mb()
   if (is.na(free)) {
     return(invisible(NULL))
   }
-  free <- min(free, .garry_cgroup_avail_mb(), na.rm = TRUE)
+  cg <- .garry_cgroup_mem()
+  free <- min(free, cg$avail + cg$active_file, na.rm = TRUE)
   need <- .gd_block_mb(spec, rows, mask_rows)
   if (need > free) {
     need <- round(need)
