@@ -969,27 +969,54 @@ NULL
 }
 
 # Rows `[y0, y0 + h)` of every slice file, as one row-major f32 cube on the
-# device.
+# device. On the CPU the read goes into C memory that the array adopts: XLA reads
+# those bytes in place, and .gd_drop_inputs() gives them back with no gc. A CUDA
+# device holds its own copy, so a read stays an R vector there.
 .gd_upload_rows <- function(bins, y0, h, nx, dev) {
-  bytes <- .Call(
-    "garry_read_rows",
-    bins,
-    as.numeric(y0) * nx * 4,
-    as.numeric(h) * nx * 4,
-    PACKAGE = "garry"
-  )
+  offset <- as.numeric(y0) * nx * 4
+  len <- as.numeric(h) * nx * 4
+  dim <- c(length(bins), h, nx)
+  if (is.null(dev)) {
+    mem <- .Call(
+      "garry_read_rows_aligned",
+      bins,
+      offset,
+      len,
+      PACKAGE = "garry"
+    )
+    release <- .Call("garry_mem_release", PACKAGE = "garry")
+    a <- g_adopt_raw(mem, length(bins) * len, release, "f32", dim)
+    .gd_inputs$live <- c(.gd_inputs$live, list(a))
+    return(a)
+  }
+  bytes <- .Call("garry_read_rows", bins, offset, len, PACKAGE = "garry")
   n <- length(bytes)
-  a <- g_upload_raw(bytes, "f32", c(length(bins), h, nx), device = dev)
+  a <- g_upload_raw(bytes, "f32", dim, device = dev)
   rm(bytes)
   .gd_drop_reads(n)
   a
 }
 
-# Hold a daemon's uploaded reads under .daemon_gc_budget_mb. A read is as big as
-# the buffer that replaced it, and by now it has survived a collection, so only
-# a full pass frees it, 68 ms on a daemon. That is nothing against a big read's
-# kernel, but a joint strip uploads one small read per band: those wait until
-# they add up, and its `joint_cubes` count them.
+# The running task's adopted inputs. A daemon runs one task at a time.
+.gd_inputs <- new.env(parent = emptyenv())
+
+# A task's exit, however it ends: an error in a read or a kernel frees what was
+# read before it. Only the storage goes here: each handle still closes through
+# its finalizer.
+.gd_drop_inputs <- function() {
+  live <- .gd_inputs$live
+  .gd_inputs$live <- NULL
+  for (a in live) {
+    g_delete(a)
+  }
+  invisible(NULL)
+}
+
+# Hold a daemon's reads for a CUDA device under .daemon_gc_budget_mb. A read is as
+# big as the buffer that replaced it, and by now it has survived a collection, so
+# only a full pass frees it, 68 ms on a daemon. That is nothing against a big
+# read's kernel, but a joint strip uploads one small read per band: those wait
+# until they add up, and its `joint_cubes` count them.
 .gd_drop_reads <- function(bytes) {
   acc <- (.daemon_gc_state$reads %||% 0) + bytes
   if (acc >= .daemon_gc_budget_mb * 2^20) {
@@ -1019,6 +1046,7 @@ NULL
 #'   a program set, or `chain` and `halo` for a closure.
 #' @keywords internal
 .gd_compute_mask <- function(job, k) {
+  on.exit(.gd_drop_inputs(), add = TRUE)
   dev <- .exec_device(k$dev)
   fm <- .gd_upload_rows(job$fmask_bins, 0L, k$ny, k$nx, dev)
   jf <- .daemon_kernel(k$ck, k$kernel %||% .gd_mask_fn(k$chain, k$halo), dev)
@@ -1026,7 +1054,8 @@ NULL
   rm(fm)
   .Call("garry_write_parts", r, job$out_bins, PACKAGE = "garry")
   unlink(job$free)
-  bytes <- 2 * .payload_bytes(r) # the fmask batch read, and the mask written
+  # counted: the mask written, and on a device the fmask batch read
+  bytes <- (1 + !is.null(dev)) * .payload_bytes(r)
   rm(r)
   .daemon_gc_after(bytes)
   invisible(TRUE)
@@ -1051,6 +1080,7 @@ NULL
 #' @keywords internal
 .gd_compute_masked_band <- function(job, k) {
   t0 <- proc.time()[["elapsed"]]
+  on.exit(.gd_drop_inputs(), add = TRUE)
   dev <- .exec_device(k$dev)
   n <- length(job$cubes[[1L]])
   nx <- k$nx
@@ -1066,8 +1096,12 @@ NULL
   out <- g_download_raw(jf(inputs)[[1L]])
   attr(out, "gd_t") <- proc.time()[["elapsed"]] - t0
   attr(out, "gd_jit") <- (.kernel_stats$creates %||% 0L) - created0
-  # the strip's cubes, read here and held on the device
-  bytes <- length(inputs) * 4 * as.numeric(n) * h * nx
+  # counted: on the CPU the output; on a device the strip's cubes
+  bytes <- if (is.null(dev)) {
+    length(out)
+  } else {
+    length(inputs) * 4 * as.numeric(n) * h * nx
+  }
   rm(inputs)
   .daemon_gc_after(bytes)
   out
