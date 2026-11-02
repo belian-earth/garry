@@ -57,6 +57,151 @@ test_that("a failed slice warp names its source and leaves no slice", {
   expect_false(file.exists(bin))
 })
 
+test_that("an aligned slice translates to the plane a warp leaves", {
+  tif <- function(dtype, values, nodata = NULL) {
+    f <- withr::local_tempfile(fileext = ".tif", .local_envir = parent.frame(2))
+    ds <- gdalraster::create("GTiff", f, 40L, 30L, 1L, dtype, return_obj = TRUE)
+    ds$setGeoTransform(c(500000, 30, 0, 5000000, 0, -30))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+    if (!is.null(nodata)) ds$setNoDataValue(1L, nodata)
+    ds$write(1L, 0L, 0L, 40L, 30L, values)
+    ds$close()
+    f
+  }
+  plane <- function(bin, n) readBin(bin, "numeric", n = n, size = 4)
+  grid <- function(f, y0, rows, x0 = 0L, nx = 40L) {
+    g <- lazy_source(f)@grid
+    g <- grid_spec(
+      g@crs,
+      extent = c(500000 + x0 * 30, 5000000 - (y0 + rows) * 30, 500000 + (x0 + nx) * 30, 5000000 - y0 * 30),
+      dims = c(nx, rows),
+      dtype = "f32"
+    )
+    .gd_rows_K(g, 0L, rows)
+  }
+  both <- function(f, k, resampling, nodata = numeric(0)) {
+    bin <- withr::local_tempfile(fileext = ".bin", .local_envir = parent.frame())
+    j <- list(locs = f, dt = 1, band = 1L, nodata = nodata, resampling = resampling, bin = bin)
+    expect_true(gdal_translate_plane(f, 1L, k$grid, resampling, nodata, bin))
+    expect_identical(list.files(dirname(bin), basename(sub("\\.bin$", "", bin))), basename(bin))
+    read <- plane(bin, k$nx * k$ny)
+    testthat::local_mocked_bindings(gdal_translate_plane = function(...) FALSE)
+    .cd_fetch_warp(j, k)
+    expect_identical(read, plane(bin, k$nx * k$ny))
+  }
+  v <- ((seq_len(1200) * 37L) %% 2000L) - 500L
+  v[seq(1, 1200, by = 7)] <- -9999L
+  i16 <- tif("Int16", v, -9999)
+  for (r in c("near", "bilinear", "cubic")) {
+    both(i16, grid(i16, 0L, 30L), r)
+    both(i16, grid(i16, 0L, 30L), r, -9999)
+  }
+  # a block of rows, and a crop, read their own window
+  both(i16, grid(i16, 12L, 9L), "bilinear", -9999)
+  both(i16, grid(i16, 5L, 20L, 7L, 25L), "bilinear", -9999)
+  # no sentinel at all, on floats with NaN in them
+  w <- as.numeric(seq_len(1200)) / 3
+  w[c(5, 80, 900)] <- NaN
+  both(tif("Float32", w), grid(i16, 0L, 30L), "bilinear")
+
+  bin <- withr::local_tempfile(fileext = ".bin")
+  k <- grid(i16, 0L, 30L)
+  # kernels that move cells on a file's own pixels are the warper's
+  expect_false(gdal_translate_plane(i16, 1L, k$grid, "cubicspline", -9999, bin))
+  expect_false(gdal_translate_plane(i16, 1L, k$grid, "rms", -9999, bin))
+  # so is a float sentinel, which the warper masks within a tolerance
+  w2 <- as.numeric(seq_len(1200))
+  w2[3] <- -9999
+  float_nd <- tif("Float32", w2, -9999)
+  expect_false(gdal_translate_plane(float_nd, 1L, k$grid, "near", numeric(0), bin))
+  expect_false(gdal_translate_plane(float_nd, 1L, k$grid, "near", -9999, bin))
+  # a decimating target, and rows stored from the south
+  coarse <- grid_spec(k$grid@crs, extent = c(500000, 4999100, 501200, 5000000), dims = c(20L, 15L), dtype = "f32")
+  expect_false(gdal_translate_plane(i16, 1L, coarse, "near", -9999, bin))
+  up <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", up, 40L, 30L, 1L, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 4999100, 0, 30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+  ds$write(1L, 0L, 0L, 40L, 30L, v)
+  ds$close()
+  expect_false(gdal_translate_plane(up, 1L, k$grid, "near", numeric(0), bin))
+  # an unaligned target, and a window past the file, are the warper's
+  shifted <- grid_spec(k$grid@crs, extent = c(500010, 4999100, 501210, 5000000), dims = c(40L, 30L), dtype = "f32")
+  expect_false(gdal_translate_plane(i16, 1L, shifted, "bilinear", -9999, bin))
+  past <- grid_spec(k$grid@crs, extent = c(500000, 4999100, 501500, 5000000), dims = c(50L, 30L), dtype = "f32")
+  expect_false(gdal_translate_plane(i16, 1L, past, "bilinear", -9999, bin))
+  # a sentinel the file does not share is the warper's too: it masks only the node's
+  expect_false(gdal_translate_plane(i16, 1L, k$grid, "bilinear", -1, bin))
+  expect_false(file.exists(bin))
+
+  # a real one-item job that cannot be read names its source and leaves nothing
+  withr::local_options(garry.read_retry = 0L)
+  ghost <- "/nonexistent/ghost.tif"
+  job <- list(locs = ghost, dt = 1, band = 1L, nodata = -9999, resampling = "near", bin = bin)
+  err <- expect_error(suppressMessages(.cd_fetch_warp(job, k)), class = "garry_read_error")
+  expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
+  expect_false(file.exists(bin))
+  # a translate that stops part way leaves no plane and no sidecars
+  testthat::local_mocked_bindings(gdal_translate_file = function(src, dst, cl) {
+    writeBin(raw(100), dst)
+    writeLines("ENVI", sub("\\.bin$", ".hdr", dst))
+    stop("GDAL Error 1: read failed")
+  })
+  expect_error(suppressMessages(gdal_translate_plane(i16, 1L, k$grid, "near", -9999, bin)), class = "garry_read_error")
+  expect_identical(list.files(dirname(bin), basename(sub("\\.bin$", "", bin))), character(0))
+  # the source's handle goes with the fetch, and its blocks with it
+  expect_false(any(grepl(basename(i16), names(.gdal_cache$handles), fixed = TRUE)))
+})
+
+local({
+  local_pools(2, 1, gdal_config = TRUE)
+
+  test_that("a daemon translates an aligned slice under its own GDAL config", {
+    f <- withr::local_tempfile(fileext = ".tif")
+    ds <- gdalraster::create("GTiff", f, 40L, 30L, 1L, "Int16", return_obj = TRUE)
+    ds$setGeoTransform(c(500000, 30, 0, 5000000, 0, -30))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+    ds$setNoDataValue(1L, -9999)
+    v <- (seq_len(1200) %% 500L) - 250L
+    v[seq(1, 1200, by = 9)] <- -9999L
+    ds$write(1L, 0L, 0L, 40L, 30L, v)
+    ds$close()
+    bin <- withr::local_tempfile(fileext = ".bin")
+    fetch <- function(j, k) {
+      mirai::collect_mirai(mirai::mirai(
+        {
+          res <- asNamespace("garry")$.cd_fetch_warp(j, k)
+          res$listing <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
+          res
+        },
+        j = j, k = k, .compute = "garry_read"
+      ))
+    }
+    g <- lazy_source(f)@grid
+    k <- .gd_rows_K(g, 0L, 30L)
+    j <- list(locs = f, dt = 1, band = 1L, nodata = -9999, resampling = "bilinear", bin = bin)
+    res <- fetch(j, k)
+    expect_identical(res$how, "translate")
+    # the config a daemon's later opens rely on comes back
+    expect_identical(res$listing, "EMPTY_DIR")
+    want <- as.numeric(matrix(v, 40L, 30L))
+    want[want == -9999] <- NaN
+    expect_identical(readBin(bin, "numeric", n = 1200L, size = 4), want)
+
+    # half a pixel off, the same slice warps, on the same daemon config
+    off <- grid_spec(g@crs, extent = g@extent + c(15, 0, 15, 0), dims = c(40L, 30L), dtype = "f32")
+    res <- fetch(j, .gd_rows_K(off, 0L, 30L))
+    expect_identical(res$how, "warp")
+    warped <- readBin(bin, "numeric", n = 1200L, size = 4)
+    testthat::local_mocked_bindings(gdal_translate_plane = function(...) FALSE)
+    .cd_fetch_warp(j, .gd_rows_K(off, 0L, 30L))
+    expect_identical(readBin(bin, "numeric", n = 1200L, size = 4), warped)
+    # and so do two items, even on the grid's own pixels
+    res <- fetch(modifyList(j, list(locs = c(f, f), dt = 1:2)), k)
+    expect_identical(res$how, "warp")
+  })
+})
+
 test_that("a composite warps onto the declared grid, to the last digit", {
   gti <- .gg_gti(list(s1 = .gg_val(0)))
   p <- plan_lazy(.gg_slice(gti, "s1", graph_new()))

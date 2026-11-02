@@ -1057,20 +1057,24 @@ NULL
   out
 }
 
-# One source's warp-on-read, run in a daemon: warp this slice's REMOTE item
-# window(s) straight into a raw f32 buffer via MEM:::DATAPOINTER in one
-# gdalwarp -- GDAL reads (windowed vsicurl), reprojects and mosaics the sources
-# itself, writing f32 into memory we hold (no R double, no tmpfs GTiff, no
-# local index). Writes the payload to `bin`.
-# `j` carries only this slice's varying data (locs, dt, nodata, bin); `k` is
+# One source's read-on-fetch, run in a daemon. One item on the grid's own pixels
+# translates straight to `bin`. Anything else warps its REMOTE item window(s)
+# into a raw f32 buffer via MEM:::DATAPOINTER in one gdalwarp -- GDAL reads
+# (windowed vsicurl), reprojects and mosaics the sources itself, writing f32
+# into memory we hold (no R double, no tmpfs GTiff, no local index) -- and
+# writes the payload to `bin`.
+# `j` carries only this slice's varying data (locs, dt, band, nodata, resampling, bin); `k` is
 # the grid-constant bundle passed once via mirai `.args` (embedding it in every
 # task instead throttles the dispatcher and starves the daemon pool).
-#' Daemon task body: warp one slice's remote items into an f32 buffer.
+#' Daemon task body: bring one slice's items to an f32 plane file.
+#'
+#' One item on the grid's own pixels is translated; anything else warps
+#' into an f32 buffer.
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
-#' @param j Per-slice job (locs/dt/nodata/resampling/bin).
-#' @param k Grid-constant bundle (nx/ny/gtstr/wkt).
-#' @return List with `tw` (warp seconds).
+#' @param j Per-slice job (locs/dt/band/nodata/resampling/bin).
+#' @param k Grid-constant bundle (nx/ny/grid/gtstr/wkt).
+#' @return List with `tw` (read seconds) and `how`, `"translate"` or `"warp"`.
 #' @keywords internal
 .cd_fetch_warp <- function(j, k) {
   nx <- k$nx
@@ -1084,6 +1088,14 @@ NULL
       class = c("garry_read_error", "garry_error")
     )
   }
+  t0 <- proc.time()[["elapsed"]]
+  # One item on the grid's own pixels needs no warp.
+  if (
+    length(j$locs) == 1L &&
+      gdal_translate_plane(j$locs, j$band, k$grid, j$resampling, j$nodata, j$bin)
+  ) {
+    return(list(tw = proc.time()[["elapsed"]] - t0, how = "translate"))
+  }
   plane <- .Call("garry_plane_new", as.numeric(nx) * ny, PACKAGE = "garry")
   # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
   # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
@@ -1091,7 +1103,6 @@ NULL
   # per-slice local index. Ordered by datetime so overlap resolution (last
   # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
   # system.time() would run a full gc() first, on every fetch.
-  t0 <- proc.time()[["elapsed"]]
   .gdal_with_retry(
     function() {
       gdal_warp_to_buffer(
@@ -1112,5 +1123,5 @@ NULL
   tw <- proc.time()[["elapsed"]] - t0
   .Call("garry_plane_write", plane, j$bin, PACKAGE = "garry")
   .daemon_gc_after(4 * as.numeric(nx) * ny)
-  list(tw = tw)
+  list(tw = tw, how = "warp")
 }

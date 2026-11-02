@@ -9,7 +9,8 @@ NULL
 # stage that masks per slice and reduces over time -- the staged scheduler's
 # read -> R -> store -> per-chunk-upload -> per-slice fused kernel is pure
 # overhead. This path instead warps each slice's f32 pixels DIRECTLY into a
-# device-bound buffer (gdalraster MEM:::DATAPOINTER, no R double carrier),
+# device-bound buffer (gdalraster MEM:::DATAPOINTER, no R double carrier), or
+# translates a slice already on the grid's own pixels (.cd_fetch_warp()),
 # assembles two contiguous (T, ny, nx) cubes (band + mask), and runs ONE lean
 # kernel: mask = M(fmask_cube); reduce(F(band_cube, mask)). M/F and the reduce
 # op are lifted straight from the plan's IR, so the maths is garry's own.
@@ -590,9 +591,17 @@ NULL
 .gd_rows_K <- function(grid, y0, rows) {
   gt <- grid@transform
   gt[c(1L, 4L)] <- gt[c(1L, 4L)] + y0 * gt[c(3L, 6L)]
+  nx <- grid@dims[["x"]]
   list(
-    nx = grid@dims[["x"]],
+    nx = nx,
     ny = rows,
+    grid = GridSpec(
+      crs = grid@crs,
+      transform = gt,
+      extent = c(gt[[1L]], gt[[4L]] + rows * gt[[6L]], gt[[1L]] + nx * gt[[2L]], gt[[4L]]),
+      dims = c(x = nx, y = as.integer(rows)),
+      dtype = grid@dtype
+    ),
     gtstr = paste(.gdal_num(gt), collapse = "/"),
     wkt = gdalraster::srs_to_wkt(grid@crs)
   )

@@ -2,19 +2,23 @@
 % Please edit documentation in R/daemon.R
 \name{.cd_fetch_warp}
 \alias{.cd_fetch_warp}
-\title{Daemon task body: warp one slice's remote items into an f32 buffer.}
+\title{Daemon task body: bring one slice's items to an f32 plane file.}
 \usage{
 .cd_fetch_warp(j, k)
 }
 \arguments{
-\item{j}{Per-slice job (locs/dt/nodata/resampling/bin).}
+\item{j}{Per-slice job (locs/dt/band/nodata/resampling/bin).}
 
-\item{k}{Grid-constant bundle (nx/ny/gtstr/wkt).}
+\item{k}{Grid-constant bundle (nx/ny/grid/gtstr/wkt).}
 }
 \value{
-List with \code{tw} (warp seconds).
+List with \code{tw} (read seconds) and \code{how}, \code{"translate"} or \code{"warp"}.
 }
 \description{
+One item on the grid's own pixels is translated; anything else warps
+into an f32 buffer.
+}
+\details{
 Internal; daemons reach it through \code{asNamespace("garry")}.
 }
 \keyword{internal}

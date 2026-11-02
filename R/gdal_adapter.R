@@ -603,6 +603,11 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   rms = "RMS"
 )
 
+# The kernels that return a source's cell on its own pixels. cubicspline
+# smooths there and rms takes the absolute value, unless the warper happens
+# to swap them for nearest: it does only on an exact north-up translation.
+.rio_cell_kernels <- c("BILINEAR", "CUBIC", "LANCZOS", "AVERAGE", "MODE")
+
 # Round-trip tolerance in PIXEL units when testing grid alignment. At a
 # 30 m pixel this is 3e-5 m: tight enough that only genuinely aligned
 # grids pass, and a false negative merely keeps the warper.
@@ -636,8 +641,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #' (new NEON float->int conversion paths) RasterIO and the warper round
 #' .5 ties in opposite directions -- every tie came back +1 DN through
 #' the fast path on the macOS CI runners. Identity is the contract, so
-#' integer bands take the fast path only for NEAREST, where no rounding
-#' happens.
+#' integer bands take the fast path only where no rounding happens: for
+#' NEAREST, and for a kernel that returns the source cell on the source's
+#' own pixels (`.rio_cell_kernels`).
 #'
 #' A south-up source (positive y pixel size: every AEF tile) stores its
 #' rows from the south. A target on its own pixels is still a window of
@@ -655,8 +661,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   (GTI and other option-driven sources are left alone in v1).
 #' @param band 1-based band index (or indices) the read will use. Their
 #'   data types drive the integer gate above.
-#' @param nodata The source node's sentinel (length 0 or 1). Averaging
-#'   declines unless the file declares the same value.
+#' @param nodata The source node's sentinel (length 0 or 1). A resampling
+#'   read declines unless the file declares the same value; on the
+#'   source's own pixels, unless the file declares none.
 #' @param decode `TRUE` for the codes behind a decoded source
 #'   (`.gdal_read_decoded()`): integer bands qualify for `"near"` and
 #'   `"average"`, the two reads that decode applies itself, and no others.
@@ -696,11 +703,15 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     return(NULL)
   }
   # What the source node's grid already says needs no open of the file.
-  # An interpolating read of integer bands stays with the warper below.
+  # An interpolating read of integer bands stays with the warper below,
+  # unless its kernel returns the source's cells.
+  interp <- resamp != "NEAREST" && !decode
   if (
     !is.null(src_grid) &&
       (!.grid_could_align(src_grid, target_grid) ||
-        (resamp != "NEAREST" && !decode && .dtype_family(src_grid@dtype) != "float"))
+        (interp &&
+          .dtype_family(src_grid@dtype) != "float" &&
+          !(resamp %in% .rio_cell_kernels && .grid_same_pixels(src_grid, target_grid))))
   ) {
     return(NULL)
   }
@@ -711,20 +722,6 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     mf <- ds$getMaskFlags(b)
     if (isTRUE(mf$PER_DATASET) || isTRUE(mf$ALPHA)) {
       return(NULL)
-    }
-  }
-  if (resamp != "NEAREST" && !decode) {
-    for (b in band) {
-      if (!startsWith(ds$getDataTypeName(b), "Float")) {
-        return(NULL)
-      }
-      # RasterIO averaging skips only the file's own nodata; a sentinel the
-      # node declares otherwise would be blended in, so leave it to the warper.
-      if (length(nodata) == 1L) {
-        if (!identical(as.numeric(ds$getNoDataValue(b)), as.numeric(nodata))) {
-          return(NULL)
-        }
-      }
     }
   }
   gt <- ds$getGeoTransform()
@@ -739,21 +736,10 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   flip <- gt[[6L]] > 0
   res_y <- abs(gt[[6L]])
   north <- if (flip) gt[[4L]] + ds$getRasterYSize() * res_y else gt[[4L]]
-  if ((partial || flip) && length(nodata) == 1L) {
-    # the warper takes the node's sentinel alone; a plain read also masks
-    # the file's own, so a file whose own differs keeps the warper
-    for (b in band) {
-      file_nd <- ds$getNoDataValue(b)
-      if (
-        !is.na(file_nd) && !identical(as.numeric(file_nd), as.numeric(nodata))
-      ) {
-        return(NULL)
-      }
-    }
-  }
   # A CRS that differs only by its false origin is the source's shifted:
   # the target's origin moves into source coordinates and the rest holds
-  shift <- .crs_false_origin_shift(ds$getProjectionRef(), target_grid@crs)
+  src_crs <- ds$getProjectionRef()
+  shift <- if (nzchar(src_crs)) .crs_false_origin_shift(src_crs, target_grid@crs)
   if (is.null(shift)) {
     return(NULL)
   }
@@ -775,6 +761,38 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   y_off <- round(y_off)
   if (fx < 1 || fy < 1) {
     return(NULL)
+  }
+  # On the source's own pixels most kernels return the source cell, so such
+  # a read is a plain one, whatever the band's type. The rest are the warper's.
+  on_pixels <- fx == 1 && fy == 1 && all(shift == 0)
+  if (interp && on_pixels && !resamp %in% .rio_cell_kernels) {
+    return(NULL)
+  }
+  if (interp && !on_pixels) {
+    for (b in band) {
+      if (!startsWith(ds$getDataTypeName(b), "Float")) {
+        return(NULL)
+      }
+      # RasterIO averaging skips only the file's own nodata; a sentinel the
+      # node declares otherwise would be blended in, so leave it to the warper.
+      if (length(nodata) == 1L) {
+        if (!identical(as.numeric(ds$getNoDataValue(b)), as.numeric(nodata))) {
+          return(NULL)
+        }
+      }
+    }
+  }
+  if ((partial || flip || (interp && on_pixels)) && length(nodata) == 1L) {
+    # the warper takes the node's sentinel alone; a plain read also masks
+    # the file's own, so a file whose own differs keeps the warper
+    for (b in band) {
+      file_nd <- ds$getNoDataValue(b)
+      if (
+        !is.na(file_nd) && !identical(as.numeric(file_nd), as.numeric(nodata))
+      ) {
+        return(NULL)
+      }
+    }
   }
   # A flipped read, and one source's share of a mosaic, take the target
   # on the source's own pixels only; a decoded read reads full rows and
@@ -807,7 +825,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     fy = as.integer(fy),
     x_off = as.integer(x_off),
     y_off = as.integer(y_off),
-    resamp = resamp,
+    resamp = if (on_pixels) "NEAREST" else resamp,
     flip = flip,
     nx = as.integer(ds$getRasterXSize()),
     ny = as.integer(ds$getRasterYSize())
@@ -830,6 +848,19 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     (tt[[1L]] - shift[[1L]] - st[[1L]]) / st[[2L]],
     (tt[[4L]] - shift[[2L]] - st[[4L]]) / st[[6L]]
   )))
+}
+
+# Does `target` take `src`'s own pixels, at its resolution with no CRS shift?
+# Only asked of grids that could align.
+.grid_same_pixels <- function(src, target) {
+  shift <- .crs_false_origin_shift(src@crs, target@crs)
+  st <- src@transform
+  tt <- target@transform
+  !is.null(shift) &&
+    all(shift == 0) &&
+    all(.rio_near_int(c(tt[[2L]] / st[[2L]], tt[[6L]] / st[[6L]]))) &&
+    round(tt[[2L]] / st[[2L]]) == 1 &&
+    round(tt[[6L]] / st[[6L]]) == 1
 }
 
 #' How a nearest-neighbour read of several sources is served.
@@ -2555,6 +2586,62 @@ gdal_copy_gtiff <- function(src, path, band, nodata, options, band_names) {
     gdal_close_output(ds, path)
   }
   invisible(path)
+}
+
+# A source on `grid`'s own pixels written as an f32 plane file, or FALSE for
+# the warper. A translate reads the window with no warper and keeps the bytes
+# out of R: on an aligned file the warper costs 2.4x, and an R vector a full
+# gc a fetch. ENVI's raw band is the plane as a warp leaves it, but for the
+# sentinel, which a translate keeps as a value and garry_bin_nan folds. The
+# warper masks a float sentinel within a tolerance, so those keep the warper.
+gdal_translate_plane <- function(src, band, grid, resampling, nodata, bin) {
+  spec <- .rio_direct_spec(src, grid, resampling, band = band, nodata = nodata)
+  if (is.null(spec)) {
+    return(FALSE)
+  }
+  # the block cache this file fills must not outlive the fetch
+  on.exit(.gdal_handle_drop(src), add = TRUE)
+  ds <- .gdal_handle(src)
+  sentinel <- if (length(nodata)) nodata else ds$getNoDataValue(band)
+  if (
+    spec$flip ||
+      spec$fx != 1L ||
+      spec$fy != 1L ||
+      spec$resamp != "NEAREST" ||
+      (!is.na(sentinel) && startsWith(ds$getDataTypeName(band), "Float"))
+  ) {
+    return(FALSE)
+  }
+  nx <- grid@dims[["x"]]
+  ny <- grid@dims[["y"]]
+  sidecars <- c(sub("\\.bin$", ".hdr", bin), paste0(bin, ".aux.xml"))
+  done <- FALSE
+  on.exit(unlink(c(sidecars, if (!done) bin)), add = TRUE)
+  cl <- c(
+    "-q", "-of", "ENVI", "-ot", "Float32", "-b", band,
+    "-srcwin", spec$x_off, spec$y_off, nx, ny
+  )
+  # ENVI reopens what it wrote and must see the header beside it, which a
+  # daemon's GDAL config hides; the open source handle needs no listing.
+  prev <- .gdal_config_prev("GDAL_DISABLE_READDIR_ON_OPEN")
+  gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "NO")
+  on.exit(gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", prev), add = TRUE)
+  .gdal_with_retry(
+    function() gdal_translate_file(ds, bin, cl),
+    what = "slice read",
+    src = src
+  )
+  if (!identical(file.size(bin), 4 * as.numeric(nx) * ny)) {
+    cli::cli_abort(
+      "translating {.path {.url_scrub(src)}} left {file.size(bin)} bytes of a {nx} x {ny} f32 plane.",
+      class = c("garry_read_error", "garry_error")
+    )
+  }
+  if (!is.na(sentinel)) {
+    .Call("garry_bin_nan", bin, as.numeric(sentinel), PACKAGE = "garry")
+  }
+  done <- TRUE
+  TRUE
 }
 
 #' Write a garry-oriented matrix into an open output dataset.

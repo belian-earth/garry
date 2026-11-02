@@ -799,11 +799,47 @@ SEXP garry_plane_write(SEXP p, SEXP path) {
   return R_NilValue;
 }
 
+/* Rewrite the `sentinel` cells of a raw f32 file as NaN, in place: a
+ * translate keeps a source's nodata as values, and every plane on the
+ * direct route marks it NaN. */
+SEXP garry_bin_nan(SEXP path, SEXP sentinel) {
+  const char *fn = translateChar(STRING_ELT(path, 0));
+  const float s = (float)asReal(sentinel);
+  FILE *f = fopen(fn, "r+b");
+  if (f == NULL) {
+    error("cannot open %s", fn);
+  }
+  static float buf[1 << 16];
+  const size_t cap = sizeof(buf) / sizeof(buf[0]);
+  size_t n;
+  int failed = 0;
+  while (!failed && (n = fread(buf, sizeof(float), cap, f)) > 0) {
+    int hit = 0;
+    for (size_t i = 0; i < n; i++) {
+      if (buf[i] == s) {
+        buf[i] = NAN;
+        hit = 1;
+      }
+    }
+    if (hit) {
+      failed = fseek(f, -(long)(n * sizeof(float)), SEEK_CUR) != 0 ||
+               fwrite(buf, sizeof(float), n, f) != n ||
+               fseek(f, 0, SEEK_CUR) != 0;
+    }
+  }
+  failed = ferror(f) != 0 || failed;
+  if (fclose(f) != 0 || failed) {
+    error("could not rewrite the nodata of %s", fn);
+  }
+  return R_NilValue;
+}
+
 static const R_CallMethodDef CallEntries[] = {
   {"garry_join_bands", (DL_FUNC) &garry_join_bands, 4},
   {"garry_plane_new", (DL_FUNC) &garry_plane_new, 1},
   {"garry_plane_addr", (DL_FUNC) &garry_plane_addr, 1},
   {"garry_plane_write", (DL_FUNC) &garry_plane_write, 2},
+  {"garry_bin_nan", (DL_FUNC) &garry_bin_nan, 2},
   {"garry_read_rows", (DL_FUNC) &garry_read_rows, 3},
   {"garry_write_parts", (DL_FUNC) &garry_write_parts, 2},
   {"garry_coarsen_into", (DL_FUNC) &garry_coarsen_into, 5},

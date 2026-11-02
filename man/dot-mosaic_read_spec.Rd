@@ -14,8 +14,9 @@
 \item{band}{1-based band index (or indices) the read will use. Their
 data types drive the integer gate above.}
 
-\item{nodata}{The source node's sentinel (length 0 or 1). Averaging
-declines unless the file declares the same value.}
+\item{nodata}{The source node's sentinel (length 0 or 1). A resampling
+read declines unless the file declares the same value; on the
+source's own pixels, unless the file declares none.}
 }
 \value{
 \code{NULL} (the warper reads them together), or a list with

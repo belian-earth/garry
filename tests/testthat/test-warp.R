@@ -412,6 +412,8 @@ test_that("a grid that cannot align declines a direct read before any open", {
   expect_null(garry:::.rio_direct_spec(gone, .warp_target(), "near", src_grid = g))
   integers <- g
   integers@dtype <- "i16"
-  expect_null(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers))
+  expect_null(garry:::.rio_direct_spec(gone, decimated, "bilinear", src_grid = integers))
+  # on its own pixels an interpolating read of integers may go direct, so it opens
+  expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers))
   expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = g))
 })

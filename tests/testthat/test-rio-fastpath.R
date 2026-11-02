@@ -298,6 +298,30 @@ test_that("a northern-zone Zarr year reads onto its southern grid as the warper 
   grid_spec("EPSG:32736", c(499990, 8599990, 500110, 8600060), res = res)
 }
 
+test_that("an integer file reads plainly on its own pixels, for the kernels that allow it", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 40L, 30L, 1L, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 5000000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+  ds$setNoDataValue(1L, -9999)
+  v <- ((seq_len(1200) * 37L) %% 2000L) - 500L
+  v[seq(1, 1200, by = 11)] <- -9999L
+  ds$write(1L, 0L, 0L, 40L, 30L, v)
+  ds$close()
+  x <- lazy_source(f)
+  crop <- grid_spec(x@grid@crs, extent = c(500090, 4999250, 500900, 4999940), dims = c(27L, 23L), dtype = "f32")
+  for (r in c("bilinear", "cubic", "lanczos", "average", "mode")) {
+    expect_identical(.rio_direct_spec(f, crop, r)$resamp, "NEAREST")
+    expect_identical(
+      collect(align_to(x, crop, resampling = r), distributed = FALSE),
+      with_warper(collect(align_to(x, crop, resampling = r), distributed = FALSE))
+    )
+  }
+  for (r in c("cubicspline", "rms")) {
+    expect_null(.rio_direct_spec(f, crop, r))
+  }
+})
+
 test_that("a south-up source on its own pixels reads directly, rows flipped", {
   f <- .south_up_tiles(1L)[[1L]]
   sub <- grid_spec("EPSG:32736", c(500010, 8600010, 500050, 8600040), res = 10)
@@ -313,7 +337,14 @@ test_that("a south-up source on its own pixels reads directly, rows flipped", {
     res = 20
   )
   expect_null(.rio_direct_spec(f, sub20, "near"))
-  expect_null(.rio_direct_spec(f, sub, "bilinear"))
+  expect_null(.rio_direct_spec(f, sub20, "bilinear"))
+  # on its own pixels no kernel moves a cell
+  expect_identical(.rio_direct_spec(f, sub, "bilinear")$resamp, "NEAREST")
+  own <- function() lazy_dataset(f, sub, resampling = "bilinear")
+  expect_identical(
+    collect(stack_bands(own()), distributed = FALSE),
+    with_warper(collect(stack_bands(own()), distributed = FALSE))
+  )
   for (g in list(sub, sub20)) {
     expr <- function() lazy_dataset(f, g, resampling = "near")
     got <- collect(stack_bands(expr()), distributed = FALSE)

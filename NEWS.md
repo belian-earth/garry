@@ -155,6 +155,13 @@
 
 ## Performance
 
+* The direct route translates a slice that needs no warp: one item on the grid's
+  own pixels goes straight to its plane file, in about 40 % of a warp's time.
+  Aligned medium HLS fell from 23.2 to 19.4 s for a median, 18.5 to 15.0 s for
+  NDVI and 49.2 to 40.8 s for a geomedian, same cells. A warp of one integer file
+  on its own pixels by bilinear, cubic, lanczos, average or mode is a plain read
+  too. `cubicspline` and `rms` move cells there, so they keep the warper, and so
+  does a float source with a sentinel on the direct route.
 * A plan that only reads now grows a single-band file's chunks to one read
   task: the whole file where it fits `garry.read_target_px`, otherwise chunks
   near that size, ending on source tiles unless the read warps. A stack used to

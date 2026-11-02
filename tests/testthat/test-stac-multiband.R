@@ -159,7 +159,7 @@ test_that("distributed fetch-backed reads of a multi-band asset match", {
   # one fetch per item, shared by all three bands
   tl <- read.csv(tlog)
   expect_identical(length(unique(tl$key[grepl("^f\\d+_", tl$key)])), 2L)
-  # a composite warps each item itself, and reads the band it names: the
+  # a composite reads each item itself, and reads the band it names: the
   # median of two slices is their mean
   cmp <- reduce_over(ds, "median", "t", nan_rm = TRUE)[["M_b2"]]
   .gg_close(collect(cmp, distributed = TRUE), rowMeans(.mb_direct(src, 2L), dims = 2L))
