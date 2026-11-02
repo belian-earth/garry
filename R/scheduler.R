@@ -1293,10 +1293,11 @@ execute_plan_mirai <- function(
     ) {
       return(invisible(NULL))
     }
+    regs <- .glue("r{run_id}_{pending_drop}")
     for (p in profiles) {
       mirai::everywhere(
         asNamespace("garry")$.daemon_shm_drop(regs),
-        regs = .glue("r{run_id}_{pending_drop}"),
+        regs = regs,
         .compute = p
       )
     }

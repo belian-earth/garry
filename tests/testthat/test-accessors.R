@@ -39,3 +39,18 @@ test_that("time_labels() reads the t axis of rasters and datasets", {
   expect_null(time_labels(lazy_source(f)))
   expect_null(time_labels(as_dataset(list(a = lazy_source(f)))))
 })
+
+test_that("the code usage scan R CMD check runs finds no undefined global", {
+  # A `$` bound in the namespace turns every `x$name` in the package into an
+  # undefined global here, which hides the real ones.
+  skip_if_not_installed("codetools")
+  skip_on_covr()
+  found <- character(0)
+  codetools::checkUsageEnv(
+    asNamespace("garry"),
+    report = function(m) found <<- c(found, m),
+    skipWith = TRUE,
+    suppressLocalUnused = TRUE
+  )
+  expect_identical(grep("no visible", found, value = TRUE), character(0))
+})
