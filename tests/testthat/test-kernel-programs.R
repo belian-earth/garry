@@ -83,6 +83,30 @@ test_that("a declared dtype holds inside a stage as it does across one", {
   expect_equal(unique(as.vector(collect(a * 2L, distributed = FALSE))), 2)
 })
 
+test_that("a declared dtype holds through a band stack's hoisted chain", {
+  tif <- function(interleave) {
+    f <- withr::local_tempfile(fileext = ".tif", .local_envir = parent.frame())
+    ds <- gdalraster::create("GTiff", f, 64L, 64L, 2L, "Float32", return_obj = TRUE,
+                             options = paste0("INTERLEAVE=", interleave))
+    ds$setGeoTransform(c(0, 10, 0, 640, 0, -10))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+    for (b in 1:2) ds$write(b, 0L, 0L, 64L, 64L, rep(5, 4096L))
+    ds$close()
+    f
+  }
+  for (interleave in c("PIXEL", "BAND")) {
+    f <- tif(interleave)
+    expect_identical(.bands_share_blocks(f), interleave == "PIXEL")
+    g <- graph_new()
+    third <- lapply(1:2, function(b) {
+      lazy_map(lazy_source(f, band = b, graph = g), fn = function(v) v / 3, dtype = "i16")
+    })
+    x <- lazy_stack(lapply(third, function(r) r * 2L), along = "band")
+    got <- collect(x, distributed = FALSE)
+    expect_equal(unique(as.vector(got)), 2, info = interleave)
+  }
+})
+
 test_that("a logical map feeds a select in the next map", {
   a <- lazy_map(lazy_source(.kp_tif(rep(5, 4096))), fn = function(v) v > 0)
   b <- lazy_map(a, fn = function(m) g_ifelse(m, 2, 3))

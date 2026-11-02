@@ -938,12 +938,12 @@ NULL
 # chain of them, becomes ONE map over the collapsed read of the maps'
 # inputs: lazy_map()'s fn is elementwise, so stack(f(x1), ..., f(xn)) is
 # f(stack(x1, ..., xn)). The chain composes into a single MapNode at the
-# stack's id, which is how a fused stage evaluates the chain anyway (no
-# casts between members). The hoist fires only when the chain ends at a
-# read whose bands share storage, so plans elsewhere are unchanged. The
-# read is the one node added; it is a leaf (or a warp over an existing
-# source) with an id above the map's, which staging and graph_import()
-# order through .topo_order().
+# stack's id, holding each member at its declared dtype as a fused stage
+# does. The hoist fires only when the chain ends at a read whose bands
+# share storage, so plans elsewhere are unchanged. The read is the one
+# node added; it is a leaf (or a warp over an existing source) with an id
+# above the map's, which staging and graph_import() order through
+# .topo_order().
 .collapse_stack <- function(graph, st) {
   ps <- lapply(.node_parents(st), function(p) graph_get(graph, p))
   read <- .collapsed_read(graph, st@id, .node_grid(st), ps)
@@ -969,40 +969,44 @@ NULL
       parents = rid,
       grid = .node_grid(st),
       role = ps[[1L]]@role,
-      fn = .compose_maps(chain$fns)
+      fn = .compose_maps(chain$fns, chain$dtypes)
     )
   )
   invisible(TRUE)
 }
 
 # Follow identical per-band maps down from a band stack's parents to a
-# read that collapses with shared storage. The maps' fns, outermost
-# first, and the collapsed read (id 0, for the caller to place); NULL
-# when the chain stops anywhere else.
+# read that collapses with shared storage. The maps' fns and dtypes,
+# outermost first, and the collapsed read (id 0, for the caller to
+# place); NULL when the chain stops anywhere else.
 .map_chain <- function(graph, st, ps) {
   fns <- list()
+  dtypes <- character(0)
   cur <- ps
   while (.same_band_maps(cur)) {
     fns <- c(fns, list(cur[[1L]]@fn))
+    dtypes <- c(dtypes, .node_grid(cur[[1L]])@dtype)
     cur <- lapply(cur, function(m) graph_get(graph, m@parents[[1L]]))
     grid <- .grid_retype(.node_grid(st), .node_grid(cur[[1L]])@dtype)
     read <- .collapsed_read(graph, 0L, grid, cur, shared_only = TRUE)
     if (!is.null(read)) {
-      return(list(fns = fns, read = read))
+      return(list(fns = fns, dtypes = dtypes, read = read))
     }
   }
   NULL
 }
 
-# One map from a chain of elementwise fns given outermost first.
-.compose_maps <- function(fns) {
+# One map from a chain of elementwise fns given outermost first, each
+# held at its declared dtype, which a stage then does for the last.
+.compose_maps <- function(fns, dtypes) {
   if (length(fns) == 1L) {
     return(fns[[1L]])
   }
   fns <- rev(lapply(fns, .slim_fn))
+  dtypes <- rev(dtypes)
   function(x) {
-    for (f in fns) {
-      x <- f(x)
+    for (i in seq_along(fns)) {
+      x <- .g_as_declared(fns[[i]](x), dtypes[[i]])
     }
     x
   }
