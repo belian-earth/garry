@@ -1023,7 +1023,10 @@ garry_last_route <- function() .garry_state$route
 # The read args of a plan that is one local file written out whole, cells and
 # type as they are, or NULL. GDAL then does the whole write: a 1 GB 64-band file
 # took 1.8 s at a 450 MB peak, against 4.7 s and 7 GB moving each band through R
-# and /dev/shm. A remote file stays with the read pool, which reads it in parallel.
+# and /dev/shm. A source that reads from the network, a local VRT of remote tiles
+# among them, stays with the read pool: it retries a failed read, where this one
+# translate does not, and a threaded GDAL read that fails on a worker thread aborts
+# the host (.gdal_threads_all()).
 .copy_args <- function(p, spec, path, nodata, dtype, wspec) {
   s <- spec$read_stage[[1L]]
   if (
@@ -1059,7 +1062,7 @@ garry_last_route <- function() .garry_state$route
     isTRUE(all.equal(ds$getGeoTransform(), g@transform)) &&
     crs_equal(ds$getProjection(), g@crs) &&
     all(vapply(a$band, function(b) .gdal_band_dtype(ds, b), "") == dtype)
-  if (same) a
+  if (same && !.gdal_reads_remote(a$path)) a
 }
 
 # Stream a read-only plan to the writer daemon. Each read task also

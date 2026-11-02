@@ -100,3 +100,27 @@ local({
     expect_false(any(is.nan(v)))
   })
 })
+
+test_that("a read that reaches the network is no copy, however local its file", {
+  withr::local_envvar(CPL_VSIL_CURL_USE_HEAD = "NO", GDAL_DISABLE_READDIR_ON_OPEN = "EMPTY_DIR")
+  d <- withr::local_tempdir("wc")
+  .http_tiffs(d, c("a.tif", "b.tif"), size = 64L)
+  srv <- .http_log_server(d)
+  urls <- srv$url(c("a.tif", "b.tif"))
+  remote <- lazy_dataset(urls)
+  mosaic <- graph_get(remote@bands[[1L]][[1L]]@graph, remote@bands[[1L]][[1L]]@node_id)@path
+  expect_true(file.exists(mosaic))
+  expect_true(.gdal_reads_remote(mosaic))
+  a <- tempfile(fileext = ".tif")
+  expect_false(.wc_copied(write_tif(remote, a, distributed = FALSE)))
+  expect_identical(.wc_cells(a), .wc_cells(file.path(d, "a.tif")))
+
+  # a VRT lists its own sources only
+  outer_vrt <- tempfile(fileext = ".vrt")
+  gdalraster::buildVRT(outer_vrt, mosaic, quiet = TRUE)
+  expect_true(.gdal_reads_remote(outer_vrt))
+  expect_false(.gdal_reads_remote(file.path(d, "a.tif")))
+  local_vrt <- tempfile(fileext = ".vrt")
+  gdalraster::buildVRT(local_vrt, file.path(d, "a.tif"), quiet = TRUE)
+  expect_false(.gdal_reads_remote(local_vrt))
+})

@@ -95,6 +95,15 @@ NULL
   )
 }
 
+# Does reading `path` reach the network? A VRT is a local file whatever its
+# sources are, and GDAL lists only the first level of them.
+.gdal_reads_remote <- function(path) {
+  ds <- .gdal_probe(path)
+  files <- ds$getFileList()
+  inner <- setdiff(files[grepl("\\.vrt$", files, ignore.case = TRUE)], ds$getFilename())
+  any(.gdal_is_remote(files)) || any(vapply(inner, .gdal_reads_remote, NA))
+}
+
 # The extra (non-spatial) dimensions of a multidimensional array read
 # through its classic view. GDAL exposes an N-D array (Zarr, and other
 # multidim drivers) as one band per combination of its extra dims and
