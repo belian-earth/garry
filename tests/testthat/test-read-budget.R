@@ -95,6 +95,8 @@ local({
   })
 
   test_that("a chunk over the execution budget warns by class", {
+    # the budget is a fraction of free RAM, and this chunk clears it from 11 GB
+    testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1000, .package = "garry")
     withr::local_options(
       garry.placement = "rules",
       garry.chunk_target_px = 400,
