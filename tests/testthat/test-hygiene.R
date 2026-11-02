@@ -87,7 +87,8 @@ test_that("gd task bodies report their transients to the deferred pass", {
 test_that("a cached pipeline kernel keeps no task's frame alive", {
   built <- list(
     function(k) garry:::.gd_lean_fn(k$F, k$op, k$nan_rm, k$affine, k$masked),
-    function(k) garry:::.gd_mask_fn(k$chain, k$halo)
+    function(k) garry:::.gd_mask_fn(k$chain, k$halo),
+    function(k) garry:::.gd_band_fn(identity, k$op)
   )
   for (build in built) {
     gone <- FALSE

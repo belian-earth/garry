@@ -874,23 +874,27 @@ NULL
   }
 }
 
-# The per-slice fn of a band kernel. .cd_stack_spec() admits a slice declaring
-# f32, which a logical keeps, so what it returns is cast as a stage casts it.
-.gd_band_fn <- function(F) {
+# The per-slice fn of a band kernel. It reads the mask at the dtype the mask's
+# chain declares, as on the scheduler, wherever the mask came from.
+# .cd_stack_spec() admits a slice declaring f32, which a logical keeps, so what
+# it returns is cast as a stage casts it.
+.gd_band_fn <- function(F, mask_dtype) {
   if (is.null(F)) {
     return(NULL)
   }
   F <- .slim_fn(F)
-  function(x, m) .g_as_declared(F(x, m), "f32")
+  force(mask_dtype)
+  function(x, m) .g_as_declared(F(x, .g_as_declared(m, mask_dtype)), "f32")
 }
 
-# The mask kernel of a chain. A kernel outlives its task in the cache, so
-# it is built here and not inline, with every argument forced: a closure
-# holds the frame it was made in, and a promise the frame of its caller.
+# The mask kernel of a chain: it returns f32, the mask files' one dtype, which
+# holds every dtype .cd_stack_spec() admits. A kernel outlives its task in the
+# cache, so it is built here and not inline, with every argument forced: a
+# closure holds the frame it was made in, and a promise the frame of its caller.
 .gd_mask_fn <- function(chain, halo) {
   force(chain)
   force(halo)
-  function(inp) list(.gd_replay_mask(inp[[1L]], chain, halo))
+  function(inp) list(.g_as_declared(.gd_replay_mask(inp[[1L]], chain, halo), "f32"))
 }
 
 # One band's kernel from its spec: the program the host traced, or the

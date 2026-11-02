@@ -260,6 +260,106 @@ local({
     .expect_cells(unclass(got), cells(c(6, 9)))
   })
 
+  # Cells of .dr_plan() over bands of 100 and 200: s2's value where the mask
+  # takes s1's away, their median elsewhere.
+  masked <- function(top = TRUE) {
+    band <- function(v) {
+      m <- matrix(v + 0.5, 40L, 60L)
+      if (top) m[1:20, ] <- v + 1
+      m
+    }
+    array(c(band(100), band(200)), c(40L, 60L, 2L))
+  }
+  nan_map <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(b > 0.5, NaN, a))
+  median_of <- function(...) .dr_plan(nan_map, c(100, 200), "median", TRUE, ...)
+
+  test_that("an integer or logical mask masks on the route, whatever its width", {
+    qa <- list(
+      u16 = list(type = "UInt16", code = 30000, thr = 21824L),
+      u8 = list(type = "Byte", code = 200, thr = 100L),
+      i8 = list(type = "Int8", code = 100, thr = 50L),
+      i16 = list(type = "Int16", code = 200, thr = 100L)
+    )
+    for (dt in names(qa)) {
+      thr <- qa[[dt]]$thr
+      logical_map <- function(q) lazy_map(q, fn = function(v) v > thr)
+      x <- median_of(type = qa[[dt]]$type, dtype = dt, code = qa[[dt]]$code, qa = logical_map)
+      got <- collect(x, distributed = TRUE)
+      expect_identical(garry_last_route(), "composite_direct", info = dt)
+      .expect_cells(unclass(got), masked(), info = dt)
+    }
+  })
+
+  test_that("a predicate mask masks on the route", {
+    pred <- function(q) lazy_map(q, fn = function(v) v > 122L, dtype = "pred")
+    got <- collect(median_of(type = "UInt16", dtype = "u16", code = 200, qa = pred), distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    .expect_cells(unclass(got), masked())
+  })
+
+  test_that("a band kernel reads a mask at the mask's dtype", {
+    # g_bitand refuses a float, and `!` an integer
+    bits <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(g_bitand(b, 1L) > 0L, NaN, a))
+    flagged <- function(q) lazy_map(q, fn = function(v) v > 1L)
+    x <- .dr_plan(bits, c(100, 200), "median", TRUE, type = "Int16", dtype = "i16", qa = flagged)
+    expect_identical(x@grid@dtype, "f32")
+    got <- collect(x, distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    .expect_cells(unclass(got), masked())
+
+    negated <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(!b, a, NaN))
+    pred <- function(q) lazy_map(q, fn = function(v) v > 1, dtype = "pred")
+    got <- collect(.dr_plan(negated, c(100, 200), "median", TRUE, qa = pred), distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    .expect_cells(unclass(got), masked())
+  })
+
+  test_that("a mask f32 cannot hold leaves the route", {
+    # 2^24 + 1 rounds to 2^24 in f32, so the file would lose the flag's low bit
+    wide <- function(q) lazy_map(q, fn = function(v) g_cast(v, "i32") * 8388608L + 1L)
+    odd <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(g_bitand(b, 1L) > 0L, a, NaN))
+    x <- .dr_plan(odd, c(100, 200), "median", TRUE, type = "Int16", dtype = "i16", qa = wide)
+    got <- collect(x, distributed = TRUE)
+    expect_identical(garry_last_route(), "scheduler")
+    .expect_cells(unclass(got), masked(top = FALSE))
+    # f64 too, so a threshold reads the value the chain declared
+    close <- function(q) lazy_map(q, fn = function(v) g_cast(v, "f64") + 0.5 + 1e-12, dtype = "f64")
+    above <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(b > 0.5, NaN, a))
+    got <- collect(.dr_plan(above, c(100, 200), "median", TRUE, qa = close), distributed = TRUE)
+    expect_identical(garry_last_route(), "scheduler")
+    expect_true(all(is.nan(got)))
+  })
+
+  test_that("two mask chains that differ only by a dtype keep their own kernels", {
+    third <- function(v) v / 3
+    above_1 <- function(v) v > 1
+    # 4 / 3 survives a 1 only if the first map stays float
+    chain <- function(dt) {
+      function(q) lazy_map(lazy_map(lazy_map(q, fn = third, dtype = dt), fn = above_1, dtype = "f32"),
+                           fn = function(v) v, dtype = "f32")
+    }
+    plan <- function(dt) median_of(code = 4, qa = chain(dt))
+    expect_false(identical(
+      .cd_chain_sig(.cd_spec(collect(plan("i16"), plan_only = TRUE))$mask_chain),
+      .cd_chain_sig(.cd_spec(collect(plan("f32"), plan_only = TRUE))$mask_chain)
+    ))
+    .expect_cells(unclass(collect(plan("i16"), distributed = TRUE)), masked(top = FALSE))
+    expect_identical(garry_last_route(), "composite_direct")
+    .expect_cells(unclass(collect(plan("f32"), distributed = TRUE)), masked())
+    expect_identical(garry_last_route(), "composite_direct")
+  })
+
+  test_that("a mask kernel run over one QA dtype serves no other", {
+    shared <- function(v) v > 144L
+    logical_map <- function(q) lazy_map(q, fn = shared)
+    for (ty in list(c("Int16", "i16"), c("Float32", "f32"), c("UInt16", "u16"))) {
+      got <- collect(median_of(type = ty[[1L]], dtype = ty[[2L]], code = 200, qa = logical_map),
+                     distributed = TRUE)
+      expect_identical(garry_last_route(), "composite_direct", info = ty[[2L]])
+      .expect_cells(unclass(got), masked(), info = ty[[2L]])
+    }
+  })
+
   test_that("a logical masked map stores 0/1 on the route", {
     above <- function(v, m) lazy_map(v, m, fn = function(a, b) a > b)
     for (vals in list(c(5, 8), 5)) {

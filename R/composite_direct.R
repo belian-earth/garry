@@ -23,7 +23,8 @@ NULL
 
 # Walk a LINEAR mask chain (Map/Focal nodes) from `mid` back to its SourceNode.
 # Returns list(chain = source->mask order, src = fmask source id, halo = sum of
-# focal radii) or NULL if the chain branches or hits an unsupported node.
+# focal radii, dtype = what the chain declares, f32 for a bare source's read)
+# or NULL if the chain branches or hits an unsupported node.
 .cd_walk_mask <- function(gg, mid) {
   chain <- list()
   h <- 0L
@@ -41,7 +42,8 @@ NULL
     chain <- c(list(cur), chain)
     cur <- gg(cur@parents[[1L]])
   }
-  list(chain = chain, src = cur@id, halo = h)
+  dtype <- if (length(chain)) chain[[length(chain)]]@grid@dtype else "f32"
+  list(chain = chain, src = cur@id, halo = h, dtype = dtype)
 }
 
 # Replay a mask chain (Map/Focal nodes) on the fmask CUBE (t,y,x), vectorised
@@ -94,6 +96,7 @@ NULL
   rlang::hash(lapply(chain, function(n) {
     list(
       cls = class(n)[[1L]],
+      dtype = n@grid@dtype,
       fn = .fn_identity(n@fn),
       radius = if (S7::S7_inherits(n, FocalNode)) n@radius else integer(0),
       weights = if (S7::S7_inherits(n, FocalNode)) n@weights else numeric(0)
@@ -223,8 +226,10 @@ NULL
       }
       masks[[key]]
     }
+    # The mask reaches a band kernel through f32 files, which hold only
+    # .f32_exact_dtypes.
     m0 <- mask_of(first@parents[[2L]])
-    if (isFALSE(m0)) {
+    if (isFALSE(m0) || !m0$dtype %in% .f32_exact_dtypes) {
       return(NULL)
     }
     fmask_srcs <- vapply(
@@ -261,6 +266,7 @@ NULL
       fmask = fmask_srcs,
       F = first@fn,
       mask_chain = m0$chain,
+      mask_dtype = m0$dtype,
       halo = m0$halo,
       op = op,
       nan_rm = nan_rm,
@@ -437,6 +443,7 @@ NULL
     nan_rm = s1$nan_rm,
     F = s1$F,
     mask_chain = s1$mask_chain,
+    mask_dtype = s1$mask_dtype,
     halo = s1$halo,
     band_srcs = lapply(specs, function(s) s$band),
     band_affine = lapply(specs, function(s) s$affine),
@@ -773,7 +780,7 @@ NULL
 # over the fmask cube and the band reduced under it. A factory for
 # .gd_mask_fn()'s reason.
 .gd_cube_fn <- function(spec) {
-  F <- .gd_band_fn(spec$F)
+  F <- .gd_band_fn(spec$F, spec$mask_dtype)
   chain <- .gd_slim_chain(spec$mask_chain)
   halo <- spec$halo
   op <- spec$op
@@ -931,9 +938,9 @@ NULL
   # affine, masked, device, and a joint reducer). Affine varies per band, so
   # bands sharing an affine share a ck, and with it one kernel per daemon (see
   # .daemon_kernel). As a program it is traced here, once, at the strip heights.
-  Fs <- .gd_band_fn(spec$F)
+  Fs <- .gd_band_fn(spec$F, spec$mask_dtype)
   base_sig <- rlang::hash(list(
-    fn = .cd_fn_sig(spec$F),
+    fn = .cd_fn_sig(Fs),
     op = spec$op,
     nan_rm = spec$nan_rm,
     masked = masked,
