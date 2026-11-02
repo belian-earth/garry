@@ -34,7 +34,11 @@ jobs:
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      R_KEEP_PKG_SOURCE: yes
+      # Off, unlike the r-lib template. Kept source hangs the whole package's text
+      # off every closure and S7 object, 4.2 MB on each crossing to or from a
+      # daemon: the suite peaks at 15 GB against 3.8 and outlasts the elapsed limit.
+      # No install in production keeps source, and covr still does.
+      R_KEEP_PKG_SOURCE: no
       PJRT_INSTALL: "1"          # let pjrt fetch the CPU plugin non-interactively
       # Kill a hung test run instead of stalling: R kills the process and
       # the check fails with the partial testthat.Rout in the artifact.
