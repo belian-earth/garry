@@ -155,6 +155,21 @@
 
 ## Performance
 
+* A plan that only reads now grows a single-band file's chunks to one read
+  task: the whole file where it fits `garry.read_target_px`, otherwise chunks
+  near that size, ending on source tiles unless the read warps. A stack used to
+  be cut as a kernel's inputs, a window of every layer held at once, though no
+  kernel holds them, and chunks fetched the source tiles they shared again: 144
+  warped Sentinel-2 files took 2.7 times the bytes in `us-west-2`. Multi-band,
+  mosaic, Zarr, decoded and coarsened reads keep their planned chunks.
+* `collect()` of a read-only plan copies chunks into the result on four threads
+  where R has OpenMP, on huge pages where the kernel grants them, and a task log
+  writes its rows without `glue`. 120 layers of 3660 x 3660 from local files fell
+  from 8.3 to 6.5 s on 16 readers.
+* A partial-width read of a raw cube slices its rows in C, in place of an R index
+  of 32 B a cell.
+* A read-only pool write stays inside the read budget while writes queue. Reads
+  used to go on past it whenever none was in flight, up to two regions a reader.
 * `geomedian()`, `medoid()` and any custom reducer over a band stack of time
   stacks take the direct route, so they stay inside the RAM budget. Medium
   HLS, 55 dates of 3660 x 3660 in six bands, ran out of memory at 16 GB and now

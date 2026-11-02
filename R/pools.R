@@ -809,6 +809,13 @@ NULL
 #' (`compute`); a memory-tight box (smaller `compute`, each daemon's
 #' base XLA client is ~300 MB once warmed).
 #'
+#' garry runs its own parallelism through these pools, so run one garry
+#' session and let it use the machine. Wrapping garry calls in forked or
+#' multi-process workers, such as `parallel::mclapply()` or a parallel
+#' `future` plan, is discouraged and at your own risk: GDAL, curl and XLA
+#' hold state that does not survive a fork, and each worker's pools would
+#' compete for the same cores, memory and `/dev/shm`.
+#'
 #' It also applies the sensible defaults so a workload script needs no
 #' preamble: the glibc `MALLOC_*` thresholds are exported BEFORE the
 #' daemons spawn (read at exec, so children inherit them), and

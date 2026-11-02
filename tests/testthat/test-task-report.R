@@ -68,7 +68,8 @@ local({
     tlog <- withr::local_tempfile(fileext = ".csv")
     out <- withr::local_tempfile(fileext = ".tif")
     withr::local_options(garry.task_log = tlog,
-                         garry.chunk_target_px = 600)
+                         garry.chunk_target_px = 600,
+                         garry.read_target_px = 600)
     write_tif(lazy_source(fixture_gradient_f32()), out, distributed = TRUE)
     expect_identical(garry_last_route(), "read_only")
 

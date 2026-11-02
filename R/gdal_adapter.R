@@ -1869,18 +1869,11 @@ stage_raw_cube <- function(src, dst_vrt) {
   n_px <- as.numeric(y_size) * x_size
   # pure-raw hot path: f32 source, no sentinel to map: the fused-read
   # shape (SI predict): plane-range reads, staying in raw end to end.
-  # Partial-width windows subset COLUMN BYTES with one precomputed
-  # index (each output row is a contiguous byte run inside its
-  # full-width row), so no numeric round-trip either way.
+  # A partial-width window keeps each full-width row's run of column
+  # bytes, so no numeric round-trip either way.
   if (
     out == "raw_f32" && es == 4L && length(nodata) != 1L && length(scale) != 1L
   ) {
-    idx <- if (!full) {
-      within <- (x_off * 4L + 1L):((x_off + x_size) * 4L)
-      # in double: rows x width x 4 bytes passes 2^31 on large cubes
-      rep((seq_len(y_size) - 1) * (nx * 4), each = length(within)) +
-        within
-    }
     parts <- vector("list", nb)
     for (k in seq_len(nb)) {
       seek(
@@ -1889,7 +1882,11 @@ stage_raw_cube <- function(src, dst_vrt) {
           4
       )
       p <- readBin(con, "raw", n = as.numeric(y_size) * nx * 4)
-      parts[[k]] <- if (full) p else p[idx]
+      parts[[k]] <- if (full) {
+        p
+      } else {
+        .Call("garry_raw_columns", p, nx * 4, x_off * 4, x_size * 4, PACKAGE = "garry")
+      }
     }
     v <- if (nb == 1L) parts[[1L]] else do.call(c, parts)
     if (nb == 1L) {

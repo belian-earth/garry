@@ -73,7 +73,7 @@ local({
     rd <- function(p) gdal_read_window(p, 1L, 0L, 0L, 60L, 40L)
     out <- withr::local_tempfile(fileext = ".tif")
     log1 <- withr::local_tempfile(fileext = ".csv")
-    withr::local_options(garry.chunk_target_px = 400, garry.task_log = log1)
+    withr::local_options(garry.chunk_target_px = 400, garry.read_target_px = 400, garry.task_log = log1)
     write_tif(lazy_source(f), out, distributed = TRUE)
     expect_identical(garry_last_route(), "read_only")
     want <- rd(out)

@@ -3,7 +3,7 @@
 # result attributes included.
 
 .ro_both <- function(build) {
-  withr::local_options(garry.chunk_target_px = 400)
+  withr::local_options(garry.chunk_target_px = 400, garry.read_target_px = 400)
   withr::local_options(garry.read_only = TRUE)
   fast <- collect(build(), distributed = FALSE)
   route <- garry_last_route()
@@ -130,7 +130,7 @@ test_that("plans that compute leave the read-only route", {
 })
 
 .ro_write_both <- function(build, ...) {
-  withr::local_options(garry.chunk_target_px = 400)
+  withr::local_options(garry.chunk_target_px = 400, garry.read_target_px = 400)
   fast <- withr::local_tempfile(fileext = ".tif")
   slow <- withr::local_tempfile(fileext = ".tif")
   withr::local_options(garry.read_only = TRUE)
@@ -230,12 +230,93 @@ test_that("a threaded read gives GDAL_NUM_THREADS back, even when it fails", {
 })
 
 # A skip here ends the file, so this block stays last.
+test_that("a read-only plan grows a single-band file's chunks to one task", {
+  tif <- function(nx, ny, block, bands = 1L) {
+    f <- withr::local_tempfile(fileext = ".tif", .local_envir = parent.frame(2))
+    opts <- if (block[[1L]] < nx) {
+      c("TILED=YES", paste0("BLOCKXSIZE=", block[[1L]]), paste0("BLOCKYSIZE=", block[[2L]]))
+    } else {
+      paste0("BLOCKYSIZE=", block[[2L]])
+    }
+    ds <- gdalraster::create("GTiff", f, nx, ny, bands, "Float32", options = opts, return_obj = TRUE)
+    ds$setGeoTransform(c(500000, 30, 0, 5000000, 0, -30))
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+    ds$close()
+    f
+  }
+  chunk_dim <- function(x, target, planned = 400) {
+    withr::local_options(garry.chunk_target_px = planned, garry.read_target_px = target)
+    .read_only_spec(plan_lazy(x))$read_stage[[1L]]@chunks@chunk_dim
+  }
+  plan_dim <- function(x, target, planned) {
+    withr::local_options(garry.chunk_target_px = planned, garry.read_target_px = target)
+    plan_lazy(x)@stages[[1L]]@chunks@chunk_dim
+  }
+  tiled <- lazy_source(tif(128L, 128L, c(16L, 16L)))
+  # a file that fits one task is one chunk, however finely it was planned
+  expect_identical(chunk_dim(tiled, 1e6), c(128L, 128L))
+  # past that, chunks stay inside the target and end on source tiles
+  expect_identical(chunk_dim(tiled, 4000), c(48L, 80L))
+  # a strip is full width, so rows pay for it, and a long file still fits whole
+  expect_identical(chunk_dim(lazy_source(tif(128L, 64L, c(128L, 1L))), 5000), c(128L, 39L))
+  expect_identical(chunk_dim(lazy_source(tif(400L, 20L, c(16L, 16L))), 9000), c(400L, 20L))
+  # a block past the target is still one block
+  expect_identical(chunk_dim(tiled, 100, 1), c(16L, 16L))
+  # a warp's target pixels have no tiles to end on
+  g <- grid_spec("EPSG:32634", extent = c(0, 0, 1280, 1280), dims = c(128L, 128L), dtype = "f32")
+  expect_identical(chunk_dim(align_to(tiled, g), 4000), c(63L, 63L))
+  # a planned chunk at the target stands, and a multi-band one is priced for its bands
+  expect_identical(chunk_dim(tiled, 1000, 1e6), plan_dim(tiled, 1000, 1e6))
+  f <- tif(128L, 128L, c(16L, 16L), 3L)
+  g3 <- graph_new()
+  mb <- lazy_stack(lapply(1:3, function(b) lazy_source(f, band = b, graph = g3)), along = "band")
+  expect_identical(chunk_dim(mb, 1e9), plan_dim(mb, 1e9, 400))
+})
+
+test_that("a pool write reads inside its budget, or to start an idle run", {
+  # nothing running: a region past the budget still goes
+  expect_true(.read_fits(0L, 0L, 0, 100, 10))
+  # queued writes drain the store, so reads wait for them
+  expect_false(.read_fits(0L, 3L, 90, 20, 100))
+  expect_false(.read_fits(1L, 0L, 70, 20, 100))
+  expect_true(.read_fits(1L, 3L, 50, 20, 100))
+})
+
+test_that("raw columns keep each row's run of bytes and refuse a bad shape", {
+  x <- as.raw(1:24)
+  expect_identical(
+    .Call("garry_raw_columns", x, 6, 2, 3, PACKAGE = "garry"),
+    x[c(3:5, 9:11, 15:17, 21:23)]
+  )
+  expect_error(.Call("garry_raw_columns", x, 7, 2, 3, PACKAGE = "garry"), "no rows")
+  expect_error(.Call("garry_raw_columns", x, 6, 4, 3, PACKAGE = "garry"), "no rows")
+})
+
+test_that("a chunk large enough to thread lands exactly where a small one does", {
+  ny <- 700L; nx <- 600L; nk <- 3L
+  h <- 650L; w <- 550L
+  planes <- function(b) (seq_len(h * w) %% 8191) + b / 4
+  v <- writeBin(c(planes(1), planes(2)), raw(), size = 4)
+  out <- .Call("garry_alloc_double", as.numeric(ny) * nx * nk, PACKAGE = "garry")
+  out[] <- -1
+  dim(out) <- c(ny, nx, nk)
+  .Call(
+    "garry_f32_into_colmajor", out, v, as.numeric(c(30, 20, 1)),
+    as.numeric(c(ny, nx, nk, 2, h, w)), PACKAGE = "garry"
+  )
+  want <- array(-1, c(ny, nx, nk))
+  for (b in 1:2) {
+    want[31:680, 21:570, b + 1L] <- t(matrix(planes(b), w, h))
+  }
+  expect_identical(out, want)
+})
+
 local({
   skip_on_cran()
   local_pools(2, 1)
 
   test_that("the read pool serves the read-only route with identical results", {
-    withr::local_options(garry.chunk_target_px = 400)
+    withr::local_options(garry.chunk_target_px = 400, garry.read_target_px = 400)
     mb <- fixture_multiband()
     f <- fixture_i16_nodata()
     coarse <- grid_spec(

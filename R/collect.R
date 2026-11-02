@@ -769,13 +769,53 @@ garry_last_route <- function() .garry_state$route
     return(NULL)
   }
   list(
-    read_stage = read_stage,
+    read_stage = Map(.read_only_chunks, read_stage, nb, MoreArgs = list(graph = graph)),
     nb = nb,
     k0 = cumsum(c(0L, nb))[seq_along(nb)],
     nk = nk,
     ny = g@dims[["y"]],
     nx = g@dims[["x"]]
   )
+}
+
+# The stage with a single-band file's chunks grown to one read task's
+# worth. The plan cut a stack as a kernel's inputs, a window of every
+# layer held at once, and no kernel holds them here. Cut that finely,
+# chunks fetch the source tiles they share again: 144 warped files in nine
+# chunks each took 2.7x the bytes, and a task to a file is the fastest
+# split in region. Chunks of an unwarped file end on its tiles; a warp's
+# target pixels have no tiles to end on. Anything else keeps its planned
+# chunks, which are priced for it: the bands of a chunk, the parts of a
+# mosaic, a Zarr's chunks, decoded and coarsened reads.
+.read_only_chunks <- function(s, nb, graph) {
+  cg <- s@chunks
+  target <- garry_opt("read_target_px")
+  node <- graph_get(graph, s@members[[1L]])
+  warp <- s@kind == "warp"
+  src <- if (warp) graph_get(graph, node@parents[[1L]]) else node
+  dims <- as.numeric(cg@grid@dims[c("x", "y")])
+  if (
+    nb > 1L ||
+      prod(pmin(cg@chunk_dim, dims)) >= target ||
+      length(src@path) > 1L ||
+      length(src@decode) > 0L ||
+      .gdal_is_zarr(src@path) ||
+      (warp && node@coarsen > 1L)
+  ) {
+    return(s)
+  }
+  block <- if (warp) c(1, 1) else as.numeric(cg@block_dim)
+  fit <- function(want, ax) {
+    min(dims[[ax]], max(block[[ax]], floor(want / block[[ax]]) * block[[ax]]))
+  }
+  if (prod(dims) <= target) {
+    want <- dims
+  } else {
+    cy <- fit(target / fit(sqrt(target), 1L), 2L)
+    want <- c(fit(target / cy, 1L), cy)
+  }
+  s@chunks@chunk_dim <- as.integer(want)
+  s
 }
 
 # Read every chunk of a read-only plan as raw f32 (the executor's own
@@ -932,6 +972,13 @@ garry_last_route <- function() .garry_state$route
   # caller's copy duplicates the whole array
   attr(out, "gis") <- gis
   out
+}
+
+# May a pool write take another read, with `n` reads in flight and
+# `queued` writes waiting? Inside the budget, or when nothing is running:
+# a store that fills must still drain, and queued writes drain it.
+.read_fits <- function(n, queued, live_mb, region_mb, budget_mb) {
+  (n == 0L && queued == 0L) || live_mb + (n + 1L) * region_mb <= budget_mb
 }
 
 # The read-only write: each chunk goes from the read straight to its
@@ -1115,8 +1162,6 @@ garry_last_route <- function() .garry_state$route
   refresh_budget()
   # Reads in flight: two a reader, each priced from launch as the
   # scheduler prices its reads, so a tight budget binds before they land.
-  # The first read always goes, or a store that fills would stop its own
-  # drain.
   cap <- max(2L * n_read, 2L)
   .read_only_each(
     p,
@@ -1146,7 +1191,7 @@ garry_last_route <- function() .garry_state$route
     },
     distributed = TRUE,
     backlog = function(n) {
-      if (n > 0L && live_mb + (n + 1L) * region_mb > budget_mb) cap else length(writes)
+      if (.read_fits(n, length(writes), live_mb, region_mb, budget_mb)) length(writes) else cap
     },
     poll = harvest,
     cap = cap,

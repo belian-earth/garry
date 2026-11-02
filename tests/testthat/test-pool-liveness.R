@@ -173,7 +173,9 @@ test_that("only a queue that stopped moving counts as stuck", {
 test_that("a daemon lost between tasks fails the run's wait, not a hang", {
   local_pools(1, 1)
   testthat::local_mocked_bindings(.copy_args = function(...) NULL, .package = "garry") # the pool write
-  withr::local_options(garry.chunk_target_px = 300L, garry.placement = "rules")
+  withr::local_options(
+    garry.chunk_target_px = 300L, garry.read_target_px = 300L, garry.placement = "rules"
+  )
   # more chunks than a reader's two in flight, so writes back up
   f <- tempfile(fileext = ".tif")
   ds <- gdalraster::create(
@@ -186,7 +188,8 @@ test_that("a daemon lost between tasks fails the run's wait, not a hang", {
   ds$write(1L, 0L, 0L, 128L, 128L, as.numeric(seq_len(128L^2)))
   ds$close()
   x <- lazy_source(f)
-  expect_gt(nrow(garry:::chunk_iter(plan_lazy(x)@stages[[1L]]@chunks)), 8L)
+  spec <- garry:::.read_only_spec(plan_lazy(x), distributed = TRUE)
+  expect_gt(nrow(garry:::chunk_iter(spec$read_stage[[1L]]@chunks)), 8L)
   # the run's id is taken after its liveness check, before its first task
   lose <- function(prof) {
     function() {

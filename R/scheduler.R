@@ -319,11 +319,9 @@ NULL
     ready = "",
     time = Sys.time()
   ) {
+    stamp <- formatC(unclass(time), format = "f", digits = 3)
     cat(
-      .glue(
-        "{formatC(unclass(time), format = 'f', digits = 3)},",
-        "{event},{key},{pool},{slot},{mb},{store_mb},{ready}"
-      ),
+      paste(stamp, event, key, pool, slot, mb, store_mb, ready, sep = ","),
       "\n",
       sep = "",
       file = task_log,

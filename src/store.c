@@ -28,6 +28,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __linux__
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 SEXP garry_malloc_trim(void);
 SEXP garry_statvfs_mb(SEXP path);
@@ -318,6 +322,14 @@ SEXP garry_sv_pad(SEXP v, SEXP dims, SEXP es_, SEXP fill, SEXP ny2_, SEXP nx2_) 
   return out;
 }
 
+/* The host alone assembles a read-only collect, so a wide read pool
+ * waits on this copy. Four threads stay well ahead of what one socket
+ * delivers; a chunk under a quarter of a megapixel is not worth waking
+ * them for. Threads split by column, so each faults in its own pages:
+ * split by row, all of them race to clear the same huge pages. */
+#define COPY_THREADS 4
+#define COPY_THREADED_CELLS 262144
+
 /* Copy a row-major f32 store payload -- one [h, w] plane or a [nb, h, w]
  * stack -- into a column-major double array of dims (NY, NX, NK) at
  * (y0, x0, k0): out[(y0 + y) + (x0 + x) * NY + (k0 + b) * NY * NX] =
@@ -342,12 +354,16 @@ SEXP garry_f32_into_colmajor(SEXP out, SEXP raw, SEXP origin, SEXP dims) {
   const float *src = (const float *)RAW(raw);
   double *dst = REAL(out);
   const R_xlen_t B = 64;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(3) schedule(static) num_threads(COPY_THREADS) \
+  if (nb * h * w >= COPY_THREADED_CELLS)
+#endif
   for (R_xlen_t b = 0; b < nb; b++) {
-    const float *plane = src + b * h * w;
-    double *slab = dst + (k0 + b) * NY * NX;
-    for (R_xlen_t yy = 0; yy < h; yy += B) {
-      R_xlen_t ye = yy + B < h ? yy + B : h;
-      for (R_xlen_t xx = 0; xx < w; xx += B) {
+    for (R_xlen_t xx = 0; xx < w; xx += B) {
+      for (R_xlen_t yy = 0; yy < h; yy += B) {
+        const float *plane = src + b * h * w;
+        double *slab = dst + (k0 + b) * NY * NX;
+        R_xlen_t ye = yy + B < h ? yy + B : h;
         R_xlen_t xe = xx + B < w ? xx + B : w;
         for (R_xlen_t x = xx; x < xe; x++) {
           double *col = slab + (x0 + x) * NY + y0;
@@ -361,10 +377,43 @@ SEXP garry_f32_into_colmajor(SEXP out, SEXP raw, SEXP origin, SEXP dims) {
   return R_NilValue;
 }
 
+/* The `width` bytes from `offset` of each `stride`-byte row of `raw`: a
+ * partial-width window of a full-width read, in place of an R index
+ * vector of 32 B a cell. */
+SEXP garry_raw_columns(SEXP raw, SEXP stride, SEXP offset, SEXP width) {
+  const R_xlen_t s = (R_xlen_t)asReal(stride);
+  const R_xlen_t o = (R_xlen_t)asReal(offset);
+  const R_xlen_t w = (R_xlen_t)asReal(width);
+  if (TYPEOF(raw) != RAWSXP || s <= 0 || o < 0 || w < 0 || o + w > s || XLENGTH(raw) % s != 0) {
+    error("garry_raw_columns: %lld bytes hold no rows of %lld with %lld from %lld",
+          (long long)XLENGTH(raw), (long long)s, (long long)w, (long long)o);
+  }
+  const R_xlen_t rows = XLENGTH(raw) / s;
+  SEXP out = PROTECT(Rf_allocVector(RAWSXP, rows * w));
+  for (R_xlen_t r = 0; r < rows; r++) {
+    memcpy(RAW(out) + r * w, RAW(raw) + r * s + o, (size_t)w);
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 /* An uninitialised double vector of length n, for a result the caller
  * fills completely (the read-only collect writes every cell). */
 SEXP garry_alloc_double(SEXP n) {
-  return Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
+  SEXP out = Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
+#ifdef MADV_HUGEPAGE
+  /* First touch of 4 KB pages takes more of a large read than the copy.
+   * A vector this size has a mapping of its own, and the kernel may
+   * decline the hint, which changes only the speed. */
+  const size_t bytes = (size_t)XLENGTH(out) * sizeof(double);
+  if (bytes >= (size_t)32 << 20) {
+    const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t lo = ((uintptr_t)REAL(out) + page - 1) & ~(page - 1);
+    uintptr_t hi = ((uintptr_t)REAL(out) + bytes) & ~(page - 1);
+    madvise((void *)lo, hi - lo, MADV_HUGEPAGE);
+  }
+#endif
+  return out;
 }
 
 /* Copy an integer band read into `dst` from element `off` on, folding
@@ -769,6 +818,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},
   {"garry_sv_pad", (DL_FUNC) &garry_sv_pad, 6},
   {"garry_f32_into_colmajor", (DL_FUNC) &garry_f32_into_colmajor, 4},
+  {"garry_raw_columns", (DL_FUNC) &garry_raw_columns, 4},
   {"garry_alloc_double", (DL_FUNC) &garry_alloc_double, 1},
   {"garry_finish_matrix", (DL_FUNC) &garry_finish_matrix, 6},
   {"garry_statvfs_mb", (DL_FUNC) &garry_statvfs_mb, 1},
