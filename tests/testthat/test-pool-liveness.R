@@ -172,6 +172,7 @@ test_that("only a queue that stopped moving counts as stuck", {
 
 test_that("a daemon lost between tasks fails the run's wait, not a hang", {
   local_pools(1, 1)
+  testthat::local_mocked_bindings(.copy_args = function(...) NULL, .package = "garry") # the pool write
   withr::local_options(garry.chunk_target_px = 300L, garry.placement = "rules")
   # more chunks than a reader's two in flight, so writes back up
   f <- tempfile(fileext = ".tif")

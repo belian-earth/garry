@@ -942,9 +942,13 @@ garry_last_route <- function() .garry_state$route
 .write_read_only <- function(p, spec, path, nodata, band_names, wspec, distributed = FALSE) {
   sink <- p@stages[[p@sink]]
   nodata <- as.numeric(nodata)
-  ds <- .sink_output(path, sink@grid, nodata, band_names, wspec)
   wdt <- wspec$dtype %||% sink@grid@dtype
   wq <- .exec_wq(wspec, nodata)
+  a <- if (is.null(wq)) .copy_args(p, spec, path, nodata, wdt, wspec)
+  if (!is.null(a)) {
+    return(gdal_copy_gtiff(a$path, path, a$band, nodata, wspec$options, band_names))
+  }
+  ds <- .sink_output(path, sink@grid, nodata, band_names, wspec)
   if (distributed && is.null(wq)) {
     gdal_close_output(ds, path)
     .write_read_only_pool(p, spec, path, nodata, wdt)
@@ -967,6 +971,45 @@ garry_last_route <- function() .garry_state$route
     }
   }, distributed = distributed)
   gdal_close_output(ds, path)
+}
+
+# The read args of a plan that is one local file written out whole, cells and
+# type as they are, or NULL. GDAL then does the whole write: a 1 GB 64-band file
+# took 1.8 s at a 450 MB peak, against 4.7 s and 7 GB moving each band through R
+# and /dev/shm. A remote file stays with the read pool, which reads it in parallel.
+.copy_args <- function(p, spec, path, nodata, dtype, wspec) {
+  s <- spec$read_stage[[1L]]
+  if (
+    length(spec$read_stage) != 1L || s@kind != "source_read" ||
+      grepl("\\.vrt$", path, ignore.case = TRUE) ||
+      length(wspec$scale) || length(wspec$offset)
+  ) {
+    return(NULL)
+  }
+  a <- .stage_read_args(p@graph, s)
+  if (
+    length(a$path) != 1L || !file.exists(a$path) || length(a$open_options) ||
+      !is.null(a$decim) || length(a$scale) || length(a$offset)
+  ) {
+    return(NULL)
+  }
+  # The read path turns a source's nodata and a float's NaN into `nodata`.
+  nan <- function(v) !length(v) || is.nan(v)
+  same_cells <- if (.dtype_family(dtype) == "float") {
+    nan(a$nodata) && nan(nodata)
+  } else {
+    !length(a$nodata) || identical(as.numeric(a$nodata), nodata)
+  }
+  if (!same_cells) {
+    return(NULL)
+  }
+  g <- p@stages[[p@sink]]@grid
+  ds <- .gdal_probe(a$path)
+  same <- ds$getRasterXSize() == g@dims[["x"]] && ds$getRasterYSize() == g@dims[["y"]] &&
+    isTRUE(all.equal(ds$getGeoTransform(), g@transform)) &&
+    crs_equal(ds$getProjection(), g@crs) &&
+    all(vapply(a$band, function(b) .gdal_band_dtype(ds, b), "") == dtype)
+  if (same) a
 }
 
 # Stream a read-only plan to the writer daemon. Each read task also

@@ -69,6 +69,7 @@ local({
 
   test_that("a read-only pool write keeps its reads inside the read budget", {
     skip_on_cran()
+    testthat::local_mocked_bindings(.copy_args = function(...) NULL, .package = "garry") # the pool write
     rd <- function(p) gdal_read_window(p, 1L, 0L, 0L, 60L, 40L)
     out <- withr::local_tempfile(fileext = ".tif")
     log1 <- withr::local_tempfile(fileext = ".csv")

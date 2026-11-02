@@ -2468,24 +2468,6 @@ gdal_create_output <- function(
     }
     return(.raw_cube_create(path, grid, n_bands, nodata, band_names, scale, offset))
   }
-  if (is.null(options)) {
-    # NUM_THREADS parallelises per-tile DEFLATE inside the (single)
-    # writer daemon: the streamed-write flush of a 64-band AEF cube was
-    # a 57 s single-threaded backlog after the drain (2026-08-12).
-    # Tiles compress independently, so output bytes are unchanged.
-    options <- c(
-      "COMPRESS=DEFLATE",
-      "TILED=YES",
-      "BLOCKXSIZE=256",
-      "BLOCKYSIZE=256",
-      "BIGTIFF=IF_SAFER",
-      "NUM_THREADS=ALL_CPUS"
-    )
-    if (n_bands > 1L) options <- c(options, "INTERLEAVE=BAND")
-  } else if (!any(grepl("^NUM_THREADS=", options, ignore.case = TRUE))) {
-    # user options keep the threaded compression unless they set it
-    options <- c(options, "NUM_THREADS=ALL_CPUS")
-  }
   ds <- gdalraster::create(
     "GTiff",
     path,
@@ -2493,7 +2475,7 @@ gdal_create_output <- function(
     grid@dims[["y"]],
     n_bands,
     dt,
-    options = options,
+    options = .gtiff_options(options, n_bands),
     return_obj = TRUE
   )
   # each setter reports failure by its value: an output that lost its
@@ -2524,6 +2506,58 @@ gdal_create_output <- function(
     if (nzchar(band_names[[b]])) ds$setDescription(b, band_names[[b]])
   }
   ds
+}
+
+# A GTiff's creation options: `options`, or the default. NUM_THREADS parallelises
+# per-tile DEFLATE inside the (single) writer daemon: the streamed-write flush of
+# a 64-band AEF cube was a 57 s single-threaded backlog after the drain
+# (2026-08-12). Tiles compress independently, so output bytes are unchanged.
+.gtiff_options <- function(options, n_bands) {
+  if (is.null(options)) {
+    options <- c(
+      "COMPRESS=DEFLATE",
+      "TILED=YES",
+      "BLOCKXSIZE=256",
+      "BLOCKYSIZE=256",
+      "BIGTIFF=IF_SAFER",
+      "NUM_THREADS=ALL_CPUS"
+    )
+    if (n_bands > 1L) options <- c(options, "INTERLEAVE=BAND")
+  } else if (!any(grepl("^NUM_THREADS=", options, ignore.case = TRUE))) {
+    # user options keep the threaded compression unless they set it
+    options <- c(options, "NUM_THREADS=ALL_CPUS")
+  }
+  options
+}
+
+# Copy bands of one file to a new GTiff, its cells as they are, decoding and
+# compressing on every core.
+gdal_copy_gtiff <- function(src, path, band, nodata, options, band_names) {
+  .gdal_handle_drop(path)
+  restore <- .gdal_threads_all(src)
+  on.exit(restore(), add = TRUE)
+  cl <- c(
+    "-q", "-of", "GTiff", "-mask", "none",
+    "-a_nodata", if (length(nodata)) .gdal_num(nodata) else "none",
+    as.vector(rbind("-b", band)),
+    as.vector(rbind("-co", .gtiff_options(options, length(band))))
+  )
+  res <- .gdal_attempt(gdal_translate_file(src, path, cl))
+  why <- c(res$failed, if (file.exists(path)) .gtiff_incomplete(path) else "GDAL wrote no file")
+  if (length(why)) {
+    cli::cli_abort(
+      c("could not copy {.path {src}} to {.path {path}}.", "x" = "{why[[1L]]}"),
+      class = c("garry_write_error", "garry_error")
+    )
+  }
+  if (any(nzchar(band_names))) {
+    ds <- methods::new(gdalraster::GDALRaster, path, FALSE)
+    for (b in seq_along(band_names)) {
+      if (nzchar(band_names[[b]])) ds$setDescription(b, band_names[[b]])
+    }
+    gdal_close_output(ds, path)
+  }
+  invisible(path)
 }
 
 #' Write a garry-oriented matrix into an open output dataset.

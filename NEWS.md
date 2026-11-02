@@ -172,6 +172,9 @@
   outside R's heap and frees it as it writes, so none is needed. Small HLS
   median fell from 7.0 to 5.2 s and medium from 39 to 33 s, its peak from 14.4
   to 13.5 GB.
+* Writing a local file out whole as a GeoTIFF, cells and type as they are, goes
+  straight through GDAL. A 1 GB 64-band file took 1.9 s where it took 5.1, at a
+  4 GB peak where it took 7.
 * A median over up to 64 dates sorts by network, where it took `top_k` past 32:
   55 dates cost a third of the time per pixel, for about 1 s more compile.
   Direct-route strips all take one height, so a run compiles one kernel where

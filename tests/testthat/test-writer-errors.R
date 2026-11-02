@@ -60,6 +60,7 @@ test_that("a failed sink write aborts classed, does not hang, closes the output"
 test_that("a close that fails or dies on the writer fails the write, and only a write", {
   skip_on_os("windows") # tools::pskill semantics
   local_pools(2, 1)
+  testthat::local_mocked_bindings(.copy_args = function(...) NULL, .package = "garry") # the pool write
   withr::local_options(garry.chunk_target_px = 600)
   f <- fixture_gradient_f32()
   x <- lazy_source(f) + 1

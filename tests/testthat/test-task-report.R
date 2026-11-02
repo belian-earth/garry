@@ -64,6 +64,7 @@ local({
   })
 
   test_that("a read-only pool write logs its reads and writes as tasks", {
+    testthat::local_mocked_bindings(.copy_args = function(...) NULL, .package = "garry") # the pool write
     tlog <- withr::local_tempfile(fileext = ".csv")
     out <- withr::local_tempfile(fileext = ".tif")
     withr::local_options(garry.task_log = tlog,
