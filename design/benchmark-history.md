@@ -89,6 +89,56 @@ Commit `803c73b`, and `c1db885` for wide_write, 2026-11-02, same machine, garry'
 - Cubed's medium geomedian of 53.9 s stops at eps 1e-4, gap 2.9e-10 on medium, and reads a Zarr built outside its clock in 44 s. garry's 49.2 s is at 12 iterations, gap 2.51e-6, and includes every read. They are not equal convergence.
 - What moved these. Whole-cube reductions gave way to a scan over dates, 14x on one core. `system.time()` ran a full `gc()` on every fetch, about 0.15 s each. Strips of one height compile one kernel, which paid for a sorting network at 55 dates. A reduce in that network drew in XLA's YNN fusion, which took Hampel to twice its time. Switching the fusion off across the suite moved no output and gained 0 to 5 % elsewhere, so garry does not set the flag.
 
+## Translate on aligned reads
+
+Translate tree of 2026-11-02, the state before its review fixes, same machine, garry's arm only, three repeats, cold / warm seconds. Output hashes are equal to the previous table on all 20 tasks. Warped reads do not take this path and did not improve.
+
+| task | variant | small | medium | medium before |
+|---|---|---|---|---|
+| median | aligned | 5.1 / 5.0 | 19.4 / 17.2 | 23.2 / 21.4 |
+| ndvi | aligned | 4.8 / 2.2 | 15.0 / 13.1 | 18.5 / 16.4 |
+| geomedian | aligned | 7.1 / 5.6 | 40.8 / 38.9 | 49.2 / 46.7 |
+
+- A re-measure at `9cb1318` with task logging added, four repeats, strips pinned at 22 and 66: median aligned 17.8 / 18.0 s, geomedian aligned 39.0 / 37.1 s. This comes from the A arm of the handover A/B, so warm median has 22 strips against the suite's 26.
+- Median's peak rose with translate: 12.9 GiB before, 14.4 GiB in the table's run, 13.8 GiB at `9cb1318` on a coarser sampler. Reader anon at the peak went from 2.5 to 3.5 GiB, about 50 MiB a reader.
+
+## Handing reads to XLA, and pool widths
+
+A scratch build, 2026-11-02, not in this branch: strip and mask reads go into aligned C memory, XLA adopts it with no copy, and `PJRT_Buffer_Delete` frees it at the task's end. It needs two additions to pjrt. Medium aligned, four repeats in ABBA order, strips pinned, the same hash on every arm and repeat, cold / warm.
+
+| | median, today | median, adopted | geomedian, today | geomedian, adopted |
+|---|---|---|---|---|
+| wall s | 17.8 / 18.0 | 14.0 / 12.5 | 39.0 / 37.1 | 33.6 / 32.0 |
+| strip daemon-s | 30.0 / 28.1 | 12.3 / 10.8 | 95.8 / 96.7 | 69.3 / 69.5 |
+| full gc passes, compute pool | 198 / 198 | 6 / 12 | 264 / 264 | 54 / 54 |
+| gc s, compute pool | 16.0 / 15.2 | 2.1 / 2.3 | 34.3 / 35.0 | 8.7 / 10.2 |
+| peak GiB | 13.8 / 13.7 | 14.2 / 13.3 | 7.7 / 8.7 | 7.3 / 7.8 |
+
+- The saving is mostly gc. A strip's second large allocation triggers a collection, which ages the read, so only a full pass frees it, at about 80 ms a pass.
+- Two gc policies with no pjrt change were each killed at the 16 GB cap, one run each, on medium median. One used minor passes only. The other kept a full pass every 1 GB.
+
+Pool widths on the adopted build, cold seconds, one or two repeats, 16 GB cap. Peak is for the median.
+
+| read x compute | median | geomedian | median warp | small median | small geomedian | peak GiB | startup s |
+|---|---|---|---|---|---|---|---|
+| 4 x 6 | 15.7 | 48.9 | 52.6 | 4.4 | 6.7 | 11.5 | 3.6 |
+| 8 x 4 | 16.1 | 41.3 | 35.3 | 5.3 | 6.8 | 11.5 | 3.6 |
+| 8 x 6 | 14.8 | 38.0 | 34.2 | 4.7 | 6.2 | 12.4 | 4.0 |
+| 14 x 6 | 14.1 | 34.5 | 30.9 | 4.6 | 6.2 | 12.9 | 4.7 |
+| 14 x 8 | 13.0 | 33.8 | 30.5 | 4.6 | 5.9 | 14.2 | 5.2 |
+| 20 x 2 | 16.3 | 44.5 | 30.8 | 5.1 | 7.6 | 12.9 | 4.6 |
+| 20 x 4 | 15.0 | 37.2 | 29.6 | 5.2 | 6.8 | 13.6 | 5.1 |
+| 20 x 6, the default | 13.5 | 33.6 | 29.2 | 4.7 | 6.4 | 13.5 | 5.5 |
+| 20 x 8 | 12.8 | 32.7 | 27.7 | 4.7 | 6.1 | 15.0 | 6.0 |
+| 20 x 10 | 12.9 | 31.8 | 28.2 | 4.7 | 6.1 | 15.1 | 6.4 |
+| 20 x 12 | killed | 33.8 | 28.9 | 5.1 | 6.6 | 15.5 | 7.0 |
+
+- ts_kalman stayed at 2.6 to 2.8 s in every cell of the sweep.
+- The default stands on this machine. Compute 8 gains 3 to 5 % for 1.5 GiB more peak, and compute 12 was killed at the cap on medium median.
+- All logical cores stays right for readers: 20 beats 14 by 6 to 9 % on warped median, 3 % on geomedian and up to 4 % on aligned median.
+- Small tasks are flat, so a wide pool only adds startup there.
+- The compute cap of 8 above 24 cores is still untested. This machine cannot show it.
+
 ---
 
 # garry benchmarks
