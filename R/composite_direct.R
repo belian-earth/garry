@@ -1197,16 +1197,7 @@ NULL
   if (length(strips) == 1L && nb == 1L) {
     return(strips[[1L]])
   }
-  p <- do.call(
-    c,
-    lapply(seq_along(strips), function(s) {
-      x <- strips[[s]]
-      attributes(x) <- NULL
-      each <- length(x) %/% nb
-      skip <- if (s == length(strips)) drop * nx * 4 else 0
-      if (nb == 1L && skip == 0) x else x[(i - 1L) * each + seq(skip + 1, each)]
-    })
-  )
+  p <- .Call("garry_join_bands", strips, i, nb, drop * nx * 4, PACKAGE = "garry")
   attr(p, "gdim") <- c(ny, nx)
   attr(p, "gdt") <- "f32"
   p

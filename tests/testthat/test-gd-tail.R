@@ -32,6 +32,20 @@ test_that(".gd_even_strips has one height and keeps each row once", {
   }
 })
 
+test_that(".gd_join_strips takes one band of each strip and drops the overlap", {
+  plane <- function(...) writeBin(as.numeric(c(...)), raw(), size = 4L)
+  # two strips of two bands, 1 x 2 cells a band, then 2 x 2 reaching back one row
+  a <- c(plane(1, 2), plane(11, 12))
+  b <- c(plane(0, 0, 3, 4), plane(0, 0, 13, 14))
+  band <- function(i) {
+    got <- garry:::.gd_join_strips(list(a, b), i, 2L, 2L, 2L, 1L)
+    expect_identical(attr(got, "gdim"), c(2L, 2L))
+    readBin(got, "numeric", n = 4L, size = 4L)
+  }
+  expect_identical(band(1L), c(1, 2, 3, 4))
+  expect_identical(band(2L), c(11, 12, 13, 14))
+})
+
 test_that("g_fill builds a device constant equal to the R fill", {
   skip_if(!rlang::is_installed("anvl"), "anvl not installed")
   a <- g_fill(1.5, c(2L, 3L))

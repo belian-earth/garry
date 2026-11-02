@@ -674,6 +674,27 @@ SEXP garry_write_parts(SEXP raw, SEXP paths) {
   return R_NilValue;
 }
 
+/* Band `i` of `nb` from each strip's band-sequential bytes, joined in strip order,
+ * less the first `drop` bytes of the last strip's band. */
+SEXP garry_join_bands(SEXP strips, SEXP i_, SEXP nb_, SEXP drop_) {
+  R_xlen_t n = XLENGTH(strips);
+  R_xlen_t band = asInteger(i_) - 1, nb = asInteger(nb_);
+  R_xlen_t drop = (R_xlen_t) asReal(drop_), total = -drop;
+  for (R_xlen_t s = 0; s < n; s++) {
+    total += XLENGTH(VECTOR_ELT(strips, s)) / nb;
+  }
+  SEXP out = PROTECT(allocVector(RAWSXP, total));
+  Rbyte *p = RAW(out);
+  for (R_xlen_t s = 0; s < n; s++) {
+    SEXP x = VECTOR_ELT(strips, s);
+    R_xlen_t each = XLENGTH(x) / nb, skip = s == n - 1 ? drop : 0;
+    memcpy(p, RAW(x) + band * each + skip, (size_t) (each - skip));
+    p += each - skip;
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 /* A fetch's f32 plane, outside R's heap. A raw vector this size has survived a
  * collection by the time it is dead, so a full gc() would be the only way to
  * free it, on every fetch. This one goes when it is written. */
@@ -730,6 +751,7 @@ SEXP garry_plane_write(SEXP p, SEXP path) {
 }
 
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_join_bands", (DL_FUNC) &garry_join_bands, 4},
   {"garry_plane_new", (DL_FUNC) &garry_plane_new, 1},
   {"garry_plane_addr", (DL_FUNC) &garry_plane_addr, 1},
   {"garry_plane_write", (DL_FUNC) &garry_plane_write, 2},
