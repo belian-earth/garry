@@ -69,25 +69,25 @@ Medium, 16 GB cap, `odc-dask` chunk 2048 from the sweep:
 
 ## After the memory and kernel work
 
-Commit `7d314ce`, 2026-11-02, same machine, garry's arm only, three repeats, cold / warm seconds. Best ODC is the first baseline's, above. Every phase completed.
+Commit `803c73b`, 2026-11-02, same machine, garry's arm only, three repeats, cold / warm seconds. Best ODC is the first baseline's, above. Every phase completed.
 
 | task | variant | small | best ODC, small | medium | best ODC, medium |
 |---|---|---|---|---|---|
-| median | aligned | 5.2 / 3.8 | 9.5 / 3.0 | 33.3 / 29.9 | 36.6 / 29.6 |
-| median | warp | 6.0 / 4.6 | 14.8 / 7.5 | 42.0 / 38.9 | 57.5 / 49.9 |
-| ndvi | aligned | 4.6 / 3.0 | 9.0 / 2.5 | 25.2 / 23.0 | 30.7 / 24.5 |
-| ndvi | warp | 5.2 / 3.5 | 13.1 / 5.8 | 31.1 / 28.0 | 46.3 / 39.2 |
-| geomedian | aligned | 7.5 / 5.9 | 3.4 / 3.2 | 50.3 / 46.8 | OOM |
-| geomedian | warp | 9.2 / 7.9 | 12.4 / 11.6 | 71.8 / 68.7 | OOM |
-| ts_kalman | default | 1.9 / 1.4 | 2.3 / 2.3 | 2.9 / 2.3 | 9.0 / 9.6 |
-| ts_hampel | default | 2.5 / 1.8 | 1.2 / 0.7 | 4.5 / 3.8 | 2.7 / 2.2 |
-| focal | aligned | 1.1 / 0.8 | 0.1 / 0.1 | 1.6 / 1.3 | 0.4 / 0.3 |
-| wide_write | default | 1.2 / 0.8 | 0.3 / 0.2 | 5.2 / 4.6 | 2.3 / 2.3 |
+| median | aligned | 5.3 / 3.0 | 9.5 / 3.0 | 23.2 / 21.4 | 36.6 / 29.6 |
+| median | warp | 6.2 / 3.9 | 14.8 / 7.5 | 33.0 / 31.3 | 57.5 / 49.9 |
+| ndvi | aligned | 5.0 / 2.4 | 9.0 / 2.5 | 18.5 / 16.4 | 30.7 / 24.5 |
+| ndvi | warp | 5.6 / 3.0 | 13.1 / 5.8 | 25.3 / 23.3 | 46.3 / 39.2 |
+| geomedian | aligned | 7.4 / 6.0 | 3.4 / 3.2 | 49.2 / 46.7 | OOM |
+| geomedian | warp | 9.0 / 8.0 | 12.4 / 11.6 | 71.0 / 68.8 | OOM |
+| ts_kalman | default | 1.6 / 1.1 | 2.3 / 2.3 | 2.6 / 2.0 | 9.0 / 9.6 |
+| ts_hampel | default | 1.6 / 0.9 | 1.2 / 0.7 | 2.3 / 1.6 | 2.7 / 2.2 |
+| focal | aligned | 0.8 / 0.5 | 0.1 / 0.1 | 1.3 / 1.0 | 0.4 / 0.3 |
+| wide_write | default | 1.2 / 0.9 | 0.3 / 0.2 | 5.1 / 4.6 | 2.3 / 2.3 |
 
-- Peaks at medium: median and ndvi 13.5 to 14.4 GB, geomedian 8.3 to 9.9 GB.
+- Output hashes match the run before this batch on every task.
 - Geomedian's gaps are unchanged: 1.85e-6 small and 2.51e-6 medium, aligned.
-- Cubed's medium geomedian of 53.9 s stops at eps 1e-4, gap 2.9e-10 on medium, and reads a Zarr built outside its clock in 44 s. garry's 50.3 s is at 12 iterations, gap 2.51e-6, and includes every read. They are not equal convergence.
-- Three things did most of this. Whole-cube reductions gave way to a scan over dates, 14x on one core. `system.time()` ran a full `gc()` on every fetch, about 0.15 s each. The budget and the memory fixes let every medium task finish.
+- Cubed's medium geomedian of 53.9 s stops at eps 1e-4, gap 2.9e-10 on medium, and reads a Zarr built outside its clock in 44 s. garry's 49.2 s is at 12 iterations, gap 2.51e-6, and includes every read. They are not equal convergence.
+- What moved these. Whole-cube reductions gave way to a scan over dates, 14x on one core. `system.time()` ran a full `gc()` on every fetch, about 0.15 s each. Strips of one height compile one kernel, which paid for a sorting network at 55 dates. A reduce in that network drew in XLA's YNN fusion, which took Hampel to twice its time. Switching the fusion off across the suite moved no output and gained 0 to 5 % elsewhere, so garry does not set the flag.
 
 ---
 

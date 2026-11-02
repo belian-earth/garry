@@ -176,10 +176,10 @@
   55 dates cost a third of the time per pixel, for about 1 s more compile.
   Direct-route strips all take one height, so a run compiles one kernel where
   it compiled two, which pays for that. Medium HLS median fell from 33 to 23 s
-  cold and 30 to 21 s warm, and small from 3.8 to 3.2 s warm, same cells.
+  cold and 30 to 21 s warm, and small from 3.8 to 3.0 s warm, same cells.
 * A median network counts valid dates by adding planes. A reduce there drew in
   XLA's YNN fusion, so `hampel_smooth()` over the medium annual stack took 4.5 s
-  and now takes 2.6, same cells.
+  and now takes 2.3, same cells.
 * A run starts with a full collection on its daemons only if enough has passed
   through them to pay for one, and the host's own after dropping store regions
   likewise. Together these were half of a small run's floor: a focal task on a
