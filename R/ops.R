@@ -535,6 +535,10 @@ g_ifelse <- function(cond, yes, no) {
     }
     return(anvl::nv_ifelse(cond, yes, no))
   }
+  # A comparison with NaN is false in XLA and NA in R.
+  if (is.logical(cond)) {
+    cond <- !is.na(cond) & cond
+  }
   ifelse(cond, yes, no)
 }
 
@@ -693,7 +697,7 @@ g_stack <- function(values) {
   if (is.null(d)) {
     return(unlist(values)) # scalars (or vectors) stack along one axis
   }
-  arr <- simplify2array(values) # (d..., k)
+  arr <- array(unlist(values), c(d, length(values))) # (d..., k)
   aperm(arr, c(length(d) + 1L, seq_along(d))) # -> (k, d...)
 }
 
@@ -876,6 +880,19 @@ g_scan <- function(init, body, xs, reverse = FALSE) {
     }
   }
   list(carry = carry, out = bufs)
+}
+
+# Apply `f` to `init` `n` times. Traced, that is one loop in the program, so the
+# program's size and compile time do not grow with `n`.
+.g_iterate <- function(init, f, n) {
+  if (.g_tree_any(init, .g_traced)) {
+    step <- function(carry, s) list(carry = list(v = f(carry$v)), out = NULL)
+    return(anvl::nv_scan(list(v = init), body = step, steps = n)$carry$v)
+  }
+  for (i in seq_len(n)) {
+    init <- f(init)
+  }
+  init
 }
 
 #' Static range slice along dim 1 (the scanned axis).

@@ -2860,13 +2860,17 @@ gdal_warp_to_buffer <- function(
   bytes = 4L
 ) {
   gdalraster::set_config_option("GDAL_MEM_ENABLE_OPEN", "YES") # >=3.10 gate
-  # `buf` is a RAW float byte vector (the raw-f32 store, D19-D21). The public
-  # gdalraster::rvector_to_MEM() infers the band type from the R vector type
-  # (integer/double/complex) and cannot expose raw bytes as Float32, so the
-  # pure-R way to zero-copy-warp into a float buffer is the data pointer plus an
-  # explicit DATATYPE MEM DSN. get_data_ptr() is exported from
-  # gdalraster 2.7.0, hence the version floor.
-  ptr <- gdalraster::get_data_ptr(buf)
+  # `buf` is a RAW float byte vector (the raw-f32 store, D19-D21) or a plane from
+  # garry_plane_new(). The public gdalraster::rvector_to_MEM() infers the band
+  # type from the R vector type (integer/double/complex) and cannot expose raw
+  # bytes as Float32, so the pure-R way to zero-copy-warp into a float buffer is
+  # the data pointer plus an explicit DATATYPE MEM DSN. get_data_ptr() is
+  # exported from gdalraster 2.7.0, hence the version floor.
+  ptr <- if (is.raw(buf)) {
+    gdalraster::get_data_ptr(buf)
+  } else {
+    .Call("garry_plane_addr", buf, PACKAGE = "garry")
+  }
   # several bands fill band-sequential planes (the MEM default BANDOFFSET)
   nb <- max(1L, length(band))
   gdt <- if (bytes == 4L) "Float32" else "Float64"

@@ -50,6 +50,61 @@ test_that("medoid returns the observed vector nearest the geomedian", {
   expect_equal(got[keep], ref[keep], tolerance = 1e-4)
 })
 
+test_that("geomedian starts from the mean of the dates with every band valid", {
+  raw <- .mb_values()
+  got <- execute_plan(plan_lazy(reduce_over(.mb_cube(), geomedian(1L), over = "t")))
+  ref <- .ref_pixels(raw, function(Y) .ref_wz(Y, iters = 1L))
+  keep <- !is.na(ref)
+  expect_equal(got[keep], ref[keep], tolerance = 1e-6)
+})
+
+test_that("a plain array gets the answers of a traced one", {
+  raw <- .mb_values()
+  for (fn in list(geomedian(3L), medoid(3L))) {
+    expect_equal(
+      fn(raw, 2L),
+      execute_plan(plan_lazy(reduce_over(.mb_cube(), fn, over = "t"))),
+      tolerance = 1e-5
+    )
+  }
+})
+
+test_that("a single pixel keeps its axes on a plain array", {
+  for (fn in list(geomedian(2L), medoid(2L))) {
+    expect_identical(dim(fn(array(as.numeric(1:6), c(2L, 3L, 1L, 1L)), 2L)), c(2L, 1L, 1L))
+  }
+})
+
+test_that("an integer cube solves in float", {
+  g <- graph_new()
+  src <- function(v) lazy_source(fixture_tile(v, type = "Int16"), graph = g)
+  stk <- function(v) lazy_stack(list(a = src(v), b = src(v + 2L), c = src(v + 10L)), along = "t")
+  cube <- lazy_stack(list(A = stk(1L), B = stk(5L)), along = "band")
+  expect_identical(cube@grid@dtype, "i16")
+  Y <- rbind(c(1, 3, 11), c(5, 7, 15))
+  got <- execute_plan(plan_lazy(reduce_over(cube, geomedian(), over = "t")))
+  expect_equal(got[, 1L, 1L], .ref_wz(Y), tolerance = 1e-4)
+  got <- execute_plan(plan_lazy(reduce_over(cube, medoid(), over = "t")))
+  expect_equal(got[, 1L, 1L], c(3, 7))
+})
+
+test_that("a joint strip's budget grows with its bands", {
+  x <- list(geomedian(), medoid())
+  for (fn in x) {
+    expect_identical(attr(fn, "joint_cubes"), garry:::.mb_joint_cubes)
+  }
+  plan_cubes <- function(nb) {
+    g <- graph_new()
+    src <- function() lazy_source(fixture_tile(1), graph = g)
+    stk <- function() lazy_stack(list(a = src(), b = src()), along = "t")
+    cube <- lazy_stack(stats::setNames(lapply(seq_len(nb), function(i) stk()), paste0("b", seq_len(nb))), along = "band")
+    top <- reduce_over(cube, geomedian(), over = "t")
+    gg <- function(id) graph_get(top@graph, id)
+    garry:::.cd_joint_spec(gg, gg(top@node_id))$cubes
+  }
+  expect_identical(plan_cubes(4L), 2 * plan_cubes(2L))
+})
+
 test_that("multiband reducers validate their inputs", {
   expect_error(geomedian(iters = 0), "positive")
   # a plain (t, y, x) stack is not a multiband cube

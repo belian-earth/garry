@@ -946,8 +946,7 @@ NULL
 }
 
 # Rows `[y0, y0 + h)` of every slice file, as one row-major f32 cube on the
-# device. The host bytes go before the kernel runs: they are as big as the
-# buffer that replaces them.
+# device.
 .gd_upload_rows <- function(bins, y0, h, nx, dev) {
   bytes <- .Call(
     "garry_read_rows",
@@ -956,10 +955,26 @@ NULL
     as.numeric(h) * nx * 4,
     PACKAGE = "garry"
   )
+  n <- length(bytes)
   a <- g_upload_raw(bytes, "f32", c(length(bins), h, nx), device = dev)
   rm(bytes)
-  gc(FALSE)
+  .gd_drop_reads(n)
   a
+}
+
+# Hold a daemon's uploaded reads under .daemon_gc_budget_mb. A read is as big as
+# the buffer that replaced it, and by now it has survived a collection, so only
+# a full pass frees it, 68 ms on a daemon. That is nothing against a big read's
+# kernel, but a joint strip uploads one small read per band: those wait until
+# they add up, and its `joint_cubes` count them.
+.gd_drop_reads <- function(bytes) {
+  acc <- (.daemon_gc_state$reads %||% 0) + bytes
+  if (acc >= .daemon_gc_budget_mb * 2^20) {
+    gc(FALSE)
+    acc <- 0
+  }
+  .daemon_gc_state$reads <- acc
+  invisible(NULL)
 }
 
 # Pipeline daemon task: replay the cleaned mask on one batch of slices
@@ -1061,34 +1076,33 @@ NULL
       class = c("garry_read_error", "garry_error")
     )
   }
-  buf <- rep(writeBin(NaN, raw(), size = 4L), nx * ny) # no source reaches: NaN
+  plane <- .Call("garry_plane_new", as.numeric(nx) * ny, PACKAGE = "garry")
   # WARP-ON-READ (via the adapter): warp the slice's REMOTE items straight
   # into the f32 buffer in one gdalwarp -- GDAL reads (windowed vsicurl),
   # reprojects and mosaics the sources itself. No tmpfs GTiff fetch, no
   # per-slice local index. Ordered by datetime so overlap resolution (last
   # source wins) matches the GTI SORT_FIELD=datetime, highest-on-top path.
-  tw <- system.time(
-    buf <- .gdal_with_retry(
-      function() {
-        gdal_warp_to_buffer(
-          buf,
-          nx,
-          ny,
-          k$gtstr,
-          k$wkt,
-          j$locs[order(j$dt)],
-          j$nodata,
-          resampling = j$resampling,
-          band = j$band
-        )
-      },
-      what = "slice warp",
-      src = j$locs
-    )
-  )[["elapsed"]]
-  writeBin(buf, j$bin)
-  bytes <- .payload_bytes(buf)
-  rm(buf)
-  .daemon_gc_after(bytes)
+  # system.time() would run a full gc() first, on every fetch.
+  t0 <- proc.time()[["elapsed"]]
+  .gdal_with_retry(
+    function() {
+      gdal_warp_to_buffer(
+        plane,
+        nx,
+        ny,
+        k$gtstr,
+        k$wkt,
+        j$locs[order(j$dt)],
+        j$nodata,
+        resampling = j$resampling,
+        band = j$band
+      )
+    },
+    what = "slice warp",
+    src = j$locs
+  )
+  tw <- proc.time()[["elapsed"]] - t0
+  .Call("garry_plane_write", plane, j$bin, PACKAGE = "garry")
+  .daemon_gc_after(4 * as.numeric(nx) * ny)
   list(tw = tw)
 }

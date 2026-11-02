@@ -35,7 +35,7 @@ local({
     }
   })
 
-  test_that("blocks and strips move a cell by rounding at most, and tmpfs ends empty", {
+  test_that("blocks and strips move no bit of a geomedian, and tmpfs ends empty", {
     x <- reduce_over(.gj_cube(), geomedian(4L), over = "t")
     want <- collect(x, distributed = TRUE)
     for (shape in list(c(1L, 40L), c(3L, 40L), c(2L, 16L), c(3L, 7L), c(1L, 3L))) {
@@ -44,7 +44,7 @@ local({
         .gd_block_rows = function(spec) shape[[2L]],
         .package = "garry"
       )
-      expect_equal(collect(x, distributed = TRUE), want, tolerance = 1e-5, info = paste(shape, collapse = " x "))
+      expect_identical(collect(x, distributed = TRUE), want, info = paste(shape, collapse = " x "))
     }
     plan <- collect(x, plan_only = TRUE)
     tmp <- withr::local_tempdir()
@@ -74,6 +74,15 @@ test_that("a block is a whole multiple of the fixed height and follows no live R
 test_that("a joint strip's height comes from the plan and the option alone", {
   testthat::local_mocked_bindings(.garry_ram_avail_mb = function() stop("not asked"))
   withr::local_options(garry.ram_budget_mb = 512)
-  expect_identical(garry:::.gd_joint_rows(55L, 3660L), 4L)
-  expect_identical(garry:::.gd_joint_rows(55L, 1e6L), 1L)
+  expect_identical(garry:::.gd_joint_rows(55L, 3660L, 34), 4L)
+  expect_identical(garry:::.gd_joint_rows(55L, 1e6L, 34), 1L)
+})
+
+test_that("a fetch plane starts NaN, writes out and frees itself", {
+  p <- .Call("garry_plane_new", 6, PACKAGE = "garry")
+  f <- withr::local_tempfile()
+  .Call("garry_plane_write", p, f, PACKAGE = "garry")
+  expect_identical(file.size(f), 24)
+  expect_true(all(is.nan(readBin(f, "numeric", n = 6L, size = 4L))))
+  expect_error(.Call("garry_plane_write", p, f, PACKAGE = "garry"), "written already")
 })

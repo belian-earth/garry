@@ -25,6 +25,8 @@
 #include <R_ext/Rdynload.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 SEXP garry_malloc_trim(void);
@@ -672,7 +674,65 @@ SEXP garry_write_parts(SEXP raw, SEXP paths) {
   return R_NilValue;
 }
 
+/* A fetch's f32 plane, outside R's heap. A raw vector this size has survived a
+ * collection by the time it is dead, so a full gc() would be the only way to
+ * free it, on every fetch. This one goes when it is written. */
+static void plane_free(SEXP p) {
+  free(R_ExternalPtrAddr(p));
+  R_ClearExternalPtr(p);
+}
+
+/* `n` f32 cells of NaN, the value of a cell no source reaches. */
+SEXP garry_plane_new(SEXP n_) {
+  R_xlen_t n = (R_xlen_t) asReal(n_);
+  float *d = malloc((size_t) n * sizeof(float));
+  if (d == NULL) {
+    error("no memory for a plane of %.0f cells", (double) n);
+  }
+  float nan = (float) R_NaN;
+  for (R_xlen_t i = 0; i < n; i++) {
+    d[i] = nan;
+  }
+  SEXP size = PROTECT(ScalarReal((double) n));
+  SEXP p = PROTECT(R_MakeExternalPtr(d, R_NilValue, size));
+  R_RegisterCFinalizerEx(p, plane_free, TRUE);
+  UNPROTECT(2);
+  return p;
+}
+
+/* The plane's address, as a GDAL MEM dataset's DATAPOINTER takes it. */
+SEXP garry_plane_addr(SEXP p) {
+  char s[32];
+  snprintf(s, sizeof s, "0x%llx", (unsigned long long) (uintptr_t) R_ExternalPtrAddr(p));
+  return mkString(s);
+}
+
+/* Write the plane to `path` and free it. */
+SEXP garry_plane_write(SEXP p, SEXP path) {
+  float *d = R_ExternalPtrAddr(p);
+  if (d == NULL) {
+    error("this plane has been written already");
+  }
+  size_t n = (size_t) asReal(R_ExternalPtrProtected(p));
+  const char *fn = translateChar(STRING_ELT(path, 0));
+  FILE *f = fopen(fn, "wb");
+  if (f == NULL) {
+    plane_free(p);
+    error("cannot open %s", fn);
+  }
+  size_t wrote = fwrite(d, sizeof(float), n, f);
+  int closed = fclose(f);
+  plane_free(p);
+  if (wrote != n || closed != 0) {
+    error("short write to %s", fn);
+  }
+  return R_NilValue;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_plane_new", (DL_FUNC) &garry_plane_new, 1},
+  {"garry_plane_addr", (DL_FUNC) &garry_plane_addr, 1},
+  {"garry_plane_write", (DL_FUNC) &garry_plane_write, 2},
   {"garry_read_rows", (DL_FUNC) &garry_read_rows, 3},
   {"garry_write_parts", (DL_FUNC) &garry_write_parts, 2},
   {"garry_coarsen_into", (DL_FUNC) &garry_coarsen_into, 5},

@@ -7,7 +7,7 @@
 medoid(iters = 12L)
 }
 \arguments{
-\item{iters}{Weiszfeld iterations (fixed, unrolled).}
+\item{iters}{Weiszfeld iterations.}
 }
 \value{
 A reducer \code{fn(x, dims)} for \code{\link[=reduce_over]{reduce_over()}}.

@@ -158,10 +158,20 @@
 * `geomedian()`, `medoid()` and any custom reducer over a band stack of time
   stacks take the direct route, so they stay inside the RAM budget. Medium
   HLS, 55 dates of 3660 x 3660 in six bands, ran out of memory at 16 GB and now
-  takes about 250 s at a 7.4 GB peak. A cube too big for `/dev/shm` runs in
+  takes 53 s at an 8.8 GB peak. A cube too big for `/dev/shm` runs in
   blocks of full-width rows, fetched, masked, reduced in strips and freed. Blocks
   and strips take their heights from the plan and `garry.read_budget_mb` and
   `garry.ram_budget_mb`, never free RAM, so one input gives one set of bytes.
+* `geomedian()` and `medoid()` solve by a scan over dates, one plane per band,
+  in place of whole-cube reductions. That is 14 times faster on one core, holds
+  a quarter of the memory, and no cell depends on chunks or strips any more. A
+  real tile moved by 0.0024 DN at most. The starting mean now takes whole dates
+  only, as the solver does, so a date with one band NaN adds nothing to it.
+* The direct route's fetches ran a full `gc()` each, through `system.time()`,
+  which cost more than the read on a small tile. A fetch now holds its plane
+  outside R's heap and frees it as it writes, so none is needed. Small HLS
+  median fell from 6.8 to 5.4 s and medium from 37 to 34 s, its peak from 14.4
+  to 13.5 GB.
 * A masked composite stays inside its RAM budget. Medium HLS median and NDVI,
   55 dates of 3660 x 3660 under 16 GB, ran out of memory on every run and now
   finish in 29 to 48 s, same cells, about 1.5 GB under the cap. Three things

@@ -1759,7 +1759,8 @@ plan_lazy <- function(x) {
     protos[[i]]$halo <- if (length(needs)) max(0L, needs) else 0L
   }
 
-  read_px <- .plan_read_px(graph, protos)
+  read_bpx <- .plan_read_bpx(graph, protos)
+  read_px <- .plan_read_px(read_bpx)
   # Fusion-aware read window cap (design/placement-cost-pass.md): a
   # fused kernel executes at READ granularity, so the window must fit
   # one reader's fused working set (input planes + activation cubes)
@@ -1836,16 +1837,7 @@ plan_lazy <- function(x) {
           max(1, garry_opt("read_budget_mb") * 2^20 / (2 * 4 * nb))
         ))
       }
-      min(
-        vapply(
-          cons,
-          function(j) {
-            .plan_read_px(graph, protos[j])
-          },
-          numeric(1)
-        ),
-        fuse_px_cap(i)
-      )
+      min(.plan_read_px(read_bpx[cons]), fuse_px_cap(i))
     },
     numeric(1)
   )
@@ -2217,8 +2209,15 @@ plan_lazy <- function(x) {
 # outer-dim product), so one coalesced 145-band source input sizes the
 # window exactly as 145 per-band inputs did: residency is identical,
 # only the task and region count differ.
-.plan_read_px <- function(graph, protos) {
-  set_bpx <- vapply(
+.plan_read_px <- function(bpx) {
+  cap <- garry_opt("read_budget_mb") * 2^20 / (2 * max(c(4, bpx)))
+  max(1, min(garry_opt("read_target_px"), cap))
+}
+
+# Bytes per pixel of each stage's input set. Priced once: every read of a sink
+# with n inputs asks for that sink's set, which is n^2 lookups when read each time.
+.plan_read_bpx <- function(graph, protos) {
+  vapply(
     protos,
     function(s) {
       if (length(s$input_nodes) == 0L) {
@@ -2236,8 +2235,6 @@ plan_lazy <- function(x) {
     },
     numeric(1)
   )
-  cap <- garry_opt("read_budget_mb") * 2^20 / (2 * max(c(4, set_bpx)))
-  max(1, min(garry_opt("read_target_px"), cap))
 }
 
 .chunk_for <- function(

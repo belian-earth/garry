@@ -149,7 +149,7 @@ NULL
 # Given a ReduceNode, lift one band's pieces: per-slice band + fmask sources,
 # the masked-apply fn F, and the mask CHAIN (Map/Focal nodes, replayed on the
 # cube; may include morphology focals). NULL if not reconstructible.
-.cd_reduce_spec <- function(gg, red) {
+.cd_reduce_spec <- function(gg, red, masks = new.env(parent = emptyenv())) {
   if (!S7::S7_inherits(red, ReduceNode)) {
     return(NULL)
   }
@@ -162,11 +162,11 @@ NULL
   if (length(red@parents) != 1L) {
     return(NULL)
   }
-  .cd_stack_spec(gg, gg(red@parents[[1L]]), red@op, red@nan_rm)
+  .cd_stack_spec(gg, gg(red@parents[[1L]]), red@op, red@nan_rm, masks)
 }
 
 # One band's slices, lifted from the stack that holds them over time.
-.cd_stack_spec <- function(gg, stk, op, nan_rm) {
+.cd_stack_spec <- function(gg, stk, op, nan_rm, masks = new.env(parent = emptyenv())) {
   if (!S7::S7_inherits(stk, StackNode) || !length(stk@parents)) {
     return(NULL)
   }
@@ -211,16 +211,24 @@ NULL
     ) {
       return(NULL)
     }
-    m0 <- .cd_walk_mask(gg, first@parents[[2L]])
-    if (is.null(m0)) {
+    # Bands share their slices' masks, so each mask is walked once.
+    mask_of <- function(mid) {
+      key <- as.character(mid)
+      if (is.null(masks[[key]])) {
+        w <- .cd_walk_mask(gg, mid)
+        masks[[key]] <- if (is.null(w)) FALSE else c(w, list(sig = .cd_chain_sig(w$chain)))
+      }
+      masks[[key]]
+    }
+    m0 <- mask_of(first@parents[[2L]])
+    if (isFALSE(m0)) {
       return(NULL)
     }
-    c_sig <- .cd_chain_sig(m0$chain)
     fmask_srcs <- vapply(
       masked,
       function(id) {
-        w <- .cd_walk_mask(gg, gg(id)@parents[[2L]])
-        if (is.null(w) || !identical(.cd_chain_sig(w$chain), c_sig)) {
+        w <- mask_of(gg(id)@parents[[2L]])
+        if (isFALSE(w) || !identical(w$sig, m0$sig)) {
           NA_integer_
         } else {
           w$src
@@ -297,16 +305,18 @@ NULL
   if (!S7::S7_inherits(cube, StackNode) || !identical(cube@along, "band")) {
     return(NULL)
   }
+  masks <- new.env(parent = emptyenv())
   specs <- lapply(cube@parents, function(id) {
     stk <- gg(id)
     if (S7::S7_inherits(stk, StackNode) && identical(stk@along, "t")) {
-      .cd_stack_spec(gg, stk, "joint", top@nan_rm)
+      .cd_stack_spec(gg, stk, "joint", top@nan_rm, masks)
     }
   })
   list(
     specs = specs,
     reduce = .slim_fn(top@fn[[1L]]),
-    margin = .dim_margins(names(.node_grid(cube)@dims), top@over)
+    margin = .dim_margins(names(.node_grid(cube)@dims), top@over),
+    cubes = length(specs) * (attr(top@fn[[1L]], "joint_cubes", exact = TRUE) %||% .gd_joint_cubes)
   )
 }
 
@@ -358,7 +368,8 @@ NULL
   } else if (S7::S7_inherits(top, ReduceNode)) {
     specs <- list(.cd_reduce_spec(gg, top))
   } else if (S7::S7_inherits(top, StackNode) && identical(top@along, "band")) {
-    specs <- lapply(top@parents, function(id) .cd_reduce_spec(gg, gg(id)))
+    masks <- new.env(parent = emptyenv())
+    specs <- lapply(top@parents, function(id) .cd_reduce_spec(gg, gg(id), masks))
   } else {
     return(NULL)
   }
@@ -391,7 +402,7 @@ NULL
     return(NULL)
   }
   spec <- .cd_group_spec(specs, sink@grid, sink@device)
-  spec$joint <- joint[c("reduce", "margin")]
+  spec$joint <- joint[c("reduce", "margin", "cubes")]
   spec
 }
 
@@ -456,11 +467,12 @@ NULL
 # its strips come from .gd_joint_rows(), so RAM sets how many run, not their
 # shape. Returns `strips`, how many kernels' cubes may be open, and the MB strip
 # tasks may hold.
-.gd_fit <- function(nb, n_slices, ny, nx, masked, comp, strips = 0L, joint = FALSE) {
+.gd_fit <- function(nb, n_slices, ny, nx, masked, comp, strips = 0L, joint_cubes = NULL) {
+  joint <- !is.null(joint_cubes)
   cube <- n_slices * as.numeric(ny) * nx * 4 / 2^20
-  whole <- .gd_strip_mb(n_slices, ny, nx, joint)
+  whole <- .gd_strip_mb(n_slices, ny, nx, joint_cubes %||% .gd_band_cubes)
   if (strips < 1L && joint) {
-    strips <- as.integer(ceiling(ny / .gd_joint_rows(n_slices, nx)))
+    strips <- as.integer(ceiling(ny / .gd_joint_rows(n_slices, nx, joint_cubes)))
   }
   wide <- if (strips >= 1L) strips else comp
   budget <- garry_opt("exec_ram_fraction") * .garry_ram_avail_mb()
@@ -479,14 +491,18 @@ NULL
 # while the first computes is what keeps the read pool working.
 .gd_cube_share <- 0.65
 
-.gd_strip_mb <- function(n_slices, ny, nx, joint = FALSE) {
-  (if (joint) .gd_joint_cubes else 3.5) * n_slices * ny * nx * 4 / 2^20
+.gd_strip_mb <- function(n_slices, ny, nx, cubes = .gd_band_cubes) {
+  cubes * as.numeric(n_slices) * ny * nx * 4 / 2^20
 }
 
-# One-band strip cubes a joint strip holds, every band and the mask, the
-# kernel's own arrays and XLA's scratch: 2.0 to 2.8 GB measured on 57.6 MB cubes
-# of a six-band geomedian, net of the daemon's baseline.
-.gd_joint_cubes <- 34
+# One-band strip cubes that one band's reduction holds.
+.gd_band_cubes <- 3.5
+
+# One-band strip cubes a joint strip holds per band, the band itself, the mask,
+# the kernel's own arrays and XLA's scratch, for a reducer that declares no
+# `joint_cubes` attribute of its own: 2.0 to 2.8 GB measured on 57.6 MB cubes of
+# a six-band whole-cube Weiszfeld, net of the daemon's baseline.
+.gd_joint_cubes <- 6
 
 # Rows of a joint strip: a quarter of what one kernel call may hold under
 # garry.ram_budget_mb, so that a short budget still runs every compute daemon.
@@ -495,8 +511,8 @@ NULL
 # 118. XLA's arithmetic can vary in the last bit with an array's shape, so a
 # strip's height comes from the plan and an option, never live RAM: one input
 # gives one set of bytes on any machine.
-.gd_joint_rows <- function(n_slices, nx) {
-  row_mb <- .gd_strip_mb(n_slices, 1L, nx, joint = TRUE)
+.gd_joint_rows <- function(n_slices, nx, cubes) {
+  row_mb <- .gd_strip_mb(n_slices, 1L, nx, cubes)
   max(1L, as.integer(floor(garry_opt("ram_budget_mb") / 4 / row_mb)))
 }
 
@@ -803,7 +819,7 @@ NULL
     }
     jf <- .host_kernel(.gd_cube_key(spec), .gd_cube_fn(spec), dev)
     res <- g_download(jf(inputs))
-  })[["elapsed"]]
+  }, gcFirst = FALSE)[["elapsed"]]
   if (isTRUE(garry_opt("progress"))) {
     cli::cli_inform(.glue(
       "[gdal-direct] lean compute={formatC(tcomp, format = 'f', digits = 2)}s"
@@ -849,10 +865,11 @@ NULL
   units <- if (joint) list(seq_len(nb)) else as.list(seq_len(nb))
   nu <- length(units)
   n_slices <- max(lengths(spec$band_srcs))
-  fit <- spec$fit %||% .gd_fit(nb, n_slices, ny, nx, masked, .comp_n(), as.integer(garry_opt("gd_strips")), joint)
+  cubes <- spec$joint$cubes
+  fit <- spec$fit %||% .gd_fit(nb, n_slices, ny, nx, masked, .comp_n(), as.integer(garry_opt("gd_strips")), cubes)
   bounds <- .gd_strip_bounds(ny, win$strips %||% fit$strips)
   ns <- length(bounds)
-  strip_mb <- .gd_strip_mb(n_slices, bounds[[1L]][[2L]], nx, joint)
+  strip_mb <- .gd_strip_mb(n_slices, bounds[[1L]][[2L]], nx, cubes %||% .gd_band_cubes)
   cap <- .gd_compute_cap(strip_mb, fit$work_mb, .daemon_depth * max(1L, .comp_n()))
   if (progress && (cap < nu * ns || fit$bands < nu)) {
     cli::cli_inform(.glue(
@@ -1222,7 +1239,7 @@ NULL
     masked,
     .comp_n(),
     as.integer(garry_opt("gd_strips")),
-    TRUE
+    spec$joint$cubes
   )
   strip <- as.integer(ceiling(height / spec$fit$strips))
   got <- lapply(blocks, function(bd) {
@@ -1369,7 +1386,8 @@ NULL
   if (!length(leaf_ids)) {
     return(NULL)
   }
-  specs <- lapply(leaf_ids, function(id) .cd_reduce_spec(gg, gg(id)))
+  masks <- new.env(parent = emptyenv())
+  specs <- lapply(leaf_ids, function(id) .cd_reduce_spec(gg, gg(id), masks))
   if (any(vapply(specs, is.null, logical(1)))) {
     return(NULL)
   }
@@ -1459,7 +1477,7 @@ NULL
       if (h > 0L) g_pad(a, h, NaN) else a
     })
     res <- g_download(.gd_host_kernel(graph, u, dev)(inputs))[[1L]]
-  })[["elapsed"]]
+  }, gcFirst = FALSE)[["elapsed"]]
   if (isTRUE(garry_opt("progress"))) {
     cli::cli_inform(.glue(
       "[gdal-direct] upper compute={formatC(tcomp, format = 'f', digits = 2)}s"
