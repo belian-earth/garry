@@ -50,6 +50,45 @@ test_that("a tile off the grid fetches nothing a warp could use", {
   expect_equal(c(ds$getRasterXSize(), ds$getRasterYSize()), c(1, 1))
 })
 
+# 100 x 100 cells of 10 m over (0, 0)-(1000, 1000), rows from the north in
+# `values`, stored north-up or south-up.
+.fa_tile <- function(dir, name, values, south_up = FALSE) {
+  f <- file.path(dir, name)
+  ds <- gdalraster::create("GTiff", f, 100L, 100L, 1L, "Float32", return_obj = TRUE)
+  ds$setGeoTransform(if (south_up) c(0, 10, 0, 0, 0, 10) else c(0, 10, 0, 1000, 0, -10))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+  stored <- if (south_up) values[100:1, ] else values
+  ds$write(1L, 0L, 0L, 100L, 100L, as.numeric(t(stored)))
+  ds$close()
+  f
+}
+
+test_that("a south-up tile fetches the rows of its window", {
+  dir <- withr::local_tempdir("fa")
+  v <- outer(1:100, 1:100, function(r, c) r * 1000 + c)
+  north <- .fa_tile(dir, "north.tif", v)
+  south <- .fa_tile(dir, "south.tif", v, south_up = TRUE)
+  fetched <- function(f, window) {
+    out <- tempfile(fileext = ".tif", tmpdir = dir)
+    gdal_fetch_window(f, out, window, "EPSG:3857")
+    ds <- methods::new(gdalraster::GDALRaster, out, read_only = TRUE)
+    on.exit(ds$close())
+    nx <- ds$getRasterXSize()
+    ny <- ds$getRasterYSize()
+    gt <- ds$getGeoTransform()
+    m <- matrix(ds$read(1L, 0L, 0L, nx, ny, nx, ny), ny, nx, byrow = TRUE)
+    list(
+      dims = c(nx, ny),
+      north = if (gt[[6L]] > 0) gt[[4L]] + ny * gt[[6L]] else gt[[4L]],
+      cells = if (gt[[6L]] > 0) m[ny:1, ] else m
+    )
+  }
+  # 40 rows, wider than the margins on both sides; 12 rows, narrower than them
+  for (w in list(c(200, 300, 600, 700), c(200, 300, 600, 420))) {
+    expect_identical(fetched(south, w), fetched(north, w))
+  }
+})
+
 test_that("gdal_fetch_window decimates to the target resolution via overviews", {
   # Checkerboard: native pixels 0/1; the AVERAGE overview is ~0.5. A coarse
   # fetch (out_res >> native) must read the overview (uniform), not native.
@@ -126,6 +165,32 @@ local({
     expect_equal(got2, want, tolerance = 1e-12, ignore_attr = TRUE)
     tl2 <- read.csv(tlog2)
     expect_false(any(grepl("^f\\d+_", tl2$key)))
+  })
+
+  test_that("a fetched south-up tile reads as the tile does", {
+    dir <- withr::local_tempdir("fa")
+    f <- .fa_tile(dir, "south.tif", outer(1:100, 1:100, function(r, c) r * 1000 + c), south_up = TRUE)
+    idx <- file.path(dir, "south.gti.fgb")
+    gti_index_create(
+      data.frame(location = f, slice = "a", datetime = "2020-01-01", xmin = 0, ymin = 0, xmax = 1000, ymax = 1000),
+      idx,
+      crs = "EPSG:3857"
+    )
+    for (dims in list(c(40L, 40L), c(40L, 12L))) {
+      g <- grid_spec("EPSG:3857", extent = c(200, 700 - dims[[2L]] * 10, 600, 700), dims = dims, dtype = "f32")
+      x <- lazy_source(
+        paste0("GTI:", idx),
+        open_options = gti_open_options(g, filter = "slice = 'a'", sort_field = "datetime"),
+        grid = g,
+        block_dim = dims
+      )
+      y <- lazy_map(x, fn = function(a) a + 1)
+      want <- collect(y, distributed = FALSE)
+      expect_false(anyNA(want))
+      withr::with_options(list(garry.fetch = "force"), {
+        expect_identical(collect(y, distributed = TRUE), want)
+      })
+    }
   })
 
   test_that("two stages sharing fetched files both read them", {

@@ -3599,16 +3599,13 @@ gdal_fetch_window <- function(
   ds <- methods::new(gdalraster::GDALRaster, location, read_only = TRUE)
   gt <- ds$getGeoTransform()
   b <- gdalraster::transform_bounds(ext, crs, ds$getProjection())
-  x0 <- max(0L, as.integer(floor((b[1] - gt[1]) / gt[2])) - .fetch_margin)
-  y0 <- max(0L, as.integer(floor((b[4] - gt[4]) / gt[6])) - .fetch_margin)
-  x1 <- min(
-    ds$getRasterXSize(),
-    as.integer(ceiling((b[3] - gt[1]) / gt[2])) + .fetch_margin
-  )
-  y1 <- min(
-    ds$getRasterYSize(),
-    as.integer(ceiling((b[2] - gt[4]) / gt[6])) + .fetch_margin
-  )
+  # the window's edges in pixels, whichever way the file stores its rows
+  cols <- (b[c(1L, 3L)] - gt[[1L]]) / gt[[2L]]
+  rows <- (b[c(2L, 4L)] - gt[[4L]]) / gt[[6L]]
+  x0 <- max(0L, as.integer(floor(min(cols))) - .fetch_margin)
+  y0 <- max(0L, as.integer(floor(min(rows))) - .fetch_margin)
+  x1 <- min(ds$getRasterXSize(), as.integer(ceiling(max(cols))) + .fetch_margin)
+  y1 <- min(ds$getRasterYSize(), as.integer(ceiling(max(rows))) + .fetch_margin)
   ds$close()
   # A tile clear of the window still gets a file: GTI's padded footprint
   # can select it, so the local index must find it. Its corner pixel lies
