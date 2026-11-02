@@ -185,6 +185,11 @@ test_that("an auth failure's own text is never read as a template", {
   state$http_auth <- list(
     "https://x" = list(source = bad, value = "kept", at = Sys.time() - 1e4, refresh = 1)
   )
-  expect_warning(garry:::.http_auth_sync(), '{"error":"invalid_grant"}', fixed = TRUE)
+  expect_warning(
+    garry:::.http_auth_sync(),
+    '{"error":"invalid_grant"}',
+    fixed = TRUE,
+    class = "garry_read_warning"
+  )
   expect_identical(state$http_auth[["https://x"]]$value, "kept")
 })

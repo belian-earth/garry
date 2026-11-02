@@ -41,7 +41,7 @@ test_that("stac_drop_duplicates dates a range-only item by its start", {
 test_that("a missing asset warns on every path", {
   skip_if_not_installed("rstac")
   it <- .di_items(list(.di_feat("a", 1, c(0, 0, 1, 1), "asc", list(red = "r.tif", nir = "n.tif"))))
-  expect_warning(stac_filter_assets(it, c("red", "nirr")), "nirr")
+  expect_warning(stac_filter_assets(it, c("red", "nirr")), "nirr", class = "garry_stac_warning")
   tbl <- stac_sources(it)
   expect_warning(got <- stac_filter_assets(tbl, c("red", "nirr")), "nirr")
   expect_identical(got$asset, "red")
@@ -150,7 +150,7 @@ test_that("stac_sources: start_datetime dates range items; clear errors otherwis
     item("b", list(datetime = NULL, start_datetime = "2023-02-01T00:00:00Z")),
     item("c", list())
   ))
-  expect_warning(out <- stac_sources(items), "dropping 1 item")
+  expect_warning(out <- stac_sources(items), "dropping 1 item", class = "garry_stac_warning")
   expect_identical(out$item_id, c("a", "b"))
   expect_error(stac_sources(items, assets = "B9"), "no STAC item carries")
   am <- list(features = list(item("d", list(datetime = "2023-01-01T00:00:00Z"),

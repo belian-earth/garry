@@ -13,7 +13,7 @@ test_that("a transient failure is retried and succeeds", {
     "ok"
   }
   expect_warning(res <- .gdal_with_retry(thunk, "read", "a.tif"),
-                 "attempt 1 of 3")
+                 "attempt 1 of 3", class = "garry_read_warning")
   expect_identical(res, "ok")
   expect_identical(n, 2L)
 })

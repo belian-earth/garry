@@ -1701,12 +1701,15 @@ execute_plan_mirai <- function(
     if (!is.na(avail) && task_mb_max > avail * mem_frac) {
       chunk_sz <- .garry_fmt_mb(task_mb_max)
       budget_sz <- .garry_fmt_mb(avail * mem_frac)
-      cli::cli_warn(paste0(
-        "a single compute chunk is estimated at {chunk_sz}, above the ",
-        "{budget_sz} execution budget; ",
-        "it will run one at a time. Lower {.code garry.chunk_target_px} or ",
-        "{.code garry.ram_budget_mb} to chunk finer."
-      ))
+      cli::cli_warn(
+        paste0(
+          "a single compute chunk is estimated at {chunk_sz}, above the ",
+          "{budget_sz} execution budget; ",
+          "it will run one at a time. Lower {.code garry.chunk_target_px} or ",
+          "{.code garry.ram_budget_mb} to chunk finer."
+        ),
+        class = c("garry_memory_warning", "garry_warning")
+      )
     }
   })
 

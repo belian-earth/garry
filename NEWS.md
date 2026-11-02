@@ -644,9 +644,11 @@
 ## Observability
 
 * Warnings carry the parent class `garry_warning` and a class of their
-  own (`garry_memory_warning`, `garry_affinity_warning`,
-  `garry_warmup_warning`, `garry_read_warning`, `garry_scale_warning`), so
-  a caller can handle them by class.
+  own (`garry_memory_warning`, `garry_cores_warning`,
+  `garry_affinity_warning`, `garry_warmup_warning`, `garry_read_warning`,
+  `garry_cache_warning`, `garry_scale_warning`, `garry_stac_warning`), so
+  a caller can handle them by class. A read retry on a daemon warns there:
+  it reaches the task log's `retry` rows, not a handler on the host.
 * The task log gains `retry` rows (a task's read retries, which a daemon
   cannot otherwise report), `resend` rows (a kernel sent again to a daemon
   that lacked it) and `warm_fail` rows.

@@ -94,6 +94,19 @@ local({
     expect_identical(rd(out), want)
   })
 
+  test_that("a chunk over the execution budget warns by class", {
+    withr::local_options(
+      garry.placement = "rules",
+      garry.chunk_target_px = 400,
+      garry.exec_ram_fraction = 1e-6
+    )
+    expect_warning(
+      suppressMessages(collect(lazy_source(f) * 2, distributed = TRUE)),
+      "single compute chunk",
+      class = "garry_memory_warning"
+    )
+  })
+
   test_that("a rounding residue in the in-flight sum leaves the compute gate's escape open", {
     # Fused reads of 0.1 MB, three or more in flight, sum back to 3e-17 and
     # not to 0. With the budget then below a read, the next read must still go

@@ -3431,10 +3431,13 @@ gdal_read_window_coarsen <- function(
     if (k <= retries) {
       .gdal_cache$retries <- (.gdal_cache$retries %||% 0L) + 1L
       delay <- 0.5 * 2^(k - 1L) * stats::runif(1L, 0.75, 1.25)
-      cli::cli_warn(paste0(
-        "{what} failed (attempt {k} of {retries + 1L}), retrying in ",
-        "{round(delay, 2)} s: {res$failed[[1L]]}"
-      ))
+      cli::cli_warn(
+        paste0(
+          "{what} failed (attempt {k} of {retries + 1L}), retrying in ",
+          "{round(delay, 2)} s: {res$failed[[1L]]}"
+        ),
+        class = c("garry_read_warning", "garry_warning")
+      )
       Sys.sleep(delay)
     }
   }

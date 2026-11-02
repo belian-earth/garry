@@ -143,10 +143,13 @@ garry_http_auth <- function(prefix, header, refresh = 1800) {
       next
     }
     v <- tryCatch(.http_auth_value(e$source, k), error = function(err) {
-      cli::cli_warn(c(
-        "Could not refresh the header for {.val {k}}; keeping the previous one.",
-        "x" = "{conditionMessage(err)}"
-      ))
+      cli::cli_warn(
+        c(
+          "Could not refresh the header for {.val {k}}; keeping the previous one.",
+          "x" = "{conditionMessage(err)}"
+        ),
+        class = c("garry_read_warning", "garry_warning")
+      )
       NULL
     })
     if (is.null(v)) {

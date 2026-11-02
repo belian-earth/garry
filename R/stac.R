@@ -129,7 +129,10 @@ stac_sign_mpc <- function(items) {
     reason = "to request Planetary Computer tokens."
   )
   if (!length(items$features)) {
-    cli::cli_warn("No STAC items to sign.")
+    cli::cli_warn(
+      "No STAC items to sign.",
+      class = c("garry_stac_warning", "garry_warning")
+    )
     return(items)
   }
   colls <- vapply(items$features, function(f) f$collection %||% NA_character_, "")
@@ -464,7 +467,8 @@ stac_sources <- function(items, assets = NULL) {
   undated <- is.na(out$datetime)
   if (any(undated)) {
     cli::cli_warn(
-      "dropping {length(unique(out$item_id[undated]))} item{?s} with no datetime or start_datetime."
+      "dropping {length(unique(out$item_id[undated]))} item{?s} with no datetime or start_datetime.",
+      class = c("garry_stac_warning", "garry_warning")
     )
     out <- out[!undated, , drop = FALSE]
   }
@@ -602,7 +606,10 @@ stac_filter_assets <- function(sources, assets) {
 .stac_warn_missing <- function(assets, held) {
   miss <- setdiff(assets, held)
   if (length(miss)) {
-    cli::cli_warn("asset{?s} not present in any item (ignored): {.val {miss}}")
+    cli::cli_warn(
+      "asset{?s} not present in any item (ignored): {.val {miss}}",
+      class = c("garry_stac_warning", "garry_warning")
+    )
   }
   invisible(NULL)
 }
@@ -730,7 +737,8 @@ stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
     m <- setdiff(names(mapping), present)
     if (length(m)) {
       cli::cli_warn(
-        "mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}"
+        "mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}",
+        class = c("garry_stac_warning", "garry_warning")
       )
     }
   }

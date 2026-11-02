@@ -28,7 +28,7 @@ test_that("stac_rename_assets keeps unmapped assets when asked", {
 test_that("stac_rename_assets warns on mapping keys absent from the table", {
   src <- .hz_tbl(c("B04", "Fmask"))
   expect_warning(stac_rename_assets(src, c(B04 = "R", B08 = "N", Fmask = "Fmask")),
-                 "B08")
+                 "B08", class = "garry_stac_warning")
 })
 
 test_that("stac_rename_assets rejects an unnamed mapping", {
