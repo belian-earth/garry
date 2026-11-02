@@ -130,7 +130,7 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
   refuse <- function(message) {
     cli::cli_abort(message, class = c("garry_write_error", "garry_error"), call = call)
   }
-  url <- targets[grepl("^[A-Za-z][A-Za-z0-9+.-]+://", targets)]
+  url <- .url_scrub(targets[grepl("^[A-Za-z][A-Za-z0-9+.-]+://", targets)])
   if (length(url)) {
     refuse(c(
       "cannot write to the URL {.path {url[[1L]]}}.",

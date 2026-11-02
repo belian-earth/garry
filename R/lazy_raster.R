@@ -263,9 +263,10 @@ lazy_source <- function(
   if (isTRUE(scale)) {
     meta <- probe()
     if (length(meta$scale) != 1L) {
+      where <- .url_scrub(what)
       cli::cli_warn(
         c(
-          "{.arg scale}: no scale/offset metadata on {.file {what}}; reading raw values.",
+          "{.arg scale}: no scale/offset metadata on {.file {where}}; reading raw values.",
           "i" = "Pass the scale yourself, or {.code scale = FALSE} if these values need none."
         ),
         class = c("garry_scale_warning", "garry_warning")

@@ -661,8 +661,9 @@ lazy_dataset <- function(
     # source's, and a tile off it would move or change resolution unasked.
     off <- .off_lattice(probes)
     if (is.null(grid) && length(off)) {
+      shown <- .url_scrub(paths[c(off[[1L]], 1L)])
       cli::cli_abort(c(
-        "{.path {paths[[off[[1L]]]]}} is not on the pixel lattice of {.path {paths[[1L]]}}: its resolution or origin differs.",
+        "{.path {shown[[1L]]}} is not on the pixel lattice of {.path {shown[[2L]]}}: its resolution or origin differs.",
         "i" = "Give {.arg grid} to read the sources onto one grid."
       ), class = c("garry_source_error", "garry_error"))
     }
@@ -741,8 +742,9 @@ lazy_dataset <- function(
     }
   }
   if (!is.null(time) && is.null(nd)) {
+    where <- .url_scrub(path[[1L]])
     cli::cli_abort(c(
-      "{.arg time} selects the slices of an N-D source; {.path {path[[1L]]}} is not read as a (time, band) array.",
+      "{.arg time} selects the slices of an N-D source; {.path {where}} is not read as a (time, band) array.",
       "i" = "Its bands are read as bands; select them with {.arg bands} or {.arg assets}."
     ))
   }
@@ -866,8 +868,9 @@ lazy_dataset <- function(
   types <- unique(unlist(lapply(path, gdal_band_types)))
   ranges <- list(Byte = c(0L, 255L), Int8 = c(-128L, 127L))
   if (length(types) != 1L || !types %in% names(ranges)) {
+    where <- .url_scrub(path[[1L]])
     cli::cli_abort(c(
-      "{.arg decode} decodes 8-bit codes; {.path {path[[1L]]}} holds {.val {types}} bands.",
+      "{.arg decode} decodes 8-bit codes; {.path {where}} holds {.val {types}} bands.",
       "i" = "Decode other types with {.fn lazy_map}."
     ))
   }

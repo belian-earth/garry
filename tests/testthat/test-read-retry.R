@@ -74,6 +74,49 @@ test_that("a signed URL's token stays out of GDAL's own text", {
   expect_identical(garry:::.url_scrub("/data/a?b.tif"), "/data/a?b.tif")
 })
 
+test_that("no message names a source's signed URL", {
+  withr::local_envvar(CPL_VSIL_CURL_USE_HEAD = "NO", GDAL_DISABLE_READDIR_ON_OPEN = "EMPTY_DIR")
+  d <- withr::local_tempdir("sig")
+  tif <- function(name, res = 10, type = "Float32", gt = c(0, res, 0, 1000, 0, -res)) {
+    n <- as.integer(1000 / res)
+    ds <- gdalraster::create("GTiff", file.path(d, name), n, n, 1L, type, return_obj = TRUE)
+    ds$setGeoTransform(gt)
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+    ds$close()
+  }
+  tif("b02.tif")
+  tif("b05.tif", res = 20)
+  tif("rotated.tif", gt = c(0, 10, 2, 1000, 2, -10))
+  tif("complex.tif", type = "CFloat32")
+  srv <- .http_log_server(d)
+  url <- function(f) paste0(srv$url(f), "?st=2026&sig=TOKEN")
+  scrubbed <- function(cnd, f) {
+    expect_match(conditionMessage(cnd), f, fixed = TRUE)
+    expect_no_match(conditionMessage(cnd), "sig=", fixed = TRUE)
+    expect_no_match(conditionMessage(cnd), "TOKEN", fixed = TRUE)
+  }
+  scrubbed(expect_error(lazy_dataset(c(url("b02.tif"), url("b05.tif"))), "pixel lattice"), "b05.tif")
+  scrubbed(expect_error(lazy_source(url("rotated.tif")), "rotated"), "rotated.tif")
+  scrubbed(expect_error(lazy_source(url("complex.tif")), "unsupported"), "complex.tif")
+  scrubbed(expect_warning(lazy_source(url("b02.tif"), scale = TRUE), class = "garry_scale_warning"), "b02.tif")
+  scrubbed(expect_error(lazy_dataset(url("b02.tif"), time = 1L), "slices"), "b02.tif")
+  scrubbed(expect_error(lazy_dataset(url("b02.tif"), decode = function(x) x), "8-bit"), "b02.tif")
+  x <- lazy_source(fixture_gradient_f32())
+  scrubbed(expect_error(write_tif(x, "https://h/out.tif?sig=TOKEN"), "URL"), "out.tif")
+})
+
+test_that("a translate that leaves a short plane fails as a read", {
+  f <- fixture_gradient_f32()
+  bin <- withr::local_tempfile()
+  file.create(bin)
+  testthat::local_mocked_bindings(gdal_translate_file = function(...) invisible(TRUE))
+  expect_error(
+    gdal_translate_plane(f, 1L, gdal_grid_spec(f)$grid, "near", numeric(0), bin),
+    "left 0 bytes",
+    class = "garry_read_error"
+  )
+})
+
 test_that("garry's own errors are not retried or relabelled", {
   withr::local_options(garry.read_retry = 2L)
   n <- 0L

@@ -38,7 +38,8 @@ NULL
   name <- ds$getDataTypeName(band)
   dtype <- unname(.gdal_dtype_map[name])
   if (is.na(dtype)) {
-    cli::cli_abort("unsupported GDAL data type {.val {name}} in {.path {ds$getFilename()}}.")
+    where <- .url_scrub(ds$getFilename())
+    cli::cli_abort("unsupported GDAL data type {.val {name}} in {.path {where}}.")
   }
   dtype
 }
@@ -583,8 +584,9 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   # the extent and rebuild a north-up transform. Axis-aligned only: a rotated
   # geotransform cannot be an analysis grid.
   if (gt[3L] != 0 || gt[5L] != 0) {
+    where <- .url_scrub(path)
     cli::cli_abort(c(
-      "{.path {path}} has a rotated geotransform, which cannot be an analysis grid.",
+      "{.path {where}} has a rotated geotransform, which cannot be an analysis grid.",
       "i" = "Warp it to a north-up raster first, with {.code gdalwarp}."
     ))
   }
@@ -2097,8 +2099,9 @@ gdal_warp_vrt <- function(
   args <- c(args, .warp_dst_nodata(.gdal_band_dtype(ds, band[[1L]]), src_nodata))
   own <- ds$getNoDataValue(band[[1L]])
   if (.mosaic_source(src_path, open_options) && .nodata_replaces(own, src_nodata)) {
+    where <- .url_scrub(src_path)
     cli::cli_abort(c(
-      "Cannot warp {.path {src_path}} under nodata {src_nodata}: its tiles declare {own}.",
+      "Cannot warp {.path {where}} under nodata {src_nodata}: its tiles declare {own}.",
       "i" = "The warper would take that value, and every gap of the mosaic, as data. Leave {.arg nodata} unset."
     ), class = c("garry_source_error", "garry_error"))
   }
@@ -2659,8 +2662,9 @@ gdal_translate_plane <- function(src, band, grid, resampling, nodata, bin) {
     src = src
   )
   if (!identical(file.size(bin), 4 * as.numeric(nx) * ny)) {
+    where <- .url_scrub(src)
     cli::cli_abort(
-      "translating {.path {.url_scrub(src)}} left {file.size(bin)} bytes of a {nx} x {ny} f32 plane.",
+      "translating {.path {where}} left {file.size(bin)} bytes of a {nx} x {ny} f32 plane.",
       class = c("garry_read_error", "garry_error")
     )
   }
