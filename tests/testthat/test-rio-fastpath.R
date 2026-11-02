@@ -798,3 +798,22 @@ local({
     }
   })
 })
+
+test_that("a tile across the antimeridian leaves a mosaic to the warper", {
+  tile <- function(crs, x0, value) {
+    fixture_tile(value, gt = c(x0, 100, 0, 8120000, 0, -100), nx = 200L, ny = 200L, crs = crs)
+  }
+  # both straddle 180 degrees, near Fiji
+  west <- tile("EPSG:32760", 810000, 1)
+  east <- tile("EPSG:32701", 170000, 2)
+  b <- gdal_grid_spec(west)$grid
+  edges <- gdalraster::transform_bounds(b@extent, b@crs, "EPSG:4326", densify_pts = 1001L)
+  expect_gt(edges[[1L]], edges[[3L]]) # transform_bounds' sign of the crossing
+  g <- grid_spec("EPSG:4326", extent = c(179.7, edges[[2L]], 180, edges[[4L]]), dims = c(120L, 80L), dtype = "f32")
+  expect_null(gdal_footprint_px(west, g))
+  expect_null(.mosaic_read_spec(c(west, east), g, 1L, numeric(0)))
+  got <- collect(lazy_dataset(c(west, east), grid = g), distributed = FALSE)
+  expect_gt(sum(!is.nan(got)), 0L)
+  testthat::local_mocked_bindings(.reads_tile_by_tile = function(...) FALSE)
+  expect_identical(collect(lazy_dataset(c(west, east), grid = g), distributed = FALSE), got)
+})

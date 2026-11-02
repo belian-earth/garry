@@ -2151,7 +2151,9 @@ gdal_version_str <- function() gdalraster::gdal_version()[[1L]]
 # The footprint of `path` on `grid`'s pixels: the columns and rows
 # c(c0, r0, c1, r1) (end-exclusive) its extent covers, densified along
 # its edges (curved reprojections bulge between corners) and two pixels
-# wider each side; NULL when the extent has no finite image on the grid.
+# wider each side; NULL when the extent has no finite image on the grid, or
+# crosses the antimeridian there, which transform_bounds() gives as xmax < xmin
+# and one box cannot hold.
 gdal_footprint_px <- function(path, grid) {
   ds <- .gdal_handle(path)
   gt <- ds$getGeoTransform()
@@ -2159,7 +2161,7 @@ gdal_footprint_px <- function(path, grid) {
   ys <- gt[[4L]] + c(0, ds$getRasterYSize()) * gt[[6L]]
   e <- c(min(xs), min(ys), max(xs), max(ys))
   b <- gdalraster::transform_bounds(e, ds$getProjection(), grid@crs, densify_pts = 1001L)
-  if (!all(is.finite(b))) {
+  if (!all(is.finite(b)) || b[[3L]] < b[[1L]]) {
     return(NULL)
   }
   tt <- grid@transform
