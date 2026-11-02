@@ -161,7 +161,10 @@ collect <- function(x, plan_only = FALSE, distributed = garry_daemons_set()) {
       home <- normalizePath(home, winslash = "/")
     }
     if (is.na(dirs[home])) {
-      dirs[[home]] <- tempfile(".garry-write-", tmpdir = if (vsi) tempdir() else home)
+      # tempfile() joins with a backslash on Windows, which dirname() later turns
+      # to a slash, and .write_named() must find the same string in a message
+      at <- if (vsi) tempdir() else home
+      dirs[[home]] <- file.path(at, basename(tempfile(".garry-write-", tmpdir = at)))
     }
     work[[i]] <- file.path(dirs[[home]], rel)
   }
