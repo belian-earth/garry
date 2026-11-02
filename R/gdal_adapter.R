@@ -1119,6 +1119,14 @@ gdal_read_window <- function(
   if (length(scale) == 1L && length(offset) == 0L) {
     offset <- 0
   }
+  if (.gdal_is_zarr(path)) {
+    .gdal_zarr_budget(
+      path,
+      open_options,
+      band,
+      as.numeric(x_size) * y_size * (decim$fx %||% 1L) * (decim$fy %||% 1L)
+    )
+  }
   if (length(decim$decode)) {
     return(.gdal_read_decoded(
       .gdal_handle(path, open_options),
@@ -1137,14 +1145,6 @@ gdal_read_window <- function(
     x_off <- x_off + decim$x_off
     y_off <- y_off + decim$y_off
     decim <- NULL
-  }
-  if (.gdal_is_zarr(path)) {
-    .gdal_zarr_budget(
-      path,
-      open_options,
-      band,
-      as.numeric(x_size) * y_size * (decim$fx %||% 1L) * (decim$fy %||% 1L)
-    )
   }
   # Warper bypass (see .rio_direct_spec()): the window arrives in TARGET
   # pixels; translate it to the source window and let RasterIO resample

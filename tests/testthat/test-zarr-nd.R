@@ -277,6 +277,24 @@ test_that("Zarr sources with different time coordinates are refused", {
   expect_error(lazy_dataset(c(a$path, b$path), g), "dimension coordinates")
 })
 
+test_that("a decoded read counts against its Zarr handle's budget", {
+  fx <- fixture_zarr_nd()
+  x <- lazy_dataset(fx$path, decode = dequantize_olmoearth)@bands[[1L]][[1L]]
+  a <- .source_read_args(graph_get(x@graph, x@node_id))
+  expect_true(length(a$decim$decode) > 0L)
+  testthat::local_mocked_bindings(.gdal_zarr_handle_mb = 600 / 2^20) # 600 bytes
+  .gdal_handle_drop(a$path)
+  key <- .gdal_href(a$path)
+  read <- function(b) gdal_read_window(a$path, b, 0L, 0L, 20L, 20L, decim = a$decim)
+  invisible(read(1L)) # 400 bytes: kept
+  h1 <- .gdal_cache$handles[[key]]
+  expect_false(is.null(h1))
+  expect_identical(.gdal_cache$zarr_bytes[[key]], 400)
+  invisible(read(2L)) # 800: reopened
+  expect_false(identical(h1, .gdal_cache$handles[[key]]))
+  expect_identical(.gdal_cache$zarr_bytes[[key]], 400)
+})
+
 test_that("a Zarr handle's byte count goes with the handle on eviction", {
   fx <- fixture_zarr_nd()
   old <- .gdal_handle_cap(1L)
