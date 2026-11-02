@@ -388,6 +388,8 @@ local({
     gone <- withr::local_tempfile(fileext = ".tif")
     file.copy(f, gone)
     x <- lazy_source(gone)
+    # Windows deletes no file that a handle holds open
+    .gdal_handles_release(gone)
     unlink(gone)
     withr::local_options(garry.read_retry = 0L)
     err <- expect_error(collect(x, distributed = TRUE), class = "garry_task_error")

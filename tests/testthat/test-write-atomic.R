@@ -699,7 +699,9 @@ test_that("what can never be a target is refused before the run", {
   refused(write_tif(x, "f.tif/x.tif", distributed = FALSE), "not a directory")
   refused(write_tif(x, "f.tif/more/x.tif", distributed = FALSE), "not a directory")
   refused(materialise(x, "f.tif", name = "m", distributed = FALSE), "not a directory")
-  # a `.` or `..` below a directory that does not exist
+  # a `.` or `..` below a directory that does not exist; Windows resolves these
+  # as text, so there they name a place that can be written
+  skip_on_os("windows")
   refused(write_tif(x, "keep/nope/../x.tif", distributed = FALSE), "not a directory")
   refused(write_tif(x, "nope/../y.tif", distributed = FALSE), "not a directory")
   refused(write_tif(x, "nope/./y.tif", distributed = FALSE), "not a directory")

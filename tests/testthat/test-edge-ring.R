@@ -239,6 +239,8 @@ local({
   # the fused path hangs on macOS: test-compute-on-read.R
   fused <- if (Sys.info()[["sysname"]] != "Darwin") list(.fused)
   legs <- c(list(.host, .comp), fused)
+  # a wide kernel stays off a reader with no thread cap, and only Linux caps them
+  wide <- c(list(.host, .comp), if (!is.null(.garry_state$reader_threads)) fused)
   closure <- list(
     .leg(decision = "comp", opts = list(garry.placement = "rules", garry.kernel_wire = "closure"))
   )
@@ -383,7 +385,7 @@ local({
     want <- .er_a
     want[, c(1L, .er_nx)] <- NaN
     want[, 2:(.er_nx - 1L)] <- .er_a[, 1:(.er_nx - 2L)] + .er_a[, 3:.er_nx]
-    expect_plan(r, want, "f32", legs = legs, px = 16, file = FALSE, tolerance = .er_tol)
+    expect_plan(r, want, "f32", legs = wide, px = 16, file = FALSE, tolerance = .er_tol)
   })
 
   test_that("a window finds its parent's nodata, whatever it returns itself", {
@@ -399,7 +401,7 @@ local({
     want <- .er_a
     want[, 1L] <- -7
     want[, 2:.er_nx] <- .er_a[, 1:(.er_nx - 1L)]
-    expect_plan(r, want, "i32", legs = legs, px = 16, file = FALSE)
+    expect_plan(r, want, "i32", legs = wide, px = 16, file = FALSE)
   })
 
   # -- gdal-direct routes ------------------------------------------------------
