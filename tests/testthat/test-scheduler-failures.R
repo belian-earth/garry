@@ -101,6 +101,51 @@ test_that("a daemon dying mid-drain aborts classed; pools are rebuildable", {
   expect_equal(unclass(got), .fixture_values(60, 40) + 1, tolerance = 0, ignore_attr = TRUE)
 })
 
+test_that("a failed read-only write leaves no region on the readers", {
+  local_pools(3, 1)
+  withr::local_options(garry.chunk_target_px = 400, garry.read_target_px = 400)
+  testthat::local_mocked_bindings(.copy_args = function(...) NULL, .package = "garry") # the pool write
+  f <- fixture_gradient_f32()
+  pids <- .sf_pids()
+  before <- .sf_shm(pids)
+  garry:::.garry_abi_check("garry_read") # the guard would refuse the mock below
+  # the first read fails, and the rest are still running when the host gives up
+  mirai::everywhere({
+    ns <- asNamespace("garry")
+    unlockBinding(".daemon_read_for_write", ns)
+    .sf_real <<- get(".daemon_read_for_write", envir = ns)
+    assign(".daemon_read_for_write", function(a, cg, core, dt, nd, reg) {
+      if (endsWith(reg, "_1")) stop("read bomb on a daemon")
+      Sys.sleep(0.5)
+      .sf_real(a, cg, core, dt, nd, reg)
+    }, envir = ns)
+  }, .compute = "garry_read")
+  err <- expect_error(
+    write_tif(lazy_source(f), withr::local_tempfile(fileext = ".tif"), distributed = TRUE),
+    class = "garry_task_error"
+  )
+  expect_match(conditionMessage(err), "read bomb on a daemon")
+  # a retry at once, with those reads still running, keeps its own regions:
+  # the clear is queued ahead of it
+  mirai::everywhere(
+    assign(".daemon_read_for_write", .sf_real, envir = asNamespace("garry")),
+    .compute = "garry_read"
+  )
+  out <- withr::local_tempfile(fileext = ".tif")
+  write_tif(lazy_source(f), out, distributed = TRUE)
+  expect_equal(
+    gdal_read_window(out, 1L, 0L, 0L, 60L, 40L),
+    gdal_read_window(f, 1L, 0L, 0L, 60L, 40L)
+  )
+  # a broadcast queues behind them too: every region they pinned is in
+  left <- garry:::.pool_broadcast(
+    quote(ls(asNamespace("garry")$.daemon_shm, all.names = TRUE)),
+    profiles = "garry_read"
+  )
+  expect_length(unlist(left), 0L)
+  .sf_expect_shm_restored(before, pids)
+})
+
 test_that("a deadlock names what is blocked and what is holding it", {
   err <- expect_error(
     garry:::.scheduler_deadlock(3L, "s4_c2", "comp", 512, 400, 1024),

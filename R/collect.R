@@ -1099,14 +1099,20 @@ garry_last_route <- function() .garry_state$route
       )
     }
   }
-  # Whatever happens, wait out the writes, close the writer's handles
-  # and drop this run's regions; on success the close is checked below.
+  # Whatever happens, drop this run's regions. A run that finished named
+  # them all, and its close is checked below. A failed one waits out the
+  # writes and closes the writer's handles, and the reads it gave up on
+  # pin regions it never hears of: the clear queues behind them, as the
+  # scheduler's does.
   on.exit(
-    {
-      if (!done) {
-        .writer_settle(writes)
-      }
-      try(drop(c(pending, vapply(writes, `[[`, character(1), "reg"))), silent = TRUE)
+    if (done) {
+      try(drop(pending), silent = TRUE)
+    } else {
+      .writer_settle(writes)
+      try(
+        mirai::everywhere(asNamespace("garry")$.daemon_shm_clear(), .compute = "garry_read"),
+        silent = TRUE
+      )
     },
     add = TRUE
   )
