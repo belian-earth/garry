@@ -20,6 +20,36 @@
                                        .gg_slice(gB, "s2", g))), "median", "t"))
 }
 
+# A two-band upper stack over two two-slice composites on an `nx` x `ny` grid:
+# the sum of bases 0 and 100 at each cell, and their difference.
+.gg_narrow_stack <- function(nx, ny) {
+  grid <- grid_spec("EPSG:3857", extent = c(0, 0, nx * 10, ny * 10), dims = c(nx, ny), dtype = "f32")
+  gti <- function(base) {
+    ent <- do.call(rbind, lapply(1:2, function(i) {
+      f <- tempfile(fileext = ".tif")
+      d <- gdalraster::create("GTiff", f, nx, ny, 1, "Float32", return_obj = TRUE)
+      d$setGeoTransform(c(0, 10, 0, ny * 10, 0, -10))
+      d$setProjection(gdalraster::srs_to_wkt("EPSG:3857"))
+      d$write(1, 0, 0, nx, ny, base + i + seq_len(nx * ny))
+      d$close()
+      data.frame(location = f, slice = paste0("s", i), datetime = paste0("s", i),
+                 xmin = 0, ymin = 0, xmax = nx * 10, ymax = ny * 10)
+    }))
+    path <- tempfile(fileext = ".gti.fgb")
+    gti_index_create(ent, path, crs = "EPSG:3857")
+    path
+  }
+  g <- graph_new()
+  slice <- function(path, s) lazy_source(
+    paste0("GTI:", path), graph = g, grid = grid, block_dim = c(nx, ny),
+    open_options = gti_open_options(grid, filter = sprintf("slice = '%s'", s), sort_field = "datetime")
+  )
+  composite <- function(path) reduce_over(lazy_stack(list(slice(path, "s1"), slice(path, "s2"))), "median", "t")
+  a <- composite(gti(0))
+  b <- composite(gti(100))
+  lazy_stack(list(sum = a + b, diff = b - a), along = "band")
+}
+
 # What those composites hold: each cell's median of its two slices.
 .gg_a <- .gg_val(5)
 .gg_b <- .gg_val(75)
@@ -66,6 +96,16 @@
   .gg_identical(.execute_gd_reduce(p, dc), gen)
 }
 
+test_that(".gd_write_stack splits bands without dropping a one-cell axis", {
+  a <- array(as.numeric(1:10), c(2L, 1L, 5L))
+  got <- .gd_write_stack(a, NULL, NULL, NULL, NULL, NULL)
+  expect_identical(dim(got[[1L]]), c(1L, 5L))
+  expect_identical(c(got[[2L]]), c(2, 4, 6, 8, 10))
+  got <- .gd_write_stack(aperm(a, c(1L, 3L, 2L)), NULL, NULL, NULL, NULL, NULL)
+  expect_identical(dim(got[[2L]]), c(5L, 1L))
+  expect_identical(.gd_write_stack(array(7, c(1L, 1L, 1L)), NULL, NULL, NULL, NULL, NULL), matrix(7))
+})
+
 local({
   local_pools(2, 1)
 
@@ -106,6 +146,24 @@ local({
     got <- collect(mean_leaf, distributed = TRUE)
     expect_identical(garry_last_route(), "gd_reduce")
     .expect_cells(unclass(got), matrix(65002, 40L, 60L))
+  })
+
+  test_that("an upper stack on one row or one column keeps the grid's shape", {
+    for (d in list(c(5L, 1L), c(1L, 5L))) {
+      nx <- d[[1L]]
+      ny <- d[[2L]]
+      x <- .gg_narrow_stack(nx, ny)
+      got <- collect(x, distributed = TRUE)
+      expect_identical(garry_last_route(), "gd_reduce")
+      want <- array(c(103 + 2 * seq_len(nx * ny), rep(100, nx * ny)), c(ny, nx, 2L))
+      expect_identical(dim(got), dim(want), info = paste(d, collapse = " x "))
+      .gg_identical(got, want)
+      f <- withr::local_tempfile(fileext = ".tif")
+      write_tif(x, f)
+      expect_identical(garry_last_route(), "gd_reduce")
+      expect_equal(gdal_read_window(f, 1L, 0L, 0L, nx, ny), array(want[, , 1L], c(ny, nx)), ignore_attr = TRUE)
+      expect_equal(gdal_read_window(f, 2L, 0L, 0L, nx, ny), matrix(100, ny, nx), ignore_attr = TRUE)
+    }
   })
 
   test_that("a focal on a composite runs warp-on-read == scheduler", {

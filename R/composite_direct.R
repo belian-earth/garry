@@ -1375,7 +1375,7 @@ NULL
 .gd_write_stack <- function(res, grid, path, nodata, band_names, wspec) {
   m <- .sv_materialise(res)
   mats <- if (length(dim(m)) == 3L) {
-    lapply(seq_len(dim(m)[[1L]]), function(b) m[b, , ])
+    lapply(seq_len(dim(m)[[1L]]), function(b) array(m[b, , ], dim(m)[-1L]))
   } else {
     list(m)
   }
