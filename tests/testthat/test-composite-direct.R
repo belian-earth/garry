@@ -202,6 +202,76 @@ local({
   })
 })
 
+# Masked reduces built by hand over GTI slices: `map` masks a band's slice with
+# its mask, and `qa` makes that mask from the slice's QA read. Slice s1 is
+# flagged `code` on its top half and s2 is clear, so a mask that works takes s1's
+# value off the top half. One band for each of `vals`.
+.dr_plan <- function(map, vals = c(5, 8), op = "max", nan_rm = FALSE, type = "Float32",
+                     dtype = "f32", code = 2,
+                     qa = function(q) lazy_map(q, fn = function(v) v > 1, dtype = "f32")) {
+  q1 <- matrix(0, 40L, 60L)
+  q1[1:20, ] <- code
+  gQ <- .gg_gti(list(s1 = q1, s2 = q1 * 0), type)
+  g <- graph_new()
+  masks <- lapply(c("s1", "s2"), function(s) qa(.gg_slice(gQ, s, g, dtype)))
+  band <- function(v) {
+    gti <- .gg_gti(list(s1 = matrix(v, 40L, 60L), s2 = matrix(v + 1, 40L, 60L)))
+    slices <- lapply(c("s1", "s2"), function(s) .gg_slice(gti, s, g))
+    reduce_over(lazy_stack(Map(map, slices, masks)), op, "t", nan_rm = nan_rm)
+  }
+  bands <- lapply(vals, band)
+  if (length(bands) == 1L) {
+    return(bands[[1L]])
+  }
+  lazy_stack(stats::setNames(bands, paste0("V", seq_along(bands))), along = "band")
+}
+
+local({
+  local_pools(2, 2)
+
+  # One value per band, or a (y, x, band) array of them.
+  cells <- function(vals) {
+    if (length(vals) == 1L) {
+      return(matrix(vals, 40L, 60L))
+    }
+    array(rep(vals, each = 2400L), c(40L, 60L, length(vals)))
+  }
+
+  test_that("a masked map that declares f32 stays on the route", {
+    thirds <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(b > 0.5, 0, a / 3), dtype = "f32")
+    got <- collect(.dr_plan(thirds), distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    .expect_cells(unclass(got), .as_f32(cells(c(6, 9) / 3)))
+  })
+
+  test_that("a masked map at another dtype leaves the route and holds it, per slice", {
+    third <- function(v, m) lazy_map(v, m, fn = function(a, b) g_ifelse(b > 0.5, 0, a / 3), dtype = "i16")
+    for (vals in list(c(4, 7), 4)) {
+      got <- collect(.dr_plan(third, vals), distributed = TRUE)
+      expect_identical(garry_last_route(), "scheduler")
+      .expect_cells(unclass(got), cells(trunc((vals + 1) / 3)))
+    }
+    # no dtype named: the kernel's own i32 is the declaration
+    whole <- function(v, m) lazy_map(v, m, fn = function(a, b) g_cast(g_ifelse(b > 0.5, 0, a), "i32"))
+    x <- .dr_plan(whole)
+    expect_identical(x@grid@dtype, "i32")
+    got <- collect(x, distributed = TRUE)
+    expect_identical(garry_last_route(), "scheduler")
+    .expect_cells(unclass(got), cells(c(6, 9)))
+  })
+
+  test_that("a logical masked map stores 0/1 on the route", {
+    above <- function(v, m) lazy_map(v, m, fn = function(a, b) a > b)
+    for (vals in list(c(5, 8), 5)) {
+      x <- .dr_plan(above, vals)
+      expect_identical(x@grid@dtype, "f32")
+      got <- collect(x, distributed = TRUE)
+      expect_identical(garry_last_route(), "composite_direct")
+      .expect_cells(unclass(got), cells(rep(1, length(vals))))
+    }
+  })
+})
+
 test_that("a composite warps onto the declared grid, to the last digit", {
   gti <- .gg_gti(list(s1 = .gg_val(0)))
   p <- plan_lazy(.gg_slice(gti, "s1", graph_new()))

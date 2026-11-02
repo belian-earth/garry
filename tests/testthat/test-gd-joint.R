@@ -26,6 +26,33 @@ local({
     }
   })
 
+  test_that("a reducer declaring anything but f32 leaves the direct route", {
+    cube <- .gj_cube()
+    plain <- reduce_over(cube, function(a, margin) g_cast(g_count(a, margin), "f32"), over = "t")
+    want <- .gj_scheduler(plain)
+    expect_setequal(as.vector(want), c(1, 2))
+    expect_identical(collect(plain, distributed = TRUE), want)
+    expect_identical(garry_last_route(), "composite_direct")
+    counted_as <- function(dt) {
+      force(dt)
+      function(a, margin) g_cast(g_count(a, margin), dt)
+    }
+    for (dt in c("i32", "f64")) {
+      x <- reduce_over(cube, counted_as(dt), over = "t")
+      expect_identical(x@grid@dtype, dt)
+      expect_identical(as.numeric(collect(x, distributed = TRUE)), as.numeric(want), info = dt)
+      expect_identical(garry_last_route(), "scheduler", info = dt)
+    }
+  })
+
+  test_that("a logical reducer stores 0/1 on the direct route", {
+    x <- reduce_over(.gj_cube(), function(a, margin) g_count(a, margin) > 1L, over = "t")
+    want <- .gj_scheduler(x)
+    expect_setequal(as.vector(want), c(0, 1))
+    expect_identical(collect(x, distributed = TRUE), want)
+    expect_identical(garry_last_route(), "composite_direct")
+  })
+
   test_that("free RAM moves no bit of a joint reducer", {
     x <- reduce_over(.gj_cube(), geomedian(4L), over = "t")
     want <- collect(x, distributed = TRUE)

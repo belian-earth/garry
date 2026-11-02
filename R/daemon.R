@@ -874,6 +874,16 @@ NULL
   }
 }
 
+# The per-slice fn of a band kernel. .cd_stack_spec() admits a slice declaring
+# f32, which a logical keeps, so what it returns is cast as a stage casts it.
+.gd_band_fn <- function(F) {
+  if (is.null(F)) {
+    return(NULL)
+  }
+  F <- .slim_fn(F)
+  function(x, m) .g_as_declared(F(x, m), "f32")
+}
+
 # The mask kernel of a chain. A kernel outlives its task in the cache, so
 # it is built here and not inline, with every argument forced: a closure
 # holds the frame it was made in, and a promise the frame of its caller.
@@ -897,7 +907,8 @@ NULL
 
 # The kernel of a reducer that sees every band: one (t, y, x) cube per band, then
 # the mask's, masked band by band as a lean kernel masks one, stacked to
-# (band, t, y, x) and reduced. Factored for .gd_mask_fn()'s reason.
+# (band, t, y, x) and reduced, to the f32 .cd_joint_spec() requires a reducer to
+# declare, which a logical keeps. Factored for .gd_mask_fn()'s reason.
 .gd_joint_fn <- function(F, reduce, margin, affines, masked) {
   force(F)
   force(reduce)
@@ -915,7 +926,7 @@ NULL
       if (masked) inp[-length(inp)] else inp,
       affines
     )
-    list(reduce(g_stack(unname(bands)), margin))
+    list(.g_as_declared(reduce(g_stack(unname(bands)), margin), "f32"))
   }
 }
 

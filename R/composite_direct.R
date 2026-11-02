@@ -177,12 +177,14 @@ NULL
     # Every slice must be a 2-parent masked MapNode: a stack mixing
     # masked and bare slices is legal IR, and probing it must fall
     # through to the scheduler, not subscript-error out of collect().
+    # Each must declare f32 too: this route's kernels return f32, and a
+    # slice held at any other dtype reduces to other cells.
     if (
       !all(vapply(
         masked,
         function(id) {
           n <- gg(id)
-          S7::S7_inherits(n, MapNode) && length(n@parents) == 2L
+          S7::S7_inherits(n, MapNode) && length(n@parents) == 2L && identical(n@grid@dtype, "f32")
         },
         logical(1)
       ))
@@ -297,9 +299,15 @@ NULL
 
 # A custom reducer over "t" of a band stack of time stacks: per-band specs,
 # bands in stack order, and what the reducer needs to run. It sees every band
-# at once, so its bands share one kernel. NULL for any other node.
+# at once, so its bands share one kernel. NULL for any other node, and for a
+# reducer that declares anything but the f32 this route's strips hold.
 .cd_joint_spec <- function(gg, top) {
-  if (!S7::S7_inherits(top, ReduceNode) || !length(top@fn) || !identical(top@over, "t")) {
+  if (
+    !S7::S7_inherits(top, ReduceNode) ||
+      !length(top@fn) ||
+      !identical(top@over, "t") ||
+      !identical(top@grid@dtype, "f32")
+  ) {
     return(NULL)
   }
   cube <- gg(top@parents[[1L]])
@@ -765,7 +773,7 @@ NULL
 # over the fmask cube and the band reduced under it. A factory for
 # .gd_mask_fn()'s reason.
 .gd_cube_fn <- function(spec) {
-  F <- .slim_fn(spec$F)
+  F <- .gd_band_fn(spec$F)
   chain <- .gd_slim_chain(spec$mask_chain)
   halo <- spec$halo
   op <- spec$op
@@ -923,7 +931,7 @@ NULL
   # affine, masked, device, and a joint reducer). Affine varies per band, so
   # bands sharing an affine share a ck, and with it one kernel per daemon (see
   # .daemon_kernel). As a program it is traced here, once, at the strip heights.
-  Fs <- .slim_fn(spec$F)
+  Fs <- .gd_band_fn(spec$F)
   base_sig <- rlang::hash(list(
     fn = .cd_fn_sig(spec$F),
     op = spec$op,
