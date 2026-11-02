@@ -350,6 +350,21 @@ local({
     }
   })
 
+  test_that("a sum over a stack is exact at the integer dtype it declares", {
+    # past 2^24 an f32 accumulator rounds odd additions away
+    vals <- withr::with_seed(1L, lapply(1:260, function(i) matrix(sample(60000:65535, 2400L, TRUE), 40L, 60L)))
+    names(vals) <- sprintf("s%03d", seq_along(vals))
+    gti <- .gg_gti(vals, "UInt16")
+    g <- graph_new()
+    x <- reduce_over(lazy_stack(lapply(names(vals), function(s) .gg_slice(gti, s, g, "u16"))), "sum", "t")
+    expect_null(.cd_reduce_spec(function(id) graph_get(x@graph, id), graph_get(x@graph, x@node_id)))
+    expect_plan(x, Reduce(`+`, vals), "i32", legs = list(.leg(decision = "none")), file = FALSE)
+    # a float sum runs at its dtype on the direct route, which keeps it
+    f <- .gg_gti(list(s1 = matrix(1.5, 40L, 60L), s2 = matrix(2.25, 40L, 60L)))
+    y <- reduce_over(lazy_stack(lapply(c("s1", "s2"), function(s) .gg_slice(f, s, g))), "sum", "t")
+    expect_plan(y, matrix(3.75, 40L, 60L), "f32", legs = list(.leg("composite_direct")), file = FALSE)
+  })
+
   test_that("a kernel under a reduce hands on its dtype on the compute pool", {
     under_reduce(.leg(decision = "none"), on_two_reads)
   })

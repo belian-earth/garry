@@ -163,6 +163,11 @@ NULL
   ) {
     return(NULL)
   }
+  # These cubes are f32, and an integer sum is exact only at the integer dtype
+  # it declares.
+  if (identical(red@op, "sum") && .dtype_family(red@grid@dtype) != "float") {
+    return(NULL)
+  }
   if (length(red@parents) != 1L) {
     return(NULL)
   }
@@ -1417,6 +1422,11 @@ NULL
   masks <- new.env(parent = emptyenv())
   specs <- lapply(leaf_ids, function(id) .cd_reduce_spec(gg, gg(id), masks))
   if (any(vapply(specs, is.null, logical(1)))) {
+    return(NULL)
+  }
+  # The upper kernel reads every leaf as f32: an integer one is the scheduler's,
+  # which hands it on at the dtype the kernel was built for.
+  if (!all(vapply(leaf_ids, function(id) identical(gg(id)@grid@dtype, "f32"), logical(1)))) {
     return(NULL)
   }
 

@@ -84,6 +84,30 @@ local({
     .gg_equal(top, (.gg_a - .gg_b) / (.gg_a + .gg_b) + .gg_a * 2 - .gg_b)
   })
 
+  test_that("an integer leaf reaches its upper kernel at its dtype", {
+    gti <- .gg_gti(list(s1 = matrix(65001, 40L, 60L), s2 = matrix(65001, 40L, 60L)), "UInt16")
+    g <- graph_new()
+    stack <- lazy_stack(list(.gg_slice(gti, "s1", g, "u16"), .gg_slice(gti, "s2", g, "u16")))
+    leaf <- reduce_over(stack, "max", "t")
+    # no f32 holds 65001001, and g_bitand refuses a float
+    rows <- list(
+      list(lazy_map(leaf, fn = function(v) v * 1000L + 1L), 65001001),
+      list(lazy_map(leaf, fn = function(v) g_bitand(v, 1L)), 1)
+    )
+    for (row in rows) {
+      expect_null(.gd_decompose(plan_lazy(row[[1L]])))
+      got <- collect(row[[1L]], distributed = TRUE)
+      expect_identical(garry_last_route(), "scheduler")
+      .expect_cells(unclass(got), matrix(row[[2L]], 40L, 60L))
+    }
+    # a float leaf stays on the path, integer source or not
+    mean_leaf <- lazy_map(reduce_over(stack, "median", "t"), fn = function(v) v + 1)
+    expect_false(is.null(.gd_decompose(plan_lazy(mean_leaf))))
+    got <- collect(mean_leaf, distributed = TRUE)
+    expect_identical(garry_last_route(), "gd_reduce")
+    .expect_cells(unclass(got), matrix(65002, 40L, 60L))
+  })
+
   test_that("a focal on a composite runs warp-on-read == scheduler", {
     cs <- .gg_composites()
     # a 3 x 3 mean of a plane is its centre, and NaN where it leaves the raster
