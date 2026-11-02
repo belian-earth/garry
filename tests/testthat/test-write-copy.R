@@ -67,6 +67,30 @@ local({
     expect_false(.wc_copied(write_tif(i16, out(), dtype = "i16", nodata = -1)))
   })
 
+  test_that("a file's own sentinel keeps it from the copy", {
+    # a declared grid leaves the node without the sentinel a read still masks
+    declared <- function(f) lazy_source(f, grid = gdal_grid_spec(f)$grid)
+    f32 <- fixture_tile(c(-9999, 7), nodata = -9999)
+    a <- out()
+    expect_false(.wc_copied(write_tif(declared(f32), a)))
+    b <- out()
+    write_tif(lazy_source(f32), b)
+    expect_identical(.wc_cells(a), .wc_cells(b))
+    expect_false(-9999 %in% .wc_cells(a)[[1L]])
+
+    i16 <- fixture_tile(c(-9999, 7), "Int16", nodata = -9999)
+    a <- out()
+    expect_false(.wc_copied(write_tif(declared(i16), a, nodata = -1)))
+    ds <- methods::new(gdalraster::GDALRaster, a, TRUE)
+    withr::defer(ds$close())
+    expect_identical(ds$getNoDataValue(1L), -1)
+    expect_identical(sum(is.na(.wc_cells(a)[[1L]])), 8L)
+
+    # that sentinel kept as it is, or none at all, still copies
+    expect_true(.wc_copied(write_tif(declared(i16), out(), nodata = -9999)))
+    expect_true(.wc_copied(write_tif(lazy_source(fixture_tile(c(1, 7), "Int16")), out())))
+  })
+
   test_that("a float's NaN cells take the output's nodata", {
     f <- fixture_tile(c(NaN, 1, 2, 3))
     got <- out()

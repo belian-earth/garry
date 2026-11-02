@@ -29,8 +29,9 @@ started elsewhere reads the same file.}
 \item{graph}{\code{Graph} to add the source to; defaults to a fresh graph.}
 
 \item{nodata}{Optional nodata sentinel replacing the file's: cells
-holding the file's own sentinel then read as data. A tile index, or a
-source opened with \code{open_options}, masks its own sentinel as well.}
+holding the file's own sentinel then read as data. A tile index, a
+source opened with \code{open_options} and a source given its \code{grid} mask
+their own sentinel as well.}
 
 \item{open_options}{GDAL open options ("KEY=VALUE"), e.g. a GTI
 \code{FILTER} selecting one time slice of a tile index. They apply to one
@@ -90,8 +91,9 @@ construction, e.g. GTI mosaics pinned to a target grid via
 rediscover the grid costs a serial remote COG header fetch per
 slice. \code{grid} must describe the dataset exactly as \code{path} +
 \code{open_options} open it, including the source dtype; it is trusted,
-not checked. With \code{grid} given, file nodata is NOT consulted (pass
-\code{nodata} explicitly if the source has a sentinel), and a warp opens the
+not checked. With \code{grid} given, file nodata is NOT consulted, though a
+read still masks it (pass \code{nodata} explicitly if the source has a
+sentinel), and a warp opens the
 file: only a source that has been opened can show that it stores the
 same type and row order as the file whose warped VRT it would take.
 }

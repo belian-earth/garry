@@ -1040,18 +1040,21 @@ garry_last_route <- function() .garry_state$route
   ) {
     return(NULL)
   }
-  # The read path turns a source's nodata and a float's NaN into `nodata`.
-  nan <- function(v) !length(v) || is.nan(v)
+  ds <- .gdal_probe(a$path)
+  # The read path turns a source's nodata, the file's own sentinel, which any
+  # read masks whatever the node says, and a float's NaN into `nodata`.
+  own <- vapply(a$band, function(b) ds$getNoDataValue(b), 0)
+  sentinels <- unique(as.numeric(c(a$nodata, own[!is.na(own)])))
+  nan <- function(v) !length(v) || all(is.nan(v))
   same_cells <- if (.dtype_family(dtype) == "float") {
-    nan(a$nodata) && nan(nodata)
+    nan(sentinels) && nan(nodata)
   } else {
-    !length(a$nodata) || identical(as.numeric(a$nodata), nodata)
+    !length(sentinels) || identical(sentinels, nodata)
   }
   if (!same_cells) {
     return(NULL)
   }
   g <- p@stages[[p@sink]]@grid
-  ds <- .gdal_probe(a$path)
   same <- ds$getRasterXSize() == g@dims[["x"]] && ds$getRasterYSize() == g@dims[["y"]] &&
     isTRUE(all.equal(ds$getGeoTransform(), g@transform)) &&
     crs_equal(ds$getProjection(), g@crs) &&
