@@ -346,6 +346,15 @@
 
 ## Bug fixes
 
+* A tile across the antimeridian no longer reads as empty. A nearest read of
+  several sources onto a longitude-latitude grid took the tile's bounds as an
+  inverted box, so its cells stayed NaN with no error. Such sources now warp
+  together.
+* A south-up tile fetched through the tile index gets the rows of its window.
+  A window 9 to 15 rows tall fetched too few and came back partly NaN.
+* A decoded Zarr read counts against its handle's budget. A long decoded read
+  kept every chunk it decoded: 16 windows of 1024 x 1024 x 64 grew a reader by
+  1.4 GB, and now by 350 MB, as a plain read does.
 * A read daemon's remote open takes what the run's files need in its first
   request, 32 KB unless the host has opened a many-band header, not 4 MB.
   The pool read 1,576 MB of a 525 MB fixture, and read 2.5 times slower
