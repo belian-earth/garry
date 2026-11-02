@@ -194,6 +194,18 @@ test_that("the gradient tape keeps a ring from any valid cell", {
   expect_identical(sum(is.nan(want)), .er_nx * .er_ny - (.er_nx - 4L) * (.er_ny - 4L))
 })
 
+test_that("a patch over an integer raster finds NaN past the edge, not 0", {
+  left <- function(v) {
+    n <- length(.g_shape(v))
+    s <- g_shift_slice(v, 0L, -1L, .g_shape(v)[[n - 1L]] - 2L, .g_shape(v)[[n]] - 2L, 1L)
+    g_pad(s, 1L, 0)
+  }
+  x <- lazy_source(fixture_tile(5, type = "Int16", nx = 6L, ny = 4L))
+  want <- matrix(5, 4L, 6L)
+  want[, 1L] <- NaN
+  expect_equal(collect(lazy_patch(x, left, radius = 1L, kernel_id = "left")), want, ignore_attr = TRUE)
+})
+
 test_that("the gradient tape finds the ring past a decode of an integer read", {
   # An integer read holds 0 past the raster, which no validity mask can tell
   # from data, so the tape takes where the raster ends, as a stage does.

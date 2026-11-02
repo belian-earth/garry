@@ -1095,8 +1095,8 @@ shrink_footprint <- function(
 #' 2D result). Not differentiable. [ocm_model()]-based cloud-mask
 #' prediction is the in-package example of its use.
 #'
-#' Cells beyond the raster edge hold the nodata of `x`'s dtype (NaN for a
-#' float, 0 for an integer), whatever a kernel before this one made of them.
+#' Cells beyond the raster edge hold NaN: `x` reads as a float here whatever
+#' its dtype, and whatever a kernel before this one made of them.
 #'
 #' `kernel_id` stands in for `fn` in kernel signatures: give two calls
 #' the same id ONLY if their fns are interchangeable (same weights,
