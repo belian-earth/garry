@@ -593,7 +593,8 @@ NULL
     quote({
       suppressMessages(library(garry))
       options(policy)
-      asNamespace("garry")$.daemon_hygiene(trim = trim)
+      ns <- asNamespace("garry")
+      ns$.daemon_hygiene(trim = trim && ns$.daemon_gc_due())
     }),
     profiles = profiles,
     policy = .daemon_policy(),

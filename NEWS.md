@@ -172,6 +172,18 @@
   outside R's heap and frees it as it writes, so none is needed. Small HLS
   median fell from 7.0 to 5.2 s and medium from 39 to 33 s, its peak from 14.4
   to 13.5 GB.
+* A median over up to 64 dates sorts by network, where it took `top_k` past 32:
+  55 dates cost a third of the time per pixel, for about 1 s more compile.
+  Direct-route strips all take one height, so a run compiles one kernel where
+  it compiled two, which pays for that. Medium HLS median fell from 33 to 23 s
+  cold and 30 to 21 s warm, and small from 3.8 to 3.2 s warm, same cells.
+* A median network counts valid dates by adding planes. A reduce there drew in
+  XLA's YNN fusion, so `hampel_smooth()` over the medium annual stack took 4.5 s
+  and now takes 2.6, same cells.
+* A run starts with a full collection on its daemons only if enough has passed
+  through them to pay for one, and the host's own after dropping store regions
+  likewise. Together these were half of a small run's floor: a focal task on a
+  small tile fell from 0.8 to 0.5 s warm.
 * A masked composite stays inside its RAM budget. Medium HLS median and NDVI,
   55 dates of 3660 x 3660 under 16 GB, ran out of memory on every run and now
   finish, same cells, about 2 GB under the cap. Three things

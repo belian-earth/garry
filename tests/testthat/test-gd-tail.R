@@ -19,6 +19,19 @@ test_that(".gd_strip_bounds tiles exactly with at most two heights", {
   }
 })
 
+test_that(".gd_even_strips has one height and keeps each row once", {
+  for (ny in c(1L, 7L, 40L, 931L)) {
+    for (h in c(1L, 2L, 3L, 6L, 64L, 2000L)) {
+      b <- garry:::.gd_even_strips(ny, h)
+      expect_identical(unique(vapply(b, `[[`, integer(1), 2L)), min(h, ny))
+      kept <- unlist(lapply(b, function(s) (s[[1L]] + s[[3L]]):(s[[1L]] + s[[2L]] - 1L)))
+      expect_identical(kept, seq_len(ny) - 1L)
+      starts <- vapply(b, `[[`, integer(1), 1L)
+      expect_true(all(starts + min(h, ny) <= ny))
+    }
+  }
+})
+
 test_that("g_fill builds a device constant equal to the R fill", {
   skip_if(!rlang::is_installed("anvl"), "anvl not installed")
   a <- g_fill(1.5, c(2L, 3L))

@@ -516,6 +516,17 @@ NULL
   max(1L, as.integer(floor(garry_opt("ram_budget_mb") / 4 / row_mb)))
 }
 
+# Strips of `h` rows over `ny`, each `c(y0, h, drop)`. One height means one kernel
+# to trace and compile on every daemon, so the last strip reaches back over its
+# neighbour's rows and .gd_join_strips() drops the first `drop` of them. A kernel
+# reduces each pixel alone, so a row comes out the same in either strip.
+.gd_even_strips <- function(ny, h) {
+  h <- min(as.integer(h), as.integer(ny))
+  lapply(seq(0L, ny - 1L, by = h), function(y) {
+    c(min(y, ny - h), h, max(0L, y + h - ny))
+  })
+}
+
 # Max concurrent tasks of `task_mb` in `work_mb`, clamped to [1, pool], the full
 # pool when RAM can't be read, which .garry_ram_avail_mb() warns of. This is what
 # lets garry_daemons() over-provision compute without OOM on a many-band job.
@@ -867,7 +878,7 @@ NULL
   n_slices <- max(lengths(spec$band_srcs))
   cubes <- spec$joint$cubes
   fit <- spec$fit %||% .gd_fit(nb, n_slices, ny, nx, masked, .comp_n(), as.integer(garry_opt("gd_strips")), cubes)
-  bounds <- .gd_strip_bounds(ny, win$strips %||% fit$strips)
+  bounds <- .gd_even_strips(ny, win$strip_rows %||% ceiling(ny / fit$strips))
   ns <- length(bounds)
   strip_mb <- .gd_strip_mb(n_slices, bounds[[1L]][[2L]], nx, cubes %||% .gd_band_cubes)
   cap <- .gd_compute_cap(strip_mb, fit$work_mb, .daemon_depth * max(1L, .comp_n()))
@@ -1106,7 +1117,7 @@ NULL
     if (got[[it$u]] == ns) {
       bands <- units[[it$u]]
       for (i in seq_along(bands)) {
-        res[[bands[[i]]]] <<- .gd_join_strips(parts[[it$u]], i, length(bands), ny, nx)
+        res[[bands[[i]]]] <<- .gd_join_strips(parts[[it$u]], i, length(bands), ny, nx, bounds[[ns]][[3L]])
       }
       parts[[it$u]] <<- list()
       later <- unlist(units[which(got < ns)])
@@ -1182,16 +1193,18 @@ NULL
 # Strips of one kernel, row-major f32 in y order, as band `i` of `nb`: a joint
 # strip holds its bands whole, one after another. Byte-identical to one whole
 # job.
-.gd_join_strips <- function(strips, i, nb, ny, nx) {
+.gd_join_strips <- function(strips, i, nb, ny, nx, drop = 0L) {
   if (length(strips) == 1L && nb == 1L) {
     return(strips[[1L]])
   }
   p <- do.call(
     c,
-    lapply(strips, function(x) {
+    lapply(seq_along(strips), function(s) {
+      x <- strips[[s]]
       attributes(x) <- NULL
       each <- length(x) %/% nb
-      if (nb == 1L) x else x[(i - 1L) * each + seq_len(each)]
+      skip <- if (s == length(strips)) drop * nx * 4 else 0
+      if (nb == 1L && skip == 0) x else x[(i - 1L) * each + seq(skip + 1, each)]
     })
   )
   attr(p, "gdim") <- c(ny, nx)
@@ -1248,7 +1261,7 @@ NULL
       h = bd[[2L]],
       mask_y0 = max(0L, min(bd[[1L]] - spec$halo, ny - mask_rows)),
       mask_rows = mask_rows,
-      strips = as.integer(ceiling(bd[[2L]] / strip))
+      strip_rows = strip
     )
     .gd_reduce_results(plan, c(spec, list(window = win)), tmp, tl)
   })

@@ -1260,11 +1260,15 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
   })
 }
 
+# The longest axis a median sorts by network. 55 dates cost 568 ns/px in the
+# network against 1,926 in top_k, for about 1 s more compile per shape.
+.g_median_net_max <- 64L
+
 #' @rdname g-reductions
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
-    if (length(dims) == 1L && .g_shape(x)[[dims]] %in% 2:32) {
+    if (length(dims) == 1L && .g_shape(x)[[dims]] %in% 2:.g_median_net_max) {
       return(.g_median_net(x, as.integer(dims), nan_rm))
     }
     return(anvl::nv_median(x, axes = dims, nan_rm = nan_rm))
@@ -1292,14 +1296,16 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   }
   sh <- .g_shape(x)
   n <- sh[[axis]]
-  cnt <- g_count(x, dims = axis)
-  if (nan_rm) {
-    # NaN sorts last as +Inf, past every slot the valid count reads
-    x <- g_ifelse(g_is_nodata(x), .g_scalar_like(x, Inf), x)
-  }
   s <- lapply(seq_len(n), function(i) {
     .g_reshape_rm(.g_slice_axis(x, axis, i, i), sh[-axis])
   })
+  # The count adds planes: a reduce op would seed XLA's YNN fusion, which took
+  # twice the time on a Hampel filter.
+  cnt <- Reduce(`+`, lapply(s, function(v) g_cast(!g_is_nodata(v), "i32")))
+  if (nan_rm) {
+    # NaN sorts last as +Inf, past every slot the valid count reads
+    s <- lapply(s, function(v) g_ifelse(g_is_nodata(v), .g_scalar_like(v, Inf), v))
+  }
   for (cp in .sort_pairs(n)) {
     lo <- anvl::nv_pmin(s[[cp[[1L]]]], s[[cp[[2L]]]])
     s[[cp[[2L]]]] <- anvl::nv_pmax(s[[cp[[1L]]]], s[[cp[[2L]]]])

@@ -10,8 +10,8 @@ jit cache.}
 \arguments{
 \item{deep}{Also evict the jit cache?}
 
-\item{trim}{Also collect and trim? About 10 ms a daemon, which a run
-that only reads has no need of.}
+\item{trim}{Also collect and trim? A full collection, about 70 ms a
+daemon, which a run that only reads has no need of.}
 }
 \value{
 \code{TRUE} if the trim ran (glibc), invisibly.

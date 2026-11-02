@@ -99,6 +99,13 @@ NULL
   invisible(TRUE)
 }
 
+# Has a daemon passed enough since its last full collection to pay for one? A
+# full pass on all 27 daemons took half of a small run.
+.daemon_gc_due <- function() {
+  s <- .daemon_gc_state
+  (s$bytes %||% 0) + (s$since_full %||% 0) + (s$reads %||% 0) >= .daemon_gc_budget_mb * 2^20
+}
+
 # Bytes a task transient holds: raw payloads by length, R vectors by
 # element width, lists summed (device arrays count through the host
 # payload they were uploaded from).
@@ -129,8 +136,8 @@ NULL
 #'
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #' @param deep Also evict the jit cache?
-#' @param trim Also collect and trim? About 10 ms a daemon, which a run
-#'   that only reads has no need of.
+#' @param trim Also collect and trim? A full collection, about 70 ms a
+#'   daemon, which a run that only reads has no need of.
 #' @return `TRUE` if the trim ran (glibc), invisibly.
 #' @keywords internal
 .daemon_hygiene <- function(deep = FALSE, trim = TRUE) {
@@ -143,6 +150,7 @@ NULL
     return(invisible(FALSE))
   }
   gc(FALSE)
+  rm(list = ls(.daemon_gc_state), envir = .daemon_gc_state)
   invisible(.garry_malloc_trim())
 }
 

@@ -1255,6 +1255,7 @@ execute_plan_mirai <- function(
   # per pool instead of one per retiring task.
   pending_drop <- character(0)
   pending_drop_mb <- 0
+  unmapped_mb <- 0
   queue_drop <- function(keys) {
     for (rk in keys) {
       if ((store_users[[rk]] %||% 0L) > 0L) {
@@ -1314,9 +1315,15 @@ execute_plan_mirai <- function(
       envir = chunk_vals
     )
     pending_drop <<- character(0)
+    unmapped_mb <<- unmapped_mb + pending_drop_mb
     pending_drop_mb <<- 0
     last_flush <<- Sys.time()
-    gc(FALSE) # host munmaps its handles; regions free once unlinked
+    # The host munmaps its handles, and regions free once unlinked. A gc costs
+    # 0.1 s and up, a sixth of a small run, so small regions wait for bigger ones.
+    if (unmapped_mb >= .daemon_gc_budget_mb) {
+      gc(FALSE)
+      unmapped_mb <<- 0
+    }
     invisible(NULL)
   }
 
