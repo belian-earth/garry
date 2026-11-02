@@ -878,7 +878,37 @@ NULL
 # One band's kernel from its spec: the program the host traced, or the
 # closure rebuilt here, so a task and the warm-up run one kernel for one ck.
 .gd_band_kernel <- function(sp) {
-  sp$set %||% .gd_lean_fn(sp$F, sp$op, sp$nan_rm, sp$affine, sp$masked)
+  if (!is.null(sp$set)) {
+    return(sp$set)
+  }
+  if (identical(sp$op, "joint")) {
+    return(.gd_joint_fn(sp$F, sp$reduce, sp$margin, sp$affines, sp$masked))
+  }
+  .gd_lean_fn(sp$F, sp$op, sp$nan_rm, sp$affine, sp$masked)
+}
+
+# The kernel of a reducer that sees every band: one (t, y, x) cube per band, then
+# the mask's, masked band by band as a lean kernel masks one, stacked to
+# (band, t, y, x) and reduced. Factored for .gd_mask_fn()'s reason.
+.gd_joint_fn <- function(F, reduce, margin, affines, masked) {
+  force(F)
+  force(reduce)
+  force(margin)
+  force(affines)
+  force(masked)
+  function(inp) {
+    bands <- Map(
+      function(x, affine) {
+        if (length(affine$scale) == 1L) {
+          x <- x * affine$scale + affine$offset
+        }
+        if (masked) F(x, inp[[length(inp)]]) else x
+      },
+      if (masked) inp[-length(inp)] else inp,
+      affines
+    )
+    list(reduce(g_stack(unname(bands)), margin))
+  }
 }
 
 #' Daemon task body: pre-compile the pipeline lean kernels.
@@ -906,11 +936,7 @@ NULL
     }
     for (h in sp$hs) {
       dims <- c(sp$n, h, sp$nx)
-      inputs <- if (sp$masked) {
-        list(g_fill(0, dims, "f32", dev), g_fill(0, dims, "f32", dev))
-      } else {
-        list(g_fill(0, dims, "f32", dev))
-      }
+      inputs <- lapply(seq_len(max(1L, length(sp$affines)) + sp$masked), function(i) g_fill(0, dims, "f32", dev))
       invisible(g_download_raw(jf(inputs)[[1L]]))
       rm(inputs)
     }
@@ -987,13 +1013,14 @@ NULL
 .gd_compute_masked_band <- function(job, k) {
   t0 <- proc.time()[["elapsed"]]
   dev <- .exec_device(k$dev)
-  n <- length(job$band_bins)
+  n <- length(job$cubes[[1L]])
   nx <- k$nx
   y0 <- if (is.null(job$rows)) 0L else job$rows[[1L]]
   h <- if (is.null(job$rows)) k$ny else job$rows[[2L]]
-  inputs <- list(.gd_upload_rows(job$band_bins, y0, h, nx, dev))
+  inputs <- lapply(job$cubes, .gd_upload_rows, y0, h, nx, dev)
   if (length(k$mask_bins)) {
-    inputs[[2L]] <- .gd_upload_rows(k$mask_bins, y0, h, nx, dev)
+    # a block's mask window starts above its first row
+    inputs[[length(inputs) + 1L]] <- .gd_upload_rows(k$mask_bins, y0 + k$mask_y0, h, nx, dev)
   }
   created0 <- .kernel_stats$creates %||% 0L
   jf <- .daemon_kernel(job$ck, .gd_band_kernel(k$kernels[[job$ck]]), dev)

@@ -78,7 +78,7 @@
           }
         }
       },
-      "route": "scheduler",
+      "route": "composite_direct",
       "arms": ["garry", "odc-dask", "odc-threads", "cubed"],
       "check": {
         "aligned": {"p99_abs": 20.0, "nan_mismatch_frac": 0.0, "cor_min": 0.999},

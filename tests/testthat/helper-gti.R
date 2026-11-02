@@ -57,6 +57,13 @@
 # verbs exactly as the HLS benchmark builds it.
 .gg_masked_composite <- function(open = 0L, dilate = 0L, single = FALSE,
                                  type = "Float32", dtype = "f32", overlap = FALSE) {
+  reduce_over(.gg_masked_dataset(open, dilate, single, type, dtype, overlap),
+              "median", "t", nan_rm = TRUE)
+}
+
+# The two-band, two-date dataset of .gg_masked_composite(), masked and cleaned.
+.gg_masked_dataset <- function(open = 0L, dilate = 0L, single = FALSE,
+                               type = "Float32", dtype = "f32", overlap = FALSE) {
   gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)), type)
   gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)), type)
   qa1 <- matrix(0, 40, 60); qa1[10:20, 10:30] <- 2
@@ -69,8 +76,16 @@
   vars <- list(V1 = sl(gA), V2 = sl(gB), Q = sl(gQ))
   if (single) vars$V2 <- NULL
   ds <- as_dataset(vars, mask_asset = "Q")
-  reduce_over(apply_mask(ds, where = c(2), open = open, dilate = dilate),
-              "median", "t", nan_rm = TRUE)
+  apply_mask(ds, where = c(2), open = open, dilate = dilate)
+}
+
+# The same two bands as a bare (band, t, y, x) cube.
+.gg_unmasked_cube <- function() {
+  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+  g <- graph_new()
+  band <- function(gti) lazy_stack(list(s1 = .gg_slice(gti, "s1", g), s2 = .gg_slice(gti, "s2", g)), along = "t")
+  lazy_stack(list(V1 = band(gA), V2 = band(gB)), along = "band")
 }
 
 # What the second slice masks. With `overlap` some cells are masked in both

@@ -155,6 +155,13 @@
 
 ## Performance
 
+* `geomedian()`, `medoid()` and any custom reducer over a band stack of time
+  stacks take the direct route, so they stay inside the RAM budget. Medium
+  HLS, 55 dates of 3660 x 3660 in six bands, ran out of memory at 16 GB and now
+  takes about 250 s at a 7.4 GB peak. A cube too big for `/dev/shm` runs in
+  blocks of full-width rows, fetched, masked, reduced in strips and freed. Blocks
+  and strips take their heights from the plan and `garry.read_budget_mb` and
+  `garry.ram_budget_mb`, never free RAM, so one input gives one set of bytes.
 * A masked composite stays inside its RAM budget. Medium HLS median and NDVI,
   55 dates of 3660 x 3660 under 16 GB, ran out of memory on every run and now
   finish in 29 to 48 s, same cells, about 1.5 GB under the cap. Three things

@@ -162,7 +162,11 @@ NULL
   if (length(red@parents) != 1L) {
     return(NULL)
   }
-  stk <- gg(red@parents[[1L]])
+  .cd_stack_spec(gg, gg(red@parents[[1L]]), red@op, red@nan_rm)
+}
+
+# One band's slices, lifted from the stack that holds them over time.
+.cd_stack_spec <- function(gg, stk, op, nan_rm) {
   if (!S7::S7_inherits(stk, StackNode) || !length(stk@parents)) {
     return(NULL)
   }
@@ -247,8 +251,8 @@ NULL
       F = first@fn,
       mask_chain = m0$chain,
       halo = m0$halo,
-      op = red@op,
-      nan_rm = red@nan_rm,
+      op = op,
+      nan_rm = nan_rm,
       affine = aff
     )
   } else if (S7::S7_inherits(first, SourceNode)) {
@@ -273,13 +277,37 @@ NULL
       F = NULL,
       mask_chain = list(),
       halo = 0L,
-      op = red@op,
-      nan_rm = red@nan_rm,
+      op = op,
+      nan_rm = nan_rm,
       affine = aff
     )
   } else {
     NULL
   }
+}
+
+# A custom reducer over "t" of a band stack of time stacks: per-band specs,
+# bands in stack order, and what the reducer needs to run. It sees every band
+# at once, so its bands share one kernel. NULL for any other node.
+.cd_joint_spec <- function(gg, top) {
+  if (!S7::S7_inherits(top, ReduceNode) || !length(top@fn) || !identical(top@over, "t")) {
+    return(NULL)
+  }
+  cube <- gg(top@parents[[1L]])
+  if (!S7::S7_inherits(cube, StackNode) || !identical(cube@along, "band")) {
+    return(NULL)
+  }
+  specs <- lapply(cube@parents, function(id) {
+    stk <- gg(id)
+    if (S7::S7_inherits(stk, StackNode) && identical(stk@along, "t")) {
+      .cd_stack_spec(gg, stk, "joint", top@nan_rm)
+    }
+  })
+  list(
+    specs = specs,
+    reduce = .slim_fn(top@fn[[1L]]),
+    margin = .dim_margins(names(.node_grid(cube)@dims), top@over)
+  )
 }
 
 # Bands (+1 with morphology) x slices x grid pixels past which a whole-grid
@@ -324,15 +352,17 @@ NULL
   gg <- function(id) graph_get(graph, id)
   src_ids <- vapply(src_stages, function(s) gg(s@members[[1L]])@id, integer(1))
   top <- gg(sink@members[[length(sink@members)]]) # the sink's output node
-  if (S7::S7_inherits(top, ReduceNode)) {
-    reduces <- list(top)
+  joint <- .cd_joint_spec(gg, top)
+  if (!is.null(joint)) {
+    specs <- joint$specs
+  } else if (S7::S7_inherits(top, ReduceNode)) {
+    specs <- list(.cd_reduce_spec(gg, top))
   } else if (S7::S7_inherits(top, StackNode) && identical(top@along, "band")) {
-    reduces <- lapply(top@parents, gg)
+    specs <- lapply(top@parents, function(id) .cd_reduce_spec(gg, gg(id)))
   } else {
     return(NULL)
   }
 
-  specs <- lapply(reduces, function(r) .cd_reduce_spec(gg, r))
   if (any(vapply(specs, is.null, logical(1)))) {
     return(NULL)
   }
@@ -357,10 +387,12 @@ NULL
   # in double: GridSpec dims are integer and the product passes 2^31
   grid_px <- as.numeric(sink@grid@dims[["x"]]) * sink@grid@dims[["y"]]
   weight <- (1L + (s1$halo > 0L)) * length(s1$band) * grid_px
-  if (n_bands == 1L && weight > .gd_compute_budget) {
+  if (is.null(joint) && n_bands == 1L && weight > .gd_compute_budget) {
     return(NULL)
   }
-  .cd_group_spec(specs, sink@grid, sink@device)
+  spec <- .cd_group_spec(specs, sink@grid, sink@device)
+  spec$joint <- joint[c("reduce", "margin")]
+  spec
 }
 
 # What makes per-band specs one composite: the same op, mask sources,
@@ -419,18 +451,26 @@ NULL
 # and one band, since nothing computes without them, and the strips shrink so
 # every daemon still has one in what is left. Strips always get their share of
 # the budget: when the two smallest cubes already fill it, the run goes over the
-# fraction, which is a margin, rather than stalling. Returns `strips`, how many
-# bands may be open at once, and the MB strip tasks may hold.
-.gd_fit <- function(nb, n_slices, ny, nx, masked, comp, strips = 0L) {
+# fraction, which is a margin, rather than stalling. A joint reducer needs every
+# band's cube at once, so `bands` is 1, its one kernel, and all of them count;
+# its strips come from .gd_joint_rows(), so RAM sets how many run, not their
+# shape. Returns `strips`, how many kernels' cubes may be open, and the MB strip
+# tasks may hold.
+.gd_fit <- function(nb, n_slices, ny, nx, masked, comp, strips = 0L, joint = FALSE) {
   cube <- n_slices * as.numeric(ny) * nx * 4 / 2^20
-  whole <- .gd_strip_mb(n_slices, ny, nx)
+  whole <- .gd_strip_mb(n_slices, ny, nx, joint)
+  if (strips < 1L && joint) {
+    strips <- as.integer(ceiling(ny / .gd_joint_rows(n_slices, nx)))
+  }
   wide <- if (strips >= 1L) strips else comp
   budget <- garry_opt("exec_ram_fraction") * .garry_ram_avail_mb()
+  open <- if (joint) 1L else nb
   if (is.na(budget) || (nb + masked) * cube + whole <= budget) {
-    return(list(strips = wide, bands = nb, work_mb = budget))
+    return(list(strips = wide, bands = open, work_mb = budget))
   }
-  bands <- min(nb, as.integer(max(1, floor(.gd_cube_share * budget / cube) - masked)))
-  work <- max(budget - (bands + masked) * cube, (1 - .gd_cube_share) * budget)
+  bands <- if (joint) 1L else min(nb, as.integer(max(1, floor(.gd_cube_share * budget / cube) - masked)))
+  held <- if (joint) nb + masked else bands + masked
+  work <- max(budget - held * cube, (1 - .gd_cube_share) * budget)
   need <- as.integer(ceiling(comp * whole / work))
   list(strips = if (strips >= 1L) strips else max(wide, need), bands = bands, work_mb = work)
 }
@@ -439,7 +479,26 @@ NULL
 # while the first computes is what keeps the read pool working.
 .gd_cube_share <- 0.65
 
-.gd_strip_mb <- function(n_slices, ny, nx) 3.5 * n_slices * ny * nx * 4 / 2^20
+.gd_strip_mb <- function(n_slices, ny, nx, joint = FALSE) {
+  (if (joint) .gd_joint_cubes else 3.5) * n_slices * ny * nx * 4 / 2^20
+}
+
+# One-band strip cubes a joint strip holds, every band and the mask, the
+# kernel's own arrays and XLA's scratch: 2.0 to 2.8 GB measured on 57.6 MB cubes
+# of a six-band geomedian, net of the daemon's baseline.
+.gd_joint_cubes <- 34
+
+# Rows of a joint strip: a quarter of what one kernel call may hold under
+# garry.ram_budget_mb, so that a short budget still runs every compute daemon.
+# Small geomedian at 8 GB, 494 MB strips ran two at once, 56 s to 124 daemon-s;
+# 128 MB ran six, 15 s to 87 daemon-s; 64 MB lost it again to overhead, 20 s to
+# 118. XLA's arithmetic can vary in the last bit with an array's shape, so a
+# strip's height comes from the plan and an option, never live RAM: one input
+# gives one set of bytes on any machine.
+.gd_joint_rows <- function(n_slices, nx) {
+  row_mb <- .gd_strip_mb(n_slices, 1L, nx, joint = TRUE)
+  max(1L, as.integer(floor(garry_opt("ram_budget_mb") / 4 / row_mb)))
+}
 
 # Max concurrent tasks of `task_mb` in `work_mb`, clamped to [1, pool], the full
 # pool when RAM can't be read, which .garry_ram_avail_mb() warns of. This is what
@@ -497,13 +556,19 @@ NULL
     )
   })
   names(jobs) <- vapply(srcs, function(s) as.character(s@members[[1L]]), "")
-  K <- list(
+  list(K = .gd_rows_K(grid, 0L, grid@dims[["y"]]), jobs = jobs)
+}
+
+# The grid-constant bundle of a warp onto `rows` full-width rows from row `y0`.
+.gd_rows_K <- function(grid, y0, rows) {
+  gt <- grid@transform
+  gt[c(1L, 4L)] <- gt[c(1L, 4L)] + y0 * gt[c(3L, 6L)]
+  list(
     nx = grid@dims[["x"]],
-    ny = grid@dims[["y"]],
-    gtstr = paste(.gdal_num(grid@transform), collapse = "/"),
+    ny = rows,
+    gtstr = paste(.gdal_num(gt), collapse = "/"),
     wkt = gdalraster::srs_to_wkt(grid@crs)
   )
-  list(K = K, jobs = jobs)
 }
 
 # Preload garry once per daemon (else fetch tasks cold-init XLA) and
@@ -522,7 +587,7 @@ NULL
 # daemons are busy with live warps, serialising a 220-task dispatch into
 # ~25 s of host stall that delayed every downstream phase (the "slow
 # lead-in").
-.gd_fetch <- function(tl, b, ids) {
+.gd_fetch <- function(tl, b, ids, K = b$K) {
   stats::setNames(
     lapply(ids, function(id) {
       .task_launch(
@@ -530,10 +595,10 @@ NULL
         paste0("f", id, "_c1"),
         quote(asNamespace("garry")$.cd_fetch_warp(j, k)),
         j = b$jobs[[as.character(id)]],
-        k = b$K,
+        k = K,
         .compute = "garry_read",
         .pool = "read",
-        .mb = 4 * as.numeric(b$K$nx) * b$K$ny / 2^20
+        .mb = 4 * as.numeric(K$nx) * K$ny / 2^20
       )
     }),
     paste0("f", ids, "_c1")
@@ -703,8 +768,8 @@ NULL
   # requires garry_daemons(), so the pools are guaranteed here). A single
   # band is fetch-bound, and its whole-grid kernel runs once the fetch has
   # drained.
-  if (spec$n_bands > 1L) {
-    res <- .gd_reduce_results(plan, spec, tmp, tl)
+  if (spec$n_bands > 1L || !is.null(spec$joint)) {
+    res <- .gd_block_results(plan, spec, tmp, tl)
     tl$line("drain_end", "-")
     return(.gd_write_result(res, spec, path, nodata, band_names, wspec = wspec))
   }
@@ -755,10 +820,13 @@ NULL
 # caller writes or feeds them to an upper kernel. `tmp` and the task log `tl` are caller-owned (shared
 # across groups).
 .gd_reduce_results <- function(plan, spec, tmp, tl) {
-  ny <- spec$grid@dims[["y"]]
+  win <- spec$window
+  ny <- win$h %||% spec$grid@dims[["y"]]
+  mask_ny <- win$mask_rows %||% ny
   nx <- spec$grid@dims[["x"]]
   progress <- isTRUE(garry_opt("progress"))
   masked <- length(spec$fmask_srcs) > 0L
+  joint <- !is.null(spec$joint)
   # Compute dispatch rides the width-1 profile set: warm every profile,
   # round-robin the mask/band jobs across them.
   comp_profs <- .comp_profiles()
@@ -773,77 +841,93 @@ NULL
     vapply(ids, function(id) b$jobs[[as.character(id)]]$bin, "")
   }
 
-  # What fits: how many strips spread each band's median across the pool, so
-  # the exposed drain (the bands with no fetch left to hide behind) divides by
-  # the pool width, and how many bands may hold a cube on tmpfs at once.
+  # What runs as one kernel: a band, or every band of a joint reducer. What
+  # fits: how many strips spread a kernel across the pool, so the exposed drain
+  # (the kernels with no fetch left to hide behind) divides by the pool width,
+  # and how many kernels may hold their cubes on tmpfs at once.
   nb <- length(spec$band_srcs)
+  units <- if (joint) list(seq_len(nb)) else as.list(seq_len(nb))
+  nu <- length(units)
   n_slices <- max(lengths(spec$band_srcs))
-  fit <- .gd_fit(nb, n_slices, ny, nx, masked, .comp_n(), as.integer(garry_opt("gd_strips")))
-  bounds <- .gd_strip_bounds(ny, fit$strips)
+  fit <- spec$fit %||% .gd_fit(nb, n_slices, ny, nx, masked, .comp_n(), as.integer(garry_opt("gd_strips")), joint)
+  bounds <- .gd_strip_bounds(ny, win$strips %||% fit$strips)
   ns <- length(bounds)
-  strip_mb <- .gd_strip_mb(n_slices, bounds[[1L]][[2L]], nx)
+  strip_mb <- .gd_strip_mb(n_slices, bounds[[1L]][[2L]], nx, joint)
   cap <- .gd_compute_cap(strip_mb, fit$work_mb, .daemon_depth * max(1L, .comp_n()))
-  if (progress && (cap < nb * ns || fit$bands < nb)) {
+  if (progress && (cap < nu * ns || fit$bands < nu)) {
     cli::cli_inform(.glue(
-      "[gdal-direct] RAM budget: {ns} strips a band, {cap} in flight, {fit$bands} of {nb} bands open at once"
+      "[gdal-direct] RAM budget: {ns} strips a kernel, {cap} in flight, {fit$bands} of {nu} kernels open at once"
     ))
   }
+  band_K <- if (is.null(win)) b$K else .gd_rows_K(spec$grid, win$y0, ny)
+  mask_K <- if (is.null(win)) b$K else .gd_rows_K(spec$grid, win$mask_y0, mask_ny)
 
   t0 <- proc.time()[["elapsed"]]
   .gd_daemon_prep("garry_read")
   # Dispatch fmask FIRST (it drains before the bands, which queue behind it on
-  # the read pool), then every band that may be open. All non-blocking.
-  fmask_p <- if (masked) .gd_fetch(tl, b, spec$fmask_srcs) else NULL
-  band_p <- vector("list", nb)
-  next_band <- 1L
-  open_bands <- 0L
-  fetch_bands <- function() {
-    while (next_band <= nb && open_bands < fit$bands) {
-      band_p[[next_band]] <<- .gd_fetch(tl, b, spec$band_srcs[[next_band]])
-      next_band <<- next_band + 1L
-      open_bands <<- open_bands + 1L
+  # the read pool), then every kernel's cubes that may be open. All non-blocking.
+  fmask_p <- if (masked) .gd_fetch(tl, b, spec$fmask_srcs, mask_K) else NULL
+  unit_p <- vector("list", nu)
+  next_unit <- 1L
+  open_units <- 0L
+  fetch_units <- function() {
+    while (next_unit <= nu && open_units < fit$bands) {
+      unit_p[[next_unit]] <<- unlist(
+        lapply(spec$band_srcs[units[[next_unit]]], function(ids) .gd_fetch(tl, b, ids, band_K)),
+        recursive = FALSE
+      )
+      next_unit <<- next_unit + 1L
+      open_units <<- open_units + 1L
     }
   }
-  fetch_bands()
+  fetch_units()
 
-  # Kernel identity for the lean band kernel: everything the traced
-  # closure closes over (F, op, nan_rm, affine, masked, device). Affine
-  # varies per band, so bands sharing an affine share a ck, and with it
-  # one kernel per daemon (see .daemon_kernel). As a program it is traced
-  # here, once, at the strip heights.
+  # Kernel identity: everything the traced closure closes over (F, op, nan_rm,
+  # affine, masked, device, and a joint reducer). Affine varies per band, so
+  # bands sharing an affine share a ck, and with it one kernel per daemon (see
+  # .daemon_kernel). As a program it is traced here, once, at the strip heights.
   Fs <- .slim_fn(spec$F)
   base_sig <- rlang::hash(list(
     fn = .cd_fn_sig(spec$F),
     op = spec$op,
     nan_rm = spec$nan_rm,
     masked = masked,
-    dev = spec$device
+    dev = spec$device,
+    reduce = if (joint) .cd_fn_sig(spec$joint$reduce),
+    margin = spec$joint$margin
   ))
   wire <- .kernel_wire_program()
   hs <- unique(vapply(bounds, `[[`, integer(1), 2L))
-  dtypes <- rep("f32", 1L + masked)
-  shape_sets <- function(n) lapply(hs, function(h) rep(list(c(n, h, nx)), 1L + masked))
-  band_ck <- vapply(
-    seq_len(nb),
-    function(bi) {
-      ck <- rlang::hash(list(base_sig, spec$band_affine[[bi]]))
+  n_in <- function(u) length(units[[u]]) + masked
+  dtypes_of <- function(u) rep("f32", n_in(u))
+  shape_sets <- function(u) {
+    n <- length(spec$band_srcs[[units[[u]][[1L]]]])
+    lapply(hs, function(h) rep(list(c(n, h, nx)), n_in(u)))
+  }
+  unit_ck <- vapply(
+    seq_len(nu),
+    function(u) {
+      ck <- rlang::hash(list(base_sig, spec$band_affine[units[[u]]]))
       if (wire) {
-        ck <- paste0(ck, "#", .program_tag(dtypes, shape_sets(length(spec$band_srcs[[bi]]))))
+        ck <- paste0(ck, "#", .program_tag(dtypes_of(u), shape_sets(u)))
       }
       ck
     },
     ""
   )
-  kernels <- lapply(which(!duplicated(band_ck)), function(bi) {
+  kernels <- lapply(which(!duplicated(unit_ck)), function(u) {
     sp <- list(
-      ck = band_ck[[bi]],
+      ck = unit_ck[[u]],
       F = Fs,
       op = spec$op,
       nan_rm = spec$nan_rm,
-      affine = spec$band_affine[[bi]],
+      affine = spec$band_affine[[units[[u]][[1L]]]],
+      affines = spec$band_affine[units[[u]]],
+      reduce = spec$joint$reduce,
+      margin = spec$joint$margin,
       masked = masked,
       dev = spec$device,
-      n = length(spec$band_srcs[[bi]]),
+      n = length(spec$band_srcs[[units[[u]][[1L]]]]),
       hs = hs,
       nx = nx
     )
@@ -851,14 +935,14 @@ NULL
       sp$set <- .trace_kernel(
         sp$ck,
         .gd_band_kernel(sp),
-        dtypes,
-        shape_sets(sp$n),
-        spec$band_srcs[[bi]][[1L]]
+        dtypes_of(u),
+        shape_sets(u),
+        spec$band_srcs[[units[[u]][[1L]]]][[1L]]
       )
     }
     sp
   })
-  names(kernels) <- unique(band_ck)
+  names(kernels) <- unique(unit_ck)
 
   # Warm + attach the compute pool while the read pool fetches: hide the XLA
   # client cold init AND the lean kernels' compiles inside the fetch window, so
@@ -914,17 +998,17 @@ NULL
     firsts <- seq(1L, nf, by = size)
     mask_sets <- lapply(
       unique(c(size, nf - firsts[[length(firsts)]] + 1L)),
-      function(k) list(c(k, ny, nx))
+      function(k) list(c(k, mask_ny, nx))
     )
     chain <- .gd_slim_chain(spec$mask_chain)
     mask_ck <- rlang::hash(list(
       chain = .cd_chain_sig(spec$mask_chain),
       halo = spec$halo,
-      ny = ny,
+      ny = mask_ny,
       nx = nx,
       dev = spec$device
     ))
-    Km <- list(ny = ny, nx = nx, dev = spec$device)
+    Km <- list(ny = mask_ny, nx = nx, dev = spec$device)
     if (wire) {
       Km$ck <- paste0(mask_ck, "#", .program_tag("f32", mask_sets))
       Km$kernel <- .trace_kernel(
@@ -939,7 +1023,7 @@ NULL
       Km$chain <- chain
       Km$halo <- spec$halo
     }
-    mask_mb <- .gd_strip_mb(size, ny, nx)
+    mask_mb <- .gd_strip_mb(size, mask_ny, nx)
     mask_cap <- .gd_compute_cap(mask_mb, fit$work_mb, length(comp_profs))
     for (i in firsts) {
       while (length(mask_p) >= mask_cap) {
@@ -978,10 +1062,11 @@ NULL
     ny = ny,
     nx = nx,
     dev = spec$device,
-    mask_bins = mask_bins
+    mask_bins = mask_bins,
+    mask_y0 = (win$y0 %||% 0L) - (win$mask_y0 %||% 0L)
   )
-  parts <- lapply(seq_len(nb), function(i) vector("list", ns))
-  got <- integer(nb)
+  parts <- lapply(seq_len(nu), function(i) vector("list", ns))
+  got <- integer(nu)
   res <- vector("list", nb)
   t_comp <- 0
   jit_creates <- 0L
@@ -991,7 +1076,7 @@ NULL
     inflight <<- inflight[-1L]
     v <- .await_task(it$h, comp_profs)
     if (inherits(v, "miraiError")) {
-      .task_abort(.glue("gdal-direct pipeline compute failed on band {it$bi} strip {it$si}"), v)
+      .task_abort(.glue("gdal-direct pipeline compute failed on kernel {it$u} strip {it$si}"), v)
     }
     v <- .task_landed(tl$line, it$key, v)
     tl$tick()
@@ -999,54 +1084,48 @@ NULL
     jit_creates <<- jit_creates + (attr(v, "gd_jit") %||% 0L)
     attr(v, "gd_t") <- NULL
     attr(v, "gd_jit") <- NULL
-    parts[[it$bi]][[it$si]] <<- v
-    got[[it$bi]] <<- got[[it$bi]] + 1L
-    if (got[[it$bi]] == ns) {
-      res[[it$bi]] <<- if (ns == 1L) {
-        parts[[it$bi]][[1L]]
-      } else {
-        p <- do.call(
-          c,
-          lapply(parts[[it$bi]], function(x) {
-            attributes(x) <- NULL
-            x
-          })
-        )
-        attr(p, "gdim") <- c(ny, nx)
-        attr(p, "gdt") <- "f32"
-        p
+    parts[[it$u]][[it$si]] <<- v
+    got[[it$u]] <<- got[[it$u]] + 1L
+    if (got[[it$u]] == ns) {
+      bands <- units[[it$u]]
+      for (i in seq_along(bands)) {
+        res[[bands[[i]]]] <<- .gd_join_strips(parts[[it$u]], i, length(bands), ny, nx)
       }
-      parts[[it$bi]] <<- list()
-      later <- which(got < ns)
-      unlink(setdiff(bin_of(spec$band_srcs[[it$bi]]), bin_of(unlist(spec$band_srcs[later]))))
-      open_bands <<- open_bands - 1L
-      fetch_bands()
+      parts[[it$u]] <<- list()
+      later <- unlist(units[which(got < ns)])
+      unlink(setdiff(
+        bin_of(unlist(spec$band_srcs[bands])),
+        bin_of(unlist(spec$band_srcs[later]))
+      ))
+      open_units <<- open_units - 1L
+      fetch_units()
     }
   }
-  for (bi in seq_len(nb)) {
-    while (is.null(band_p[[bi]])) {
+  for (u in seq_len(nu)) {
+    while (is.null(unit_p[[u]])) {
       harvest()
     }
-    .gd_fetch_land(tl, band_p[[bi]], .glue("band {bi}"))
+    .gd_fetch_land(tl, unit_p[[u]], .glue("kernel {u}"))
     if (progress) {
       cli::cli_inform(.glue(
-        "[gdal-direct] band {bi} drained at ",
+        "[gdal-direct] kernel {u} drained at ",
         "{formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s"
       ))
     }
     while (length(mask_p)) {
       land_mask() # the mask files must exist first
     }
+    cubes <- unname(lapply(spec$band_srcs[units[[u]]], bin_of))
     for (si in seq_len(ns)) {
       while (length(inflight) >= cap) {
         harvest()
       } # RAM cap: bound concurrency
       jb <- list(
-        band_bins = bin_of(spec$band_srcs[[bi]]),
+        cubes = cubes,
         rows = if (ns == 1L) NULL else bounds[[si]],
-        ck = band_ck[[bi]]
+        ck = unit_ck[[u]]
       )
-      key <- paste0("b", spec$band_srcs[[bi]][[1L]], "_c", si)
+      key <- paste0("b", spec$band_srcs[[units[[u]][[1L]]]][[1L]], "_c", si)
       p <- next_cp()
       h <- .task_launch(
         tl,
@@ -1059,7 +1138,7 @@ NULL
         .slot = p,
         .mb = strip_mb
       )
-      inflight[[length(inflight) + 1L]] <- list(bi = bi, si = si, key = key, h = h)
+      inflight[[length(inflight) + 1L]] <- list(u = u, si = si, key = key, h = h)
     }
   }
   if (progress) {
@@ -1077,10 +1156,88 @@ NULL
       "[gdal-direct] pipeline ",
       "total={formatC(proc.time()[['elapsed']] - t0, format = 'f', digits = 2)}s ",
       "(compute sum={formatC(t_comp, format = 'f', digits = 2)}s, ",
-      "{ns} strip/band, {jit_creates} post-warm compile)"
+      "{ns} strip/kernel, {jit_creates} post-warm compile)"
     ))
   }
   res
+}
+
+# Strips of one kernel, row-major f32 in y order, as band `i` of `nb`: a joint
+# strip holds its bands whole, one after another. Byte-identical to one whole
+# job.
+.gd_join_strips <- function(strips, i, nb, ny, nx) {
+  if (length(strips) == 1L && nb == 1L) {
+    return(strips[[1L]])
+  }
+  p <- do.call(
+    c,
+    lapply(strips, function(x) {
+      attributes(x) <- NULL
+      each <- length(x) %/% nb
+      if (nb == 1L) x else x[(i - 1L) * each + seq_len(each)]
+    })
+  )
+  attr(p, "gdim") <- c(ny, nx)
+  attr(p, "gdt") <- "f32"
+  p
+}
+
+# Rows of a joint reducer's block: the most that one block's cubes may pin under
+# garry.read_budget_mb, in whole multiples of a fixed height. Plain arithmetic
+# on the plan and an option, never live RAM: warped cells depend on the window
+# they are read through, so the windows must not move with what is free.
+.gd_block_rows <- function(spec) {
+  n <- max(lengths(spec$band_srcs))
+  inputs <- length(spec$band_srcs) + (length(spec$fmask_srcs) > 0L)
+  nx <- spec$grid@dims[["x"]]
+  rows <- garry_opt("read_budget_mb") * 2^20 / (2 * 4 * n * inputs * nx)
+  .gd_block_tile * max(1L, as.integer(floor(rows / .gd_block_tile)))
+}
+
+.gd_block_tile <- 512L
+
+# A joint reducer needs every band's cube at once, which may be more than fits on
+# tmpfs. So it runs block by block: one run of full-width rows fetched, masked,
+# reduced in strips and freed. The mask reads `halo` rows past the block where
+# the raster has them, and every block's mask window has one height, so one
+# program serves them all: the window slides at the raster's edges rather than
+# pads, and a kept row is at least `halo` from any cut, so no cell depends on
+# where the blocks fall.
+.gd_block_results <- function(plan, spec, tmp, tl) {
+  ny <- spec$grid@dims[["y"]]
+  nx <- spec$grid@dims[["x"]]
+  rows <- if (is.null(spec$joint)) ny else .gd_block_rows(spec)
+  if (rows >= ny) {
+    return(.gd_reduce_results(plan, spec, tmp, tl))
+  }
+  blocks <- .gd_strip_bounds(ny, ceiling(ny / rows))
+  height <- blocks[[1L]][[2L]]
+  masked <- length(spec$fmask_srcs) > 0L
+  mask_rows <- min(ny, height + 2L * spec$halo)
+  spec$fit <- .gd_fit(
+    length(spec$band_srcs),
+    max(lengths(spec$band_srcs)),
+    height,
+    nx,
+    masked,
+    .comp_n(),
+    as.integer(garry_opt("gd_strips")),
+    TRUE
+  )
+  strip <- as.integer(ceiling(height / spec$fit$strips))
+  got <- lapply(blocks, function(bd) {
+    win <- list(
+      y0 = bd[[1L]],
+      h = bd[[2L]],
+      mask_y0 = max(0L, min(bd[[1L]] - spec$halo, ny - mask_rows)),
+      mask_rows = mask_rows,
+      strips = as.integer(ceiling(bd[[2L]] / strip))
+    )
+    .gd_reduce_results(plan, c(spec, list(window = win)), tmp, tl)
+  })
+  lapply(seq_along(spec$band_srcs), function(b) {
+    .gd_join_strips(lapply(got, `[[`, b), 1L, 1L, ny, nx)
+  })
 }
 
 #' Recognise any warp-on-read-replayable plan and lift its whole IR, or NULL.
