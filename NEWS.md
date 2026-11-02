@@ -2,6 +2,10 @@
 
 ## Breaking changes
 
+* `geomedian()`, `medoid()` and custom reducers over a band stack of time stacks
+  take the direct route, so warped cells move. On small HLS a warped geomedian
+  moved by a median of 0.22 DN, p99 12 DN and at most 1,277 DN, with the same NaN
+  cells. Aligned reads move by rounding only.
 * A warp of one file takes GDAL's default tolerance, 0.125 source pixels, in
   place of the exact transformer, so its cells move and it runs about five
   times faster. A Landsat band warped from UTM to LAEA took 1.1 s against
