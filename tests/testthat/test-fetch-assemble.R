@@ -157,6 +157,13 @@ local({
     expect_length(root, 1L)
     expect_match(basename(root), "^garry-fetch-")
     expect_false(dir.exists(root))
+    # nor does a daemon hold one of its files open, which pins it in tmpfs
+    held <- .pool_broadcast(
+      quote(names(asNamespace("garry")$.gdal_cache$stamps)),
+      profiles = c("garry_read", .comp_profiles()),
+      what = "the handle query"
+    )
+    expect_false(any(grepl("garry-fetch-", unlist(held), fixed = TRUE)))
 
     # auto mode: local locations -> no fetch tasks
     tlog2 <- tempfile(fileext = ".csv")
@@ -168,6 +175,8 @@ local({
   })
 
   test_that("a fetched south-up tile reads as the tile does", {
+    # GTI refuses one on GDAL 3.11.4 and reads it on 3.12.1
+    skip_if(gdalraster::gdal_version_num() < 3120000L, "GTI needs a north-up tile here")
     dir <- withr::local_tempdir("fa")
     f <- .fa_tile(dir, "south.tif", outer(1:100, 1:100, function(r, c) r * 1000 + c), south_up = TRUE)
     idx <- file.path(dir, "south.gti.fgb")

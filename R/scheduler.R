@@ -2191,6 +2191,18 @@ execute_plan_mirai <- function(
   warm_collect() # a warm-up still compiling keeps its launch row alone
   log_line("drain_end", "-")
   on.exit(log_line("host_end", "-"), add = TRUE)
+  # A daemon's cached handle on a fetched file holds its bytes in tmpfs after the
+  # delete, and stops the delete on Windows. A failed run's tasks may still be
+  # reading, so only a finished run closes them here; the rest age out of the cache.
+  if (!is.null(fetch_root)) {
+    .pool_broadcast(
+      quote(asNamespace("garry")$.gdal_handles_release(targets)),
+      profiles = profiles,
+      targets = character(0),
+      live_only = TRUE,
+      what = "closing the daemons' fetched files"
+    )
+  }
   # Outstanding writer-daemon writes must land before outputs close or
   # host-side retrieval begins; then the writer releases its handles.
   if (writer_on) {
