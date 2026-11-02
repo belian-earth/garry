@@ -69,7 +69,7 @@ Medium, 16 GB cap, `odc-dask` chunk 2048 from the sweep:
 
 ## After the memory and kernel work
 
-Commit `803c73b`, 2026-11-02, same machine, garry's arm only, three repeats, cold / warm seconds. Best ODC is the first baseline's, above. Every phase completed.
+Commit `803c73b`, and `c1db885` for wide_write, 2026-11-02, same machine, garry's arm only, three repeats, cold / warm seconds. Best ODC is the first baseline's, above. Every phase completed.
 
 | task | variant | small | best ODC, small | medium | best ODC, medium |
 |---|---|---|---|---|---|
@@ -82,7 +82,7 @@ Commit `803c73b`, 2026-11-02, same machine, garry's arm only, three repeats, col
 | ts_kalman | default | 1.6 / 1.1 | 2.3 / 2.3 | 2.6 / 2.0 | 9.0 / 9.6 |
 | ts_hampel | default | 1.6 / 0.9 | 1.2 / 0.7 | 2.3 / 1.6 | 2.7 / 2.2 |
 | focal | aligned | 0.8 / 0.5 | 0.1 / 0.1 | 1.3 / 1.0 | 0.4 / 0.3 |
-| wide_write | default | 1.2 / 0.9 | 0.3 / 0.2 | 5.1 / 4.6 | 2.3 / 2.3 |
+| wide_write | default | 0.3 / 0.2 | 0.3 / 0.2 | 2.3 / 1.9 | 2.3 / 2.3 |
 
 - Output hashes match the run before this batch on every task.
 - Geomedian's gaps are unchanged: 1.85e-6 small and 2.51e-6 medium, aligned.
