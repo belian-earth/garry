@@ -158,7 +158,7 @@
 * `geomedian()`, `medoid()` and any custom reducer over a band stack of time
   stacks take the direct route, so they stay inside the RAM budget. Medium
   HLS, 55 dates of 3660 x 3660 in six bands, ran out of memory at 16 GB and now
-  takes 53 s at an 8.8 GB peak. A cube too big for `/dev/shm` runs in
+  takes 50 s at an 8.3 GB peak. A cube too big for `/dev/shm` runs in
   blocks of full-width rows, fetched, masked, reduced in strips and freed. Blocks
   and strips take their heights from the plan and `garry.read_budget_mb` and
   `garry.ram_budget_mb`, never free RAM, so one input gives one set of bytes.
@@ -170,11 +170,11 @@
 * The direct route's fetches ran a full `gc()` each, through `system.time()`,
   which cost more than the read on a small tile. A fetch now holds its plane
   outside R's heap and frees it as it writes, so none is needed. Small HLS
-  median fell from 6.8 to 5.4 s and medium from 37 to 34 s, its peak from 14.4
+  median fell from 7.0 to 5.2 s and medium from 39 to 33 s, its peak from 14.4
   to 13.5 GB.
 * A masked composite stays inside its RAM budget. Medium HLS median and NDVI,
   55 dates of 3660 x 3660 under 16 GB, ran out of memory on every run and now
-  finish in 29 to 48 s, same cells, about 1.5 GB under the cap. Three things
+  finish, same cells, about 2 GB under the cap. Three things
   were outside the budget. The warm-up compiled each kernel by running it
   on a dummy strip, on every compute daemon at once, and now compiles without
   running. The mask took the whole QA cube in one task, and now takes a batch of
