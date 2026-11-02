@@ -41,10 +41,6 @@ jobs:
       # 90 min, far past the suite on any platform, so this only fires on
       # a genuine wedge.
       _R_CHECK_TESTS_ELAPSED_TIMEOUT_: "5400"
-      # Test workers (testthat's default is 2). Each one starts up to eight
-      # processes, so macOS, on 3 cores and 7 GB, keeps two; the ubuntu and
-      # windows runners have 4 cores and 16 GB.
-      TESTTHAT_CPUS: ${{ matrix.config.os == 'macos-latest' && '2' || '4' }}
 
     steps:
       - uses: actions/checkout@v6
