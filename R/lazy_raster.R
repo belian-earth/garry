@@ -84,11 +84,12 @@ LazyRaster <- S7::new_class(
 #' rediscover the grid costs a serial remote COG header fetch per
 #' slice. `grid` must describe the dataset exactly as `path` +
 #' `open_options` open it, including the source dtype; it is trusted,
-#' not checked. With `grid` given, file nodata is NOT consulted, though a
-#' read still masks it (pass `nodata` explicitly if the source has a
-#' sentinel), and a warp opens the
-#' file: only a source that has been opened can show that it stores the
-#' same type and row order as the file whose warped VRT it would take.
+#' not checked. With `grid` given, the file's nodata is not read, so pass
+#' `nodata` if the source has a sentinel, and pass that sentinel: a plain
+#' read masks the file's own sentinel whatever the node says, and a warp
+#' sees only the value given. A warp also opens the file: only a source that
+#' has been opened can show that it stores the same type and row order as
+#' the file whose warped VRT it would take.
 #'
 #' @param path Path or VSI URL readable by GDAL. A relative path is taken
 #'   against the working directory here, so a later [setwd()] or a pool
@@ -97,8 +98,8 @@ LazyRaster <- S7::new_class(
 #' @param graph `Graph` to add the source to; defaults to a fresh graph.
 #' @param nodata Optional nodata sentinel replacing the file's: cells
 #'   holding the file's own sentinel then read as data. A tile index, a
-#'   source opened with `open_options` and a source given its `grid` mask
-#'   their own sentinel as well.
+#'   source opened with `open_options` or a source given `grid` masks its
+#'   own sentinel as well.
 #' @param open_options GDAL open options ("KEY=VALUE"), e.g. a GTI
 #'   `FILTER` selecting one time slice of a tile index. They apply to one
 #'   source, and not to a decoded one.

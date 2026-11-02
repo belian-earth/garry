@@ -618,7 +618,9 @@
   so the same cell was NaN by direct read and data through the warper.
   A tile index or a source opened with options cannot replace its own
   sentinel: reads mask both, as before, and `align_to()` refuses at plan
-  time instead of taking its gaps as data.
+  time instead of taking its gaps as data. `lazy_source(grid = )` never
+  opens the file, so it keeps the split: pass the file's own sentinel
+  there.
 * `lazy_dataset(paths)` no longer mosaics tiles off one pixel lattice,
   which averaged their resolution or moved pixels: they need `grid` and
   then warp onto it. Tiles kept apart must agree on dtype, on any nodata

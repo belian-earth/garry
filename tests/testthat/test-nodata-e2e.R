@@ -165,3 +165,17 @@ test_that("a given nodata keeps tiles apart, so a gap stays nodata", {
   same <- lazy_dataset(c(a, b), nodata = 0)[[1L]]
   expect_length(graph_get(same@graph, same@node_id)@path, 1L)
 })
+
+test_that("a grid source keeps the file's sentinel: a plain read masks both, a warp one", {
+  # The file form replaces the sentinel by a VRT, and the grid form opens nothing.
+  f <- fixture_tile(c(-9999, 10, 10, -1), nodata = -9999, nx = 2L, ny = 2L)
+  grid <- lazy_source(f)@grid
+  by_file <- lazy_source(f, nodata = -1)
+  by_grid <- lazy_source(f, grid = grid, nodata = -1)
+  want <- matrix(c(-9999, 10, 10, NaN), 2L, byrow = TRUE)
+  expect_equal(collect(by_file), want, ignore_attr = TRUE)
+  want[[1L, 1L]] <- NaN
+  expect_equal(collect(by_grid), want, ignore_attr = TRUE)
+  fine <- grid_spec(c(0, 20, 20, 40), res = 5, crs = "EPSG:3857")
+  expect_identical(collect(align_to(by_grid, fine, "near"))[[1L, 1L]], -9999)
+})
