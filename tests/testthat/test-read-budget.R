@@ -94,6 +94,44 @@ local({
     expect_identical(rd(out), want)
   })
 
+  test_that("a rounding residue in the in-flight sum leaves the compute gate's escape open", {
+    # Fused reads of 0.1 MB, three or more in flight, sum back to 3e-17 and
+    # not to 0. With the budget then below a read, the next read must still go
+    # alone once the last one lands: the run has nothing else in flight.
+    fuse_tiles <- garry:::.fuse_tiles
+    readings <- 0L
+    testthat::local_mocked_bindings(
+      .fuse_tiles = function(...) utils::modifyList(fuse_tiles(...), list(ws_mb = 0.1)),
+      # the first reading takes the run past the 5 s clock, so the second
+      # lands with the first sweep's reads in flight
+      .store_budget = function(...) {
+        readings <<- readings + 1L
+        if (readings == 1L) {
+          Sys.sleep(5.1)
+          return(list(avail = 1024, pool = 1024, ram_read = 256, read = 256, tight = FALSE))
+        }
+        list(avail = 1024, pool = 0.05, ram_read = 0, read = 256, tight = FALSE)
+      }
+    )
+    tlog <- withr::local_tempfile(fileext = ".csv")
+    # a tight RAM budget cuts this raster into eleven windows
+    withr::local_options(
+      garry.placement = "cost",
+      garry.ram_budget_mb = 0.01,
+      garry.read_target_px = 4096,
+      garry.chunk_target_px = 4096,
+      garry.task_log = tlog
+    )
+    big <- fixture_tile(t(.fixture_values(256, 256)), nx = 256L, ny = 256L)
+    x <- lazy_map(lazy_source(big), fn = function(v) v * 2 + 1)
+    got <- suppressMessages(collect(x, distributed = TRUE))
+    expect_equal(unclass(got), .fixture_values(256, 256) * 2 + 1, tolerance = 0, ignore_attr = TRUE)
+    expect_gte(.max_in_flight(tlog), 3L)
+    d <- utils::read.csv(tlog)
+    expect_gt(sum(d$event == "launch"), .max_in_flight(tlog))
+    expect_gte(readings, 2L)
+  })
+
   test_that("a starved gate serialises a run's reads and its answer holds", {
     # Rules placement keeps the maps on the compute pool, so compute outputs
     # feed the store gate that reads wait on; a run the gates wedged ends in

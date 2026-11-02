@@ -527,6 +527,7 @@ execute_plan_mirai <- function(
   # ram_budget_mb is the per-CHUNK size target of the chunking pass.
   comp_budget_mb <- Inf
   mb_inflight <- 0
+  n_mb_inflight <- 0L # byte-accounted tasks in that sum
   read_budget_mb <- garry_opt("read_budget_mb")
   # Largest co-resident read SET (one window per input of the widest
   # compute stage): filled during task build; the effective read budget
@@ -1800,11 +1801,12 @@ execute_plan_mirai <- function(
   # same budget (a fleet of cold fused reads otherwise stacks N XLA
   # ramps on whatever else holds the machine: measured at crop=0 with
   # the whole-AOI embedding staging resident). The escape is accordingly "nothing
-  # byte-accounted in flight", so one over-budget task always runs.
+  # byte-accounted in flight", so one over-budget task always runs. It counts
+  # tasks: the running sum keeps a rounding residue once they have landed.
   # Cold-scan concurrency is bounded STRUCTURALLY, by K scan profiles
   # with one cold compile each (design/routed-dispatch.md).
   comp_ok <- function(t) {
-    mb_inflight == 0 ||
+    n_mb_inflight == 0L ||
       mb_inflight + t$mb <= comp_budget_mb
   }
   # Writer-daemon bookkeeping. Each dispatched write holds a consumer
@@ -1989,6 +1991,7 @@ execute_plan_mirai <- function(
         }
         n_inflight[[t$pool]] <- n_inflight[[t$pool]] + 1L
         mb_inflight <- mb_inflight + t$mb
+        n_mb_inflight <- n_mb_inflight + (t$mb > 0)
         # Read-producing tasks pin their region from launch, not from
         # completion (fetch-backed assembles run on the compute pool but
         # pin store bytes just the same).
@@ -2090,6 +2093,7 @@ execute_plan_mirai <- function(
           }
         }
         mb_inflight <- mb_inflight - tasks[[k]]$mb
+        n_mb_inflight <- n_mb_inflight - (tasks[[k]]$mb > 0)
         harvested <- TRUE
         for (sp in stream_sinks) {
           if (is.null(sp$task_j[[k]])) {
