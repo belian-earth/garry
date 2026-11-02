@@ -182,11 +182,14 @@
 * A read-only pool write stays inside the read budget while writes queue. Reads
   used to go on past it whenever none was in flight, up to two regions a reader.
 * `geomedian()`, `medoid()` and any custom reducer declaring `f32` over a band
-  stack of time stacks take the direct route, so they stay inside the RAM budget. Medium
-  HLS, 55 dates of 3660 x 3660 in six bands, ran out of memory at 16 GB and now
-  takes 50 s at an 8.3 GB peak. A cube too big for `/dev/shm` runs in
-  blocks of full-width rows, fetched, masked, reduced in strips and freed. Blocks
-  and strips take their heights from the plan and `garry.read_budget_mb` and
+  stack of time stacks take the direct route. Medium HLS, 55 dates of 3660 x
+  3660 in six bands, ran out of memory at 16 GB and now takes 50 s at an 8.3 GB
+  peak. A cube runs in blocks of full-width rows, fetched, masked, reduced in
+  strips and freed. `garry.read_budget_mb` bounds a block only down to 512 rows,
+  and all of a block's cubes sit on `/dev/shm` together, so one that does not
+  fit stops before its first fetch with a `garry_memory_error`.
+  `garry.composite_direct = FALSE` runs such a plan on the scheduler. Blocks and
+  strips take their heights from the plan and `garry.read_budget_mb` and
   `garry.ram_budget_mb`, never free RAM, so one input gives one set of bytes.
 * `geomedian()` and `medoid()` solve by a scan over dates, one plane per band,
   in place of whole-cube reductions. That is 14 times faster on one core, holds

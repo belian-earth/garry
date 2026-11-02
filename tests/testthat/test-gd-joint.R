@@ -102,6 +102,43 @@ local({
     expect_length(list.files(tmp), 0L)
   })
 
+  test_that("a block tmpfs cannot hold stops before the first fetch", {
+    x <- reduce_over(.gj_cube(), geomedian(4L), over = "t")
+    want <- collect(x, distributed = TRUE)
+    whole <- garry:::.gd_block_mb(.cd_spec(collect(x, plan_only = TRUE)), 40L, 40L)
+    room <- function(shm, cgroup, rows, env = parent.frame()) {
+      testthat::local_mocked_bindings(
+        .garry_shm_free_mb = function() shm,
+        .garry_cgroup_avail_mb = function() cgroup,
+        .gd_block_rows = function(spec) rows,
+        .package = "garry",
+        .env = env
+      )
+    }
+    stops <- function(shm, cgroup, rows = 40L) {
+      room(shm, cgroup, rows)
+      testthat::local_mocked_bindings(.gd_fetch = function(...) stop("fetched"), .package = "garry")
+      expect_error(collect(x, distributed = TRUE), class = "garry_memory_error")
+    }
+    runs <- function(shm, cgroup, rows = 40L) {
+      room(shm, cgroup, rows)
+      expect_identical(collect(x, distributed = TRUE), want)
+      expect_identical(garry_last_route(), "composite_direct")
+    }
+    err <- stops(whole / 2, NA_real_)
+    expect_match(conditionMessage(err), "garry.composite_direct", fixed = TRUE)
+    expect_s3_class(err, "garry_error")
+    # a cgroup pays for tmpfs however large the mount
+    stops(1e6, whole / 2)
+    runs(whole, NA_real_)
+    runs(1e6, whole)
+    # with no tmpfs nothing is pinned on it
+    runs(NA_real_, 1)
+    # in blocks, one block counts: 14 rows of each band and 18 of the mask
+    stops(whole / 3, NA_real_, 16L)
+    runs(whole / 2, NA_real_, 16L)
+  })
+
   test_that("an unmasked cube reduces jointly too", {
     x <- .gg_unmasked_cube()
     r <- reduce_over(x, geomedian(4L), over = "t")
@@ -118,6 +155,21 @@ test_that("a block is a whole multiple of the fixed height and follows no live R
   rows <- garry:::.gd_block_rows(sp)
   expect_identical(rows %% garry:::.gd_block_tile, 0L)
   expect_gte(rows, garry:::.gd_block_tile)
+})
+
+test_that("the block height is a floor: no budget brings a wide tile's block under it", {
+  sp <- list(band_srcs = lapply(0:5, function(b) b * 73L + 1:73), fmask_srcs = 500L + 1:73,
+             grid = grid_spec("EPSG:32755", extent = c(0, 0, 109800, 109800), dims = c(10980L, 10980L)))
+  for (mb in c(4096, 64, 1)) {
+    withr::local_options(garry.read_budget_mb = mb)
+    expect_identical(garry:::.gd_block_rows(sp), garry:::.gd_block_tile, info = mb)
+  }
+  # 22 blocks of 500 rows: 73 dates of 6 bands and a mask, 10980 wide, in f32
+  expect_identical(garry:::.gd_block_mb(sp, 500L, 500L), 73 * 7 * 500 * 10980 * 4 / 2^20)
+  # bands sharing a file hold it once, and the mask reads its halo past the block
+  sp$band_srcs <- list(1:3, 2:4)
+  sp$fmask_srcs <- 5:7
+  expect_identical(garry:::.gd_block_mb(sp, 10L, 14L), (4 * 10 + 3 * 14) * 10980 * 4 / 2^20)
 })
 
 test_that("a joint strip's height comes from the plan and the option alone", {

@@ -1248,10 +1248,13 @@ NULL
   p
 }
 
-# Rows of a joint reducer's block: the most that one block's cubes may pin under
-# garry.read_budget_mb, in whole multiples of a fixed height. Plain arithmetic
-# on the plan and an option, never live RAM: warped cells depend on the window
-# they are read through, so the windows must not move with what is free.
+# Rows of a joint reducer's block: what one block's cubes may pin under
+# garry.read_budget_mb, in whole multiples of a fixed height and never under one.
+# That height is a floor: below it the budget bounds nothing, and a block is as
+# big as its dates, bands and width make it, which .gd_block_check() holds to
+# tmpfs. Plain arithmetic on the plan and an option, never live RAM: warped cells
+# depend on the window they are read through, so the windows must not move with
+# what is free.
 .gd_block_rows <- function(spec) {
   n <- max(lengths(spec$band_srcs))
   inputs <- length(spec$band_srcs) + (length(spec$fmask_srcs) > 0L)
@@ -1262,6 +1265,42 @@ NULL
 
 .gd_block_tile <- 512L
 
+# MB one joint block holds at once: each band file and each slice's cleaned mask.
+.gd_block_mb <- function(spec, rows, mask_rows) {
+  bands <- length(unique(unlist(spec$band_srcs)))
+  planes <- bands * as.numeric(rows) + length(spec$fmask_srcs) * as.numeric(mask_rows)
+  planes * spec$grid@dims[["x"]] * 4 / 2^20
+}
+
+# A block's cubes are on tmpfs together until its strips land, so one that tmpfs
+# cannot hold is known here, ahead of its first fetch, and not as a short write
+# or a cgroup kill partway through. What tmpfs can take is as in .store_budget().
+# This reads live space, as .gd_block_rows() must not: it moves no window. With
+# no /dev/shm the cubes are on disk, which this does not bound.
+.gd_block_check <- function(spec, rows, mask_rows) {
+  free <- .garry_shm_free_mb()
+  if (is.na(free)) {
+    return(invisible(NULL))
+  }
+  free <- min(free, .garry_cgroup_avail_mb(), na.rm = TRUE)
+  need <- .gd_block_mb(spec, rows, mask_rows)
+  if (need > free) {
+    need <- round(need)
+    free <- round(free)
+    tile <- .gd_block_tile
+    cli::cli_abort(
+      c(
+        "one block of this reducer needs {need} MB on tmpfs, and {free} MB is free.",
+        "i" = "A block holds every band at once. {.code garry.read_budget_mb} sets its height, down to {tile} rows.",
+        "i" = "Enlarge {.file /dev/shm}, or set {.code options(garry.composite_direct = FALSE)} for the scheduler."
+      ),
+      class = c("garry_memory_error", "garry_error"),
+      call = NULL
+    )
+  }
+  invisible(NULL)
+}
+
 # A joint reducer needs every band's cube at once, which may be more than fits on
 # tmpfs. So it runs block by block: one run of full-width rows fetched, masked,
 # reduced in strips and freed. The mask reads `halo` rows past the block where
@@ -1270,16 +1309,20 @@ NULL
 # pads, and a kept row is at least `halo` from any cut, so no cell depends on
 # where the blocks fall.
 .gd_block_results <- function(plan, spec, tmp, tl) {
+  if (is.null(spec$joint)) {
+    return(.gd_reduce_results(plan, spec, tmp, tl))
+  }
   ny <- spec$grid@dims[["y"]]
   nx <- spec$grid@dims[["x"]]
-  rows <- if (is.null(spec$joint)) ny else .gd_block_rows(spec)
+  rows <- .gd_block_rows(spec)
+  blocks <- .gd_strip_bounds(ny, ceiling(ny / rows))
+  height <- blocks[[1L]][[2L]]
+  mask_rows <- min(ny, height + 2L * spec$halo)
+  .gd_block_check(spec, height, mask_rows)
   if (rows >= ny) {
     return(.gd_reduce_results(plan, spec, tmp, tl))
   }
-  blocks <- .gd_strip_bounds(ny, ceiling(ny / rows))
-  height <- blocks[[1L]][[2L]]
   masked <- length(spec$fmask_srcs) > 0L
-  mask_rows <- min(ny, height + 2L * spec$halo)
   spec$fit <- .gd_fit(
     length(spec$band_srcs),
     max(lengths(spec$band_srcs)),
