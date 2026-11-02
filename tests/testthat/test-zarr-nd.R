@@ -129,6 +129,11 @@ test_that("Zarr connection strings count as remote and get the vsicurl prefix", 
   expect_true(.gdal_is_remote('ZARR:"/vsis3/b/s.zarr":/e'))
   expect_true(.gdal_is_remote('ZARR:"https://h/s.zarr":/e'))
   expect_false(.gdal_is_remote('ZARR:"/data/s.zarr":/e'))
+  # a handler inside another name still reads the network
+  expect_true(.gdal_is_remote("/vsizip//vsicurl/https://h/a.zip"))
+  expect_true(.gdal_is_remote("vrt:///vsis3/b/a.tif?bands=1"))
+  expect_true(.gdal_is_remote("/vsiadls/c/a.tif"))
+  expect_false(.gdal_is_remote("/data/vsicurl_cache/a.tif"))
   expect_true(.gdal_is_zarr('ZARR:"/data/s.zarr":/e'))
   expect_false(.gdal_is_zarr("/data/a.tif"))
 })

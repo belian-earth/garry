@@ -124,3 +124,13 @@ test_that("a read that reaches the network is no copy, however local its file", 
   gdalraster::buildVRT(local_vrt, file.path(d, "a.tif"), quiet = TRUE)
   expect_false(.gdal_reads_remote(local_vrt))
 })
+
+test_that("two VRTs that reference each other end the walk for remote sources", {
+  listed <- list(a.vrt = c("a.vrt", "b.vrt"), b.vrt = c("b.vrt", "a.vrt", "/vsicurl/http://h/c.tif"))
+  local_mocked_bindings(.gdal_probe = function(path) {
+    list(getFileList = function() listed[[path]], getFilename = function() path)
+  })
+  expect_true(.gdal_reads_remote("a.vrt"))
+  listed$b.vrt <- c("b.vrt", "a.vrt")
+  expect_false(.gdal_reads_remote("a.vrt"))
+})

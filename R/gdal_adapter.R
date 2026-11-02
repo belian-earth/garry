@@ -87,22 +87,24 @@ NULL
   sub('^ZARR:"(https?://)', 'ZARR:"/vsicurl/\\1', href)
 }
 
-# Is a path a remote (network-backed) GDAL source? Covers driver
-# connection strings that wrap a remote store, e.g. ZARR:"/vsicurl/...".
+# Is a path a remote (network-backed) GDAL source? The handler can sit inside
+# another name: ZARR:"/vsicurl/...", vrt:///vsis3/..., /vsizip//vsicurl/...
 .gdal_is_remote <- function(path) {
   grepl(
-    '^/vsi(curl|s3|gs|az|swift)|^https?://|^[A-Za-z0-9_]+:"(/vsi(curl|s3|gs|az|swift)|https?://)',
+    '/vsi(curl|s3|gs|az|adls|oss|swift|hdfs|webhdfs)(_streaming)?[/?]|^https?://|^[A-Za-z0-9_]+:"https?://',
     path
   )
 }
 
 # Does reading `path` reach the network? A VRT is a local file whatever its
-# sources are, and GDAL lists only the first level of them.
-.gdal_reads_remote <- function(path) {
+# sources are, and GDAL lists only the first level of them. `seen` ends the walk
+# at VRTs that reference each other.
+.gdal_reads_remote <- function(path, seen = character(0)) {
   ds <- .gdal_probe(path)
   files <- ds$getFileList()
-  inner <- setdiff(files[grepl("\\.vrt$", files, ignore.case = TRUE)], ds$getFilename())
-  any(.gdal_is_remote(files)) || any(vapply(inner, .gdal_reads_remote, NA))
+  seen <- c(seen, ds$getFilename())
+  inner <- setdiff(files[grepl("\\.vrt$", files, ignore.case = TRUE)], seen)
+  any(.gdal_is_remote(files)) || any(vapply(inner, .gdal_reads_remote, NA, seen = seen))
 }
 
 # The extra (non-spatial) dimensions of a multidimensional array read
