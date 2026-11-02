@@ -67,13 +67,7 @@ local({
 })
 
 test_that("every cross-process entry point is in the ABI token", {
-  r_dir <- testthat::test_path("..", "..", "R")
-  skip_if(!dir.exists(r_dir), "package sources not available")
-  code <- unlist(lapply(
-    list.files(r_dir, pattern = "\\.R$", full.names = TRUE),
-    readLines,
-    warn = FALSE
-  ))
+  code <- unlist(lapply(.r_sources(), readLines, warn = FALSE))
   code <- sub("^\\s*#.*$", "", code) # roxygen and comments
   m <- regmatches(code, gregexpr('asNamespace\\("garry"\\)\\$[.A-Za-z_]+', code))
   called <- unique(sub(".*\\$", "", unlist(m)))

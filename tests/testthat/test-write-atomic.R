@@ -482,9 +482,9 @@ local({
     err <- expect_error(materialise(x, dir, name = "m", overwrite = TRUE, distributed = TRUE),
                         class = "garry_write_error")
     said <- cli::ansi_strip(conditionMessage(err))
-    expect_match(said, "Already in place:[^\\n]*m-a\\.vrt")
-    expect_match(said, "mixed[^\\n]*write these again[^\\n]*m-b\\.vrt")
-    expect_match(said, "Still as they were:[^\\n]*m-c\\.vrt")
+    expect_match(said, "Already in place:[^\n]*m-a\\.vrt")
+    expect_match(said, "mixed[^\n]*write these again[^\n]*m-b\\.vrt")
+    expect_match(said, "Still as they were:[^\n]*m-c\\.vrt")
   })
 
   test_that("a write touches nothing but its targets", {

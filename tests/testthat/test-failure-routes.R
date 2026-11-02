@@ -53,9 +53,12 @@
   invisible(err)
 }
 
+# GDAL 3.13 names the refused connection; 3.11 says only that the path does not exist.
+.fr_refused <- "connect|does not exist"
+
 .fr_sources <- list(
   missing = list(path = .fr_gone(), cause = "No such file or directory"),
-  signed = list(path = .fr_url, cause = "connect")
+  signed = list(path = .fr_url, cause = .fr_refused)
 )
 
 # Two integer tiles with a gap: a read shows it, a kernel cannot hold it.
@@ -368,7 +371,7 @@ local({
     x <- lazy_source(paste0("GTI:", idx), nodata = -9999, grid = .fr_grid, block_dim = c(6L, 4L),
                      open_options = gti_open_options(.fr_grid, filter = "slice = 's1'",
                                                      sort_field = "datetime"))
-    err <- .fr_fails(collect(x + 1, distributed = TRUE), task_read, "connect")
+    err <- .fr_fails(collect(x + 1, distributed = TRUE), task_read, .fr_refused)
     expect_match(conditionMessage(err), "fetch failed", fixed = TRUE)
   })
 

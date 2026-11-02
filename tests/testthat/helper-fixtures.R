@@ -4,6 +4,14 @@
 
 .fixture_env <- new.env(parent = emptyenv())
 
+# The package's R sources. R CMD check has no R/ beside the tests and covr has one holding the
+# installed code, so a test that scans them skips on the files themselves, not on the folder.
+.r_sources <- function() {
+  files <- list.files(testthat::test_path("..", "..", "R"), pattern = "\\.R$", full.names = TRUE)
+  testthat::skip_if(length(files) == 0L, "package sources not available")
+  files
+}
+
 .fixture_values <- function(nx, ny) {
   outer(seq_len(ny), seq_len(nx), function(r, c2) r * 100 + c2)  # [y, x]
 }

@@ -52,13 +52,7 @@ test_that("a garry option with no such name fails, it does not mean the default"
 test_that("every option the package reads is registered", {
   expect_false(garry_opt("warp_exact")) # exactness is opted into
   # garry_opt() fails on an unknown name only when a run reaches that line
-  r_dir <- testthat::test_path("..", "..", "R")
-  skip_if(!dir.exists(r_dir), "package sources not available")
-  code <- unlist(lapply(
-    list.files(r_dir, pattern = "\\.R$", full.names = TRUE),
-    readLines,
-    warn = FALSE
-  ))
+  code <- unlist(lapply(.r_sources(), readLines, warn = FALSE))
   code <- sub("^\\s*#.*$", "", code) # roxygen and comments
   m <- regmatches(code, gregexpr('garry_opt\\("[a-z0-9_]+"\\)', code))
   read <- unique(gsub('^garry_opt\\("|"\\)$', "", unlist(m)))
