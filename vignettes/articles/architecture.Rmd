@@ -26,10 +26,13 @@ filter a subsystem, and scroll to zoom.
 
 Two things are worth reading directly off this graph. First, the
 lazy-verb layer (`lazy_map()`, `focal_map()`, `reduce_over()`, and
-friends) reaches neither backend: building a pipeline touches no data
-and compiles nothing. Second, everything that does reach anvl or GDAL
-funnels through the execution verbs (`collect()`, `materialise()`,
-`preview()`, `write_tif()`), which is the lazy contract made visible.
+friends) never reaches GDAL, and reaches anvl only to read a kernel's
+output dtype: an abstract trace when `lazy_map()` or `scan_over()` has no
+`dtype`, or `reduce_over()` has a custom reducer. Building a pipeline
+touches no data and compiles nothing. Second, everything else that
+reaches anvl or GDAL funnels through the execution verbs (`collect()`,
+`materialise()`, `preview()`, `write_tif()`), which is the lazy contract
+made visible.
 
 <iframe src="garry-api-graph.html" width="100%" height="900"
   style="border:1px solid #ddd; border-radius:4px;"
