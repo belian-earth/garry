@@ -80,6 +80,28 @@ local({
     expect_length(list.files(tmp), 0L)
   })
 
+  test_that("a self-masked cube reads its band and mask through their own windows", {
+    # with a halo the mask reads rows past the block, into a file of its own
+    ds <- .gg_dated_dataset("self", open = 1L, dilate = 1L)
+    x <- reduce_over(lazy_stack(list(V1 = ds[["V1"]], V2 = ds[["V2"]]), along = "band"), geomedian(4L), over = "t")
+    plan <- collect(x, plan_only = TRUE)
+    spec <- .cd_spec(plan)
+    expect_gt(spec$halo, 0L)
+    expect_identical(spec$fmask_srcs, spec$band_srcs[[1L]])
+    want <- .gj_scheduler(x)
+    expect_gt(sum(is.nan(want)), 0L)
+    expect_identical(collect(x, distributed = TRUE), want)
+    expect_identical(garry_last_route(), "composite_direct")
+    for (rows in c(16L, 7L)) {
+      testthat::local_mocked_bindings(.gd_block_rows = function(spec) rows, .package = "garry")
+      expect_identical(collect(x, distributed = TRUE), want, info = rows)
+    }
+    tmp <- withr::local_tempdir()
+    res <- garry:::.gd_block_results(plan, spec, tmp, garry:::.gd_log_open())
+    expect_length(res, 2L)
+    expect_length(list.files(tmp), 0L)
+  })
+
   test_that("an unmasked cube reduces jointly too", {
     x <- .gg_unmasked_cube()
     r <- reduce_over(x, geomedian(4L), over = "t")

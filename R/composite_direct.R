@@ -893,9 +893,16 @@ NULL
   }
 
   b <- .gd_build_jobs(plan, spec$grid, tmp)
-  bin_of <- function(ids) {
-    vapply(ids, function(id) b$jobs[[as.character(id)]]$bin, "")
+  bin_of <- function(ids, jobs = b$jobs) {
+    vapply(ids, function(id) jobs[[as.character(id)]]$bin, "")
   }
+  # The mask reads into files of its own: a source can feed a band as well,
+  # through another window, and a mask task deletes what it has read.
+  fb <- b
+  fb$jobs <- lapply(b$jobs, function(j) {
+    j$bin <- sub("\\.bin$", "-fmask.bin", j$bin)
+    j
+  })
 
   # What runs as one kernel: a band, or every band of a joint reducer. What
   # fits: how many strips spread a kernel across the pool, so the exposed drain
@@ -923,7 +930,7 @@ NULL
   .gd_daemon_prep("garry_read")
   # Dispatch fmask FIRST (it drains before the bands, which queue behind it on
   # the read pool), then every kernel's cubes that may be open. All non-blocking.
-  fmask_p <- if (masked) .gd_fetch(tl, b, spec$fmask_srcs, mask_K) else NULL
+  fmask_p <- if (masked) .gd_fetch(tl, fb, unique(spec$fmask_srcs), mask_K) else NULL
   unit_p <- vector("list", nu)
   next_unit <- 1L
   open_units <- 0L
@@ -1025,7 +1032,10 @@ NULL
   # Mask: once fmask lands, compute the cleaned mask on the compute pool while
   # the bands are still fetching, a batch of slices to a daemon, each slice to
   # its own file, read by every band median. A slice's morphology touches no
-  # other slice, so a batch needs no halo from its neighbours.
+  # other slice, so a batch needs no halo from its neighbours. A batch deletes
+  # the fmask files no other batch reads. One every date shares has no such
+  # batch, and goes once they have all landed.
+  fbins <- character(0)
   mask_bins <- character(0)
   mask_p <- list()
   land_mask <- function() {
@@ -1049,6 +1059,7 @@ NULL
       ))
     }
     nf <- length(spec$fmask_srcs)
+    fbins <- bin_of(spec$fmask_srcs, fb$jobs)
     mask_bins <- tempfile(rep("mask", nf), tmpdir = tmp, fileext = ".bin")
     on.exit(unlink(mask_bins), add = TRUE)
     size <- as.integer(ceiling(nf / ns))
@@ -1095,7 +1106,11 @@ NULL
           tl,
           key,
           quote(asNamespace("garry")$.gd_compute_mask(jm, km)),
-          jm = list(fmask_bins = bin_of(spec$fmask_srcs[take]), out_bins = mask_bins[take]),
+          jm = list(
+            fmask_bins = fbins[take],
+            out_bins = mask_bins[take],
+            free = setdiff(fbins[take], fbins[-take])
+          ),
           km = Km,
           .compute = p,
           .pool = "comp",
@@ -1172,6 +1187,7 @@ NULL
     while (length(mask_p)) {
       land_mask() # the mask files must exist first
     }
+    unlink(fbins)
     cubes <- unname(lapply(spec$band_srcs[units[[u]]], bin_of))
     for (si in seq_len(ns)) {
       while (length(inflight) >= cap) {

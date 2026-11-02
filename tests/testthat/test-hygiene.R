@@ -62,14 +62,16 @@ test_that("gd task bodies report their transients to the deferred pass", {
     f
   }
   fm <- bin("fm.bin", rep(1, 6))
+  shared <- bin("shared.bin", rep(1, 6))
   band <- bin("b.bin", 1:6)
   st$bytes <- 0
   garry:::.gd_compute_mask(
-    list(fmask_bins = fm, out_bins = file.path(dir, "m.bin")),
+    list(fmask_bins = c(fm, shared), out_bins = file.path(dir, c("m1.bin", "m2.bin")), free = fm),
     list(chain = list(), halo = 0L, ny = 2L, nx = 3L, dev = "cpu", ck = "k-gc-mask")
   )
   expect_gte(st$bytes, 2 * 6 * 4)
   expect_false(file.exists(fm))
+  expect_true(file.exists(shared))
   st$bytes <- 0
   garry:::.gd_compute_masked_band(
     list(cubes = list(band), rows = NULL, ck = "k-gc-band"),

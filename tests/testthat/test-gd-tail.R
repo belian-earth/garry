@@ -151,6 +151,51 @@ local({
     expect_length(list.files(tmp), 0L)
   })
 
+  test_that("a static mask is read once and outlives every batch but the last", {
+    # three batches over two daemons: the third starts after the first has ended
+    withr::local_options(garry.gd_strips = 3L)
+    x <- reduce_over(.gg_dated_dataset("static"), "median", "t", nan_rm = TRUE)
+    plan <- collect(x, plan_only = TRUE)
+    spec <- .cd_spec(plan)
+    expect_identical(unique(tabulate(spec$fmask_srcs)[spec$fmask_srcs]), 6L)
+    real <- garry:::.gd_fetch
+    read <- integer(0)
+    testthat::local_mocked_bindings(
+      .gd_fetch = function(tl, b, ids, ...) {
+        read <<- c(read, ids)
+        real(tl, b, ids, ...)
+      },
+      .package = "garry"
+    )
+    got <- collect(x, distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    expect_identical(sum(read == spec$fmask_srcs[[1L]]), 1L)
+    band <- function(v) {
+      v[.gg_static_qa() == 2] <- NaN
+      v
+    }
+    .gg_identical(got, array(c(band(.gg_val(35)), band(.gg_val(135))), c(40L, 60L, 2L)))
+    tmp <- withr::local_tempdir()
+    res <- garry:::.gd_reduce_results(plan, spec, tmp, garry:::.gd_log_open())
+    expect_length(res, 2L)
+    expect_length(list.files(tmp), 0L)
+  })
+
+  test_that("a band masked by its own source keeps its cube past the mask", {
+    x <- reduce_over(.gg_dated_dataset("self"), "median", "t", nan_rm = TRUE)
+    plan <- collect(x, plan_only = TRUE)
+    spec <- .cd_spec(plan)
+    expect_identical(spec$fmask_srcs, spec$band_srcs[[1L]])
+    want <- withr::with_options(list(garry.composite_direct = FALSE), collect(x, distributed = TRUE))
+    expect_gt(sum(is.nan(want)), 0L)
+    expect_identical(collect(x, distributed = TRUE), want)
+    expect_identical(garry_last_route(), "composite_direct")
+    tmp <- withr::local_tempdir()
+    res <- garry:::.gd_reduce_results(plan, spec, tmp, garry:::.gd_log_open())
+    expect_length(res, 2L)
+    expect_length(list.files(tmp), 0L)
+  })
+
   test_that("repeat collect creates no new pipeline kernels (cache + warm)", {
     skip_on_os("mac")   # daemons start every run cold there (.daemon_jit_reset)
     withr::local_options(garry.gd_strips = 2)

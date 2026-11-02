@@ -1003,9 +1003,9 @@ NULL
 # Pipeline daemon task: replay the cleaned mask on one batch of slices
 # (morphology, vectorised over time, each slice on its own) and write each
 # slice's mask to its own file, so every band's median reads it instead of
-# recomputing the morphology. The batch's fmask slices are done with, and go,
-# so tmpfs holds one cube of them or of their masks. Runs on the compute pool
-# while the bands are still fetching.
+# recomputing the morphology. The fmask files no other batch reads are done
+# with, and go, so tmpfs holds one cube of them or of their masks. Runs on the
+# compute pool while the bands are still fetching.
 #' Daemon task body: compute one batch of the shared cleaned mask.
 #'
 #' Replays the mask-cleaning morphology over a batch of QA slices and
@@ -1013,7 +1013,8 @@ NULL
 #' of recomputing the morphology per band.
 #' Internal; daemons reach it through `asNamespace("garry")`.
 #'
-#' @param job `fmask_bins` and `out_bins`, one each per slice of the batch.
+#' @param job `fmask_bins` and `out_bins`, one each per slice of the batch,
+#'   and `free`, the fmask files to delete once the batch has read them.
 #' @param k The batch's constants: `ny`, `nx`, `dev`, `ck`, and `kernel`,
 #'   a program set, or `chain` and `halo` for a closure.
 #' @keywords internal
@@ -1024,7 +1025,7 @@ NULL
   r <- g_download_raw(jf(list(fm))[[1L]])
   rm(fm)
   .Call("garry_write_parts", r, job$out_bins, PACKAGE = "garry")
-  unlink(job$fmask_bins)
+  unlink(job$free)
   bytes <- 2 * .payload_bytes(r) # the fmask batch read, and the mask written
   rm(r)
   .daemon_gc_after(bytes)

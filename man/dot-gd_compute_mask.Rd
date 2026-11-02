@@ -7,7 +7,8 @@
 .gd_compute_mask(job, k)
 }
 \arguments{
-\item{job}{\code{fmask_bins} and \code{out_bins}, one each per slice of the batch.}
+\item{job}{\code{fmask_bins} and \code{out_bins}, one each per slice of the batch,
+and \code{free}, the fmask files to delete once the batch has read them.}
 
 \item{k}{The batch's constants: \code{ny}, \code{nx}, \code{dev}, \code{ck}, and \code{kernel},
 a program set, or \code{chain} and \code{halo} for a closure.}

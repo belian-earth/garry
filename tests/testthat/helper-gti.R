@@ -79,6 +79,32 @@
   apply_mask(ds, where = c(2), open = open, dilate = dilate)
 }
 
+# Six dates of two bands, whose medians are .gg_val(35) and .gg_val(135), under
+# a mask that shares a node with something else. "static" is one QA plane read
+# for every date, as a land-cover or DEM threshold is. "self" masks by the first
+# band's own source.
+.gg_dated_dataset <- function(mask, open = 0L, dilate = 0L) {
+  dates <- paste0("s", 1:6)
+  planes <- function(base) stats::setNames(lapply(1:6, function(i) .gg_val(base + 10 * i)), dates)
+  g <- graph_new()
+  sl <- function(gti) stats::setNames(lapply(dates, function(d) .gg_slice(gti, d, g)), dates)
+  A <- sl(.gg_gti(planes(0)))
+  B <- sl(.gg_gti(planes(100)))
+  if (identical(mask, "static")) {
+    S <- .gg_slice(.gg_gti(list(st = .gg_static_qa())), "st", g)
+    ds <- as_dataset(list(V1 = A, V2 = B, Q = stats::setNames(rep(list(S), 6L), dates)), mask_asset = "Q")
+    return(apply_mask(ds, where = c(2), open = open, dilate = dilate))
+  }
+  ds <- as_dataset(list(V1 = A, V2 = B, Q = A), mask_asset = "Q")
+  apply_mask(ds, where = function(q) g_cast(q > 60, "f32"), open = open, dilate = dilate)
+}
+
+.gg_static_qa <- function() {
+  qa <- matrix(0, 40, 60)
+  qa[10:20, 10:30] <- 2
+  qa
+}
+
 # The same two bands as a bare (band, t, y, x) cube.
 .gg_unmasked_cube <- function() {
   gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
