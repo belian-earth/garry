@@ -288,6 +288,12 @@ local({
       expect_identical(garry_last_route(), "composite_direct", info = dt)
       .expect_cells(unclass(got), masked(), info = dt)
     }
+    # one band runs its mask inside its one kernel, with no file
+    q16 <- function(q) lazy_map(q, fn = function(v) v > 21824L)
+    one <- .dr_plan(nan_map, 100, "median", TRUE, type = "UInt16", dtype = "u16", code = 30000, qa = q16)
+    got <- collect(one, distributed = TRUE)
+    expect_identical(garry_last_route(), "composite_direct")
+    .expect_cells(unclass(got), masked()[, , 1L])
   })
 
   test_that("a predicate mask masks on the route", {
