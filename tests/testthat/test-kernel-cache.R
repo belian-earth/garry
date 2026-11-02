@@ -42,6 +42,7 @@ test_that("a ragged chunk grid submits at most 4 shapes per stage", {
 })
 
 test_that("a kernel signature that fails stops the run", {
+  skip_if_not(.kernels_outlive_runs(), "no kernel is signed where none outlives a run")
   testthat::local_mocked_bindings(.stage_kernel_sig = function(...) stop("no signature"))
   expect_error(
     collect(lazy_source(fixture_gradient_f32()) * 7, distributed = FALSE),

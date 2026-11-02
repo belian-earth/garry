@@ -42,6 +42,7 @@ local({
   }
 
   test_that("a kernel resent to a daemon that lost it leaves a task-log row", {
+    skip_if_not(.kernels_outlive_runs(), "every run starts cold where no kernel outlives a run")
     log <- withr::local_tempfile(fileext = ".csv")
     withr::local_options(garry.task_log = log, garry.chunk_target_px = 400)
     x <- .kko_compute_plan(7)
