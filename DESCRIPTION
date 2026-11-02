@@ -31,7 +31,6 @@ Imports:
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
-    codetools,
     htmltools,
     htmlwidgets,
     httr2,
