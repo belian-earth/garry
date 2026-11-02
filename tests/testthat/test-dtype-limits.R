@@ -228,9 +228,62 @@ test_that("only an explicit dtype narrows an unsigned result", {
   expect_identical(lazy_map(b, fn = function(v) v * 2L, dtype = "u8")@grid@dtype, "u8")
 })
 
+# An unsigned dtype named on a map, past each of its ends, in every kernel the
+# value can reach it from.
+.dl_saturated <- function(legs) {
+  b <- lazy_source(.dl_tile(c(200, 7), "Byte"))
+  m <- .dl_m(c(200, 7))
+  doubled <- lazy_map(b, fn = function(v) v * 2L, dtype = "u8")
+  expect_plan(doubled, pmin(m * 2, 255), "u8", legs = legs)
+  # a consumer reads the cast value, in the stage or across one
+  expect_plan(lazy_map(doubled, fn = function(v) v + 1L), pmin(m * 2, 255) + 1, "i16",
+              legs = legs, px = 4, file = FALSE)
+  # from a float: past the top, and below zero
+  expect_plan(lazy_map(b, fn = function(v) v * 1.5, dtype = "u8"), pmin(trunc(m * 1.5), 255), "u8",
+              legs = legs, file = FALSE)
+  expect_plan(lazy_map(b, fn = function(v) v - 201, dtype = "u8"), pmax(m - 201, 0), "u8",
+              legs = legs, file = FALSE)
+  # from an integer wider than the carrier, whose convert to i16 would wrap
+  # 65536 to 0 and -4464 to itself, and 70000 to 4464
+  wide <- lazy_source(.dl_tile(c(70, 0, 74), "Byte"))
+  expect_plan(lazy_map(wide, fn = function(v) g_cast(v, "i32") * 1000L - 4464L, dtype = "u8"),
+              .dl_m(c(255, 0, 255)), "u8", legs = legs, file = FALSE)
+  # the wider unsigned dtypes, each at its own end
+  u <- lazy_source(.dl_tile(c(60000, 7), "UInt16"))
+  expect_plan(lazy_map(u, fn = function(v) v * 2L, dtype = "u16"), .dl_m(c(65535, 14)), "u16",
+              legs = legs, file = FALSE)
+  w <- lazy_source(.dl_tile(c(4294967295, 7), "UInt32"))
+  expect_plan(lazy_map(w, fn = function(v) v * 2L, dtype = "u32"), .dl_m(c(4294967295, 14)), "u32",
+              legs = legs, file = FALSE)
+}
+
+test_that("an unsigned dtype a map names saturates in the kernel, as in a file", {
+  .dl_saturated(list(.host))
+})
+
+test_that("a checkpoint moves no cell of a narrowed map", {
+  b <- lazy_source(.dl_tile(c(200, 7), "Byte"))
+  r <- lazy_map(b, fn = function(v) v * 2L, dtype = "u8")
+  saved <- materialise(r, dir = withr::local_tempdir(), distributed = FALSE)
+  .expect_cells(unclass(collect(saved, distributed = FALSE)), unclass(collect(r, distributed = FALSE)))
+})
+
+test_that("a value already in an unsigned dtype's range does not move", {
+  b <- lazy_source(.dl_tile(c(255, 0, 7), "Byte"))
+  m <- .dl_m(c(255, 0, 7))
+  expect_plan(lazy_map(b, fn = function(v) v, dtype = "u8"), m, "u8")
+  expect_plan(lazy_map(b, fn = function(v) g_cast(v, "f32"), dtype = "u8"), m, "u8", file = FALSE)
+  expect_plan(lazy_map(b, fn = function(v) v > 1L), m > 1, "u8", file = FALSE)
+})
+
 local({
   local_pools(2, 1)
   test_that("the pools declare and hold an unsigned result the same", {
     .dl_unsigned(list(.comp, .fused))
+  })
+
+  test_that("the pools saturate an unsigned dtype a map names", {
+    skip_on_os("mac") # the fused path hangs there: test-compute-on-read.R
+    .dl_saturated(list(.comp, .fused))
   })
 })

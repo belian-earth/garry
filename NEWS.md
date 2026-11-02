@@ -25,8 +25,8 @@
   plus one writes Int16 unless asked otherwise. This covers `+`, `-`, `*`,
   `%%`, unary minus, and a `lazy_map()`, `scan_over()` or custom
   `reduce_over()` that declares no `dtype`. To narrow, say so:
-  `write_tif(dtype = "u8")` saturates at the dtype's ends, and
-  `lazy_map(dtype = "u8")` keeps the declaration.
+  `write_tif(dtype = "u8")` and `lazy_map(dtype = "u8")` both saturate
+  at the dtype's ends.
 * A window over another kernel finds nodata past the raster, whatever that
   kernel made of those cells, so a chain gives one answer inside a stage
   and across a boundary. `focal_map()`, `focal_kernel()` and `lazy_patch()`

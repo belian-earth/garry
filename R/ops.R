@@ -129,12 +129,29 @@ g_value_and_gradient <- function(f, wrt) {
 }
 
 # A kernel output at the dtype its node declares: the convert a stage
-# export needs when the two differ, nothing when they agree.
+# export needs when the two differ, nothing when they agree. A carrier
+# holds more than its unsigned dtype, so a value past the dtype's ends
+# saturates there, as it does in a file.
 .g_as_declared <- function(x, dtype) {
-  if (!.g_traced(x) || identical(as.character(anvl::dtype(x)), .input_dtype(dtype))) {
+  if (!.g_traced(x)) {
     return(x)
   }
-  anvl::nv_convert(x, .input_dtype(dtype))
+  carrier <- .input_dtype(dtype)
+  if (!dtype %in% names(.anvl_upload_dtype)) {
+    return(.g_convert(x, carrier))
+  }
+  # Another integer would wrap through the carrier, and u32's end is no R
+  # integer, so they saturate at f64, exact over every dtype's range.
+  wide <- dtype == "u32" || (.g_is_integer(x) && !identical(.g_dtype(x), carrier))
+  via <- if (wide) "f64" else carrier
+  x <- .g_convert(x, via)
+  lo <- anvl::nv_scalar(0, dtype = via)
+  hi <- anvl::nv_scalar(2^.dtype_width(dtype) - 1, dtype = via)
+  .g_convert(anvl::nv_clamp(x, lo, hi), carrier)
+}
+
+.g_convert <- function(x, dtype) {
+  if (identical(as.character(anvl::dtype(x)), dtype)) x else anvl::nv_convert(x, dtype)
 }
 
 # Trace `fn` (list of inputs -> named list of exports) at these dtypes

@@ -34,7 +34,8 @@ automatically.
 The output dtype is the dtype \code{fn} returns, found by tracing it on
 abstract inputs (nothing runs and nothing compiles). \code{dtype} overrides
 it: the kernel's output is cast to \code{dtype}, which truncates a float to
-an integer dtype, and everything downstream reads the cast value. A
+an integer dtype and saturates at the ends of an unsigned one, and
+everything downstream reads the cast value. A
 kernel returning a logical stores 0/1 at the promoted input dtype, and
 \code{\link[=g_ifelse]{g_ifelse()}} reads such a mask with nonzero as true.
 
