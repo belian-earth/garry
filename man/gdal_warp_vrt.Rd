@@ -32,7 +32,9 @@ VRT records them, so every read of it opens the same source.}
 
 \item{alike}{What makes sources warp alike: two sources with the same
 \code{alike} differ only in their name, so the second takes the first's VRT
-with its source renamed and is never opened here. \code{NULL} builds.}
+with its source renamed and is never opened here. It must cover what
+the VRT takes from the file, its type and row order among them
+(\code{.warp_read_plan()}). \code{NULL} builds.}
 }
 \value{
 Path to the VRT file (in \code{tempdir()}).

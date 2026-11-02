@@ -91,7 +91,9 @@ rediscover the grid costs a serial remote COG header fetch per
 slice. \code{grid} must describe the dataset exactly as \code{path} +
 \code{open_options} open it, including the source dtype; it is trusted,
 not checked. With \code{grid} given, file nodata is NOT consulted (pass
-\code{nodata} explicitly if the source has a sentinel).
+\code{nodata} explicitly if the source has a sentinel), and a warp opens the
+file: only a source that has been opened can show that it stores the
+same type and row order as the file whose warped VRT it would take.
 }
 \examples{
 f <- system.file("extdata", "garry-example.tif", package = "garry")

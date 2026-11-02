@@ -85,7 +85,9 @@ LazyRaster <- S7::new_class(
 #' slice. `grid` must describe the dataset exactly as `path` +
 #' `open_options` open it, including the source dtype; it is trusted,
 #' not checked. With `grid` given, file nodata is NOT consulted (pass
-#' `nodata` explicitly if the source has a sentinel).
+#' `nodata` explicitly if the source has a sentinel), and a warp opens the
+#' file: only a source that has been opened can show that it stores the
+#' same type and row order as the file whose warped VRT it would take.
 #'
 #' @param path Path or VSI URL readable by GDAL. A relative path is taken
 #'   against the working directory here, so a later [setwd()] or a pool
@@ -239,7 +241,8 @@ lazy_source <- function(
       list()
     } else {
       unclass(decode)[c("src", "lo", "table", "nodata")]
-    }
+    },
+    stored = meta$stored %||% list()
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }

@@ -15,8 +15,10 @@ gdal_grid_spec(path, band = 1L, open_options = character(0))
 }
 \value{
 A list: \code{grid} (\code{GridSpec}), \code{nodata} (length 0 or 1),
-\code{block_dim} (integer length 2, x then y), and \code{scale}/\code{offset}
-(each length 0 when the band carries no scaling metadata).
+\code{block_dim} (integer length 2, x then y), \code{scale}/\code{offset}
+(each length 0 when the band carries no scaling metadata), and
+\code{stored}: the band's own \code{dtype} and whether the file is \code{south_up},
+which \code{grid}, a north-up view of it, does not show.
 }
 \description{
 Inspect a GDAL source and build its GridSpec (plus read metadata).

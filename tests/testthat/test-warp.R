@@ -358,6 +358,80 @@ test_that("a file on a warped file's grid takes its VRT with the source renamed"
   expect_length(ls(memo), 2L)
 })
 
+# A warped VRT holds its file's type and row order, and a source's grid shows
+# neither: a sentinel or scale widens the type, and a south-up file's grid is
+# north-up. /vsimem for the reason given above.
+test_that("a file takes a warped VRT only from one storing the same type and row order", {
+  dir <- "/vsimem/warp-product"
+  withr::defer(gdalraster::vsi_rmdir(dir, recursive = TRUE))
+  tif <- function(name, type, values, nodata = NULL, gt = c(500000, 10, 0, 4600000, 0, -10)) {
+    f <- file.path(dir, name)
+    ds <- gdalraster::create("GTiff", f, 60, 40, 1, type, return_obj = TRUE)
+    ds$setGeoTransform(gt)
+    ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+    if (!is.null(nodata)) ds$setNoDataValue(1, nodata)
+    ds$write(1, 0, 0, 60, 40, as.numeric(t(values)))
+    ds$close()
+    f
+  }
+  target <- .warp_target()
+  memo <- garry:::.gdal_cache$warp_vrt
+  fresh <- function() rm(list = ls(memo), envir = memo)
+  read <- function(x) collect(align_to(x, target), distributed = FALSE)
+  alone <- function(f) {
+    fresh()
+    read(lazy_source(f))
+  }
+  after <- function(first, f) {
+    fresh()
+    read(lazy_source(first))
+    read(lazy_source(f))
+  }
+  cells <- outer(1:40, 1:60, `+`)
+
+  # both read as f32: an Int16 working type rounds the second file
+  i16 <- tif("i16.tif", "Int16", cells, nodata = -9999)
+  f32 <- tif("f32.tif", "Float32", cells + 0.5, nodata = -9999)
+  expect_identical(lazy_source(i16)@grid@dtype, lazy_source(f32)@grid@dtype)
+  expect_true(any(alone(f32) %% 1 == 0.5, na.rm = TRUE))
+  expect_identical(after(i16, f32), alone(f32))
+
+  # a Byte working type clamps it
+  u8 <- tif("u8.tif", "Byte", cells, nodata = 0)
+  u16 <- tif("u16.tif", "UInt16", cells + 1000, nodata = 0)
+  expect_gt(min(alone(u16), na.rm = TRUE), 255)
+  expect_identical(after(u8, u16), alone(u16))
+
+  # a stack in one plan warps its files one after the other
+  fresh()
+  both <- lazy_stack(list(align_to(lazy_source(u8), target), align_to(lazy_source(u16), target)), along = "band")
+  expect_identical(c(collect(both, distributed = FALSE)[, , 2L]), c(alone(u16)))
+
+  # the same cells stored from the south warp to the same place
+  north <- tif("north.tif", "Float32", cells)
+  south <- tif("south.tif", "Float32", cells[40:1, ], gt = c(500000, 10, 0, 4599600, 0, 10))
+  expect_true(grid_equal(lazy_source(north)@grid, lazy_source(south)@grid))
+  expect_identical(after(south, north), alone(north))
+  expect_identical(after(north, south), alone(north))
+  # lazy_dataset() declares the grid it found, so it says the same
+  fresh()
+  ds <- function(f) collect(lazy_dataset(f, target), distributed = FALSE)
+  from_north <- ds(north)
+  expect_identical(ds(south), from_north)
+
+  # a source given its grid is not opened, so it shares nothing
+  fresh()
+  read(lazy_source(north))
+  given <- read(lazy_source(south, grid = gdal_grid_spec(south)$grid))
+  expect_identical(given, alone(north))
+
+  # one product still shares
+  fresh()
+  read(lazy_source(u16))
+  read(lazy_source(tif("u16b.tif", "UInt16", cells + 2000, nodata = 0)))
+  expect_length(ls(memo), 1L)
+})
+
 test_that("a warp's cells do not depend on its chunks at GDAL's tolerance", {
   f <- withr::local_tempfile(fileext = ".tif")
   nx <- 1400L

@@ -1065,7 +1065,8 @@ NULL
       resampling = p1@resampling,
       scale = p1@scale,
       offset = p1@offset,
-      decode = p1@decode
+      decode = p1@decode,
+      stored = p1@stored
     ))
   }
   if (!all(vapply(ps, .single_band_warp, logical(1), graph = graph))) {

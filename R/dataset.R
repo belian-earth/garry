@@ -831,6 +831,7 @@ lazy_dataset <- function(
       resampling = if (length(path) > 1L) resolve_rs(nm) else "near",
       name = nm
     )
+    x <- .with_stored(x, .gdal_stored(ds, b))
     if (!is.null(grid)) {
       x <- align_to(x, grid, resampling = resolve_rs(nm))
     }

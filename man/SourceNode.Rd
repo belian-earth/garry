@@ -19,7 +19,8 @@ SourceNode(
   offset = numeric(0),
   name = character(0),
   collapsed = integer(0),
-  decode = list()
+  decode = list(),
+  stored = list()
 )
 }
 \arguments{
@@ -61,6 +62,10 @@ for an ordinary source.}
 \code{\link[=lazy_dataset]{lazy_dataset()}}): the codes file (\code{src}), its first code (\code{lo}) and
 the table of decoded values (\code{table}); \code{path} is then the
 lookup-table VRT. Empty for an ordinary source.}
+
+\item{stored}{What the file stores that \code{grid} does not show: the band's
+\code{dtype} before any widening and whether it is \code{south_up}. Empty for a
+source given its grid, which is not opened to find out.}
 }
 \value{
 A \code{SourceNode}.

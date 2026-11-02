@@ -48,6 +48,15 @@ Node <- S7::new_class(
   lr
 }
 
+# Stamp what the file stores on a LazyRaster's source (in place, via the
+# graph env), for a builder that opened the file and declared its grid.
+.with_stored <- function(lr, stored) {
+  n <- graph_get(lr@graph, lr@node_id)
+  n@stored <- stored
+  graph_replace(lr@graph, lr@node_id, n)
+  lr
+}
+
 #' A GDAL-readable source: path + band + optional nodata sentinel.
 #'
 #' Created by [lazy_source()]. A declared `nodata` on an integer source
@@ -80,6 +89,9 @@ Node <- S7::new_class(
 #'   [lazy_dataset()]): the codes file (`src`), its first code (`lo`) and
 #'   the table of decoded values (`table`); `path` is then the
 #'   lookup-table VRT. Empty for an ordinary source.
+#' @param stored What the file stores that `grid` does not show: the band's
+#'   `dtype` before any widening and whether it is `south_up`. Empty for a
+#'   source given its grid, which is not opened to find out.
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(
@@ -115,7 +127,10 @@ SourceNode <- S7::new_class(
     # holds the codes file (`src`), the first code (`lo`) and the table
     # of decoded values (f32, NaN at the nodata code), which an aligned
     # read applies itself (.gdal_read_decoded()). Empty = no decode.
-    decode = S7::new_property(S7::class_list, default = quote(list()))
+    decode = S7::new_property(S7::class_list, default = quote(list())),
+    # .gdal_stored() of the file, as the source's opener saw it. Empty =
+    # not opened: a given `grid` promises neither.
+    stored = S7::new_property(S7::class_list, default = quote(list()))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L) {

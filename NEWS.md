@@ -228,12 +228,13 @@
 * A stack of remote files warped to another grid no longer stops at the
   host to open them. `collect()` opened each file twice, one at a time,
   and built its warped VRT twice. Now a file takes the VRT of the first
-  file on its grid, with the source renamed, and is not opened until a
+  file of its product, with the source renamed, and is not opened until a
   daemon reads it. 141 files through 20 daemons at 15 ms went from 15.9 s
-  to 4.5 s, same pixels. Files sharing a grid, band, nodata, scale and
-  offset count as one product, so a file with an alpha band of its own
-  among them needs an open of its own: give it its own `lazy_source()`
-  grid.
+  to 4.5 s, same sums. Files sharing a grid, stored type, row order, band,
+  nodata, scale and offset count as one product. Only a file
+  `lazy_source()` or `lazy_dataset()` has opened can show those, so a
+  `lazy_source()` given its `grid` builds a VRT of its own. An alpha band
+  is not counted, so give a file that has one its `grid`.
 * Compute kernels reach daemons as StableHLO programs: the host traces
   each kernel once per input shape, a daemon compiles the text, and no R
   closure crosses a process. Compute stages on one chunk fold into one

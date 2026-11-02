@@ -134,8 +134,12 @@ NULL
       resampling = wnode@resampling
     ))
   }
-  # A file on the grid of one that had to warp warps too: no need to open it
-  alike <- list(snode@grid, snode@scale, snode@offset)
+  # A file of the same product as one that had to warp warps too: no need to
+  # open it. The grid hides what the VRT holds of the file, its type and row
+  # order, so a source that never opened its file builds its own.
+  alike <- if (length(snode@stored)) {
+    list(snode@grid, snode@stored, snode@scale, snode@offset)
+  }
   key <- .warp_vrt_key(alike, band, wnode@target_grid, wnode@resampling, snode@nodata, snode@open_options)
   spec <- if (is.null(key) || is.null(.gdal_cache$warp_vrt[[key]])) {
     .rio_direct_spec(

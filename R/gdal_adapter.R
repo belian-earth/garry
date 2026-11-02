@@ -43,6 +43,13 @@ NULL
   dtype
 }
 
+# What a file stores that a GridSpec does not show: the band's type, which a
+# sentinel or scale widens on the grid, and its row order, which
+# gdal_grid_spec() normalises to north-up. A warped VRT holds both.
+.gdal_stored <- function(ds, band) {
+  list(dtype = .gdal_band_dtype(ds, band), south_up = ds$getGeoTransform()[[6L]] > 0)
+}
+
 # Dataset handle cache: open once per (path, open options) per process,
 # LRU-capped. An open dataset is not free: a GTI/warped mosaic pins
 # warper buffers, VSICURL caches and block-cache pages, so a daemon
@@ -532,8 +539,10 @@ gdal_blank_vrt <- function(grid) {
 #' @param band 1-based band index.
 #' @param open_options GDAL open options ("KEY=VALUE").
 #' @return A list: `grid` (`GridSpec`), `nodata` (length 0 or 1),
-#'   `block_dim` (integer length 2, x then y), and `scale`/`offset`
-#'   (each length 0 when the band carries no scaling metadata).
+#'   `block_dim` (integer length 2, x then y), `scale`/`offset`
+#'   (each length 0 when the band carries no scaling metadata), and
+#'   `stored`: the band's own `dtype` and whether the file is `south_up`,
+#'   which `grid`, a north-up view of it, does not show.
 #' @export
 gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
   ds <- .gdal_probe(path, open_options)
@@ -584,7 +593,14 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
     dims = c(x = nx, y = ny),
     dtype = dtype
   )
-  list(grid = grid, nodata = nodata, block_dim = block, scale = sc, offset = of)
+  list(
+    grid = grid,
+    nodata = nodata,
+    block_dim = block,
+    scale = sc,
+    offset = of,
+    stored = .gdal_stored(ds, band)
+  )
 }
 
 # -- Warper bypass: aligned decimating reads -----------------------------------
@@ -2021,7 +2037,9 @@ stage_raw_cube <- function(src, dst_vrt) {
 #'   VRT records them, so every read of it opens the same source.
 #' @param alike What makes sources warp alike: two sources with the same
 #'   `alike` differ only in their name, so the second takes the first's VRT
-#'   with its source renamed and is never opened here. `NULL` builds.
+#'   with its source renamed and is never opened here. It must cover what
+#'   the VRT takes from the file, its type and row order among them
+#'   (`.warp_read_plan()`). `NULL` builds.
 #' @return Path to the VRT file (in `tempdir()`).
 gdal_warp_vrt <- function(
   src_path,
