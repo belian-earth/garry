@@ -195,7 +195,7 @@ NULL
   over <- if (!S7::S7_inherits(node, MapNode)) node@over
   id <- list(
     class(node)[[1L]],
-    node@fn,
+    .fn_identity(node@fn),
     over,
     pdims,
     dtypes,

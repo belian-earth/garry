@@ -287,3 +287,12 @@ local({
     .dl_saturated(list(.comp, .fused))
   })
 })
+
+test_that("a map reads the value a closure captured when it was declared", {
+  x <- lazy_source(fixture_tile(2.5))
+  declared <- character(0)
+  for (dt in c("i32", "f64")) {
+    declared <- c(declared, lazy_map(x, fn = function(v) g_cast(v, dt))@grid@dtype)
+  }
+  expect_identical(declared, c("i32", "f64"))
+})
