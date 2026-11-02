@@ -2,8 +2,8 @@
 
 ## Breaking changes
 
-* `geomedian()`, `medoid()` and custom reducers over a band stack of time stacks
-  take the direct route, so warped cells move. On small HLS a warped geomedian
+* `geomedian()`, `medoid()` and custom reducers declaring `f32` over a band stack
+  of time stacks take the direct route, so warped cells move. On small HLS a warped geomedian
   moved by a median of 0.22 DN, p99 12 DN and at most 1,277 DN, with the same NaN
   cells. Aligned reads move by rounding only.
 * A warp of one file takes GDAL's default tolerance, 0.125 source pixels, in
@@ -181,8 +181,8 @@
   of 32 B a cell.
 * A read-only pool write stays inside the read budget while writes queue. Reads
   used to go on past it whenever none was in flight, up to two regions a reader.
-* `geomedian()`, `medoid()` and any custom reducer over a band stack of time
-  stacks take the direct route, so they stay inside the RAM budget. Medium
+* `geomedian()`, `medoid()` and any custom reducer declaring `f32` over a band
+  stack of time stacks take the direct route, so they stay inside the RAM budget. Medium
   HLS, 55 dates of 3660 x 3660 in six bands, ran out of memory at 16 GB and now
   takes 50 s at an 8.3 GB peak. A cube too big for `/dev/shm` runs in
   blocks of full-width rows, fetched, masked, reduced in strips and freed. Blocks
