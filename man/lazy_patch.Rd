@@ -47,8 +47,8 @@ reduce the leading band axis to \code{out_bands} channels (0 = a plain
 prediction is the in-package example of its use.
 }
 \details{
-Cells beyond the raster edge hold the nodata of \code{x}'s dtype (NaN for a
-float, 0 for an integer), whatever a kernel before this one made of them.
+Cells beyond the raster edge hold NaN: \code{x} reads as a float here whatever
+its dtype, and whatever a kernel before this one made of them.
 
 \code{kernel_id} stands in for \code{fn} in kernel signatures: give two calls
 the same id ONLY if their fns are interchangeable (same weights,
