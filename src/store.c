@@ -1,3 +1,5 @@
+#define _FILE_OFFSET_BITS 64 /* ahead of every header: mingw-w64's off_t and fseeko */
+
 /* Raw store payload byte work (design/f64-store.md, D19-D21).
  *
  * A store value is a raw vector of row-major element bytes tagged with

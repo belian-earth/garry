@@ -235,6 +235,24 @@ test_that("rows of many files join into one cube, and a cube splits back", {
   expect_error(.Call("garry_read_rows", file.path(dir, "no.bin"), 0, 4, PACKAGE = "garry"), "cannot open")
 })
 
+test_that("rows past 2 GiB of a file read", {
+  # A 23171-pixel-square f32 plane puts rows there. The file is sparse where
+  # that exists, and on Windows, which has no /dev/shm, it sits in tempdir().
+  f <- withr::local_tempfile(fileext = ".bin")
+  con <- file(f, "wb")
+  seek(con, 2^31 + 4, rw = "write")
+  writeBin(as.raw(1:4), con)
+  close(con)
+  expect_identical(.Call("garry_read_rows", f, 2^31 + 4, 4, PACKAGE = "garry"), as.raw(1:4))
+})
+
+test_that("store.c takes a 64-bit off_t ahead of every header", {
+  # mingw-w64's off_t is 32 bits without it, which no Linux test can see
+  src <- test_path("..", "..", "src", "store.c")
+  skip_if_not(file.exists(src), "no package source here")
+  expect_match(readLines(src, n = 1L), "^#define _FILE_OFFSET_BITS 64\\b")
+})
+
 test_that("a program's warm-up compiles a shape no machine could run", {
   fn <- garry:::.gd_lean_fn(NULL, "median", TRUE, NULL, FALSE)
   huge <- c(64L, 20000L, 20000L) # 102 GB, far past this suite's memory
