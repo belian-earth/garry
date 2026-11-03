@@ -11,7 +11,7 @@ GeoTIFF. Use it once on pipeline intermediates that are read many times
 ## Usage
 
 ``` r
-stage_raw_cube(src, dst_vrt, slab_rows = 512L)
+stage_raw_cube(src, dst_vrt)
 ```
 
 ## Arguments
@@ -24,13 +24,16 @@ stage_raw_cube(src, dst_vrt, slab_rows = 512L)
 
   Destination `.vrt` path (the `.bin` lands beside it).
 
-- slab_rows:
-
-  Rows per read/write slab (memory bound).
-
 ## Value
 
 `dst_vrt`, invisibly.
+
+## Details
+
+As for every write (see
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)),
+the cube builds beside its target and replaces it only when complete, so
+`src` may be the cube itself, and a failure leaves the target as it was.
 
 ## See also
 

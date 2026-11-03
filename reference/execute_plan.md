@@ -45,10 +45,7 @@ execute_plan(plan, path = NULL, nodata = NULL, band_names = NULL, wspec = NULL)
 ## Value
 
 The sink stage's value (matrix for raster sinks, scalar for global
-reductions), or `path` invisibly when writing. When
-`options(garry.exec_stats = TRUE)`, in-memory results carry a
-`garry_exec_stats` attribute recording the distinct input shapes
-submitted per stage.
+reductions), or `path` invisibly when writing.
 
 ## See also
 

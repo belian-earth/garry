@@ -28,7 +28,11 @@ lazy_map(..., fn, dtype = NULL, bands = NULL)
 
 - dtype:
 
-  Optional output dtype override.
+  Optional output dtype. Given, `fn` is not traced when the raster is
+  built, so a kernel that only traces at chunk time can use it. Left
+  out, it is what `fn` returns. Unsigned inputs compute in a wider
+  signed dtype (`u8` in `i16`, `u16` in `i32`), so `fn` over them
+  returns that unless told otherwise.
 
 - bands:
 
@@ -40,9 +44,14 @@ A `LazyRaster`, or a `LazyDataset` when given one.
 
 ## Details
 
-The output dtype defaults to the promoted input dtype; pass `dtype` when
-`fn` changes the value domain, e.g. `"f32"` for a mask that introduces
-NaN over an integer band.
+The output dtype is the dtype `fn` returns, found by tracing it on
+abstract inputs (nothing runs and nothing compiles). `dtype` overrides
+it: the kernel's output is cast to `dtype`, which truncates a float to
+an integer dtype and saturates at the ends of an unsigned one, and
+everything downstream reads the cast value. A kernel returning a logical
+stores 0/1 at the promoted input dtype, and
+[`g_ifelse()`](https://belian-earth.github.io/garry/reference/g_ifelse.md)
+reads such a mask with nonzero as true.
 
 Over a `LazyDataset`, `fn` is applied to every value band (a single
 dataset input only); `bands` restricts which bands, and non-selected

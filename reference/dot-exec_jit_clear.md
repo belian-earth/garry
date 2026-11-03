@@ -1,6 +1,6 @@
-# Drop every cached executable held by the single-process executor.
+# Drop every kernel this process holds.
 
-The cache is keyed on stage structure, so it is only ever a speed
+The cache is keyed on kernel content, so it is only ever a speed
 optimisation; clearing it costs a recompile and nothing else.
 
 ## Usage

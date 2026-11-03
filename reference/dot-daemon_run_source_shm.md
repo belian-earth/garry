@@ -1,41 +1,32 @@
 # Daemon task body: read one source window into shared memory.
 
-The mori-store counterpart of `.daemon_run_source` and
-`.daemon_run_source_split`. Coarse reads share their per-compute- chunk
-parts as elements of one shared list: consumers extract their element
-zero-copy. (Consumer-side RANGE subsetting of a mapped matrix would
-materialise the whole window per input, a large transient allocation, so
-the split happens producer-side here too.) Internal; daemons reach it
-through `asNamespace("garry")`.
+Coarse reads share their per-compute-chunk parts as elements of one
+shared list: consumers extract their element zero-copy. (Consumer-side
+RANGE subsetting of a mapped matrix would materialise the whole window
+per input, a large transient allocation, so the split happens
+producer-side here too.) Internal; daemons reach it through
+`asNamespace("garry")`.
 
 ## Usage
 
 ``` r
 .daemon_run_source_shm(
-  path,
-  band,
-  nodata,
+  ra,
   cg,
   core,
   key,
   reg_key,
   parts = NULL,
-  open_options = character(0),
   fuse = NULL,
-  read_raw = FALSE,
-  store_raw = FALSE,
-  scale = numeric(0),
-  offset = numeric(0),
-  decim = NULL,
-  resampling = "near"
+  read_raw = FALSE
 )
 ```
 
 ## Arguments
 
-- path, band, nodata:
+- ra:
 
-  Source identity.
+  Read arguments (as `.stage_read_args()`).
 
 - cg:
 
@@ -48,11 +39,13 @@ through `asNamespace("garry")`.
   else per-compute-chunk windows (`r0`/`c0` 0-based offsets, `nr`/`nc`
   sizes, `elt` the element name).
 
-- decim:
+- fuse:
 
-  Optional decimating-read spec (see
-  [`gdal_read_window()`](https://belian-earth.github.io/garry/reference/gdal_read_window.md)),
-  set when an aligned warp is served by a direct RasterIO read.
+  The fused kernel to run on the window, or NULL.
+
+- read_raw:
+
+  Read as a raw f32 payload?
 
 ## Value
 

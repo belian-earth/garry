@@ -10,7 +10,7 @@ its weights: pass the returned LazyRaster as `wrt` to
 ## Usage
 
 ``` r
-focal_kernel(x, weights, boundary = "nodata")
+focal_kernel(x, weights)
 ```
 
 ## Arguments
@@ -23,11 +23,7 @@ focal_kernel(x, weights, boundary = "nodata")
 
   Square odd-sided numeric matrix, rows = dy, cols = dx.
 
-- boundary:
-
-  Boundary policy; only "nodata" in v1.
-
 ## Value
 
-A `LazyRaster` (f32 for an integer `x`, which is read as f32 so cells
-beyond the raster edge can be NaN).
+A `LazyRaster` (a float for an integer `x`, which is read as the float
+that holds it so cells beyond the raster edge can be NaN).

@@ -84,8 +84,9 @@ the band axis via <code><a href="stack_bands.html">stack_bands()</a></code> firs
 <dt id="arg-distributed">distributed<a class="anchor" aria-label="anchor" href="#arg-distributed"></a></dt>
 <dd><p>Execute across the <code><a href="garry_daemons.html">garry_daemons()</a></code> pools? Defaults to
 <code><a href="garry_daemons_set.html">garry_daemons_set()</a></code>, so <code>collect(x)</code> uses the pools when they are running
-and runs single-threaded otherwise. Pass <code>TRUE</code>/<code>FALSE</code> to override; the
-distributed result is identical to the single-threaded one.</p></dd>
+and runs single-threaded otherwise. Pass <code>TRUE</code>/<code>FALSE</code> to override. One
+plan gives the same cells either way; a reprojected STAC band warps by a
+different route on each, so its cells can differ within GDAL's tolerance.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -98,7 +99,8 @@ for global reductions, a <code>[y, x]</code> matrix for a single layer, or a
 A matrix/array result also carries a <code>gis</code> attribute in the style of
 <code><a href="https://firelab.github.io/gdalraster/reference/read_ds.html" class="external-link">gdalraster::read_ds()</a></code> (<code>type</code>, <code>bbox</code> = <code>c(xmin, ymin, xmax, ymax)</code>,
 <code>dim</code> = <code>c(nx, ny, nbands)</code>, <code>srs</code> = WKT, <code>datatype</code>), so the array is
-self-describing and <code><a href="preview.html">preview()</a></code> can set real-world axes without the grid.</p>
+self-describing and <code><a href="preview.html">preview()</a></code> can set real-world axes without the grid.
+An <code>i32</code> cell of -2^31 reads as <code>NA</code>, the value R's integers keep for it.</p>
     </div>
 
     <div class="section level2">

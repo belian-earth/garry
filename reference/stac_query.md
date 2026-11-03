@@ -7,7 +7,7 @@ the API rejects GET, and fetches every page of results via
 ## Usage
 
 ``` r
-stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
+stac_query(bbox, stac_source, collection, start_date, end_date)
 ```
 
 ## Arguments
@@ -31,10 +31,6 @@ stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
   (such as `"2023-06-01"` or `"2023-06-01 12:00:00"`). A date without a
   time covers that whole day, so `end_date = "2023-12-31"` includes
   acquisitions made on the 31st.
-
-- limit:
-
-  Page size requested from the API.
 
 ## Value
 

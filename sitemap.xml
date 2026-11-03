@@ -20,7 +20,6 @@
 <url><loc>https://belian-earth.github.io/garry/news/index.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/ChunkGrid.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/FocalNode.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/FusedNode.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/Graph.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/GridSpec.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/LazyDataset.html</loc></url>
@@ -40,7 +39,6 @@
 <url><loc>https://belian-earth.github.io/garry/reference/apply_mask.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/as_dataset.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/as_terra.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/as_vaster_extent.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/band_project.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/band_sel.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/bilateral_focal.html</loc></url>
@@ -48,7 +46,6 @@
 <url><loc>https://belian-earth.github.io/garry/reference/chunk_window_with_halo.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/coarsen.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/collect.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/cross_grid_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/crs_equal.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dataset-bands.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dequantize_aef.html</loc></url>
@@ -71,11 +68,9 @@
 <url><loc>https://belian-earth.github.io/garry/reference/dot-daemon_write_shared.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-exec_jit_clear.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-g_has_nv_scan.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/dot-g_has_raw_upload.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-garry_abi_token.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_compute_mask.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_compute_masked_band.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/dot-gd_warm.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-gd_warm_pipeline.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-mosaic_read_spec.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/dot-rio_direct_spec.html</loc></url>
@@ -87,7 +82,6 @@
 <url><loc>https://belian-earth.github.io/garry/reference/fill_gaps.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/focal_kernel.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/focal_map.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/fusable.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g-bitwise.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g-reductions.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/g_broadcast_arrays.html</loc></url>
@@ -134,7 +128,6 @@
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_fetch_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_grid_spec.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_mosaic_vrt.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/gdal_nodata_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_pixel_extract.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_read_window.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/gdal_version_num.html</loc></url>
@@ -160,7 +153,6 @@
 <url><loc>https://belian-earth.github.io/garry/reference/gti_open_options.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/hampel_smooth.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/index.html</loc></url>
-<url><loc>https://belian-earth.github.io/garry/reference/is_barrier.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/kalman_llt.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/kalman_smooth.html</loc></url>
 <url><loc>https://belian-earth.github.io/garry/reference/lazy-dim.html</loc></url>

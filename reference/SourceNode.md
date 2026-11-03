@@ -3,8 +3,9 @@
 Created by
 [`lazy_source()`](https://belian-earth.github.io/garry/reference/lazy_source.md).
 A declared `nodata` on an integer source promotes the source's output
-dtype to f32 so NaN can carry nodata downstream; the executor rewrites
-`value == nodata` to NaN at read time.
+dtype to the float that holds it (f32 up to 16 bits, else f64) so NaN
+can carry nodata downstream; the executor rewrites `value == nodata` to
+NaN at read time.
 
 ## Usage
 
@@ -24,7 +25,8 @@ SourceNode(
   offset = numeric(0),
   name = character(0),
   collapsed = integer(0),
-  decode = list()
+  decode = list(),
+  stored = list()
 )
 ```
 
@@ -104,6 +106,12 @@ SourceNode(
   the codes file (`src`), its first code (`lo`) and the table of decoded
   values (`table`); `path` is then the lookup-table VRT. Empty for an
   ordinary source.
+
+- stored:
+
+  What the file stores that `grid` does not show: the band's `dtype`
+  before any widening and whether it is `south_up`. Empty for a source
+  given its grid, which is not opened to find out.
 
 ## Value
 

@@ -1,6 +1,7 @@
-# Daemon task body: warp one slice's remote items into an f32 buffer.
+# Daemon task body: bring one slice's items to an f32 plane file.
 
-Internal; daemons reach it through `asNamespace("garry")`.
+One item on the grid's own pixels is translated; anything else warps
+into an f32 buffer.
 
 ## Usage
 
@@ -12,12 +13,16 @@ Internal; daemons reach it through `asNamespace("garry")`.
 
 - j:
 
-  Per-slice job (locs/dt/nodata/resampling/bin).
+  Per-slice job (locs/dt/band/nodata/resampling/bin).
 
 - k:
 
-  Grid-constant bundle (nx/ny/gtstr/wkt).
+  Grid-constant bundle (nx/ny/grid/gtstr/wkt).
 
 ## Value
 
-List with `err` and `tw` (warp seconds).
+List with `tw` (read seconds) and `how`, `"translate"` or `"warp"`.
+
+## Details
+
+Internal; daemons reach it through `asNamespace("garry")`.

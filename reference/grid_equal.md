@@ -5,7 +5,7 @@ Structural equality of two grids (geometry only, not dtype).
 ## Usage
 
 ``` r
-grid_equal(a, b, tol = 1e-09)
+grid_equal(a, b)
 ```
 
 ## Arguments
@@ -13,10 +13,6 @@ grid_equal(a, b, tol = 1e-09)
 - a, b:
 
   `GridSpec` objects.
-
-- tol:
-
-  Numeric tolerance for transform/extent comparison.
 
 ## Value
 

@@ -14,9 +14,9 @@ arguments it sizes the pools to the machine: `read` = all logical cores
 drain full) and `compute` = a third of the logical cores, capped at 8
 with a floor of 2; on CUDA the compute pool is 2, since concurrent
 clients share one card. `collect(distributed = TRUE)` detects the pools
-automatically and pre-compiles stage kernels at run start
-(`garry_opt("jit_warmup")`), scan kernels included, targeted at the
-`garry_opt("scan_profiles")` designated profiles only.
+automatically and pre-compiles stage kernels on idle daemons at run
+start, scan kernels on the `garry_opt("scan_profiles")` designated
+profiles only.
 
 ## Usage
 
@@ -25,8 +25,7 @@ garry_daemons(
   read = NULL,
   compute = NULL,
   read_handles = NULL,
-  gdal_config = TRUE,
-  ...
+  gdal_config = TRUE
 )
 ```
 
@@ -71,12 +70,6 @@ garry_daemons(
   `garry_opt("gdal_cachemax_mb")`: GDAL's own default is 5% of RAM per
   process.
 
-- ...:
-
-  Passed to
-  [`mirai::daemons()`](https://mirai.r-lib.org/reference/daemons.html)
-  for every pool; `dispatcher` is garry's to set.
-
 ## Value
 
 Invisibly, `list(read =, compute =)`.
@@ -89,6 +82,14 @@ device on multi-GPU, or one per socket on NUMA (`compute`); a
 memory-tight box (smaller `compute`, each daemon's base XLA client is
 ~300 MB once warmed).
 
+garry runs its own parallelism through these pools, so run one garry
+session and let it use the machine. Wrapping garry calls in forked or
+multi-process workers, such as
+[`parallel::mclapply()`](https://rdrr.io/r/parallel/mclapply.html) or a
+parallel `future` plan, is discouraged and at your own risk: GDAL, curl
+and XLA hold state that does not survive a fork, and each worker's pools
+would compete for the same cores, memory and `/dev/shm`.
+
 It also applies the sensible defaults so a workload script needs no
 preamble: the glibc `MALLOC_*` thresholds are exported BEFORE the
 daemons spawn (read at exec, so children inherit them), and
@@ -97,8 +98,8 @@ runs on every read daemon. Neither touches the host's own GDAL config
 (that would hide local sidecars for the caller's reads); call
 [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
 yourself to tune host-side discovery. `MALLOC_*` is only-if-unset, and
-`gdal_config = FALSE` skips the GDAL settings entirely. Headers
-registered with
+`gdal_config = FALSE` skips the GDAL settings entirely, on every route.
+Headers registered with
 [`garry_http_auth()`](https://belian-earth.github.io/garry/reference/garry_http_auth.md)
 are applied to the new pools.
 

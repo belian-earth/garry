@@ -1,4 +1,4 @@
-# Daemon task body: pipeline JitFunctions created in this process so far.
+# Daemon task body: kernels created in this process so far.
 
 Internal; daemons reach it through `asNamespace("garry")`.
 

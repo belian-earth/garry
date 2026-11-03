@@ -86,7 +86,10 @@ bit patterns that do not exist. It matches the default of
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
-    <p>Paste fast path: when <code>x</code> is already exactly on the target grid
+    <p>A warp takes GDAL's default tolerance, 0.125 source pixels, so a cell
+can sit that far from where the exact transform puts it. Set
+<code>garry.warp_exact = TRUE</code> for exact warps, at about five times the cost.</p>
+<p>Paste fast path: when <code>x</code> is already exactly on the target grid
 (same CRS, transform, extent and dims; <code><a href="grid_equal.html">grid_equal()</a></code>), <code>align_to()</code>
 is a no-op returning <code>x</code>: reads stay plain windowed reads, with no
 warp barrier splitting the plan. This is the single-CRS-zone

@@ -5,7 +5,8 @@ Samples a raster at points via
 which reads only the blocks containing points. Accepts anything that
 function accepts (a path or a `GDALRaster`, passed through untouched)
 plus a garry `LazyRaster`/`LazyDataset` that is already **materialised**
-– i.e. one whose graph is a bare source over local files, as
+– i.e. one whose graph is a bare source over local files, opened without
+open options, as
 [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
 returns.
 

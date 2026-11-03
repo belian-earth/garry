@@ -11,7 +11,7 @@ and the `g_*` vocabulary
 ## Usage
 
 ``` r
-focal_map(x, fn, radius, boundary = "nodata", bands = NULL)
+focal_map(x, fn, radius, bands = NULL)
 ```
 
 ## Arguments
@@ -29,10 +29,6 @@ focal_map(x, fn, radius, boundary = "nodata", bands = NULL)
   Halo in pixels (mandatory: the footprint cannot be inferred from
   `fn`).
 
-- boundary:
-
-  Boundary policy; only "nodata" in v1.
-
 - bands:
 
   `LazyDataset` only: bands to apply to (default: all value bands).
@@ -44,10 +40,12 @@ one.
 
 ## Details
 
-Cells beyond the raster edge are NaN (nodata): v1 supports only this
-`boundary = "nodata"` policy; reflect/wrap are not implemented. An
-integer raster is read as f32 for the stencil, so the edge can be NaN,
-and the result is f32.
+Cells beyond the raster edge are NaN (nodata), whatever a kernel before
+this one made of them. An integer raster is read as a float for the
+stencil (f32 up to 16 bits, else f64), so the edge can be NaN, and the
+result is that float. A map that names its float `dtype` over integers
+keeps its integer read: its kernel decodes them, and sees cells beyond
+the edge as 0.
 
 Over a `LazyDataset`, the stencil is applied to every value band per
 slice; `bands` restricts which bands.

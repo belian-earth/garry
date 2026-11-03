@@ -38,8 +38,8 @@ A focal body `fn(shifts)` for
 ## Details
 
 A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
-outside the raster) drop out of the weighted mean (the semantics of
-`rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")`).
-`sigma_r` must be supplied: the parameter-free per-band default (the
-band's own sd) is a whole-raster statistic, so compute it in a separate
-reduce pass (or reuse fitted values) and pass it in.
+outside the raster) drop out of the weighted mean, so the window shrinks
+at raster edges and around holes. `sigma_r` must be supplied: the
+parameter-free per-band default (the band's own sd) is a whole-raster
+statistic, so compute it in a separate reduce pass (or reuse fitted
+values) and pass it in.

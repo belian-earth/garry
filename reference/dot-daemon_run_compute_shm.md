@@ -15,10 +15,10 @@ Internal; daemons reach it through `asNamespace("garry")`.
   reg_key,
   out_keys = NULL,
   device = "cpu",
-  store_raw = FALSE,
   edge = NULL,
   wq = NULL,
-  grow = NULL
+  grow = NULL,
+  ring = NULL
 )
 ```
 
@@ -30,12 +30,14 @@ Internal; daemons reach it through `asNamespace("garry")`.
 
 - fn:
 
-  Stage closure; `in_vals`/`in_keys`/`trims`/`dtypes` describe the
-  inputs (`in_keys` name the element to extract from each shared value:
-  the node key, or a part name for coarse reads); `reg_key` the daemon
-  registry slot for the result. `grow` = c(rows, cols) pads an edge
-  chunk's inputs to the stage's modal chunk shape and crops the outputs
-  back (see `.sv_grow()`).
+  Stage kernel (a closure or a program set), NULL on a key-only launch;
+  `in_vals`/`in_keys`/`trims`/`dtypes` describe the inputs (`in_keys`
+  name the element to extract from each shared value: the node key, or a
+  part name for coarse reads); `reg_key` the daemon registry slot for
+  the result. `grow` = c(rows, cols) pads an edge chunk's inputs to the
+  stage's modal chunk shape and crops the outputs back (see
+  `.sv_grow()`). `ring` holds the chunk's cells past the raster for a
+  kernel that takes them (see `.ring_cells()`).
 
 ## Value
 

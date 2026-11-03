@@ -1,6 +1,6 @@
 # Can scans take the traced path?
 
-Internal capability check (exported for daemon use via `::`).
+Internal capability check.
 
 ## Usage
 

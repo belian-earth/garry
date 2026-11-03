@@ -16,7 +16,7 @@ semantics.
 ## Usage
 
 ``` r
-g_scan(init, body, xs = NULL, length = NULL, reverse = FALSE)
+g_scan(init, body, xs, reverse = FALSE)
 ```
 
 ## Arguments
@@ -32,11 +32,7 @@ g_scan(init, body, xs = NULL, length = NULL, reverse = FALSE)
 
 - xs:
 
-  Per-step inputs sliced along dim 1 (array, nested list, or NULL).
-
-- length:
-
-  Static trip count; required when `xs` is NULL.
+  Per-step inputs sliced along dim 1 (array or nested list).
 
 - reverse:
 

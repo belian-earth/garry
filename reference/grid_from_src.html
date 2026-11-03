@@ -58,9 +58,7 @@ kinds are treated differently, because they carry different information:</p>
 <span>  <span class="va">x</span>,</span>
 <span>  <span class="va">res</span>,</span>
 <span>  projection <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"laea"</span>, <span class="st">"aeqd"</span>, <span class="st">"utm"</span>, <span class="st">"pconic"</span>, <span class="st">"eqdc"</span><span class="op">)</span>,</span>
-<span>  ellps <span class="op">=</span> <span class="st">"WGS84"</span>,</span>
-<span>  buffer <span class="op">=</span> <span class="fl">0</span>,</span>
-<span>  dtype <span class="op">=</span> <span class="st">"f32"</span></span>
+<span>  buffer <span class="op">=</span> <span class="fl">0</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -77,11 +75,11 @@ kinds are treated differently, because they carry different information:</p>
 for a vector, in the chosen projected CRS units (see <code><a href="grid_from_bbox.html">grid_from_bbox()</a></code>).</p></dd>
 
 
-<dt id="arg-projection-ellps">projection, ellps<a class="anchor" aria-label="anchor" href="#arg-projection-ellps"></a></dt>
+<dt id="arg-projection">projection<a class="anchor" aria-label="anchor" href="#arg-projection"></a></dt>
 <dd><p>Vector sources only; ignored for rasters.</p></dd>
 
 
-<dt id="arg-buffer-dtype">buffer, dtype<a class="anchor" aria-label="anchor" href="#arg-buffer-dtype"></a></dt>
+<dt id="arg-buffer">buffer<a class="anchor" aria-label="anchor" href="#arg-buffer"></a></dt>
 <dd><p>As in <code><a href="grid_from_bbox.html">grid_from_bbox()</a></code>.</p></dd>
 
 </dl></div>
@@ -95,12 +93,12 @@ for a vector, in the chosen projected CRS units (see <code><a href="grid_from_bb
 <ul><li><p><strong>Raster</strong> (GeoTIFF, COG, ...): the source already has a projected CRS and
 footprint, so the grid keeps that native CRS and extent and is simply
 re-gridded to <code>res</code> (the extent is snapped out to whole multiples of <code>res</code>).
-<code>projection</code>/<code>ellps</code> are ignored: reprojecting a raster's own grid would
+<code>projection</code> is ignored: reprojecting a raster's own grid would
 distort it. Use this to coarsen a tile in place, e.g. read a 10 m embedding
 COG onto a 30 m grid while preserving its geometry.</p></li>
 <li><p><strong>Vector</strong> (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
 so a projected CRS is chosen for it and the grid is built exactly as
-<code><a href="grid_from_bbox.html">grid_from_bbox()</a></code> does, honouring <code>projection</code>/<code>ellps</code>.</p></li>
+<code><a href="grid_from_bbox.html">grid_from_bbox()</a></code> does, honouring <code>projection</code>.</p></li>
 </ul><p>Remote sources are read via HTTP range requests (header only), so this does
 not download the whole file.</p>
     </div>

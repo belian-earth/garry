@@ -31,9 +31,7 @@ GPU).
   [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
   plans the graph into chunks, streams reads through a GDAL daemon pool,
   and runs the fused kernels through
-  [anvl](https://github.com/r-xla/anvl) (XLA). On a three-band annual
-  HLS composite it matches Python’s ODC + dask on the same machine, in
-  idiomatic R.
+  [anvl](https://github.com/r-xla/anvl) (XLA).
 - **GDAL-faithful.** IO is
   [gdalraster](https://cran.r-project.org/package=gdalraster).
 
@@ -45,8 +43,8 @@ reductions, scans along time, whole-window model kernels; fixed-point
 iteration is planned) over grid-pinned labelled cubes. Expressions are
 written in [anvl](https://github.com/r-xla/anvl)’s vocabulary, planned
 as one graph, and executed distributed and memory-bounded. This closed
-world is what makes whole-graph fusion, cost placement and
-byte-identical distributed execution possible.
+world is what makes whole-graph fusion, cost placement and reproducible
+distributed execution possible.
 
 On those primitives garry ships a growing catalogue of statistical
 verbs:
@@ -265,8 +263,8 @@ reprojects onto a target grid;
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 brings the result into R and
 [`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
-streams it to disk. See `benchmarks/compare.sh` for the back-to-back
-garry-vs-ODC benchmark.
+streams it to disk. See `benchmarks/README.md` for the garry-vs-ODC
+benchmark suite.
 
 # Package index
 
@@ -432,7 +430,8 @@ collect().
 - [`lazy_patch()`](https://belian-earth.github.io/garry/reference/lazy_patch.md)
   :
 
-  Whole-window model op (advanced): apply `fn` to the raw padded chunk.
+  Whole-window model op (advanced): apply `fn` to the whole padded
+  chunk.
 
 - [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
   : Lazily resample/reproject onto a target grid.
@@ -457,7 +456,7 @@ Plan, distribute across daemons, and write the result.
 - [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
   : Set up split mirai daemon pools for distributed execution.
 - [`garry_daemons_set()`](https://belian-earth.github.io/garry/reference/garry_daemons_set.md)
-  : Are the garry daemon pools running?
+  : Are the garry daemon pools set?
 - [`garry_pool_hygiene()`](https://belian-earth.github.io/garry/reference/garry_pool_hygiene.md)
   : Reclaim daemon memory across the pools.
 - [`garry_gdal_config()`](https://belian-earth.github.io/garry/reference/garry_gdal_config.md)
@@ -710,9 +709,8 @@ IR directly (custom nodes, alternate executors) – not for normal use.
 - [`FocalNode()`](https://belian-earth.github.io/garry/reference/FocalNode.md)
   :
 
-  Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
-  "nodata", the only policy: cells beyond the raster edge are NaN.
-  Created by
+  Focal (stencil) op. `radius` is the halo in pixels; cells beyond the
+  raster edge are NaN. Created by
   [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
   and
   [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md).
@@ -738,14 +736,6 @@ IR directly (custom nodes, alternate executors) – not for normal use.
 
   Combine inputs along a named dim (e.g. time). Created by
   [`lazy_stack()`](https://belian-earth.github.io/garry/reference/lazy_stack.md).
-
-- [`FusedNode()`](https://belian-earth.github.io/garry/reference/FusedNode.md)
-  :
-
-  Output of the composition pass. Holds a composed R function assembled
-  from its members; ready for
-  [`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) at
-  execution time.
 
 - [`PatchNode()`](https://belian-earth.github.io/garry/reference/PatchNode.md)
   : Whole-window model op: fn over the raw padded chunk. Halo-consuming.
@@ -788,13 +778,6 @@ IR directly (custom nodes, alternate executors) – not for normal use.
 - [`execute_plan_mirai()`](https://belian-earth.github.io/garry/reference/execute_plan_mirai.md)
   : Execute a Plan across mirai daemons.
 
-- [`fusable()`](https://belian-earth.github.io/garry/reference/fusable.md)
-  : Can this node be composed with fusable neighbours into a single
-  kernel?
-
-- [`is_barrier()`](https://belian-earth.github.io/garry/reference/is_barrier.md)
-  : Does this node force a stage boundary?
-
 - [`required_halo()`](https://belian-earth.github.io/garry/reference/required_halo.md)
   : Halo radius required by this node from its inputs.
 
@@ -803,12 +786,6 @@ IR directly (custom nodes, alternate executors) – not for normal use.
 
 - [`chunk_window_with_halo()`](https://belian-earth.github.io/garry/reference/chunk_window_with_halo.md)
   : Expand a chunk window by the ChunkGrid's halo, clipped to the grid.
-
-- [`cross_grid_window()`](https://belian-earth.github.io/garry/reference/cross_grid_window.md)
-  :
-
-  Map an output-chunk window on `out_grid` to the minimal input window
-  required on `in_grid`.
 
 # Articles
 

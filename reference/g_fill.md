@@ -2,7 +2,7 @@
 
 The fill is represented in the program (no host buffer of `prod(dim)`
 elements is built or transferred), so it is the cheap way to make a
-large device array — e.g. warm-up dummies for kernel precompiles.
+large device array: e.g. warm-up dummies for kernel precompiles.
 
 ## Usage
 

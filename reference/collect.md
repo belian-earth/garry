@@ -35,8 +35,10 @@ collect(x, plan_only = FALSE, distributed = garry_daemons_set())
   pools? Defaults to
   [`garry_daemons_set()`](https://belian-earth.github.io/garry/reference/garry_daemons_set.md),
   so `collect(x)` uses the pools when they are running and runs
-  single-threaded otherwise. Pass `TRUE`/`FALSE` to override; the
-  distributed result is identical to the single-threaded one.
+  single-threaded otherwise. Pass `TRUE`/`FALSE` to override. One plan
+  gives the same cells either way; a reprojected STAC band warps by a
+  different route on each, so its cells can differ within GDAL's
+  tolerance.
 
 ## Value
 
@@ -51,7 +53,8 @@ carries a `gis` attribute in the style of
 `c(nx, ny, nbands)`, `srs` = WKT, `datatype`), so the array is
 self-describing and
 [`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
-can set real-world axes without the grid.
+can set real-world axes without the grid. An `i32` cell of -2^31 reads
+as `NA`, the value R's integers keep for it.
 
 ## Examples
 

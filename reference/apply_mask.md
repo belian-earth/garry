@@ -8,15 +8,7 @@ slice and reused across all value bands.
 ## Usage
 
 ``` r
-apply_mask(
-  x,
-  from = NULL,
-  where,
-  open = 0L,
-  dilate = 0L,
-  drop = TRUE,
-  join = "exact"
-)
+apply_mask(x, from = NULL, where, open = 0L, dilate = 0L, join = "exact")
 ```
 
 ## Arguments
@@ -43,7 +35,7 @@ apply_mask(
     such as HLS Fmask / Landsat QA_PIXEL, e.g. `qa_bits(0:3)`;
 
   - a function `\(f) ...` -\> a predicate returning a 0/1 (or logical)
-    mask, written in the `g_*` vocabulary.
+    mask, written in the `g_*` vocabulary. NaN reads as clear.
 
 - open:
 
@@ -54,10 +46,6 @@ apply_mask(
 
   Dilation radius (buffer): grows the surviving bad regions outward, a
   safety margin around clouds. `0` skips it. Applied after `open`.
-
-- drop:
-
-  Drop the QA band from the returned dataset? (default `TRUE`.)
 
 - join:
 

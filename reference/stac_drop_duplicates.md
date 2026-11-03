@@ -1,7 +1,9 @@
 # Drop duplicate acquisitions (identical footprint and datetime).
 
 Duplicate items are a known Planetary Computer quirk; equality uses the
-footprint rounded to 4 decimal places plus the datetime, per asset.
+footprint rounded to 4 decimal places plus the datetime, per asset. A
+range-only item (no `datetime`) is dated by its `start_datetime`, as in
+[`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md).
 
 ## Usage
 

@@ -14,7 +14,8 @@ MapNode(
   parents = integer(0),
   grid = GridSpec(),
   role = character(0),
-  fn = function() NULL
+  fn = function() NULL,
+  dtype = character(0)
 )
 ```
 
@@ -45,6 +46,12 @@ MapNode(
 - fn:
 
   Elementwise R function.
+
+- dtype:
+
+  Length-0 (the dtype `fn` was traced to return) or length-1 dtype named
+  by the caller of
+  [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).
 
 ## Value
 

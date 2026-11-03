@@ -1,8 +1,7 @@
-# Focal (stencil) op. `radius` is the halo in pixels; `boundary` is "nodata", the only policy: cells beyond the raster edge are NaN. Created by [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md) and [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md).
+# Focal (stencil) op. `radius` is the halo in pixels; cells beyond the raster edge are NaN. Created by [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md) and [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md).
 
-Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
-"nodata", the only policy: cells beyond the raster edge are NaN. Created
-by
+Focal (stencil) op. `radius` is the halo in pixels; cells beyond the
+raster edge are NaN. Created by
 [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
 and
 [`focal_kernel()`](https://belian-earth.github.io/garry/reference/focal_kernel.md).
@@ -17,7 +16,6 @@ FocalNode(
   role = character(0),
   fn = function() NULL,
   radius = integer(0),
-  boundary = character(0),
   weights = integer(0)
 )
 ```
@@ -53,10 +51,6 @@ FocalNode(
 - radius:
 
   Halo radius in pixels.
-
-- boundary:
-
-  Boundary policy: `"nodata"`.
 
 - weights:
 

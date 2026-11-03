@@ -1,7 +1,7 @@
-# Daemon task body: memory hygiene — trim arenas, optionally evict the jit cache.
+# Daemon task body: memory hygiene: trim arenas, optionally evict the jit cache.
 
 `deep = TRUE` additionally clears the jit cache (forces recompiles: ~1 s
-for map kernels, ~20 s for scans) — reserve it for memory pressure; the
+for map kernels, ~20 s for scans): reserve it for memory pressure; the
 default trim-only pass costs microseconds and gives back what glibc is
 hoarding. Every pass also closes cached Zarr handles, whose decoded
 chunks no trim can return.
@@ -9,7 +9,7 @@ chunks no trim can return.
 ## Usage
 
 ``` r
-.daemon_hygiene(deep = FALSE)
+.daemon_hygiene(deep = FALSE, trim = TRUE)
 ```
 
 ## Arguments
@@ -17,6 +17,11 @@ chunks no trim can return.
 - deep:
 
   Also evict the jit cache?
+
+- trim:
+
+  Also collect and trim? A full collection, about 70 ms a daemon, which
+  a run that only reads has no need of.
 
 ## Value
 

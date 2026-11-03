@@ -11,9 +11,7 @@ grid_from_src(
   x,
   res,
   projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-  ellps = "WGS84",
-  buffer = 0,
-  dtype = "f32"
+  buffer = 0
 )
 ```
 
@@ -29,11 +27,11 @@ grid_from_src(
   a vector, in the chosen projected CRS units (see
   [`grid_from_bbox()`](https://belian-earth.github.io/garry/reference/grid_from_bbox.md)).
 
-- projection, ellps:
+- projection:
 
   Vector sources only; ignored for rasters.
 
-- buffer, dtype:
+- buffer:
 
   As in
   [`grid_from_bbox()`](https://belian-earth.github.io/garry/reference/grid_from_bbox.md).
@@ -47,16 +45,16 @@ A `GridSpec`.
 - **Raster** (GeoTIFF, COG, ...): the source already has a projected CRS
   and footprint, so the grid keeps that native CRS and extent and is
   simply re-gridded to `res` (the extent is snapped out to whole
-  multiples of `res`). `projection`/`ellps` are ignored: reprojecting a
-  raster's own grid would distort it. Use this to coarsen a tile in
-  place, e.g. read a 10 m embedding COG onto a 30 m grid while
-  preserving its geometry.
+  multiples of `res`). `projection` is ignored: reprojecting a raster's
+  own grid would distort it. Use this to coarsen a tile in place, e.g.
+  read a 10 m embedding COG onto a 30 m grid while preserving its
+  geometry.
 
 - **Vector** (GeoJSON, GeoPackage, shapefile, ...): only a footprint is
   known, so a projected CRS is chosen for it and the grid is built
   exactly as
   [`grid_from_bbox()`](https://belian-earth.github.io/garry/reference/grid_from_bbox.md)
-  does, honouring `projection`/`ellps`.
+  does, honouring `projection`.
 
 Remote sources are read via HTTP range requests (header only), so this
 does not download the whole file.

@@ -4,8 +4,14 @@ Grid, dtype, native block size, and file nodata come from GDAL via the
 adapter
 ([`gdal_grid_spec()`](https://belian-earth.github.io/garry/reference/gdal_grid_spec.md)).
 A user-supplied `nodata` overrides the file's. An integer source with
-nodata is promoted to f32 so NaN can carry nodata downstream; the
-sentinel-to-NaN rewrite happens at read time in the adapter.
+nodata is promoted to the float that holds it (f32 up to 16 bits, else
+f64) so NaN can carry nodata downstream; the sentinel-to-NaN rewrite
+happens at read time in the adapter. An integer source without nodata
+has nowhere to put a missing cell, so a compute stage that meets one (a
+failed read, a cell no tile reaches, a cell a warp leaves past the
+source's footprint) fails: declare `nodata` where cells can be missing.
+An Int32 cell holding `-2147483648` reads as missing, `nodata` or not:
+gdalraster returns R integers, and that value is R's `NA_integer_`.
 
 ## Usage
 
@@ -30,7 +36,10 @@ lazy_source(
 
 - path:
 
-  Path or VSI URL readable by GDAL.
+  Path or VSI URL readable by GDAL. A relative path is taken against the
+  working directory here, so a later
+  [`setwd()`](https://rdrr.io/r/base/getwd.html) or a pool started
+  elsewhere reads the same file.
 
 - band:
 
@@ -42,12 +51,16 @@ lazy_source(
 
 - nodata:
 
-  Optional nodata sentinel overriding the file metadata.
+  Optional nodata sentinel replacing the file's: cells holding the
+  file's own sentinel then read as data. A tile index, a source opened
+  with `open_options` or a source given `grid` masks its own sentinel as
+  well.
 
 - open_options:
 
   GDAL open options ("KEY=VALUE"), e.g. a GTI `FILTER` selecting one
-  time slice of a tile index.
+  time slice of a tile index. They apply to one source, and not to a
+  decoded one.
 
 - grid:
 
@@ -73,7 +86,7 @@ lazy_source(
   `v * scale + offset`, applied after the nodata sentinel becomes NaN. A
   length-1 numeric supplies the scale explicitly (with `offset`),
   skipping discovery. Discovery only consults the file: STAC-side
-  metadata is never read.
+  metadata is never read. A band that reports none warns and reads raw.
 
 - offset:
 
@@ -109,8 +122,12 @@ GTI mosaics pinned to a target grid via
 where opening every time slice just to rediscover the grid costs a
 serial remote COG header fetch per slice. `grid` must describe the
 dataset exactly as `path` + `open_options` open it, including the source
-dtype; it is trusted, not checked. With `grid` given, file nodata is NOT
-consulted (pass `nodata` explicitly if the source has a sentinel).
+dtype; it is trusted, not checked. With `grid` given, the file's nodata
+is not read, so pass `nodata` if the source has a sentinel, and pass
+that sentinel: a plain read masks the file's own sentinel whatever the
+node says, and a warp sees only the value given. A warp also opens the
+file: only a source that has been opened can show that it stores the
+same type and row order as the file whose warped VRT it would take.
 
 ## See also
 

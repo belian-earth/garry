@@ -42,9 +42,10 @@ Stage(
 
   The composed stage closure. For "compute" stages it is called as
   `fn(inputs)` with a list of chunk arrays in `input_nodes` order, each
-  padded to the stage halo, and returns the chunk-core array; a
-  "reduce_partial" stage returns a named list of per-chunk partials and
-  "reduce_combine" combines those lists into the final value; for
+  padded to the stage halo, followed by the chunk's cells past the
+  raster when a window reads a member, and returns the chunk-core array;
+  a "reduce_partial" stage returns a named list of per-chunk partials
+  and "reduce_combine" combines those lists into the final value; for
   "source_read" and "warp" stages `fn` is the identity (the executor and
   the GDAL warper supply the values).
 
@@ -93,7 +94,7 @@ Stage(
 - strip_rows:
 
   Rows per strip when `fn` runs a compute stage's members over row
-  strips of each chunk (see `garry.scan_strip_px`); 0 runs the whole
+  strips of each chunk (`.scan_strip_px` cells each); 0 runs the whole
   chunk at once.
 
 ## Value

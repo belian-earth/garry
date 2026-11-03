@@ -11,18 +11,14 @@ central tendency: every distance couples all bands.
 ## Usage
 
 ``` r
-geomedian(iters = 12L, eps = 1e-07)
+geomedian(iters = 12L)
 ```
 
 ## Arguments
 
 - iters:
 
-  Weiszfeld iterations (fixed, unrolled).
-
-- eps:
-
-  Distance regulariser (guards the weight at zero distance).
+  Weiszfeld iterations.
 
 ## Value
 
@@ -32,9 +28,9 @@ A reducer `fn(x, dims)` for
 ## Details
 
 Solved by Weiszfeld iteration (a fixed-point weighted mean, weights
-inverse distance to the current estimate), unrolled to a fixed `iters`
-steps so it compiles to a static kernel. Timesteps with any NaN band are
-ignored; pixels with no valid timestep return NaN.
+inverse distance to the current estimate) for a fixed `iters` steps, so
+it compiles to a static kernel. Timesteps with any NaN band are ignored;
+pixels with no valid timestep return NaN.
 
 The input must be a `(band, t, y, x)` cube: stack each band's
 `(t, y, x)` stack along `"band"`, then reduce over `"t"`; the band axis

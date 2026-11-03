@@ -16,7 +16,7 @@ bodies:
 ## Usage
 
 ``` r
-fill_gaps(x, method = c("ffill", "bfill", "linear"), over = "t")
+fill_gaps(x, method = c("ffill", "bfill", "linear"))
 ```
 
 ## Arguments
@@ -28,10 +28,6 @@ fill_gaps(x, method = c("ffill", "bfill", "linear"), over = "t")
 - method:
 
   `"ffill"`, `"bfill"` or `"linear"`.
-
-- over:
-
-  Axis to fill along (only `"t"` is meaningful today).
 
 ## Value
 

@@ -9,7 +9,7 @@ multi-tile mosaics (e.g. the file form of
 ## Usage
 
 ``` r
-gdal_mosaic_vrt(dst, files, te = NULL, ts = NULL, vrtnodata = NULL)
+gdal_mosaic_vrt(dst, files)
 ```
 
 ## Arguments
@@ -33,8 +33,10 @@ with a warning, any other: a tile stored south-up (positive north-south
 pixel size; every AEF tile, seen 2026-09-25) or a tile in the
 neighbouring UTM zone (ESD tiles on the MGRS grid, which overlaps a zone
 boundary). A skipped tile would be a hole, or with every tile skipped no
-mosaic at all, so a build that lost a source is an error here. Sources
-like that do not belong in a mosaic: the file form of
+mosaic at all, so a build that lost a source is an error here. It also
+averages unequal resolutions and places a tile off the first one's
+pixels by resampling. Sources like these do not belong in a mosaic
+(`.mosaicable()`): the file form of
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 keeps them as a multi-path source node and the warper reads them
 together (`gdal_warp_window()`).

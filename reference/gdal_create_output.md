@@ -3,7 +3,7 @@
 A single non-spatial dim ("t" or "band") maps to bands; more than one is
 an error. A `.tif` destination writes a tiled GTiff; a `.vrt`
 destination writes a raw-BSQ cube (`.bin` + sibling `VRTRawRasterBand`
-VRT — the intermediate format whose reads bypass GDAL's tile machinery;
+VRT: the intermediate format whose reads bypass GDAL's tile machinery;
 see
 [`stage_raw_cube()`](https://belian-earth.github.io/garry/reference/stage_raw_cube.md)).
 
@@ -61,4 +61,5 @@ gdal_create_output(
 
 ## Value
 
-An open dataset object; caller must `$close()`.
+An open dataset object; the caller closes it with `gdal_close_output()`,
+which reports a failed close.

@@ -1,11 +1,11 @@
-# Whole-window model op (advanced): apply `fn` to the raw padded chunk.
+# Whole-window model op (advanced): apply `fn` to the whole padded chunk.
 
 The escape hatch behind model-inference verbs such as
 [`ocm_mask()`](https://belian-earth.github.io/garry/reference/ocm.md):
 where
 [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md)
 materialises a shift list (unusable beyond small radii), a patch op
-hands `fn` the raw window carrying `radius` halo cells per side and
+hands `fn` the whole window carrying `radius` halo cells per side and
 crops the contaminated ring off the result. `fn` must be size-preserving
 on the last two (spatial) dims, derive every size from its input's
 shape, be written in the `g_*` vocabulary, and reduce the leading band
@@ -68,6 +68,9 @@ lazy_patch(
 A `LazyRaster` on the spatial grid (plus `out_bands` bands).
 
 ## Details
+
+Cells beyond the raster edge hold NaN: `x` reads as a float here
+whatever its dtype, and whatever a kernel before this one made of them.
 
 `kernel_id` stands in for `fn` in kernel signatures: give two calls the
 same id ONLY if their fns are interchangeable (same weights, same code).

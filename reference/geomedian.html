@@ -66,7 +66,7 @@ tendency: every distance couples all bands.</p>
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">geomedian</span><span class="op">(</span>iters <span class="op">=</span> <span class="fl">12L</span>, eps <span class="op">=</span> <span class="fl">1e-07</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">geomedian</span><span class="op">(</span>iters <span class="op">=</span> <span class="fl">12L</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -74,11 +74,7 @@ tendency: every distance couples all bands.</p>
 
 
 <dl><dt id="arg-iters">iters<a class="anchor" aria-label="anchor" href="#arg-iters"></a></dt>
-<dd><p>Weiszfeld iterations (fixed, unrolled).</p></dd>
-
-
-<dt id="arg-eps">eps<a class="anchor" aria-label="anchor" href="#arg-eps"></a></dt>
-<dd><p>Distance regulariser (guards the weight at zero distance).</p></dd>
+<dd><p>Weiszfeld iterations.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -88,10 +84,9 @@ tendency: every distance couples all bands.</p>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
     <p>Solved by Weiszfeld iteration (a fixed-point weighted mean,
-weights inverse distance to the current estimate), unrolled to a
-fixed <code>iters</code> steps so it compiles to a static kernel. Timesteps
-with any NaN band are ignored; pixels with no valid timestep return
-NaN.</p>
+weights inverse distance to the current estimate) for a fixed
+<code>iters</code> steps, so it compiles to a static kernel. Timesteps with any
+NaN band are ignored; pixels with no valid timestep return NaN.</p>
 <p>The input must be a <code>(band, t, y, x)</code> cube: stack each band's
 <code>(t, y, x)</code> stack along <code>"band"</code>, then reduce over <code>"t"</code>; the band
 axis survives.</p>

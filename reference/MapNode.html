@@ -62,7 +62,8 @@ at plan time. Created by <code><a href="lazy_map.html">lazy_map()</a></code>.</p
 <span>  parents <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/integer.html" class="external-link">integer</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
 <span>  grid <span class="op">=</span> <span class="fu"><a href="GridSpec.html">GridSpec</a></span><span class="op">(</span><span class="op">)</span>,</span>
 <span>  role <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span>,</span>
-<span>  fn <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="op">)</span> <span class="cn">NULL</span></span>
+<span>  fn <span class="op">=</span> <span class="kw">function</span><span class="op">(</span><span class="op">)</span> <span class="cn">NULL</span>,</span>
+<span>  dtype <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/character.html" class="external-link">character</a></span><span class="op">(</span><span class="fl">0</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -90,6 +91,11 @@ Pure metadata: never read by the planner or executors; surfaced by
 
 <dt id="arg-fn">fn<a class="anchor" aria-label="anchor" href="#arg-fn"></a></dt>
 <dd><p>Elementwise R function.</p></dd>
+
+
+<dt id="arg-dtype">dtype<a class="anchor" aria-label="anchor" href="#arg-dtype"></a></dt>
+<dd><p>Length-0 (the dtype <code>fn</code> was traced to return) or length-1
+dtype named by the caller of <code><a href="lazy_map.html">lazy_map()</a></code>.</p></dd>
 
 </dl></div>
     <div class="section level2">

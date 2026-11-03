@@ -20,7 +20,8 @@ paths hand the same request to the same GDAL resampler.
   band = 1L,
   nodata = numeric(0),
   partial = FALSE,
-  decode = FALSE
+  decode = FALSE,
+  src_grid = NULL
 )
 ```
 
@@ -51,8 +52,9 @@ paths hand the same request to the same GDAL resampler.
 
 - nodata:
 
-  The source node's sentinel (length 0 or 1). Averaging declines unless
-  the file declares the same value.
+  The source node's sentinel (length 0 or 1). A resampling read declines
+  unless the file declares the same value; on the source's own pixels,
+  unless the file declares none.
 
 - partial:
 
@@ -67,6 +69,12 @@ paths hand the same request to the same GDAL resampler.
   `TRUE` for the codes behind a decoded source (`.gdal_read_decoded()`):
   integer bands qualify for `"near"` and `"average"`, the two reads that
   decode applies itself, and no others.
+
+- src_grid:
+
+  The source node's
+  [`GridSpec()`](https://belian-earth.github.io/garry/reference/GridSpec.md),
+  which can decline without opening the file.
 
 ## Value
 
@@ -91,7 +99,9 @@ band type itself, and under GDAL 3.13.1 on ARM (new NEON float-\>int
 conversion paths) RasterIO and the warper round .5 ties in opposite
 directions – every tie came back +1 DN through the fast path on the
 macOS CI runners. Identity is the contract, so integer bands take the
-fast path only for NEAREST, where no rounding happens.
+fast path only where no rounding happens: for NEAREST, and for a kernel
+that returns the source cell on the source's own pixels
+(`.rio_cell_kernels`).
 
 A south-up source (positive y pixel size: every AEF tile) stores its
 rows from the south. A target on its own pixels is still a window of it,

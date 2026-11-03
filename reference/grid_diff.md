@@ -10,7 +10,7 @@ error.
 ## Usage
 
 ``` r
-grid_diff(a, b, tol = 1e-09)
+grid_diff(a, b)
 ```
 
 ## Arguments
@@ -18,11 +18,6 @@ grid_diff(a, b, tol = 1e-09)
 - a, b:
 
   `GridSpec` objects.
-
-- tol:
-
-  Numeric tolerance, as in
-  [`grid_equal()`](https://belian-earth.github.io/garry/reference/grid_equal.md).
 
 ## Value
 

@@ -57,9 +57,7 @@
 <span>  assets <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  mask_asset <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  granularity <span class="op">=</span> <span class="st">"day"</span>,</span>
-<span>  sort_field <span class="op">=</span> <span class="st">"datetime"</span>,</span>
 <span>  nodata <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  lon <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  resampling <span class="op">=</span> <span class="st">"near"</span>,</span>
 <span>  scale <span class="op">=</span> <span class="cn">FALSE</span>,</span>
 <span>  offset <span class="op">=</span> <span class="cn">NULL</span>,</span>
@@ -100,28 +98,26 @@ alongside the value assets and used as the default <code>from</code> in <code><a
 <dd><p>Time-slice granularity (see <code><a href="stac_time_slices.html">stac_time_slices()</a></code>).</p></dd>
 
 
-<dt id="arg-sort-field">sort_field<a class="anchor" aria-label="anchor" href="#arg-sort-field"></a></dt>
-<dd><p>Index field ordering overlaps within a slice.</p></dd>
-
-
 <dt id="arg-nodata">nodata<a class="anchor" aria-label="anchor" href="#arg-nodata"></a></dt>
 <dd><p>Nodata handling: <code>NULL</code> (per-band file metadata), a scalar
 (applied to every asset), or a named numeric keyed by dataset band name
-or by asset (a band name wins; unnamed bands fall back to file
-metadata). An asset key covers every band of a multi-band asset. Reflectance and QA bands usually need
-different sentinels, so the named form is typical, e.g.
-<code>c(B04 = -9999, B03 = -9999, Fmask = 255)</code>.</p></dd>
-
-
-<dt id="arg-lon">lon<a class="anchor" aria-label="anchor" href="#arg-lon"></a></dt>
-<dd><p>Longitude for <code>granularity = "solar_day"</code> (see
-<code><a href="stac_time_slices.html">stac_time_slices()</a></code>).</p></dd>
+or by asset (a band name wins; bands with no key fall back to file
+metadata). An asset key covers every band of a multi-band asset, and a
+key that names no band or asset of the source aborts. Reflectance and
+QA bands usually need different sentinels, so the named form is
+typical, e.g.
+<code>c(B04 = -9999, B03 = -9999, Fmask = 255)</code>. In the file form a
+sentinel replaces the file's own, whose cells then read as data. In
+the table form the tiles' own sentinel stays masked as well, since
+each slice's mosaic is built on it, and <code><a href="align_to.html">align_to()</a></code> refuses such a
+band.</p></dd>
 
 
 <dt id="arg-resampling">resampling<a class="anchor" aria-label="anchor" href="#arg-resampling"></a></dt>
-<dd><p>GDAL resampling for the warp-on-read onto <code>grid</code>: a scalar
+<dd><p>GDAL resampling for the warp-on-read onto <code>grid</code>, or
+onto the grid of several sources kept apart: a scalar
 (every value band) or a named character keyed by dataset band name or
-by asset, as for <code>nodata</code> (unnamed bands fall back to <code>"near"</code>). <code>mask_asset</code> is always read <code>"near"</code> regardless, since
+by asset, as for <code>nodata</code> (bands with no key fall back to <code>"near"</code>). <code>mask_asset</code> is always read <code>"near"</code> regardless, since
 interpolating packed QA bits corrupts them. <code>"near"</code> (the default)
 preserves exact source values; use <code>"bilinear"</code>, <code>"average"</code>, <code>"cubic"</code>,
 ... to interpolate. Resample after the fact instead with <code><a href="align_to.html">align_to()</a></code>.</p></dd>
@@ -138,13 +134,14 @@ after the nodata sentinel becomes NaN. A scalar or named numeric
 explicitly. Discovery only consults the files themselves: STAC
 metadata is never read, so collections
 whose files carry no scaling metadata (e.g. Planetary Computer
-Sentinel-2 L2A) read raw and scale explicitly instead.
+Sentinel-2 L2A) warn, read raw and need scaling explicitly.
 <code>mask_asset</code> is never scaled.</p></dd>
 
 
 <dt id="arg-offset">offset<a class="anchor" aria-label="anchor" href="#arg-offset"></a></dt>
-<dd><p>Explicit additive offset(s) (scalar or named by asset)
-used when <code>scale</code> is numeric; defaults to 0. Ignored when <code>scale</code> is
+<dd><p>Explicit additive offset(s) (scalar or named by band or
+asset) used when <code>scale</code> is numeric; defaults to 0. A band with an
+offset and no scale of its own takes scale 1. Ignored when <code>scale</code> is
 logical.</p></dd>
 
 
@@ -196,7 +193,10 @@ the asset's name. Every band of a multi-band asset (e.g. a SAR product
 packing several polarisations into one COG) becomes its own dataset
 band, named <code>&lt;asset&gt;_&lt;description&gt;</code>, or <code>&lt;asset&gt;_b&lt;index&gt;</code> when the
 file carries no band descriptions; <code>bands</code> selects and renames them.</p></li>
-<li><p>a character path (or vector of same-CRS tile paths, mosaicked): one band
+<li><p>a character path, or a vector of tile paths (mosaicked where they
+share a CRS and one pixel lattice, kept apart and warped together
+otherwise; tiles off that lattice need <code>grid</code>, and tiles kept apart
+must agree on dtype and on any nodata they declare): one band
 per file band, one time slice. This is the multi-band raster entry –
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 GDAL driver, any multi-band file GDAL reads. Each band is its own

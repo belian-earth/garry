@@ -425,7 +425,7 @@
           <code><a href="lazy_patch.html">lazy_patch()</a></code>
 
         </dt>
-        <dd>Whole-window model op (advanced): apply <code>fn</code> to the raw padded chunk.</dd>
+        <dd>Whole-window model op (advanced): apply <code>fn</code> to the whole padded chunk.</dd>
 
         <dt>
 
@@ -497,7 +497,7 @@
           <code><a href="garry_daemons_set.html">garry_daemons_set()</a></code>
 
         </dt>
-        <dd>Are the garry daemon pools running?</dd>
+        <dd>Are the garry daemon pools set?</dd>
 
         <dt>
 
@@ -1004,7 +1004,7 @@
           <code><a href="FocalNode.html">FocalNode()</a></code>
 
         </dt>
-        <dd>Focal (stencil) op. <code>radius</code> is the halo in pixels; <code>boundary</code> is "nodata", the only policy: cells beyond the raster edge are NaN. Created by <code><a href="../reference/focal_map.html">focal_map()</a></code> and <code><a href="../reference/focal_kernel.html">focal_kernel()</a></code>.</dd>
+        <dd>Focal (stencil) op. <code>radius</code> is the halo in pixels; cells beyond the raster edge are NaN. Created by <code><a href="../reference/focal_map.html">focal_map()</a></code> and <code><a href="../reference/focal_kernel.html">focal_kernel()</a></code>.</dd>
 
         <dt>
 
@@ -1033,13 +1033,6 @@
 
         </dt>
         <dd>Combine inputs along a named dim (e.g. time). Created by <code><a href="../reference/lazy_stack.html">lazy_stack()</a></code>.</dd>
-
-        <dt>
-
-          <code><a href="FusedNode.html">FusedNode()</a></code>
-
-        </dt>
-        <dd>Output of the composition pass. Holds a composed R function assembled from its members; ready for <code><a href="https://r-xla.github.io/anvl/reference/jit.html" class="external-link">anvl::jit()</a></code> at execution time.</dd>
 
         <dt>
 
@@ -1127,20 +1120,6 @@
 
         <dt>
 
-          <code><a href="fusable.html">fusable()</a></code>
-
-        </dt>
-        <dd>Can this node be composed with fusable neighbours into a single kernel?</dd>
-
-        <dt>
-
-          <code><a href="is_barrier.html">is_barrier()</a></code>
-
-        </dt>
-        <dd>Does this node force a stage boundary?</dd>
-
-        <dt>
-
           <code><a href="required_halo.html">required_halo()</a></code>
 
         </dt>
@@ -1159,13 +1138,6 @@
 
         </dt>
         <dd>Expand a chunk window by the ChunkGrid's halo, clipped to the grid.</dd>
-
-        <dt>
-
-          <code><a href="cross_grid_window.html">cross_grid_window()</a></code>
-
-        </dt>
-        <dd>Map an output-chunk window on <code>out_grid</code> to the minimal input window required on <code>in_grid</code>.</dd>
       </dl></div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside></div>

@@ -130,7 +130,11 @@ supported route: <code>align_to(materialise(x, dir), grid)</code>.</p>
 cubes hold floats only. A raster with a <code>t</code> or <code>band</code> axis comes back
 stacked along that axis with its labels. Existing files are refused unless <code>overwrite = TRUE</code>:
 the graph may have changed since they were written, and silently
-reusing stale pixels is the failure mode a checkpoint must not have.</p>
+reusing stale pixels is the failure mode a checkpoint must not have.
+As for every write (see <code><a href="write_tif.html">write_tif()</a></code>), the files build in a hidden
+<code>.garry-write-XXXX</code> directory beside the target and replace it only when
+the whole run has succeeded, so <code>x</code> may read the checkpoint it replaces,
+and a failed run leaves it as it was.</p>
 <p><code>dir</code> defaults to a fresh unique directory under the session's
 <code><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir()</a></code>, announced by a message: convenient, but session-scoped
 (the files vanish when R exits), and every call writes a NEW copy,

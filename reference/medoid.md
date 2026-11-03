@@ -12,18 +12,14 @@ at all.
 ## Usage
 
 ``` r
-medoid(iters = 12L, eps = 1e-07)
+medoid(iters = 12L)
 ```
 
 ## Arguments
 
 - iters:
 
-  Weiszfeld iterations (fixed, unrolled).
-
-- eps:
-
-  Distance regulariser (guards the weight at zero distance).
+  Weiszfeld iterations.
 
 ## Value
 

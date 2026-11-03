@@ -1,7 +1,8 @@
 # Reductions over array margins.
 
-`g_sum` accumulates 8- and 16-bit integers in i32 (32-bit unsigned in
-i64), so a sum does not wrap at the input type's range.
+`g_sum` accumulates 8- and 16-bit integers in i32 and 32-bit integers in
+i64, so a sum does not wrap at the input type's range. `g_mean` averages
+integers in f32.
 
 ## Usage
 

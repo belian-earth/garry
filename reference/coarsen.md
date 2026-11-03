@@ -10,7 +10,7 @@ averaged to 30 m,
 ## Usage
 
 ``` r
-coarsen(x, factor, fun = "mean")
+coarsen(x, factor)
 ```
 
 ## Arguments
@@ -22,10 +22,6 @@ coarsen(x, factor, fun = "mean")
 - factor:
 
   Integer block size (\>= 1).
-
-- fun:
-
-  Block statistic; only `"mean"`.
 
 ## Value
 

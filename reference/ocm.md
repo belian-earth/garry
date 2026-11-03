@@ -101,7 +101,13 @@ carry full spatial context (OmniCloudMask itself blends overlapping
 patches; garry crops instead). The per-window normalisation makes
 results inherently window-dependent, exactly as OmniCloudMask's are
 patch-dependent, so expect class agreement with the Python
-implementation, not bit identity, except in the single-chunk case.
+implementation, not bit identity. The kernel on an array is bit
+identical to Python; `ocm_predict()` is not, even on one chunk, because
+a chunk's window carries a NaN ring past the raster's edge. Real scenes
+showed the ring changing the outer 8 to 16 px, so a result near a raster
+edge improves if the read grows by `halo` and the output is cropped
+back. OmniCloudMask's Python default takes a cell of 0 as nodata, and
+garry classifies it as any other: mask such fill first.
 
 Weights are the OmniCloudMask authors'
 (<https://github.com/DPIRD-DMA/OmniCloudMask>) and are not distributed

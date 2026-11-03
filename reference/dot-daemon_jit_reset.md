@@ -1,7 +1,7 @@
 # Daemon task body: start a run with a fresh jit cache on macOS.
 
 Reusing a daemon's cached JitFunction across RUNS stalls on macOS: the
-same family as the host-cache slowdown gated in `.exec_cached_jit`
+same family as the host-cache slowdown gated in `.host_kernel`
 (test-kernel-cache tripwire, run 33505350958) and the fused-on-reader
 hang (test-compute-on-read). It surfaced on the daemons once kernel
 signatures became stable across plans (`.fn_identity`, 2026-09-07): the

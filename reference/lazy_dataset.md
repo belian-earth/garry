@@ -11,9 +11,7 @@ lazy_dataset(
   assets = NULL,
   mask_asset = NULL,
   granularity = "day",
-  sort_field = "datetime",
   nodata = NULL,
-  lon = NULL,
   resampling = "near",
   scale = FALSE,
   offset = NULL,
@@ -58,33 +56,31 @@ lazy_dataset(
   Time-slice granularity (see
   [`stac_time_slices()`](https://belian-earth.github.io/garry/reference/stac_time_slices.md)).
 
-- sort_field:
-
-  Index field ordering overlaps within a slice.
-
 - nodata:
 
   Nodata handling: `NULL` (per-band file metadata), a scalar (applied to
   every asset), or a named numeric keyed by dataset band name or by
-  asset (a band name wins; unnamed bands fall back to file metadata). An
-  asset key covers every band of a multi-band asset. Reflectance and QA
-  bands usually need different sentinels, so the named form is typical,
-  e.g. `c(B04 = -9999, B03 = -9999, Fmask = 255)`.
-
-- lon:
-
-  Longitude for `granularity = "solar_day"` (see
-  [`stac_time_slices()`](https://belian-earth.github.io/garry/reference/stac_time_slices.md)).
+  asset (a band name wins; bands with no key fall back to file
+  metadata). An asset key covers every band of a multi-band asset, and a
+  key that names no band or asset of the source aborts. Reflectance and
+  QA bands usually need different sentinels, so the named form is
+  typical, e.g. `c(B04 = -9999, B03 = -9999, Fmask = 255)`. In the file
+  form a sentinel replaces the file's own, whose cells then read as
+  data. In the table form the tiles' own sentinel stays masked as well,
+  since each slice's mosaic is built on it, and
+  [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
+  refuses such a band.
 
 - resampling:
 
-  GDAL resampling for the warp-on-read onto `grid`: a scalar (every
-  value band) or a named character keyed by dataset band name or by
-  asset, as for `nodata` (unnamed bands fall back to `"near"`).
-  `mask_asset` is always read `"near"` regardless, since interpolating
-  packed QA bits corrupts them. `"near"` (the default) preserves exact
-  source values; use `"bilinear"`, `"average"`, `"cubic"`, ... to
-  interpolate. Resample after the fact instead with
+  GDAL resampling for the warp-on-read onto `grid`, or onto the grid of
+  several sources kept apart: a scalar (every value band) or a named
+  character keyed by dataset band name or by asset, as for `nodata`
+  (bands with no key fall back to `"near"`). `mask_asset` is always read
+  `"near"` regardless, since interpolating packed QA bits corrupts them.
+  `"near"` (the default) preserves exact source values; use
+  `"bilinear"`, `"average"`, `"cubic"`, ... to interpolate. Resample
+  after the fact instead with
   [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md).
 
 - scale:
@@ -98,13 +94,14 @@ lazy_dataset(
   as for `nodata`) supplies scales explicitly. Discovery only consults
   the files themselves: STAC metadata is never read, so collections
   whose files carry no scaling metadata (e.g. Planetary Computer
-  Sentinel-2 L2A) read raw and scale explicitly instead. `mask_asset` is
-  never scaled.
+  Sentinel-2 L2A) warn, read raw and need scaling explicitly.
+  `mask_asset` is never scaled.
 
 - offset:
 
-  Explicit additive offset(s) (scalar or named by asset) used when
-  `scale` is numeric; defaults to 0. Ignored when `scale` is logical.
+  Explicit additive offset(s) (scalar or named by band or asset) used
+  when `scale` is numeric; defaults to 0. A band with an offset and no
+  scale of its own takes scale 1. Ignored when `scale` is logical.
 
 - bands:
 
@@ -159,11 +156,14 @@ A `LazyDataset`.
   `<asset>_<description>`, or `<asset>_b<index>` when the file carries
   no band descriptions; `bands` selects and renames them.
 
-- a character path (or vector of same-CRS tile paths, mosaicked): one
-  band per file band, one time slice. This is the multi-band raster
-  entry – geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr
-  via the GDAL driver, any multi-band file GDAL reads. Each band is its
-  own source, so reads of a band-interleaved file fan out band-by-band
+- a character path, or a vector of tile paths (mosaicked where they
+  share a CRS and one pixel lattice, kept apart and warped together
+  otherwise; tiles off that lattice need `grid`, and tiles kept apart
+  must agree on dtype and on any nodata they declare): one band per file
+  band, one time slice. This is the multi-band raster entry –
+  geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
+  GDAL driver, any multi-band file GDAL reads. Each band is its own
+  source, so reads of a band-interleaved file fan out band-by-band
   across the reader pool (per-band tasks through per-daemon handles: the
   measured fastest remote shape, design/gdal-multiband-fanout.md). When
   the bands share storage (a pixel-interleaved file, a Zarr chunk

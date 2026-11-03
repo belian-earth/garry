@@ -61,9 +61,7 @@ returns a ready <code>GridSpec</code>.</p>
 <span>  <span class="va">bbox</span>,</span>
 <span>  <span class="va">res</span>,</span>
 <span>  projection <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"laea"</span>, <span class="st">"aeqd"</span>, <span class="st">"utm"</span>, <span class="st">"pconic"</span>, <span class="st">"eqdc"</span><span class="op">)</span>,</span>
-<span>  ellps <span class="op">=</span> <span class="st">"WGS84"</span>,</span>
-<span>  buffer <span class="op">=</span> <span class="fl">0</span>,</span>
-<span>  dtype <span class="op">=</span> <span class="st">"f32"</span></span>
+<span>  buffer <span class="op">=</span> <span class="fl">0</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -84,16 +82,8 @@ supported projections); a scalar, or <code>c(xres, yres)</code>.</p></dd>
 <dd><p>Projection family; the first is the default (see Details).</p></dd>
 
 
-<dt id="arg-ellps">ellps<a class="anchor" aria-label="anchor" href="#arg-ellps"></a></dt>
-<dd><p>Ellipsoid for the centred projections.</p></dd>
-
-
 <dt id="arg-buffer">buffer<a class="anchor" aria-label="anchor" href="#arg-buffer"></a></dt>
 <dd><p>Extent padding in projected units, applied before snapping.</p></dd>
-
-
-<dt id="arg-dtype">dtype<a class="anchor" aria-label="anchor" href="#arg-dtype"></a></dt>
-<dd><p>Grid dtype.</p></dd>
 
 </dl></div>
     <div class="section level2">

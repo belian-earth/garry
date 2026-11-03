@@ -2,9 +2,9 @@
 
 The registry surface for the flat `garry.*` option namespace: one row
 per option with its tier (`user` day-one switches, `tuning`
-budgets/targets, `calibration` cost-model constants), package default,
-current session value and a one-line description. Values are validated
-against the same registry when execution starts.
+budgets/targets), package default, current session value and a one-line
+description. Values are validated against the same registry when
+execution starts.
 
 ## Usage
 

@@ -1,12 +1,11 @@
 # Daemon task body: pre-compile the pipeline lean kernels.
 
 Runs on each compute-pool daemon while the read pool owns the fetch
-drain: get-or-create each spec's JitFunction under the same `ck` the
-real band tasks use, then execute once per strip height on `g_fill`
-dummies (the fill is represented in the program — no host bytes move) so
-the XLA compile never lands on the post-fetch tail. Failures fall back
-to the plain client wake; warm-up is an optimisation, never a
-correctness dependency.
+drain, so the XLA compile never lands on the post-fetch tail. A program
+compiles every strip height and runs nothing. A closure compiles only by
+running, once per strip height on `g_fill` dummies, each as much memory
+as a real strip. A failure raises: the host reports it, and a band task
+compiles the kernel.
 
 ## Usage
 
@@ -18,8 +17,9 @@ correctness dependency.
 
 - specs:
 
-  List of kernel specs: `ck`, `F`, `op`, `nan_rm`, `affine`, `masked`,
-  `dev`, `n` slice count, `hs` strip heights, `nx`.
+  List of kernel specs: `ck`, `set` the program set, or `F` and `reduce`
+  for a closure, `op`, `nan_rm`, `affine`, `masked`, `dev`, `n` slice
+  count, `hs` strip heights, `nx`.
 
 ## Value
 

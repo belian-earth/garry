@@ -60,15 +60,7 @@ across all value bands.</p>
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">apply_mask</span><span class="op">(</span></span>
-<span>  <span class="va">x</span>,</span>
-<span>  from <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  <span class="va">where</span>,</span>
-<span>  open <span class="op">=</span> <span class="fl">0L</span>,</span>
-<span>  dilate <span class="op">=</span> <span class="fl">0L</span>,</span>
-<span>  drop <span class="op">=</span> <span class="cn">TRUE</span>,</span>
-<span>  join <span class="op">=</span> <span class="st">"exact"</span></span>
-<span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">apply_mask</span><span class="op">(</span><span class="va">x</span>, from <span class="op">=</span> <span class="cn">NULL</span>, <span class="va">where</span>, open <span class="op">=</span> <span class="fl">0L</span>, dilate <span class="op">=</span> <span class="fl">0L</span>, join <span class="op">=</span> <span class="st">"exact"</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -91,7 +83,7 @@ e.g. <code>c(0, 1, 2, 3, 8, 9, 10, 11)</code>;</p></li>
 <li><p><code><a href="qa_bits.html">qa_bits()</a></code> -&gt; a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. <code>qa_bits(0:3)</code>;</p></li>
 <li><p>a function <code>\(f) ...</code> -&gt; a predicate returning a 0/1 (or logical)
-mask, written in the <code>g_*</code> vocabulary.</p></li>
+mask, written in the <code>g_*</code> vocabulary. NaN reads as clear.</p></li>
 </ul></dd>
 
 
@@ -103,10 +95,6 @@ removing isolated flagged pixels up to the radius. <code>0</code> skips it.</p><
 <dt id="arg-dilate">dilate<a class="anchor" aria-label="anchor" href="#arg-dilate"></a></dt>
 <dd><p>Dilation radius (buffer): grows the surviving bad regions
 outward, a safety margin around clouds. <code>0</code> skips it. Applied after <code>open</code>.</p></dd>
-
-
-<dt id="arg-drop">drop<a class="anchor" aria-label="anchor" href="#arg-drop"></a></dt>
-<dd><p>Drop the QA band from the returned dataset? (default <code>TRUE</code>.)</p></dd>
 
 
 <dt id="arg-join">join<a class="anchor" aria-label="anchor" href="#arg-join"></a></dt>

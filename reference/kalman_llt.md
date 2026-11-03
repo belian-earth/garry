@@ -23,7 +23,6 @@ kalman_llt(
   robust_iters = 0L,
   robust_threshold = 3,
   robust_inflation = 100,
-  kappa = 1e+07,
   dtype = "f32"
 )
 ```
@@ -53,10 +52,6 @@ kalman_llt(
 - robust_threshold, robust_inflation:
 
   Robust loop constants.
-
-- kappa:
-
-  Diffuse-initialisation variance.
 
 - dtype:
 

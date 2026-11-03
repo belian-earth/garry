@@ -71,7 +71,11 @@ cubes hold floats only. A raster with a `t` or `band` axis comes back
 stacked along that axis with its labels. Existing files are refused
 unless `overwrite = TRUE`: the graph may have changed since they were
 written, and silently reusing stale pixels is the failure mode a
-checkpoint must not have.
+checkpoint must not have. As for every write (see
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)),
+the files build in a hidden `.garry-write-XXXX` directory beside the
+target and replace it only when the whole run has succeeded, so `x` may
+read the checkpoint it replaces, and a failed run leaves it as it was.
 
 `dir` defaults to a fresh unique directory under the session's
 [`tempdir()`](https://rdrr.io/r/base/tempfile.html), announced by a

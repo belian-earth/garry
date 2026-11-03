@@ -37,8 +37,9 @@ gives all the sources together.
 
 - nodata:
 
-  The source node's sentinel (length 0 or 1). Averaging declines unless
-  the file declares the same value.
+  The source node's sentinel (length 0 or 1). A resampling read declines
+  unless the file declares the same value; on the source's own pixels,
+  unless the file declares none.
 
 ## Value
 

@@ -12,7 +12,7 @@ g_ifelse(cond, yes, no)
 
 - cond:
 
-  Logical array.
+  Logical array, or a stored 0/1 mask: nonzero is true.
 
 - yes, no:
 

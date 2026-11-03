@@ -23,9 +23,16 @@ lazy-verb layer
 ([`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md),
 [`focal_map()`](https://belian-earth.github.io/garry/reference/focal_map.md),
 [`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md),
-and friends) reaches neither backend: building a pipeline touches no
-data and compiles nothing. Second, everything that does reach anvl or
-GDAL funnels through the execution verbs
+and friends) never reaches GDAL, and reaches anvl only to read a
+kernel’s output dtype: an abstract trace when
+[`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)
+or
+[`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
+has no `dtype`, or
+[`reduce_over()`](https://belian-earth.github.io/garry/reference/reduce_over.md)
+has a custom reducer. Building a pipeline touches no data and compiles
+nothing. Second, everything else that reaches anvl or GDAL funnels
+through the execution verbs
 ([`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
 [`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md),
 [`preview()`](https://belian-earth.github.io/garry/reference/preview.md),

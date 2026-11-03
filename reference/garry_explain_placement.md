@@ -12,12 +12,7 @@ do with this topology" without daemons running.
 ## Usage
 
 ``` r
-garry_explain_placement(
-  x,
-  read = NULL,
-  compute = NULL,
-  mode = garry_opt("placement")
-)
+garry_explain_placement(x, read = NULL, compute = NULL)
 ```
 
 ## Arguments
@@ -30,10 +25,6 @@ garry_explain_placement(
 
   Pool widths to assume; default = the live pools (0 when none are
   running).
-
-- mode:
-
-  `"rules"` or `"cost"`; default `garry_opt("placement")`.
 
 ## Value
 

@@ -2,26 +2,13 @@
 
 The fetch half of the fetch/assemble split: a plain
 `gdal_translate -srcwin` of the window intersecting the target extent
-(plus a warp-kernel margin), remote COG to local tmpfs, native dtype and
-blocks; no warp, no mosaic on the remote path. On failure with
-`garry.read_fail = "nodata"`, writes a small all-nodata placeholder
-covering the window so the local mosaic reads a hole instead of erroring
-(Int16 when a nodata sentinel is declared, Byte 255 otherwise, the HLS
-QA convention).
+(plus a warp-kernel margin, `.fetch_margin`), remote COG to local tmpfs,
+native dtype and blocks; no warp, no mosaic on the remote path.
 
 ## Usage
 
 ``` r
-.daemon_fetch_window(
-  location,
-  out_file,
-  ext,
-  crs,
-  nodata = numeric(0),
-  margin = 8L,
-  target_res = NULL,
-  nbands = 1L
-)
+.daemon_fetch_window(location, out_file, ext, crs, target_res = NULL)
 ```
 
 ## Arguments
@@ -38,17 +25,9 @@ QA convention).
 
   Target extent and CRS defining the window.
 
-- nodata:
+- target_res:
 
-  Optional sentinel for the failure placeholder.
-
-- margin:
-
-  Source-pixel margin around the window.
-
-- nbands:
-
-  Source band count, for the failure placeholder.
+  Target x resolution: a coarser grid decimates the fetch.
 
 ## Value
 

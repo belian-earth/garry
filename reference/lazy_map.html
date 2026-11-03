@@ -82,7 +82,11 @@ automatically.</p>
 
 
 <dt id="arg-dtype">dtype<a class="anchor" aria-label="anchor" href="#arg-dtype"></a></dt>
-<dd><p>Optional output dtype override.</p></dd>
+<dd><p>Optional output dtype. Given, <code>fn</code> is not traced when the
+raster is built, so a kernel that only traces at chunk time can use it.
+Left out, it is what <code>fn</code> returns. Unsigned inputs compute in a wider
+signed dtype (<code>u8</code> in <code>i16</code>, <code>u16</code> in <code>i32</code>), so <code>fn</code> over them returns
+that unless told otherwise.</p></dd>
 
 
 <dt id="arg-bands">bands<a class="anchor" aria-label="anchor" href="#arg-bands"></a></dt>
@@ -95,9 +99,13 @@ automatically.</p>
     </div>
     <div class="section level2">
     <h2 id="details">Details<a class="anchor" aria-label="anchor" href="#details"></a></h2>
-    <p>The output dtype defaults to the promoted input dtype; pass
-<code>dtype</code> when <code>fn</code> changes the value domain, e.g. <code>"f32"</code> for a mask
-that introduces NaN over an integer band.</p>
+    <p>The output dtype is the dtype <code>fn</code> returns, found by tracing it on
+abstract inputs (nothing runs and nothing compiles). <code>dtype</code> overrides
+it: the kernel's output is cast to <code>dtype</code>, which truncates a float to
+an integer dtype and saturates at the ends of an unsigned one, and
+everything downstream reads the cast value. A
+kernel returning a logical stores 0/1 at the promoted input dtype, and
+<code><a href="g_ifelse.html">g_ifelse()</a></code> reads such a mask with nonzero as true.</p>
 <p>Over a <code>LazyDataset</code>, <code>fn</code> is applied to every value band (a single dataset
 input only); <code>bands</code> restricts which bands, and non-selected bands pass
 through unchanged.</p>

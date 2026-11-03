@@ -97,9 +97,12 @@ Click a node to highlight its one-hop neighbourhood, use the dropdowns
 to jump to a function or filter a subsystem, and scroll to zoom.</p>
 <p>Two things are worth reading directly off this graph. First, the
 lazy-verb layer (<code><a href="../reference/lazy_map.html">lazy_map()</a></code>, <code><a href="../reference/focal_map.html">focal_map()</a></code>,
-<code><a href="../reference/reduce_over.html">reduce_over()</a></code>, and friends) reaches neither backend:
-building a pipeline touches no data and compiles nothing. Second,
-everything that does reach anvl or GDAL funnels through the execution
+<code><a href="../reference/reduce_over.html">reduce_over()</a></code>, and friends) never reaches GDAL, and reaches
+anvl only to read a kernel’s output dtype: an abstract trace when
+<code><a href="../reference/lazy_map.html">lazy_map()</a></code> or <code><a href="../reference/scan_over.html">scan_over()</a></code> has no
+<code>dtype</code>, or <code><a href="../reference/reduce_over.html">reduce_over()</a></code> has a custom reducer.
+Building a pipeline touches no data and compiles nothing. Second,
+everything else that reaches anvl or GDAL funnels through the execution
 verbs (<code><a href="../reference/collect.html">collect()</a></code>, <code><a href="../reference/materialise.html">materialise()</a></code>,
 <code><a href="../reference/preview.html">preview()</a></code>, <code><a href="../reference/write_tif.html">write_tif()</a></code>), which is the lazy
 contract made visible.</p>

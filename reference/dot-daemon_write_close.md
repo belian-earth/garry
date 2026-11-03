@@ -1,6 +1,6 @@
 # Daemon task body: close every output the writer holds open.
 
-Returns the close errors, named by output path (empty when all closed).
+Internal; daemons reach it through `asNamespace("garry")`.
 
 ## Usage
 
@@ -10,8 +10,4 @@ Returns the close errors, named by output path (empty when all closed).
 
 ## Value
 
-`NULL`, invisibly.
-
-## Details
-
-Internal; daemons reach it through `asNamespace("garry")`.
+The close failures, named by output path (empty when all closed).

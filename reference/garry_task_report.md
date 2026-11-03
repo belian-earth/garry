@@ -1,6 +1,6 @@
 # Summarise a `garry.task_log` CSV.
 
-Summarises the task log CSV the distributed scheduler writes when the
+Summarises the task log CSV the distributed routes write when the
 `garry.task_log` option is set (see
 [`garry_options()`](https://belian-earth.github.io/garry/reference/garry_options.md);
 schema `time,event,key,pool,slot,mb,store_mb,ready`): per-stage task
@@ -22,7 +22,7 @@ garry_task_report(path)
 
 - path:
 
-  Path to a task-log CSV written by the scheduler.
+  Path to a task-log CSV written by a distributed run.
 
 ## Value
 

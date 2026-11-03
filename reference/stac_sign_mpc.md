@@ -13,7 +13,7 @@ instead of one per item. Use it in place of `rstac::items_sign()` after
 ## Usage
 
 ``` r
-stac_sign_mpc(items, subscription_key = Sys.getenv("MPC_TOKEN", unset = NA))
+stac_sign_mpc(items)
 ```
 
 ## Arguments
@@ -23,14 +23,15 @@ stac_sign_mpc(items, subscription_key = Sys.getenv("MPC_TOKEN", unset = NA))
   An rstac `doc_items` from
   [`stac_query()`](https://belian-earth.github.io/garry/reference/stac_query.md).
 
-- subscription_key:
-
-  Optional MPC subscription key (defaults to the `MPC_TOKEN` environment
-  variable). Not required for public data.
-
 ## Value
 
 `items` with every asset href signed.
+
+## Details
+
+An MPC subscription key, not required for public data, is read from the
+`MPC_TOKEN` environment variable, here and whenever a long run re-signs
+an expiring href.
 
 ## See also
 

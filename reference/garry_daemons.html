@@ -14,9 +14,8 @@ wide read pool keeps the network drain full) and compute = a
 third of the logical cores, capped at 8 with a floor of 2; on CUDA
 the compute pool is 2, since concurrent clients share one card.
 collect(distributed = TRUE) detects the pools automatically and
-pre-compiles stage kernels at run start
-(garry_opt(&quot;jit_warmup&quot;)), scan kernels included, targeted at
-the garry_opt(&quot;scan_profiles&quot;) designated profiles only."><meta property="og:description" content="Two pools instead of one: read daemons execute source/warp read
+pre-compiles stage kernels on idle daemons at run start, scan kernels
+on the garry_opt(&quot;scan_profiles&quot;) designated profiles only."><meta property="og:description" content="Two pools instead of one: read daemons execute source/warp read
 tasks (and any kernels the placement pass fuses onto them), while
 compute daemons run the materialised XLA stages. The resource
 model is: pool width is slots, admission is concurrency. Every
@@ -31,9 +30,8 @@ wide read pool keeps the network drain full) and compute = a
 third of the logical cores, capped at 8 with a floor of 2; on CUDA
 the compute pool is 2, since concurrent clients share one card.
 collect(distributed = TRUE) detects the pools automatically and
-pre-compiles stage kernels at run start
-(garry_opt(&quot;jit_warmup&quot;)), scan kernels included, targeted at
-the garry_opt(&quot;scan_profiles&quot;) designated profiles only."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
+pre-compiles stage kernels on idle daemons at run start, scan kernels
+on the garry_opt(&quot;scan_profiles&quot;) designated profiles only."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
 
@@ -95,9 +93,8 @@ wide read pool keeps the network drain full) and <code>compute</code> = a
 third of the logical cores, capped at 8 with a floor of 2; on CUDA
 the compute pool is 2, since concurrent clients share one card.
 <code>collect(distributed = TRUE)</code> detects the pools automatically and
-pre-compiles stage kernels at run start
-(<code>garry_opt("jit_warmup")</code>), scan kernels included, targeted at
-the <code>garry_opt("scan_profiles")</code> designated profiles only.</p>
+pre-compiles stage kernels on idle daemons at run start, scan kernels
+on the <code>garry_opt("scan_profiles")</code> designated profiles only.</p>
     </div>
 
     <div class="section level2">
@@ -106,8 +103,7 @@ the <code>garry_opt("scan_profiles")</code> designated profiles only.</p>
 <span>  read <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  compute <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  read_handles <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  gdal_config <span class="op">=</span> <span class="cn">TRUE</span>,</span>
-<span>  <span class="va">...</span></span>
+<span>  gdal_config <span class="op">=</span> <span class="cn">TRUE</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
 
@@ -152,11 +148,6 @@ mixing local multi-file reads). Either way every daemon's GDAL
 block cache is capped at <code>garry_opt("gdal_cachemax_mb")</code>: GDAL's
 own default is 5% of RAM per process.</p></dd>
 
-
-<dt id="arg--">...<a class="anchor" aria-label="anchor" href="#arg--"></a></dt>
-<dd><p>Passed to <code><a href="https://mirai.r-lib.org/reference/daemons.html" class="external-link">mirai::daemons()</a></code> for every pool; <code>dispatcher</code> is
-garry's to set.</p></dd>
-
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
@@ -169,6 +160,12 @@ source API that throttles concurrent reads (smaller <code>read</code>); one
 daemon per device on multi-GPU, or one per socket on NUMA
 (<code>compute</code>); a memory-tight box (smaller <code>compute</code>, each daemon's
 base XLA client is ~300 MB once warmed).</p>
+<p>garry runs its own parallelism through these pools, so run one garry
+session and let it use the machine. Wrapping garry calls in forked or
+multi-process workers, such as <code><a href="https://rdrr.io/r/parallel/mclapply.html" class="external-link">parallel::mclapply()</a></code> or a parallel
+<code>future</code> plan, is discouraged and at your own risk: GDAL, curl and XLA
+hold state that does not survive a fork, and each worker's pools would
+compete for the same cores, memory and <code>/dev/shm</code>.</p>
 <p>It also applies the sensible defaults so a workload script needs no
 preamble: the glibc <code>MALLOC_*</code> thresholds are exported BEFORE the
 daemons spawn (read at exec, so children inherit them), and
@@ -176,8 +173,8 @@ daemons spawn (read at exec, so children inherit them), and
 host's own GDAL config (that would hide local sidecars for the
 caller's reads); call <code><a href="garry_gdal_config.html">garry_gdal_config()</a></code> yourself to tune host-side
 discovery. <code>MALLOC_*</code> is only-if-unset, and <code>gdal_config = FALSE</code>
-skips the GDAL settings entirely. Headers registered with
-<code><a href="garry_http_auth.html">garry_http_auth()</a></code> are applied to the new pools.</p>
+skips the GDAL settings entirely, on every route. Headers registered
+with <code><a href="garry_http_auth.html">garry_http_auth()</a></code> are applied to the new pools.</p>
     </div>
     <div class="section level2">
     <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>

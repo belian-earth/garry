@@ -11,9 +11,7 @@ grid_from_bbox(
   bbox,
   res,
   projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-  ellps = "WGS84",
-  buffer = 0,
-  dtype = "f32"
+  buffer = 0
 )
 ```
 
@@ -32,17 +30,9 @@ grid_from_bbox(
 
   Projection family; the first is the default (see Details).
 
-- ellps:
-
-  Ellipsoid for the centred projections.
-
 - buffer:
 
   Extent padding in projected units, applied before snapping.
-
-- dtype:
-
-  Grid dtype.
 
 ## Value
 
