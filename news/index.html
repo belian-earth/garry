@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">garry</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.1.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Released version">0.2.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -45,9 +45,9 @@
     </div>
 
     <div class="section level2">
-<h2 class="pkg-version" data-toc-text="development version" id="garry-development-version">garry (development version)<a class="anchor" aria-label="anchor" href="#garry-development-version"></a></h2>
+<h2 class="pkg-version" data-toc-text="0.2.0" id="garry-020">garry 0.2.0<a class="anchor" aria-label="anchor" href="#garry-020"></a></h2>
 <div class="section level3">
-<h3 id="breaking-changes-development-version">Breaking changes<a class="anchor" aria-label="anchor" href="#breaking-changes-development-version"></a></h3>
+<h3 id="breaking-changes-0-2-0">Breaking changes<a class="anchor" aria-label="anchor" href="#breaking-changes-0-2-0"></a></h3>
 <ul><li>
 <code><a href="../reference/geomedian.html">geomedian()</a></code>, <code><a href="../reference/medoid.html">medoid()</a></code> and custom reducers declaring <code>f32</code> over a band stack of time stacks take the direct route, so warped cells move. On small HLS a warped geomedian moved by a median of 0.22 DN, p99 12 DN and at most 1,277 DN, with the same NaN cells. Aligned reads move by rounding only.</li>
 <li>A warp of one file takes GDAL’s default tolerance, 0.125 source pixels, in place of the exact transformer, so its cells move and it runs about five times faster. A Landsat band warped from UTM to LAEA took 1.1 s against 5.7 s, with 68 % of cells moving, p99 17 DN and at most 228; a class map read by nearest neighbour took 0.5 s against 5.1 s, with 0.1 % of cells changing class. Cells still do not depend on chunks: a warped VRT reads by fixed blocks. <code>garry.warp_exact = TRUE</code> brings exact warps back, and now also governs windows, so the old mix of exact files and approximate windows has no setting.</li>
@@ -75,7 +75,7 @@
 <code><a href="../reference/write_tif.html">write_tif()</a></code> takes <code>cog</code> as <code>TRUE</code> or <code>FALSE</code> alone, and refuses <code>overview_resampling</code> without <code>cog = TRUE</code>. <code><a href="../reference/collect.html">collect()</a></code> takes <code>distributed</code> as <code>TRUE</code> or <code>FALSE</code> alone.</li>
 </ul></div>
 <div class="section level3">
-<h3 id="new-features-development-version">New features<a class="anchor" aria-label="anchor" href="#new-features-development-version"></a></h3>
+<h3 id="new-features-0-2-0">New features<a class="anchor" aria-label="anchor" href="#new-features-0-2-0"></a></h3>
 <ul><li>
 <code>coarsen(x, factor)</code> maps a read onto the grid <code>factor</code> times coarser by block means of its valid values. Its read assembles each window’s finer cells from the sources as their nearest-neighbour read does (direct window reads of the sources on those cells’ pixels, a warp of each other source alone, later sources winning where they hold data), decodes them if the dataset decodes, and averages each block in one pass. <code>stack_bands(coarsen(lazy_dataset(tiles, grid10, resampling = "near", decode = dequantize_aef), 3L))</code> builds a 30 m embedding cube straight from the tiles, identical to writing the 10 m codes and then averaging their decoded values: an AEF box-year (four south-up tiles, 64 bands, 4488 x 5727 codes) in 8.5 s instead of 14 s through the codes (about 36 s before this release), an OlmoEarth window (128 bands, through a false-origin shift) in 6.8 s instead of 9.7 s. Cells warped from a reprojected source match the 10 m read’s under <code>garry.warp_exact = TRUE</code>.</li>
 <li>
@@ -99,8 +99,9 @@
 <li>New vignette: OlmoEarth embeddings from Zarr.</li>
 </ul></div>
 <div class="section level3">
-<h3 id="performance-development-version">Performance<a class="anchor" aria-label="anchor" href="#performance-development-version"></a></h3>
-<ul><li><p>The direct route translates a slice that needs no warp: one item on the grid’s own pixels goes straight to its plane file, in about 40 % of a warp’s time. Aligned medium HLS fell from 23.2 to 19.4 s for a median, 18.5 to 15.0 s for NDVI and 49.2 to 40.8 s for a geomedian, same cells. A warp of one integer file on its own pixels by bilinear, cubic, lanczos, average or mode is a plain read too. <code>cubicspline</code> and <code>rms</code> move cells there, so they keep the warper, and so does a float source with a sentinel on the direct route.</p></li>
+<h3 id="performance-0-2-0">Performance<a class="anchor" aria-label="anchor" href="#performance-0-2-0"></a></h3>
+<ul><li><p>On the CPU a mask or band task of the direct route’s pipeline reads its batch or strip into C memory that XLA takes with no copy, and frees it on exit with no gc, where a read in R’s heap needs a full pass to go. Cells do not change. Reads stay in R on a CUDA device, which holds its own copy, for a one-band composite on the direct route, and on the scheduler.</p></li>
+<li><p>The direct route translates a slice that needs no warp: one item on the grid’s own pixels goes straight to its plane file, in about 40 % of a warp’s time. Aligned medium HLS fell from 23.2 to 19.4 s for a median, 18.5 to 15.0 s for NDVI and 49.2 to 40.8 s for a geomedian, same cells. A warp of one integer file on its own pixels by bilinear, cubic, lanczos, average or mode is a plain read too. <code>cubicspline</code> and <code>rms</code> move cells there, so they keep the warper, and so does a float source with a sentinel on the direct route.</p></li>
 <li><p>A plan that only reads now grows a single-band file’s chunks to one read task: the whole file where it fits <code>garry.read_target_px</code>, otherwise chunks near that size, ending on source tiles unless the read warps. A stack used to be cut as a kernel’s inputs, a window of every layer held at once, though no kernel holds them, and chunks fetched the source tiles they shared again: 144 warped Sentinel-2 files took 2.7 times the bytes in <code>us-west-2</code>. Multi-band, mosaic, Zarr, decoded and coarsened reads keep their planned chunks.</p></li>
 <li><p><code><a href="../reference/collect.html">collect()</a></code> of a read-only plan copies chunks into the result on four threads where R has OpenMP, on huge pages where the kernel grants them, and a task log writes its rows without <code>glue</code>. 120 layers of 3660 x 3660 from local files fell from 8.3 to 6.5 s on 16 readers.</p></li>
 <li><p>A partial-width read of a raw cube slices its rows in C, in place of an R index of 32 B a cell.</p></li>
@@ -139,7 +140,7 @@
 <li><p><code><a href="../reference/lazy_value_and_grad.html">lazy_value_and_grad()</a></code> keeps its kernels by content, as stages do, so a loop passing new <code>weights</code> compiles once: 170 steps on an 80 x 60 raster went from 53 s to 1.6 s, with identical results.</p></li>
 </ul></div>
 <div class="section level3">
-<h3 id="bug-fixes-development-version">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-development-version"></a></h3>
+<h3 id="bug-fixes-0-2-0">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-2-0"></a></h3>
 <ul><li><p>An in-process <code><a href="../reference/collect.html">collect()</a></code> of a warped 32-bit integer band no longer prints gdalraster’s Int64 alert and warning. A warp widens such a band to Int64 so its empty cells have a value, and a double holds every value the band can, so the note was untrue. Opening any other Int64 file still gives it.</p></li>
 <li><p>A tile across the antimeridian no longer reads as empty. A nearest read of several sources onto a longitude-latitude grid took the tile’s bounds as an inverted box, so its cells stayed NaN with no error. Such sources now warp together.</p></li>
 <li><p>A south-up tile fetched through the tile index gets the rows of its window. A window 9 to 15 rows tall fetched too few and came back partly NaN.</p></li>
@@ -219,7 +220,7 @@
 <li><p>Per-band GTI <code>resampling</code> shared one wrapper file, so the last method applied to every non-nearest band of an asset; a warp of a GTI source also dropped the source’s own resampling. Several sources on their planning grid now read by <code>resampling</code>, which <code>grid = NULL</code> ignored, and <code><a href="../reference/coarsen.html">coarsen()</a></code> refuses a source read by anything but nearest neighbour.</p></li>
 </ul></div>
 <div class="section level3">
-<h3 id="observability-development-version">Observability<a class="anchor" aria-label="anchor" href="#observability-development-version"></a></h3>
+<h3 id="observability-0-2-0">Observability<a class="anchor" aria-label="anchor" href="#observability-0-2-0"></a></h3>
 <ul><li><p>Warnings carry the parent class <code>garry_warning</code> and a class of their own (<code>garry_memory_warning</code>, <code>garry_cores_warning</code>, <code>garry_affinity_warning</code>, <code>garry_warmup_warning</code>, <code>garry_read_warning</code>, <code>garry_cache_warning</code>, <code>garry_scale_warning</code>, <code>garry_stac_warning</code>), so a caller can handle them by class. A read retry on a daemon warns there: it reaches the task log’s <code>retry</code> rows, not a handler on the host.</p></li>
 <li><p>The task log gains <code>retry</code> rows (a task’s read retries, which a daemon cannot otherwise report), <code>resend</code> rows (a kernel sent again to a daemon that lacked it) and <code>warm_fail</code> rows.</p></li>
 <li><p>The task log (<code>garry.task_log</code>) tags each daemon’s memory sample with its role (read, comp or write), and samples the calling process’s memory, the container (cgroup) usage against its limit, <code>/dev/shm</code> use and the compute and read admission budgets. <code><a href="../reference/garry_task_report.html">garry_task_report()</a></code> summarises them. Sampling and the memory guard now run every 5 s during a drain, including while every daemon is busy with a long task.</p></li>

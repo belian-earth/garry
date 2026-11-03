@@ -7,13 +7,13 @@
 ## Citation
 
 Graham H (2026). *garry: Lazy, Spatial-Aware Raster Arrays with
-JIT-Compiled Kernels*. R package version 0.1.0,
+JIT-Compiled Kernels*. R package version 0.2.0,
 <https://belian-earth.github.io/garry/>.
 
     @Manual{,
       title = {garry: Lazy, Spatial-Aware Raster Arrays with JIT-Compiled Kernels},
       author = {Hugh Graham},
       year = {2026},
-      note = {R package version 0.1.0},
+      note = {R package version 0.2.0},
       url = {https://belian-earth.github.io/garry/},
     }

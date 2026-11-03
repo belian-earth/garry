@@ -1,6 +1,6 @@
 # Changelog
 
-## garry (development version)
+## garry 0.2.0
 
 ### Breaking changes
 
@@ -199,6 +199,13 @@
 - New vignette: OlmoEarth embeddings from Zarr.
 
 ### Performance
+
+- On the CPU a mask or band task of the direct route’s pipeline reads
+  its batch or strip into C memory that XLA takes with no copy, and
+  frees it on exit with no gc, where a read in R’s heap needs a full
+  pass to go. Cells do not change. Reads stay in R on a CUDA device,
+  which holds its own copy, for a one-band composite on the direct
+  route, and on the scheduler.
 
 - The direct route translates a slice that needs no warp: one item on
   the grid’s own pixels goes straight to its plane file, in about 40 %
