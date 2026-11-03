@@ -22,9 +22,9 @@ lazy_dataset(
 \arguments{
 \item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally
 filtered), a \code{stac_sources()} table, or a character path / vector of
-paths to (multi-band) raster file(s) -- local, \verb{/vsicurl/}, or bare
-\verb{http(s)://} (prefixed automatically) -- or \verb{ZARR:"<store>":/<array>}
-strings, a bare \verb{https://} store prefixed the same way.}
+paths to (multi-band) raster files (local, \verb{/vsicurl/}, or bare
+\verb{http(s)://}, prefixed automatically), or \verb{ZARR:"<store>":/<array>}
+strings, whose bare \verb{https://} store is prefixed the same way.}
 
 \item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band. Required for the table
 form; \code{NULL} (the default) keeps the file form on its native grid.}

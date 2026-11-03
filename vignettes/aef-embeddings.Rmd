@@ -91,11 +91,11 @@ happen once, and everything after reads local pixels.
 cube <- materialise(embeddings)   # pass dir= to keep it beyond the session
 ```
 
-**Fit.** k-means needs pixels in R, but not all 7.5 million of them --
+**Fit.** k-means needs pixels in R, but not all 7.5 million of them:
 100k scattered ones place five centroids perfectly well.
-`extract_points()` reads just those, straight out of the cube: GDAL
-touches only the blocks holding points, so this costs a fraction of a
-second rather than another pass over the raster.
+`extract_points()` reads just those, straight out of the local cube:
+GDAL reads only the rows holding points, here nearly all of them, but
+from local disk rather than the network.
 
 Points are a [wk](https://paleolimbot.github.io/wk/) `xy` vector carrying
 their own CRS, so they are placed on the grid explicitly rather than by

@@ -187,9 +187,9 @@ LazyDataset <- S7::new_class(
 #'
 #' @param sources A STAC `doc_items` (from [stac_query()], optionally
 #'   filtered), a `stac_sources()` table, or a character path / vector of
-#'   paths to (multi-band) raster file(s) -- local, `/vsicurl/`, or bare
-#'   `http(s)://` (prefixed automatically) -- or `ZARR:"<store>":/<array>`
-#'   strings, a bare `https://` store prefixed the same way.
+#'   paths to (multi-band) raster files (local, `/vsicurl/`, or bare
+#'   `http(s)://`, prefixed automatically), or `ZARR:"<store>":/<array>`
+#'   strings, whose bare `https://` store is prefixed the same way.
 #' @param grid Target [GridSpec()] for every band. Required for the table
 #'   form; `NULL` (the default) keeps the file form on its native grid.
 #' @param assets Character vector of value assets to load (table form), or of

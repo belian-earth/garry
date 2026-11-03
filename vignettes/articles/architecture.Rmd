@@ -32,8 +32,11 @@ lazy-verb layer (`lazy_map()`, `focal_map()`, `reduce_over()`, and
 friends) reads no data and compiles nothing. While building, it reaches
 anvl only to read a kernel's output dtype: an abstract trace when
 `lazy_map()` or `scan_over()` has no `dtype`, or `reduce_over()` has a
-custom reducer. Its other anvl edges, such as `apply_mask()`'s, are the
-bodies of the kernels it builds, which run at execution. Its one GDAL
+custom reducer. Its pjrt edges come from fingerprinting arrays a kernel
+body captures, which keys that dtype trace so a kernel repeated across
+bands or slices traces once; nothing is compiled. Its other anvl edges,
+such as `apply_mask()`'s, are the bodies of the kernels it builds,
+which run at execution. Its one GDAL
 edge is `shrink_footprint(boundary = "keep")`, which writes a
 sourceless VRT marking the grid's interior. Second, pixels are read and
 kernels run only by the execution verbs (`collect()`, `materialise()`,

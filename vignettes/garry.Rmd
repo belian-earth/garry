@@ -72,8 +72,8 @@ preview(el, main = "Mount Hood elevation (m)")
 
 `preview()` is the quick look: it plots a copy decimated to your device.
 This tile sits on its own grid, so `preview()` reads all of it first and says
-so; a dataset pinned to an analysis grid is re-planned at preview resolution
-and reads overviews only.
+so; a STAC dataset, whose mosaic is pinned to the analysis grid, is
+re-planned at preview resolution and reads the sources' overviews.
 
 ## Build a computation
 

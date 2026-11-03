@@ -7,7 +7,8 @@ NULL
 #' routes, same daemons) and writes the result to `path`. On the
 #' distributed scheduler, chunks stream to the file as they land, so the
 #' full raster never sits in memory; the single-process executor and the
-#' direct composite routes hold the result, then write it. Returns the path
+#' direct composite routes hold the result, then write it. A plan that only
+#' reads writes window by window on either route. Returns the path
 #' invisibly; `collect()` always returns the in-session array.
 #'
 #' `dtype` with `scale`/`offset` quantizes at the sink boundary: values
