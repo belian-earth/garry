@@ -189,20 +189,17 @@ NULL
 
 # The arrays of the Zarr store at `root` (.zarr_store_root()) that GDAL
 # reads as rasters (two or more dimensions), in the order of their paths,
-# one row each: `path`, the connection string garry reads, from the array's
-# own group (ZARR:"<store>/<group>":/<name>); `full`, the one from the
-# store's root; `array`, its path in the store; `name`, the last part of
-# that; `crs` ("" for none) and `xmin`, `ymin`, `xmax`, `ymax`; and
-# `declared`, TRUE when the store declares the CRS and extent
-# (.zarr_listing()), FALSE when GDAL gives them on opening the array, as
-# it does for those named `array` (all without it) and leaves the rest NA.
-# From the root, GDAL 3.13 opens an array by looking for the coordinate
-# arrays of every array in the store: 2.3 s an open for OlmoEarth's 60
-# zones, against 0.05 s from the array's group. A remote store's listing,
-# with what GDAL gave, is kept for the session.
+# one row each: `path`, its connection string from its group; `array`, its
+# path in the store; `name`, the last part of that; `crs` ("" for none)
+# and `xmin`, `ymin`, `xmax`, `ymax`; `declared`, TRUE when the store
+# declares the CRS and extent (.zarr_listing()), FALSE when GDAL gives
+# them on opening the array, as it does for those named `array` (all
+# without it) and leaves the rest NA; and `via_group`, TRUE when the
+# array's group declares part of them (.zarr_placed_paths()). A remote
+# store's listing, with what GDAL gave, is kept for the session.
 gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   out <- .gdal_cache$zarr_stores[[root]] %||%
-    .zarr_listing(sub('^ZARR:"(.*)"$', "\\1", root)) %||%
+    .zarr_listing(root, call) %||%
     .zarr_gdal_listing(root, call)
   for (i in which(is.na(out$crs) & (is.null(array) | out$name %in% array))) {
     g <- .gdal_georef(out$path[[i]])
@@ -215,118 +212,154 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   out
 }
 
-# The arrays of the Zarr store at `store` from its consolidated metadata,
-# one document read once (v3: the root's zarr.json; v2: .zmetadata), as
-# gdal_zarr_arrays() rows; NULL for a store without it. An array's CRS is
-# its zarr-conventions proj:code, proj:wkt2 or proj:projjson, and its
-# extent spatial:bbox, or spatial:transform over spatial:shape (else the
-# array's last two dimensions), each set taken from the array's attributes
-# or else from its nearest group that has any of them. Nothing else is
-# read: an array they do not place is left for GDAL to place.
-.zarr_listing <- function(store) {
-  v3 <- .gdal_read_json(.glue("{store}/zarr.json"))
-  if (is.null(v3)) {
-    md <- .gdal_read_json(.glue("{store}/.zmetadata"))$metadata
-    if (is.null(md) || ".zarray" %in% names(md)) {
-      return(NULL)
+# The zarr-conventions GDAL 3.13 places arrays by, registered in
+# zarr_conventions by uuid (it ignores the name).
+.zarr_proj <- "f17cb550-5864-4468-aeb7-f3180cfb622f"
+.zarr_spatial <- "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
+
+# The arrays of a Zarr v3 store from the consolidated metadata in its
+# root's zarr.json, one document, as gdal_zarr_arrays() rows; NULL for a
+# store without it. Declarations are read as GDAL 3.13 reads them: from
+# the array's attributes, else its parent group's, registered by the
+# zarr_conventions of the first of those that has any; a CRS from
+# proj:code, proj:wkt2 or proj:projjson, and an extent from the
+# spatial:transform beside spatial:dimensions, over spatial:shape (else
+# the array's last two dimensions). GDAL places the arrays they do not.
+# A CRS PROJ cannot resolve aborts, as do spatial:dimensions the array
+# lacks: GDAL 3.13 crashes on opening such an array.
+.zarr_listing <- function(root, call) {
+  store <- sub('^ZARR:"(.*)"$', "\\1", root)
+  doc <- .gdal_read_json(.glue("{store}/zarr.json"))
+  md <- doc$consolidated_metadata$metadata
+  if (is.null(md)) {
+    return(NULL)
+  }
+  is_arr <- vapply(
+    md,
+    function(m) identical(m$node_type, "array") && length(m$shape) >= 2L,
+    NA
+  )
+  keys <- sort(names(md)[is_arr], method = "radix")
+  out <- .zarr_rows(store, paste0("/", keys))
+  for (i in seq_along(keys)) {
+    m <- md[[keys[[i]]]]
+    up <- if (grepl("/", keys[[i]])) md[[dirname(keys[[i]])]] else doc
+    nodes <- list(m$attributes, up$attributes)
+    # 1 for the array, 2 for its group: the first that has any of `keys`
+    at <- function(keys) {
+      match(TRUE, vapply(nodes, function(n) any(keys %in% names(n)), NA))
     }
-    leaf <- basename(names(md))
-    node <- file.path("", sub("/?[^/]*$", "", names(md)))
-    is_arr <- leaf == ".zarray"
-    attrs <- stats::setNames(md[leaf == ".zattrs"], node[leaf == ".zattrs"])
-  } else {
-    md <- v3$consolidated_metadata$metadata
-    if (is.null(md)) {
-      return(NULL)
-    }
-    node <- file.path("", names(md))
-    is_arr <- vapply(md, function(m) identical(m$node_type, "array"), NA)
-    attrs <- c(
-      list(`/` = v3$attributes),
-      stats::setNames(lapply(md, `[[`, "attributes"), node)
+    w <- c(
+      at("zarr_conventions"),
+      at(c("proj:code", "proj:wkt2", "proj:projjson")),
+      at("spatial:dimensions")
     )
-  }
-  shapes <- stats::setNames(lapply(md[is_arr], `[[`, "shape"), node[is_arr])
-  a <- sort(names(shapes)[lengths(shapes) >= 2L], method = "radix")
-  # the attributes among `keys` of the node at `p` or its nearest group
-  # that has any
-  near <- function(p, keys) {
-    repeat {
-      got <- attrs[[p]][intersect(keys, names(attrs[[p]]))]
-      if (length(got) || p == "/") {
-        return(got)
-      }
-      p <- dirname(p)
+    reg <- nodes[[w[[1L]]]]$zarr_conventions
+    ids <- unlist(lapply(reg, function(r) if (is.list(r)) r$uuid))
+    pj <- nodes[[w[[2L]]]]
+    sp <- nodes[[w[[3L]]]]
+    json <- pj[["proj:projjson"]]
+    crs <- pj[["proj:code"]] %||%
+      pj[["proj:wkt2"]] %||%
+      if (is.list(json)) yyjsonr::write_json_str(json, auto_unbox = TRUE)
+    tr <- sp[["spatial:transform"]]
+    dims <- utils::tail(sp[["spatial:dimensions"]], 2L)
+    if (
+      !all(c(.zarr_proj, .zarr_spatial) %in% ids) ||
+        !rlang::is_string(crs) ||
+        !(is.numeric(tr) && length(tr) == 6L && all(is.finite(tr))) ||
+        length(dims) != 2L
+    ) {
+      next
     }
+    a <- out$array[[i]]
+    where <- .url_scrub(store)
+    resolves <- tryCatch(
+      nzchar(.gdal_quiet_errors(gdalraster::srs_to_wkt(crs))),
+      error = function(e) FALSE
+    )
+    bad <- if (!all(dims %in% m$dimension_names)) {
+      "{.code spatial:dimensions} it lacks ({.val {dims}}), on which GDAL 3.13 crashes"
+    } else if (!resolves) {
+      "a CRS that PROJ cannot resolve: {.val {crs}}"
+    }
+    if (length(bad)) {
+      cli::cli_abort(
+        paste0("{.val {a}} of {.path {where}} declares ", bad, "."),
+        class = c("garry_source_error", "garry_error"),
+        call = call
+      )
+    }
+    hw <- sp[["spatial:shape"]]
+    if (!(is.numeric(hw) && length(hw) == 2L)) {
+      hw <- utils::tail(m$shape, 2L)
+    }
+    col <- c(0, hw[[2L]], 0, hw[[2L]])
+    row <- c(0, 0, hw[[1L]], hw[[1L]])
+    xs <- tr[[1L]] * col + tr[[2L]] * row + tr[[3L]]
+    ys <- tr[[4L]] * col + tr[[5L]] * row + tr[[6L]]
+    via <- grepl("/", keys[[i]]) && 2L %in% w
+    out[i, c("crs", "xmin", "ymin", "xmax", "ymax", "declared", "via_group")] <-
+      list(crs, min(xs), min(ys), max(xs), max(ys), TRUE, via)
   }
-  num <- function(v, n) {
-    if (is.numeric(v) && length(v) == n && all(is.finite(v))) as.numeric(v)
-  }
-  crs <- vapply(
-    a,
-    function(p) {
-      pj <- near(p, c("proj:code", "proj:wkt2", "proj:projjson"))
-      json <- pj[["proj:projjson"]]
-      crs <- pj[["proj:code"]] %||%
-        pj[["proj:wkt2"]] %||%
-        if (is.list(json)) yyjsonr::write_json_str(json, auto_unbox = TRUE)
-      ok <- is.character(crs) && length(crs) == 1L && nzchar(crs)
-      if (ok) crs else NA_character_
-    },
-    ""
-  )
-  ext <- vapply(
-    a,
-    function(p) {
-      sp <- near(p, c("spatial:bbox", "spatial:transform", "spatial:shape"))
-      tr <- num(sp[["spatial:transform"]], 6L)
-      e <- num(sp[["spatial:bbox"]], 4L)
-      if (is.null(e) && !is.null(tr)) {
-        hw <- num(sp[["spatial:shape"]], 2L) %||% utils::tail(shapes[[p]], 2L)
-        col <- c(0, hw[[2L]], 0, hw[[2L]])
-        row <- c(0, 0, hw[[1L]], hw[[1L]])
-        xs <- tr[[1L]] * col + tr[[2L]] * row + tr[[3L]]
-        ys <- tr[[4L]] * col + tr[[5L]] * row + tr[[6L]]
-        e <- c(min(xs), min(ys), max(xs), max(ys))
-      }
-      e %||% rep(NA_real_, 4L)
-    },
-    numeric(4)
-  )
-  crs[is.na(colSums(ext))] <- NA
-  .zarr_rows(store, a, unname(crs), unname(ext))
+  out
 }
 
-# gdal_zarr_arrays() rows for the arrays at paths `a` of `store`, with
-# their CRS and extent (`ext`, one column an array) where declared.
-.zarr_rows <- function(
-  store,
-  a,
-  crs = rep(NA_character_, length(a)),
-  ext = matrix(NA_real_, 4L, length(a))
-) {
-  grp <- ifelse(dirname(a) == "/", "", dirname(a))
+# The connection strings that read the arrays `rows` (gdal_zarr_arrays()
+# rows) of the store at `root` where GDAL 3.13 places them. From an
+# array's group, GDAL takes up the group's part in its declarations only
+# when the group's own zarr.json consolidates the array; otherwise only
+# from the store's root, where it looks for the coordinate arrays of every
+# array in the store. The root's entry for a group is the same either way
+# (empty, for OlmoEarth as for zarr-python), so the group's zarr.json is
+# read, into the /vsicurl/ cache that GDAL's open of the group then reads.
+.zarr_placed_paths <- function(rows, root) {
+  store <- sub('^ZARR:"(.*)"$', "\\1", root)
+  for (i in which(rows$via_group)) {
+    a <- rows$array[[i]]
+    doc <- .gdal_read_json(.glue("{store}{dirname(a)}/zarr.json"))
+    if (!basename(a) %in% names(doc$consolidated_metadata$metadata)) {
+      rows$path[[i]] <- .glue('ZARR:"{store}":{a}')
+    }
+  }
+  rows$path
+}
+
+# gdal_zarr_arrays() rows for the arrays at paths `a` of `store`, read
+# from their groups (ZARR:"<store>/<group>":/<name>) and not yet placed.
+.zarr_rows <- function(store, a) {
+  grp <- sub("/[^/]*$", "", a)
+  na <- rep(NA_real_, length(a))
+  no <- logical(length(a))
   data.frame(
-    path = .glue('ZARR:"{store}{grp}":/{basename(a)}'),
-    full = .glue('ZARR:"{store}":{a}'),
+    path = .glue('ZARR:"{store}{grp}":{substring(a, nchar(grp) + 1L)}'),
     array = a,
     name = basename(a),
-    crs = crs,
-    xmin = ext[1L, ],
-    ymin = ext[2L, ],
-    xmax = ext[3L, ],
-    ymax = ext[4L, ],
-    declared = !is.na(crs),
-    stringsAsFactors = FALSE
+    crs = as.character(na),
+    xmin = na,
+    ymin = na,
+    xmax = na,
+    ymax = na,
+    declared = no,
+    via_group = no
   )
 }
 
-# The arrays of a store without consolidated metadata, as GDAL lists them
-# (its SUBDATASETS) from the store's directories, which a server must list
-# over HTTP; the root itself (`array` "/") when GDAL opens it as one array.
+# The arrays of a store without Zarr v3 consolidated metadata, as GDAL
+# lists them (gdalmdiminfo): from a v2 store's .zmetadata, or else from
+# the store's directories, which a server must list over HTTP.
 .zarr_gdal_listing <- function(root, call) {
-  ds <- tryCatch(
-    .gdal_probe(root),
+  info <- tryCatch(
+    .gdal_with_retry(
+      function() {
+        .gdal_quiet_remote(
+          gdalraster::mdim_info(root, pretty = FALSE, cout = FALSE),
+          zarr = TRUE
+        )
+      },
+      what = "listing a Zarr store's arrays",
+      src = root
+    ),
     garry_read_error = function(e) {
       where <- .url_scrub(root)
       cli::cli_abort(
@@ -341,15 +374,36 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
       )
     }
   )
-  store <- sub('^ZARR:"(.*)"$', "\\1", root)
-  if (ds$getRasterCount() > 0L) {
-    out <- .zarr_rows(store, "/")
-    out$path <- out$full <- root
-    return(out)
+  walk <- function(g) {
+    a <- Filter(function(m) length(m$dimensions) >= 2L, g$arrays)
+    c(
+      vapply(a, `[[`, "", "full_name", USE.NAMES = FALSE),
+      unlist(lapply(g$groups, walk), use.names = FALSE)
+    )
   }
-  sds <- grep("_NAME=", ds$getMetadata(0L, "SUBDATASETS"), value = TRUE)
-  a <- sub('^SUBDATASET_[0-9]+_NAME=ZARR:".*":(/[^"]*)$', "\\1", sds)
-  .zarr_rows(store, sort(a, method = "radix"))
+  a <- sort(walk(.json_parse(info, root)), method = "radix")
+  .zarr_rows(sub('^ZARR:"(.*)"$', "\\1", root), a)
+}
+
+# Nested lists from the JSON text `txt` of `path`. yyjsonr: gdalraster
+# imports it, so it adds no install.
+.json_parse <- function(txt, path) {
+  opts <- yyjsonr::opts_read_json(
+    obj_of_arrs_to_df = FALSE,
+    arr_of_objs_to_df = FALSE,
+    int64 = "double"
+  )
+  tryCatch(
+    yyjsonr::read_json_str(txt, opts = opts),
+    error = function(e) {
+      where <- .url_scrub(path)
+      cli::cli_abort(
+        "{.path {where}} is not valid JSON.",
+        class = c("garry_read_error", "garry_error"),
+        parent = e
+      )
+    }
+  )
 }
 
 # A JSON document at `path`, read through GDAL's virtual file system so
@@ -375,25 +429,7 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     },
     zarr = TRUE
   )
-  if (is.null(txt)) {
-    return(NULL)
-  }
-  opts <- yyjsonr::opts_read_json(
-    obj_of_arrs_to_df = FALSE,
-    arr_of_objs_to_df = FALSE,
-    int64 = "double"
-  )
-  tryCatch(
-    yyjsonr::read_json_str(txt, opts = opts),
-    error = function(e) {
-      where <- .url_scrub(path)
-      cli::cli_abort(
-        "{.path {where}} is not valid JSON.",
-        class = c("garry_read_error", "garry_error"),
-        parent = e
-      )
-    }
-  )
+  if (!is.null(txt)) .json_parse(txt, path)
 }
 
 # Where GDAL places the dataset at `path`: `crs`, "" when it has none, and
@@ -423,20 +459,11 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # geotransform (a message and a warning): asked of a Zarr array, they
 # mean GDAL does not place it, which the caller reports.
 .gdal_unplaced_quiet <- function(code) {
-  absent <- c(
-    "failed to get projection ref",
-    "failed to get geotransform, default returned"
-  )
   quiet <- function(cnd) {
-    said <- trimws(cli::ansi_strip(conditionMessage(cnd)))
-    # a cli alert leads with its bullet
-    if (said %in% absent || sub("^\\S+\\s+", "", said) %in% absent) {
-      restart <- if (inherits(cnd, "warning")) {
-        "muffleWarning"
-      } else {
-        "muffleMessage"
-      }
-      invokeRestart(restart)
+    absent <- "failed to get (projection ref|geotransform, default returned)"
+    if (grepl(absent, cli::ansi_strip(conditionMessage(cnd)))) {
+      tryInvokeRestart("muffleWarning")
+      tryInvokeRestart("muffleMessage")
     }
   }
   withCallingHandlers(code, warning = quiet, message = quiet)
@@ -445,42 +472,33 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # Check that GDAL places each array a store declares (`arrays`, the
 # gdal_zarr_arrays() rows being read) where the store says: `probes`, their
 # .source_probes() in the same order, must give the same CRS and an extent
-# within a thousandth of a pixel of the declared one. They can differ:
-# GDAL 3.13 does not take up an array's group attributes through the
-# array's group when only the store's root consolidates them (the layout
-# zarr-python writes by default), so it gives the array no CRS.
+# within a thousandth of a pixel of the declared one. An error names the
+# connection string only where GDAL gave a CRS through it.
 .zarr_check_placed <- function(arrays, probes, call = rlang::caller_env()) {
   for (i in which(arrays$declared)) {
     p <- probes[[i]]
-    want <- unlist(
-      arrays[i, c("xmin", "ymin", "xmax", "ymax")],
-      use.names = FALSE
-    )
+    a <- arrays[i, ]
+    want <- unlist(a[c("xmin", "ymin", "xmax", "ymax")], use.names = FALSE)
     got <- .gdal_extent(p$gt, p$nx, p$ny)
     tol <- 1e-3 * abs(p$gt[c(2L, 6L, 2L, 6L)])
     if (
-      nzchar(p$srs) &&
-        crs_equal(p$srs, arrays$crs[[i]]) &&
-        all(abs(got - want) <= tol)
+      nzchar(p$srs) && crs_equal(p$srs, a$crs) && all(abs(got - want) <= tol)
     ) {
       next
     }
-    a <- arrays[i, ]
-    where <- .url_scrub(sub('^ZARR:"(.*)":/.*$', "\\1", a$full))
-    full <- .url_scrub(a$full)
-    path <- .url_scrub(a$path)
     said <- .glue("{.crs_label(a$crs)} over {.extent_txt(want)}")
+    path <- .url_scrub(a$path)
     gdal <- if (nzchar(p$srs)) {
-      .glue("{.crs_label(p$srs)} over {.extent_txt(got)}")
+      .glue("{.crs_label(p$srs)} over {.extent_txt(got)}, opening {path}")
     } else {
       "no CRS"
     }
     cli::cli_abort(
       c(
-        "GDAL does not place {.val {a$array}} of {.path {where}} where the store declares it.",
+        "GDAL does not place {.val {a$array}} where its store declares it.",
         "*" = "The store declares {said} (xmin, ymin, xmax, ymax).",
-        "*" = "GDAL gives {gdal}, opening {.code {path}}.",
-        "i" = "Give the array as a connection string to read it as GDAL places it, from the store's root ({.code {full}}) or from its group ({.code {path}})."
+        "*" = "GDAL gives {gdal}.",
+        "i" = "garry reads a store's arrays only where GDAL and the store agree they lie."
       ),
       class = c("garry_source_error", "garry_error"),
       call = call
