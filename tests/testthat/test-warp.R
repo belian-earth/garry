@@ -245,12 +245,11 @@ test_that("an integer warp marks the cells past its footprint as missing", {
                  Int32 = c(-2147483647, 2147483647))
   for (type in names(ranges)) {
     x <- align_to(lazy_source(fixture_tile(ranges[[type]], type)), big)
-    # a 32-bit band warps widened to Int64, which gdalraster notes on each open
-    m <- .int64_hushed(collect(x, distributed = FALSE))
+    m <- collect(x, distributed = FALSE)
     expect_identical(sum(is.nan(m)), 48L)
     # the ends of the band's range stay data
     expect_equal(sort(unique(as.numeric(m[3:6, 3:6]))), ranges[[type]])
-    expect_error(.int64_hushed(collect(x + 1L, distributed = FALSE)), class = "garry_nodata_error")
+    expect_error(collect(x + 1L, distributed = FALSE), class = "garry_nodata_error")
   }
   # an interpolated read still rounds to the band's type
   fine <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(8L, 8L))
@@ -258,6 +257,23 @@ test_that("an integer warp marks the cells past its footprint as missing", {
                distributed = FALSE)
   expect_true(all(b[!is.nan(b)] == round(b[!is.nan(b)])))
   expect_false(all(is.nan(b)))
+})
+
+test_that("a 32-bit band's warp says nothing of the Int64 band garry widens it to", {
+  big <- grid_spec("EPSG:3857", extent = c(-20, -20, 60, 60), dims = c(8L, 8L))
+  src <- lazy_source(fixture_tile(c(0, 4294967295), "UInt32"))
+  x <- align_to(src, big)
+  rp <- .warp_read_plan(graph_get(x@graph, x@node_id), graph_get(x@graph, src@node_id))
+  expect_true(any(grepl('dataType="Int64"', readLines(rp$path), fixed = TRUE)))
+  # each collect warps to a VRT of its own, which the read opens
+  expect_no_warning(m <- collect(x, distributed = FALSE))
+  expect_identical(sort(unique(as.numeric(m[!is.nan(m)]))), c(0, 4294967295))
+  expect_no_message(collect(x, distributed = FALSE), message = "Int64")
+  # any other Int64 open keeps the note: the same VRT under a name of its own
+  own <- file.path(dirname(rp$path), "own-int64.vrt")
+  expect_true(file.copy(rp$path, own))
+  withr::defer(unlink(own))
+  expect_warning(expect_message(gdal_grid_spec(own), "Int64"), "handled as 'double'", fixed = TRUE)
 })
 
 test_that("a warp of an integer band keeps its values whatever marks the empty cells", {

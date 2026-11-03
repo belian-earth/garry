@@ -83,7 +83,7 @@
   tlog <- withr::local_tempfile(fileext = ".csv")
   withr::local_options(leg$opts)
   withr::local_options(garry.task_log = if (!is.null(leg$decision)) tlog)
-  out <- .int64_hushed(code)
+  out <- code
   expect_identical(garry_last_route(), leg$route, info = info)
   if (!is.null(leg$decision)) {
     tbl <- garry_explain_placement(x)
