@@ -24,10 +24,12 @@ Imports:
     methods,
     mirai,
     mori,
-    pjrt (>= 0.6.0.9001),
+    pjrt (>= 0.6.0.9100),
     rlang,
     stablehlo (>= 0.5.0),
     wk
+Remotes:
+    belian-earth/pjrt@buffer-handover
 Additional_repositories:
     https://r-xla.r-universe.dev
 Suggests:
