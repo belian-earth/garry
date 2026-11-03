@@ -209,6 +209,14 @@ stages over locally materialised cubes: the CNN is subject to the same
 planning, chunking, halo, and distribution as any focal or reduction,
 and on a time series the per-scene inferences pipeline across the
 daemon pool. Second, for composites the natural next step is the
-multivariate route: `reduce_over(cube, geomedian(), over = "t")` on the
-OCM-masked stack gives spectra no per-band median can (see the
-composite vignette).
+multivariate route: stack the masked bands into a `(band, t, y, x)` cube
+and reduce it over time with `geomedian()`, which gives spectra no
+per-band median can (see the composite vignette):
+
+```r
+cube <- lazy_stack(
+  list(B02 = ocm_masked[["B02"]], B03 = ocm_masked[["B03"]],
+       B04 = ocm_masked[["B04"]], B08 = ocm_masked[["B08"]]),
+  along = "band")
+gmed <- reduce_over(cube, geomedian(), over = "t")
+```

@@ -112,7 +112,7 @@ preview(comp, bands = c("R", "G", "B"))      # true-colour look (band names)
 ## PCA over the band axis
 
 A per-pixel PCA collapses the spectral vector to a few components. Fit it in
-plain R on the materialized composite -- fitting a model in R is perfectly
+plain R on the collected composite -- fitting a model in R is perfectly
 reasonable; not everything belongs in the lazy graph.
 
 

@@ -18,8 +18,8 @@ it builds one band per file band, named from the file's band descriptions
 (`A00` .. `A63` here). Each band is its own source, so at `collect()` the
 reads fan out band-by-band across the reader pool -- many connections issuing
 range requests concurrently, which is what makes a 64-band remote read fast.
-This vignette reads one tile, resamples to 30 m, dequantises on the read, and
-renders three arbitrary bands as a false-colour composite.
+This vignette reads one tile, decodes it and resamples it to 30 m on the read,
+and renders three arbitrary bands as a false-colour composite.
 
 ## Read and dequantise
 
@@ -34,8 +34,8 @@ tile <- paste0("https://data.source.coop/tge-labs/aef/v1/annual/2021/36S/",
 # the analysis grid: the tile's own footprint at 30 m
 grid <- grid_from_src(tile, 30)
 
-embeddings <- lazy_dataset(tile, grid, resampling = "average") |>
-  lazy_map(fn = dequantize_aef, dtype = "f32")
+embeddings <- lazy_dataset(tile, grid, resampling = "average",
+                           decode = dequantize_aef)
 
 embeddings
 #> ── <LazyDataset> ────────────────────────────────
@@ -49,14 +49,16 @@ embeddings
 
 `lazy_dataset()` records a lazy 64-band dataset; nothing is fetched yet (the
 construction costs one metadata probe, however many bands the file carries).
-`dequantize_aef()` is applied as a map, which garry fuses onto the read so the
-nonlinear decode runs on-device, not as a separate pass.
+`decode = dequantize_aef` decodes every 10 m code through a lookup table
+before the average, so each 30 m value is the mean of the decoded embeddings,
+the order a nonlinear decode needs.
 
 ## Collect three bands and plot
 
-Pick three arbitrary embedding dimensions and collect just those: the band-axis
-subset means only those three are ever read or computed or preview a coarser 
-overview of the tile to take a quick look.
+Pick three arbitrary embedding dimensions: the band-axis subset means only
+those three are ever read or computed. `preview()` reads them on the full 30 m
+grid and decimates them for the plot. A file source is not pinned to a grid,
+so it cannot use the tile's overviews; `preview()` says so in a message.
 
 
 ``` r
@@ -77,7 +79,7 @@ The clustering below uses all of them.
 
 An unsupervised k-means over the 64-dimensional embedding vectors segments
 the landscape without a single training label. The pattern is
-fit-small, predict-lazily -- and neither half needs the raster on disk:
+fit-small, predict-lazily, with both halves reading one local cube:
 
 **Materialise once.** Both halves below read all 64 bands, so decode the
 tile a single time into a local cube and work from that. This is the one
@@ -103,9 +105,10 @@ assumption (`wk::as_xy()` converts points from sf, terra or a data frame).
 ``` r
 set.seed(42)
 n   <- 1e5
+bb  <- grid_bbox(grid)
 pts <- wk::xy(
-  stats::runif(n, xmin(grid), xmax(grid)),
-  stats::runif(n, ymin(grid), ymax(grid)),
+  stats::runif(n, bb[["xmin"]], bb[["xmax"]]),
+  stats::runif(n, bb[["ymin"]], bb[["ymax"]]),
   crs = grid_crs(grid)
 )
 
@@ -129,7 +132,7 @@ surrounding cell centres for continuous data measured off-grid, and
 bands -- the `band_project()` reducer from the
 [PCA article](hls-harmonized-pca.html). The argmax is expressible in the
 same public vocabulary, so the WHOLE assignment runs inside the graph: a
-custom band reducer composes six projections with a comparison chain, and
+custom band reducer composes five projections with a comparison chain, and
 `collect()` returns the finished cluster map. This is ordinary user code --
 garry's shipped verbs are built from exactly these pieces, with no
 privileged access to the engine.
