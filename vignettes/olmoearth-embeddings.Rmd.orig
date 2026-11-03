@@ -35,10 +35,11 @@ embedding moved between 2023 and 2025.
 
 ## Open the store
 
-GDAL's Zarr driver reads the store directly, and `lazy_dataset()` takes the
-store's URL as it is: GDAL lists the store's arrays and where each one lies,
-and garry reads those that overlap the grid it is given. garry adds the
-`ZARR:` and `/vsicurl/` prefixes GDAL needs for a store over `https`.
+`lazy_dataset()` takes the store's URL as it is. garry reads the store's
+consolidated metadata, one document that lists the 60 zones and the CRS and
+extent each declares, and reads the arrays that overlap the grid it is given
+through GDAL's Zarr driver. garry adds the `ZARR:` and `/vsicurl/` prefixes
+GDAL needs for a store over `https`.
 
 ```{r open, message = FALSE}
 library(garry)
@@ -47,25 +48,27 @@ store <- "https://data.source.coop/olmoearth/olmoearth-v1-3-embeddings/embedding
 ```
 
 Each zone is in its own UTM CRS (Jasper is in zone 11, `EPSG:32611`), on a
-10 m grid anchored at the zone origin. A grid in that CRS at 10 m with edges
-on multiples of 10 m is a plain window of zone 11's array, so its read needs
-no resampling. Edges on multiples of 2560 m also line up with the store's
-256-pixel chunks, so every chunk fetched is used in full.
+10 m grid from easting 0 and northing 9,502,720. A grid in that CRS at 10 m
+with edges on multiples of 10 m is a plain window of zone 11's array, so its
+read needs no resampling. Edges on multiples of 2560 m also line up with the
+store's 256-pixel chunks, so every chunk fetched is used in full.
 
 ```{r grid}
 grid <- grid_spec("EPSG:32611", c(417280, 5834240, 445440, 5870080), res = 10)
 dim(grid)
 ```
 
-`lazy_dataset()` asks GDAL for the store's arrays and keeps those whose
-extent overlaps the grid, and its message names them. Each zone's array
-reaches well past its zone (983 km east to west), so the grid overlaps zones
-10 and 12 as well as 11. Where zones overlap, the one later in the store wins
-wherever it holds data, and each zone holds embeddings only a little past its
-edges (see [Across zones](#across-zones)), so every cell here comes from zone
-11. Listing the store's 60 zones takes about 250 metadata requests, once per
-session. To read zone 11 alone, give its array instead:
-`ZARR:"<store>/utm11":/embeddings`.
+`lazy_dataset()` keeps the arrays whose extent overlaps the grid, and its
+message names them. Each zone's array reaches well past its zone (983 km east
+to west), so the grid overlaps zones 10 and 12 as well as 11. Zone 11 is in
+the grid's CRS, so it is read last: wherever it holds data its own pixels are
+read, and zones 10 and 12 show only where it holds none. GDAL opens the three
+arrays, and garry checks that GDAL places each one where the store declares.
+Building the dataset from the store took 18 requests and about 11 s against
+source.coop, and zone 11's array named by hand,
+`ZARR:"<store>/utm11":/embeddings`, took 8 requests and 6 s; a second build
+in the session made none. Naming the array also reads zone 11 alone, without
+warping zones 10 and 12 into every window.
 
 `lazy_dataset()` then reads the arrays' dimension tags (GDAL flattens
 `(time, band)` into classic bands and labels each one) and lays them out as
@@ -78,7 +81,8 @@ oe
 time_labels(oe)
 ```
 
-Nothing has been fetched yet beyond the store's metadata.
+Nothing has been fetched yet beyond the store's metadata and each zone's
+year labels.
 
 ## Read two years
 
@@ -152,8 +156,8 @@ embeddings record that. The next section measures which shift is larger.
 The cosine distance `1 - (a . b) / (|a| |b|)` between a pixel's 2023 and 2025
 vectors measures how much its embedding changed, whatever the cause. The
 vectors are not unit length, so the norms stay in the formula. Each term is
-a band reduction, and garry fuses the whole expression into one kernel over
-the two cubes.
+a band reduction, and `collect()` computes them all in one run over the two
+cubes.
 
 ```{r change, message = FALSE}
 a <- cubes$y2023
@@ -220,9 +224,10 @@ lines(gdalraster::transform_xy(cbind(0, seq(51.4, 51.6, by = 0.01)),
 
 The dashed line is the meridian. Each zone carries embeddings a little past
 its own edge, so near the boundary both zones hold a vector for the same
-pixel, and the zone later in the store, zone 31, wins. How far apart are the
-two? Give each zone's array to read it alone, and take the cosine distance
-where both have data:
+pixel. Neither zone is in the grid's CRS, so they keep their order in the
+store, and zone 31, read last, wins. How far apart are the two? Give each
+zone's array to read it alone, and take the cosine distance where both have
+data:
 
 ```{r zones-overlap, message = FALSE}
 zone <- function(z) {
