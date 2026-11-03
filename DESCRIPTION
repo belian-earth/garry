@@ -27,7 +27,8 @@ Imports:
     pjrt (>= 0.6.0.9100),
     rlang,
     stablehlo (>= 0.5.0),
-    wk
+    wk,
+    yyjsonr (>= 0.1.18)
 Remotes:
     belian-earth/pjrt@buffer-handover
 Additional_repositories:

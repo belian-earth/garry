@@ -353,10 +353,14 @@ fixture_zarr_store <- function(format = "ZARR_V3", consolidated = TRUE) {
 
 # A Zarr store GDAL writes with each of `arrays` at its root: a 20 x 30
 # Int8 array in EPSG:32632 at 10 m from (500000, 4600000), the i-th one's
-# values i * 10 plus the column modulo 7 and the row modulo 3. Returns the
-# store.
-fixture_zarr_root <- function(arrays = "a", format = "ZARR_V3") {
-  key <- paste(c("zarr-root", arrays, format), collapse = " ")
+# values i * 10 plus the column modulo 7 and the row modulo 3, with or
+# without consolidated metadata. Returns the store.
+fixture_zarr_root <- function(
+  arrays = "a",
+  format = "ZARR_V3",
+  consolidated = TRUE
+) {
+  key <- paste(c("zarr-root", arrays, format, consolidated), collapse = " ")
   if (!is.null(.fixture_env[[key]])) {
     return(.fixture_env[[key]])
   }
@@ -404,9 +408,149 @@ fixture_zarr_root <- function(arrays = "a", format = "ZARR_V3") {
     src,
     store,
     output_format = "Zarr",
-    creation_options = paste0("FORMAT=", format),
+    creation_options = c(
+      paste0("FORMAT=", format),
+      paste0("CREATE_CONSOLIDATED_METADATA=", if (consolidated) "YES" else "NO")
+    ),
     quiet = TRUE
   )
   .fixture_env[[key]] <- store
   store
+}
+
+# A Zarr store written by hand as zarr-python lays one out: GDAL's own
+# georeferencing is absent, and each array is placed only by the
+# zarr-conventions attributes proj:code, spatial:transform and
+# spatial:shape. One Int16 array `v` of 20 x 30 px at 10 m, uncompressed,
+# sits in a group per element of `at` (name = list(crs, x0, y1), plus
+# `attrs` to add or, as NULL, drop attributes); the i-th holds i * 100 plus
+# its row and column, and its fill value -1 at the top-left pixel. The
+# attributes sit on the group, on the array (`on = "array"`), or only the
+# first element's on the store's root (`on = "root"`). The store is
+# consolidated at its root; a v3 store's groups too when `per_group`, as
+# OlmoEarth's are. Returns the store.
+fixture_zarr_declared <- function(
+  at,
+  on = "group",
+  per_group = TRUE,
+  format = 3L
+) {
+  root <- tempfile("garry-declared-", fileext = ".zarr")
+  js <- function(x, ...) {
+    path <- file.path(...)
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    writeLines(yyjsonr::write_json_str(x, auto_unbox = TRUE), path)
+  }
+  obj <- function(x = NULL) {
+    if (length(x)) x else structure(list(), names = character(0))
+  }
+  conv <- list(
+    list(uuid = "f17cb550-5864-4468-aeb7-f3180cfb622f", name = "proj"),
+    list(uuid = "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4", name = "spatial")
+  )
+  meta <- list()
+  top <- NULL
+  for (i in seq_along(at)) {
+    g <- names(at)[[i]]
+    a <- at[[g]]
+    decl <- utils::modifyList(
+      list(
+        zarr_conventions = conv,
+        `proj:code` = a$crs,
+        `spatial:dimensions` = c("y", "x"),
+        `spatial:transform` = c(10, 0, a$x0, 0, -10, a$y1),
+        `spatial:shape` = c(20L, 30L)
+      ),
+      a$attrs %||% list()
+    )
+    top <- if (i == 1L && on == "root") decl else top
+    ga <- obj(if (on == "group") decl)
+    aa <- obj(if (on == "array") decl)
+    v <- outer(1:20, 1:30, function(y, x) i * 100L + y + x)
+    v[1L, 1L] <- -1L
+    if (format == 3L) {
+      arr <- list(
+        zarr_format = 3L,
+        node_type = "array",
+        shape = c(20L, 30L),
+        data_type = "int16",
+        chunk_grid = list(
+          name = "regular",
+          configuration = list(chunk_shape = c(20L, 30L))
+        ),
+        chunk_key_encoding = list(
+          name = "default",
+          configuration = list(separator = "/")
+        ),
+        fill_value = -1L,
+        codecs = list(list(
+          name = "bytes",
+          configuration = list(endian = "little")
+        )),
+        attributes = aa,
+        dimension_names = c("y", "x")
+      )
+      grp <- list(zarr_format = 3L, node_type = "group", attributes = ga)
+      meta[[g]] <- grp
+      meta[[paste0(g, "/v")]] <- arr
+      if (per_group) {
+        grp$consolidated_metadata <- list(
+          kind = "inline",
+          must_understand = FALSE,
+          metadata = list(v = arr)
+        )
+      }
+      js(grp, root, g, "zarr.json")
+      js(arr, root, g, "v", "zarr.json")
+      chunk <- file.path(root, g, "v", "c", "0", "0")
+    } else {
+      arr <- list(
+        zarr_format = 2L,
+        shape = c(20L, 30L),
+        chunks = c(20L, 30L),
+        dtype = "<i2",
+        compressor = NULL,
+        fill_value = -1L,
+        order = "C",
+        filters = NULL
+      )
+      aa[["_ARRAY_DIMENSIONS"]] <- c("y", "x")
+      meta[[paste0(g, "/.zgroup")]] <- list(zarr_format = 2L)
+      meta[[paste0(g, "/.zattrs")]] <- ga
+      meta[[paste0(g, "/v/.zarray")]] <- arr
+      meta[[paste0(g, "/v/.zattrs")]] <- aa
+      js(list(zarr_format = 2L), root, g, ".zgroup")
+      js(ga, root, g, ".zattrs")
+      js(arr, root, g, "v", ".zarray")
+      js(aa, root, g, "v", ".zattrs")
+      chunk <- file.path(root, g, "v", "0.0")
+    }
+    dir.create(dirname(chunk), recursive = TRUE, showWarnings = FALSE)
+    con <- file(chunk, "wb")
+    writeBin(as.integer(t(v)), con, size = 2L, endian = "little")
+    close(con)
+  }
+  if (format == 3L) {
+    js(
+      list(
+        zarr_format = 3L,
+        node_type = "group",
+        attributes = obj(top),
+        consolidated_metadata = list(
+          kind = "inline",
+          must_understand = FALSE,
+          metadata = meta
+        )
+      ),
+      root,
+      "zarr.json"
+    )
+  } else {
+    js(list(zarr_format = 2L), root, ".zgroup")
+    js(obj(top), root, ".zattrs")
+    meta[[".zgroup"]] <- list(zarr_format = 2L)
+    meta[[".zattrs"]] <- obj(top)
+    js(list(metadata = meta, zarr_consolidated_format = 1L), root, ".zmetadata")
+  }
+  root
 }

@@ -181,22 +181,29 @@ LazyDataset <- S7::new_class(
 #'   (else `b<index>`) and slices take the time coordinate's (e.g. years);
 #'   pick slices with [time_sel()], or build only some with `time`.
 #'
-#'   A Zarr store's root (a `.zarr` path or URL, or `ZARR:"<root>"`) reads
-#'   the store's arrays that overlap `grid`, so a store of one array per
-#'   UTM zone needs no connection string per zone. GDAL lists the arrays,
-#'   from the store's consolidated metadata (over HTTP GDAL needs it, or
-#'   directory listings), and gives each one's CRS and extent; garry keeps
-#'   those whose extent overlaps `grid`, says which, and reads them as it
-#'   reads a vector of them. They go in the order of their paths in the
-#'   store (`/utm09/embeddings` before `/utm10/embeddings`), and where two
-#'   hold data for a cell, the later one's value is read. An array's extent
-#'   can reach well past the data it holds: each OlmoEarth zone's spans
-#'   983 km east to west, so a grid at Jasper (53 degrees north, inside
-#'   zone 11) also overlaps zones 10 and 12, and zone 12 wins wherever it
-#'   holds data. Give the arrays as connection strings to read fewer.
-#'   `array` names the array to read in each group when the georeferenced
-#'   arrays carry more than one name. Without `grid` the store must hold
-#'   one georeferenced array.
+#'   A Zarr store's root (a `.zarr` path or URL, or `ZARR:"<root>"`),
+#'   given alone, reads the store's arrays that overlap `grid`, so a store
+#'   of one array per UTM zone needs no connection string per zone. garry
+#'   lists the arrays from the store's consolidated metadata, one document,
+#'   and takes each one's CRS and extent from the zarr-conventions
+#'   attributes it declares (`proj:code`, `proj:wkt2` or `proj:projjson`;
+#'   `spatial:bbox`, or `spatial:transform` with `spatial:shape`), on the
+#'   array or its nearest group. GDAL places an array that declares none,
+#'   and lists the arrays of a store without consolidated metadata (over
+#'   HTTP, only where the server lists directories). garry keeps the arrays
+#'   whose extent overlaps `grid`, says which, and reads them as it reads a
+#'   vector of them; GDAL must place each one where the store declares it,
+#'   or the call aborts and names connection strings that read it as GDAL
+#'   places it. Where two arrays hold data for a cell, the later one's value
+#'   is read: arrays in the grid's CRS go last, so their own pixels win,
+#'   and the others go first, in the order of their paths in the store. An
+#'   array's extent can reach well past the data it holds: each OlmoEarth
+#'   zone's spans 983 km east to west, so a grid at Jasper (53 degrees
+#'   north, in zone 11's CRS) also reads zones 10 and 12, which show only
+#'   where zone 11 holds no data. Give the arrays as connection strings to
+#'   read fewer. `array` names the array to read in each group when the
+#'   arrays with a CRS and extent carry more than one name. Without `grid`
+#'   the store must hold one such array.
 #'
 #' All bands share one intermediate representation (IR) graph, so a mask
 #' defined once (see [apply_mask()]) is computed once and dedup'd across bands, and
@@ -282,9 +289,10 @@ LazyDataset <- S7::new_class(
 #'   asset) used when `scale` is numeric; defaults to 0. A band with an
 #'   offset and no scale of its own takes scale 1. Ignored when `scale` is
 #'   logical.
-#' @param array Zarr store root: the name of the array to read in each
-#'   group, the last part of its path, such as `"embeddings"`. Needed only
-#'   when the store's georeferenced arrays carry more than one name; `NULL`
+#' @param array With a Zarr store's root as `sources` (see the
+#'   description): the name of the array to read in each group, the last
+#'   part of its path, such as `"embeddings"`. Needed only when the
+#'   store's arrays with a CRS and extent carry more than one name; `NULL`
 #'   (the default) takes the one name they share.
 #' @return A `LazyDataset`.
 #' @seealso [group_by_time()], [collect()]
@@ -639,20 +647,35 @@ lazy_dataset <- function(
 }
 
 # The sources lazy_dataset() reads for `sources`. A Zarr store's root
-# becomes the arrays GDAL lists in it (gdal_zarr_arrays()) that are named
-# `array`, or share the one name of the georeferenced arrays, and overlap
-# `grid`, in the order of their paths; several read together as an
-# explicit list of them does, a later one winning where both hold data.
-# Anything else passes through.
+# becomes the arrays of one name in it (gdal_zarr_arrays()) that have a CRS
+# and extent overlapping `grid`, their rows kept in attribute "zarr_arrays"
+# for .zarr_check_placed(). They read as an explicit list of them does, a
+# later one winning where two hold data: those in the grid's CRS go last,
+# so their own pixels win, the rest in the order of their paths. Anything
+# else passes through.
 .ds_store_sources <- function(
   sources,
   grid,
   array,
   call = rlang::caller_env()
 ) {
-  root <- .zarr_store_root(sources)
   err <- c("garry_source_error", "garry_error")
-  if (is.null(root)) {
+  by_hand <- c(
+    "i" = "Or give the arrays as connection strings, such as {.code ZARR:\"<store>\":/<group>/<array>}."
+  )
+  roots <- vapply(sources, function(s) !is.null(.zarr_store_root(s)), NA)
+  if (length(sources) > 1L && any(roots)) {
+    where <- .url_scrub(sources[roots][[1L]])
+    cli::cli_abort(
+      c(
+        "{.path {where}} is the root of a Zarr store, which is read alone: give one store's root.",
+        by_hand
+      ),
+      class = err,
+      call = call
+    )
+  }
+  if (!any(roots)) {
     if (!is.null(array)) {
       where <- .url_scrub(sources[[1L]])
       cli::cli_abort(
@@ -670,9 +693,9 @@ lazy_dataset <- function(
     .assert_class(grid, GridSpec, "GridSpec")
   }
   where <- .url_scrub(sources)
-  found <- gdal_zarr_arrays(root, array, call = call)
-  if (is.null(found)) {
-    if (!is.null(array)) {
+  arrays <- gdal_zarr_arrays(.zarr_store_root(sources), array, call = call)
+  if (!is.null(array)) {
+    if (identical(arrays$array, "/")) {
       cli::cli_abort(
         c(
           "GDAL opens {.path {where}} as a single array, so {.arg array} has none to pick.",
@@ -682,90 +705,94 @@ lazy_dataset <- function(
         call = call
       )
     }
-    return(root)
+    if (!array %in% arrays$name) {
+      cli::cli_abort(
+        c(
+          "{.path {where}} holds no array named {.val {array}}.",
+          "i" = "Its arrays are named {.val {unique(arrays$name)}}."
+        ),
+        class = err,
+        call = call
+      )
+    }
+    arrays <- arrays[arrays$name == array, , drop = FALSE]
   }
-  if (!length(found$names)) {
-    cli::cli_abort(
-      "GDAL lists no arrays of two or more dimensions in {.path {where}}.",
-      class = err,
-      call = call
-    )
+  placed <- nzchar(arrays$crs)
+  if (!any(placed)) {
+    none <- if (nrow(arrays)) {
+      "No array of {.path {where}} declares a CRS and extent, and GDAL places none: {.val {arrays$array}}."
+    } else {
+      "{.path {where}} holds no array of two or more dimensions."
+    }
+    cli::cli_abort(c(none, by_hand), class = err, call = call)
   }
-  arrays <- found$arrays
-  if (!nrow(arrays)) {
-    cli::cli_abort(
-      c(
-        "{.path {where}} holds no array named {.val {array}}.",
-        "i" = "Its arrays are named {.val {found$names}}."
-      ),
-      class = err,
-      call = call
-    )
-  }
-  spatial <- arrays[nzchar(arrays$crs), , drop = FALSE]
-  if (!nrow(spatial)) {
-    cli::cli_abort(
-      c(
-        "GDAL places none of the arrays of {.path {where}} on a map: {.val {arrays$array}} carry no CRS or geotransform.",
-        "i" = "{.fn lazy_dataset} reads arrays GDAL georeferences."
-      ),
-      class = err,
-      call = call
-    )
-  }
-  nms <- unique(spatial$name)
+  nms <- unique(arrays$name[placed])
   if (length(nms) > 1L) {
     cli::cli_abort(
       c(
-        "{.path {where}} holds georeferenced arrays of {length(nms)} names: {.val {nms}}.",
+        "{.path {where}} holds arrays with a CRS and extent under {length(nms)} names: {.val {nms}}.",
         "i" = "Name the one to read with {.arg array}, e.g. {.code array = \"{nms[[1L]]}\"}."
       ),
       class = err,
       call = call
     )
   }
+  spatial <- arrays[placed & arrays$name == nms, , drop = FALSE]
+  lost <- arrays$array[!placed & arrays$name == nms]
+  named <- if (nzchar(nms)) cli::format_inline(" {.val {nms}}") else ""
+  n <- nrow(spatial)
+  unplaced <- c(
+    "!" = if (length(lost)) {
+      "{length(lost)} more{named} {cli::qty(length(lost))}array{?s} {?has/have} no CRS or extent, declared or from GDAL: {.val {lost}}."
+    }
+  )
   if (is.null(grid)) {
-    if (nrow(spatial) > 1L) {
+    if (n > 1L) {
       cli::cli_abort(
         c(
-          "{.path {where}} holds {nrow(spatial)} {.val {nms}} arrays, in {length(unique(spatial$crs))} CRS{?s}.",
+          "{.path {where}} holds {n}{named} arrays, in {length(unique(spatial$crs))} CRS{?s}.",
           "i" = "Give {.arg grid}: the arrays that overlap it are read onto it."
         ),
         class = err,
         call = call
       )
     }
-    return(spatial$path)
-  }
-  meets <- vapply(
-    seq_len(nrow(spatial)),
-    function(i) {
-      e <- unlist(spatial[i, c("xmin", "ymin", "xmax", "ymax")])
-      .gdal_grid_meets(grid, e, spatial$crs[[i]])
-    },
-    logical(1)
-  )
-  if (!any(meets)) {
-    crs <- .crs_label(grid@crs)
-    bb <- paste(
-      format(grid@extent, scientific = FALSE, trim = TRUE),
-      collapse = ", "
+    keep <- spatial
+  } else {
+    meets <- vapply(
+      seq_len(n),
+      function(i) {
+        e <- unlist(spatial[i, c("xmin", "ymin", "xmax", "ymax")])
+        .gdal_grid_meets(grid, e, spatial$crs[[i]])
+      },
+      logical(1)
     )
-    cli::cli_abort(
-      c(
-        "None of the {nrow(spatial)} {.val {nms}} {cli::qty(nrow(spatial))}array{?s} of {.path {where}} overlaps the grid.",
-        "i" = "The grid covers {bb} (xmin, ymin, xmax, ymax) in {crs}.",
-        "i" = "Check the grid's CRS and extent, or read another store."
-      ),
-      class = err,
-      call = call
-    )
+    if (!any(meets)) {
+      crs <- .crs_label(grid@crs)
+      bb <- .extent_txt(grid@extent)
+      cli::cli_abort(
+        c(
+          "None of the {n}{named} {cli::qty(n)}array{?s} of {.path {where}} overlaps the grid.",
+          "i" = "The grid covers {bb} (xmin, ymin, xmax, ymax) in {crs}.",
+          unplaced,
+          "i" = "Check the grid's CRS and extent, or read another store.",
+          by_hand
+        ),
+        class = err,
+        call = call
+      )
+    }
+    keep <- spatial[meets, , drop = FALSE]
+    native <- vapply(keep$crs, crs_equal, NA, grid@crs, USE.NAMES = FALSE)
+    keep <- keep[order(native), , drop = FALSE]
   }
-  keep <- spatial[meets, , drop = FALSE]
-  cli::cli_inform(
-    "Reading {nrow(keep)} of the {nrow(spatial)} {.val {nms}} {cli::qty(nrow(spatial))}array{?s} of {.path {where}}: {.val {keep$array}}."
-  )
-  keep$path
+  if (nrow(arrays) > 1L) {
+    cli::cli_inform(c(
+      "Reading {nrow(keep)} of the {n}{named} {cli::qty(n)}array{?s} of {.path {where}}: {.val {keep$array}}.",
+      unplaced
+    ))
+  }
+  structure(keep$path, zarr_arrays = keep)
 }
 
 # File form of lazy_dataset(): one band per (selected) file band, one time
@@ -805,10 +832,18 @@ lazy_dataset <- function(
   # defensively at open, but the warp seam consumes the path directly --
   # an unprefixed remote URL there makes GDAL pull the ENTIRE file (a
   # 2.7 GB AEF tile), observed live 2026-08-12.
+  store <- attr(paths, "zarr_arrays") # .ds_store_sources()
   paths <- vapply(as.character(paths), .gdal_href, "", USE.NAMES = FALSE)
+  # GDAL must place a store's arrays where the store declares them; the
+  # probes serve the checks of several sources below too
+  probes <- NULL
+  if (any(store$declared)) {
+    probes <- .gdal_unplaced_quiet(.source_probes(paths))
+    .zarr_check_placed(store, probes)
+  }
   meta <- NULL
   path <- if (length(paths) > 1L) {
-    probes <- .source_probes(paths)
+    probes <- probes %||% .source_probes(paths)
     # Several sources warp together band by band (one Zarr array per UTM
     # zone, say), so they must agree on their bands and, for N-D arrays,
     # on what each band is.
