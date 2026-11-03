@@ -111,7 +111,7 @@ prompts interactively otherwise, which fails in scripts and on servers):
 
 ``` r
 pjrt::install_pjrt()               # CPU plugin (~250 MB unpacked, cached per user),
-                                   # plus the CUDA plugin on a machine with an NVIDIA GPU
+                                   # plus the CUDA plugin on a Linux machine with an NVIDIA GPU
 # pjrt::install_pjrt(cuda = TRUE)  # also the CUDA plugin, when detection misses the GPU
 ```
 

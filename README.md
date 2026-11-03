@@ -100,7 +100,7 @@ prompts interactively otherwise, which fails in scripts and on servers):
 
 ``` r
 pjrt::install_pjrt()               # CPU plugin (~250 MB unpacked, cached per user),
-                                   # plus the CUDA plugin on a machine with an NVIDIA GPU
+                                   # plus the CUDA plugin on a Linux machine with an NVIDIA GPU
 # pjrt::install_pjrt(cuda = TRUE)  # also the CUDA plugin, when detection misses the GPU
 ```
 
@@ -183,12 +183,12 @@ plan_draw(composite[["ndvi"]])    # the NDVI band's node tree
 #> └─ ƒ map  (2 inputs)  ×2
 #>    └─ ▸ median  over t  ×2
 #>       └─ ⬚ stack  along t
-#>          └─ ✕ node  ×15
+#>          └─ ✕ mask  (2 inputs)  ×15
 #>             ├─ ◈ source  2536×1480 f32
 #>             └─ ◫ focal  r=3
 #>                └─ ◫ focal  r=2
 #>                   └─ ◫ focal  r=2
-#>                      └─ ✕ node
+#>                      └─ ✕ mask
 #>                         └─ ◈ source  2536×1480 f32
 
 # preview() estimates a coarse grid from the graph and device, runs the pipeline
