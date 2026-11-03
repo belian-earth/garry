@@ -52,38 +52,102 @@ test_that(".payload_bytes sizes raw payloads, R vectors and lists", {
   expect_identical(pb(list(raw(4), list(numeric(1), "x"))), 12)
 })
 
-test_that("gd task bodies report their transients to the deferred pass", {
-  st <- garry:::.daemon_gc_state
-  on.exit(st$bytes <- 0, add = TRUE)
-  dir <- withr::local_tempdir()
+# A gd task fixture on a 2 x 3 grid: a mask batch of two slices, one of them
+# read by another batch too, and a band strip of three slices. A median takes
+# the strip's three planes to one, so its count tells reads from outputs.
+.gc_fixture <- function(dir) {
   bin <- function(name, v) {
     f <- file.path(dir, name)
     writeBin(as.numeric(v), f, size = 4L)
     f
   }
-  fm <- bin("fm.bin", rep(1, 6))
-  shared <- bin("shared.bin", rep(1, 6))
-  band <- bin("b.bin", 1:6)
+  ny <- 2L
+  nx <- 3L
+  band <- bin("b.bin", seq_len(ny * nx))
+  list(
+    ny = ny,
+    nx = nx,
+    plane = ny * nx * 4, # one f32 slice
+    fm = bin("fm.bin", rep(1, ny * nx)),
+    shared = bin("shared.bin", rep(1, ny * nx)),
+    strip = c(band, band, band)
+  )
+}
+
+# Run the fixture's mask batch, then its band strip, on `dev`. Returns the
+# bytes each reported to the deferred pass.
+.gc_run <- function(fx, dir, dev, ck) {
+  st <- garry:::.daemon_gc_state
   st$bytes <- 0
   garry:::.gd_compute_mask(
-    list(fmask_bins = c(fm, shared), out_bins = file.path(dir, c("m1.bin", "m2.bin")), free = fm),
-    list(chain = list(), halo = 0L, ny = 2L, nx = 3L, dev = "cpu", ck = "k-gc-mask")
-  )
-  expect_gte(st$bytes, 2 * 6 * 4)
-  expect_false(file.exists(fm))
-  expect_true(file.exists(shared))
-  st$bytes <- 0
-  garry:::.gd_compute_masked_band(
-    list(cubes = list(band), rows = NULL, ck = "k-gc-band"),
     list(
-      kernels = list(`k-gc-band` = list(
-        F = NULL, op = "median", nan_rm = TRUE, masked = FALSE,
-        affine = list(scale = numeric(0), offset = numeric(0))
-      )),
-      ny = 2L, nx = 3L, dev = "cpu", mask_bins = character(0), mask_y0 = 0L
+      fmask_bins = c(fx$fm, fx$shared),
+      out_bins = file.path(dir, c("m1.bin", "m2.bin")),
+      free = fx$fm
+    ),
+    list(
+      chain = list(),
+      halo = 0L,
+      ny = fx$ny,
+      nx = fx$nx,
+      dev = dev,
+      ck = paste0(ck, "-mask")
     )
   )
-  expect_gte(st$bytes, 6 * 4)
+  mask <- st$bytes
+  st$bytes <- 0
+  band_ck <- paste0(ck, "-band")
+  garry:::.gd_compute_masked_band(
+    list(cubes = list(fx$strip), rows = NULL, ck = band_ck),
+    list(
+      kernels = stats::setNames(
+        list(list(
+          F = NULL,
+          op = "median",
+          nan_rm = TRUE,
+          masked = FALSE,
+          affine = list(scale = numeric(0), offset = numeric(0))
+        )),
+        band_ck
+      ),
+      ny = fx$ny,
+      nx = fx$nx,
+      dev = dev,
+      mask_bins = character(0),
+      mask_y0 = 0L
+    )
+  )
+  c(mask = mask, band = st$bytes)
+}
+
+test_that("gd task bodies report their transients to the deferred pass", {
+  st <- garry:::.daemon_gc_state
+  on.exit(st$bytes <- 0, add = TRUE)
+  .local_kernel_cache()
+  dir <- withr::local_tempdir()
+  fx <- .gc_fixture(dir)
+  got <- .gc_run(fx, dir, "cpu", "k-gc")
+  # What R held: the two masks written and the strip's one median plane. The
+  # reads left with each task and took no gc.
+  expect_equal(got[["mask"]], 2 * fx$plane)
+  expect_equal(got[["band"]], fx$plane)
+  expect_false(file.exists(fx$fm))
+  expect_true(file.exists(fx$shared))
+})
+
+test_that("on a device the deferred pass also counts the reads R held", {
+  st <- garry:::.daemon_gc_state
+  on.exit(st$bytes <- 0, add = TRUE)
+  .local_kernel_cache()
+  # No card here, so name the CPU as a device: that takes the device's branch.
+  testthat::local_mocked_bindings(.exec_device = function(device) "cpu")
+  dir <- withr::local_tempdir()
+  fx <- .gc_fixture(dir)
+  got <- .gc_run(fx, dir, "cpu", "k-gc-dev")
+  # The mask batch's two reads and its two masks written; the strip's three
+  # reads, which outweigh its median plane.
+  expect_equal(got[["mask"]], 2 * 2 * fx$plane)
+  expect_equal(got[["band"]], length(fx$strip) * fx$plane)
 })
 
 test_that("a cached pipeline kernel keeps no task's frame alive", {

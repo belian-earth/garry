@@ -354,6 +354,46 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   anvl::nv_array(bytes, shape = dim, dtype = dtype, byrow = TRUE, device = device)
 }
 
+#' Hand C memory to an AnvlArray with no copy.
+#'
+#' `mem` holds `prod(dim)` elements of `dtype` in ROW-major element order,
+#' aligned to 64 bytes. The array owns it from here: XLA reads those bytes
+#' in place, and [g_delete()] frees them with no gc. R's heap never holds
+#' them, so a read need not wait for a collection to go. This needs a CPU:
+#' a CUDA device holds its own copy, so its reads go through [g_upload_raw()].
+#'
+#' @param mem External pointer to the memory, cleared on success. Its
+#'   finalizer must do nothing on a null address.
+#' @param bytes Size of `mem`.
+#' @param release External pointer to the C function that frees `mem`. It
+#'   can run on an XLA thread, so it must not touch R.
+#' @param dtype garry dtype string (typically `"f32"`).
+#' @param dim Integer dims, `[nr, nc]` or `[t, nr, nc]`.
+#' @return An `AnvlArray` on the default device.
+#' @keywords internal
+g_adopt_raw <- function(mem, bytes, release, dtype, dim) {
+  anvl::nv_array(pjrt::pjrt_buffer_adopt(
+    mem,
+    bytes,
+    release,
+    dtype,
+    dim,
+    device = anvl::default_device("pjrt")
+  ))
+}
+
+#' Free an AnvlArray's memory now.
+#'
+#' The memory goes once any execution reading it has finished, with no gc,
+#' and any later use of `x` is an error.
+#'
+#' @param x `AnvlArray`.
+#' @return `NULL`, invisibly.
+#' @keywords internal
+g_delete <- function(x) {
+  pjrt::pjrt_buffer_delete(x$data)
+}
+
 #' Construct a constant-filled AnvlArray on the device.
 #'
 #' The fill is represented in the program (no host buffer of `prod(dim)`

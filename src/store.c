@@ -26,6 +26,7 @@
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -679,18 +680,18 @@ SEXP garry_coarsen_into(SEXP dst, SEXP off, SEXP src, SEXP geo, SEXP table) {
   return dst;
 }
 
-/* The same run of bytes from each file, end to end in one raw vector. A cube
- * read this way is built once, where joining per-file reads holds it twice. */
-SEXP garry_read_rows(SEXP paths, SEXP offset, SEXP bytes) {
+/* `len` bytes at `off` of every file, end to end at `p`. Returns NULL once all of
+ * them came, or what went wrong, so a caller holding C memory frees it before R
+ * hears of the error. */
+static const char *read_rows_to(unsigned char *p, SEXP paths, double off, double len) {
+  static char why[8192];
   R_xlen_t n = XLENGTH(paths);
-  double off = Rf_asReal(offset), len = Rf_asReal(bytes);
-  SEXP out = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t) (n * len)));
-  unsigned char *p = RAW(out);
   for (R_xlen_t i = 0; i < n; i++) {
     const char *path = R_ExpandFileName(CHAR(STRING_ELT(paths, i)));
     FILE *f = fopen(path, "rb");
     if (f == NULL) {
-      Rf_error("cannot open %s", path);
+      snprintf(why, sizeof why, "cannot open %s", path);
+      return why;
     }
     size_t got = 0;
     if (fseeko(f, (off_t) off, SEEK_SET) == 0) {
@@ -698,11 +699,93 @@ SEXP garry_read_rows(SEXP paths, SEXP offset, SEXP bytes) {
     }
     fclose(f);
     if (got != (size_t) len) {
-      Rf_error("short read of %s: %.0f of %.0f bytes", path, (double) got, len);
+      snprintf(why, sizeof why, "short read of %s: %.0f of %.0f bytes", path, (double) got, len);
+      return why;
     }
+  }
+  return NULL;
+}
+
+/* The same run of bytes from each file, end to end in one raw vector. A cube
+ * read this way is built once, where joining per-file reads holds it twice. */
+SEXP garry_read_rows(SEXP paths, SEXP offset, SEXP bytes) {
+  double len = Rf_asReal(bytes);
+  SEXP out = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t) (XLENGTH(paths) * len)));
+  const char *why = read_rows_to(RAW(out), paths, Rf_asReal(offset), len);
+  if (why != NULL) {
+    Rf_error("%s", why);
   }
   UNPROTECT(1);
   return out;
+}
+
+/* Memory for a buffer to adopt: 64-byte aligned, with malloc()'s own pointer
+ * and the block's size stored just ahead of it. posix_memalign() does not
+ * exist on Windows. mem_release() runs on an XLA thread, so it touches nothing
+ * of R's, and the count of live bytes, which a test reads, is atomic. */
+typedef struct {
+  void *base;
+  size_t size;
+} mem_head;
+
+static atomic_size_t mem_live;
+
+static void *mem_new(size_t n) {
+  void *base = malloc(n + 64 + sizeof(mem_head));
+  if (base == NULL) {
+    return NULL;
+  }
+  uintptr_t p = ((uintptr_t) base + sizeof(mem_head) + 63) & ~(uintptr_t) 63;
+  mem_head *h = (mem_head *) p - 1;
+  h->base = base;
+  h->size = n;
+  atomic_fetch_add(&mem_live, n);
+  return (void *) p;
+}
+
+static void mem_release(void *p) {
+  mem_head *h = (mem_head *) p - 1;
+  atomic_fetch_sub(&mem_live, h->size);
+  free(h->base);
+}
+
+/* Bytes of the blocks mem_new() made that are not yet released. */
+SEXP garry_mem_live(void) {
+  return Rf_ScalarReal((double) atomic_load(&mem_live));
+}
+
+/* Nothing to do once adopted: adoption clears the pointer. */
+static void mem_finalize(SEXP mem) {
+  void *p = R_ExternalPtrAddr(mem);
+  if (p != NULL) {
+    R_ClearExternalPtr(mem);
+    mem_release(p);
+  }
+}
+
+SEXP garry_mem_release(void) {
+  return R_MakeExternalPtrFn((DL_FUNC) mem_release, R_NilValue, R_NilValue);
+}
+
+/* The same bytes in C memory, for a CPU buffer to adopt: R's heap never holds
+ * them, so they go with the buffer and need no gc. */
+SEXP garry_read_rows_aligned(SEXP paths, SEXP offset, SEXP bytes) {
+  double len = Rf_asReal(bytes);
+  double size = XLENGTH(paths) * len;
+  SEXP mem = PROTECT(R_MakeExternalPtr(NULL, R_NilValue, R_NilValue));
+  R_RegisterCFinalizerEx(mem, mem_finalize, TRUE);
+  void *p = mem_new((size_t) size);
+  if (p == NULL) {
+    Rf_error("no memory for a read of %.0f bytes", size);
+  }
+  R_SetExternalPtrAddr(mem, p);
+  const char *why = read_rows_to(p, paths, Rf_asReal(offset), len);
+  if (why != NULL) {
+    mem_finalize(mem);
+    Rf_error("%s", why);
+  }
+  UNPROTECT(1);
+  return mem;
 }
 
 /* A raw cube cut into equal parts, one file each. */
@@ -843,6 +926,9 @@ static const R_CallMethodDef CallEntries[] = {
   {"garry_plane_write", (DL_FUNC) &garry_plane_write, 2},
   {"garry_bin_nan", (DL_FUNC) &garry_bin_nan, 2},
   {"garry_read_rows", (DL_FUNC) &garry_read_rows, 3},
+  {"garry_read_rows_aligned", (DL_FUNC) &garry_read_rows_aligned, 3},
+  {"garry_mem_release", (DL_FUNC) &garry_mem_release, 0},
+  {"garry_mem_live", (DL_FUNC) &garry_mem_live, 0},
   {"garry_write_parts", (DL_FUNC) &garry_write_parts, 2},
   {"garry_coarsen_into", (DL_FUNC) &garry_coarsen_into, 5},
   {"garry_decode_into", (DL_FUNC) &garry_decode_into, 5},

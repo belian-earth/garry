@@ -115,7 +115,8 @@
 
 # One-band strip cubes a joint strip of these reducers holds per band, for
 # .gd_fit(): its input, the read that filled it, its masked copy, and a share of
-# the mask's two and the scan's few planes.
+# the mask's two and the scan's few planes. On the CPU the read is the input, and
+# this stays: a joint strip's height follows it, and cells follow the height.
 .mb_joint_cubes <- 3.5
 
 # The iteration count of a multivariate reducer.
