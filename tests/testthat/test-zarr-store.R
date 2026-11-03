@@ -212,10 +212,12 @@ test_that("GDAL lists a v2 store and places what it declares", {
 
 test_that("GDAL places the arrays of a store that declares nothing", {
   for (fmt in c("ZARR_V3", "ZARR_V2")) {
-    # unlisted without consolidated metadata
-    expect_null(gdal_zarr_arrays(.zarr_store_root(
-      fixture_zarr_store(fmt, FALSE)$store
-    )))
+    # unlisted without consolidated metadata, which GDAL before 3.13 writes
+    # for a v2 store whatever it is asked
+    st <- fixture_zarr_store(fmt, FALSE)$store
+    if (!file.exists(file.path(st, ".zmetadata"))) {
+      expect_null(gdal_zarr_arrays(.zarr_store_root(st)))
+    }
     if (fmt == "ZARR_V3" && .old_gdal()) {
       next
     }
