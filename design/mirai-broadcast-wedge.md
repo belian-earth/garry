@@ -82,7 +82,7 @@ garry prevents the second at its source and catches it if it happens anyway:
 - `.pool_send()` runs each `everywhere()` under `suspendInterrupts()`, so a
   broadcast is sent whole. It cannot block: garry's pools set no memory limit
   for mirai's gate.
-- garry never cancels a broadcast's task.
+- garry cancels only a failed run's own read tasks, never a broadcast's.
 - The progress check catches a generation left open by anything else, such as
   a user's own `everywhere()` on garry's profile.
 
@@ -123,6 +123,31 @@ daemons that have not answered the probe, by pid. A Ctrl-C, or 60 s, stops
 those daemons with SIGKILL, since a dead daemon cannot be mid-reply; the close
 waits until each pool has seen them go, then closes, says which daemons it
 stopped, and raises the Ctrl-C again so `garry_daemons()` starts no pool.
+
+A close cancels nothing. Each run cancels its own queued reads, through the
+handles it holds, before its clear: the scheduler's in-flight table, the
+read-only loop's, and the composite routes' fetches (`.run_guard()` clears once
+the run's own frames have exited). A width-1 profile has no dispatcher to drop
+a task, so nothing is cancelled there, and a failed run's clear on a compute
+profile waits behind its running task, the task queued behind it and any
+kernel warm-up queued there: tens of seconds behind a scan compile. The
+readers' clear goes only once the compute profiles' have come back: it frees
+regions a compute task still running has yet to read, and that daemon died of
+it in 14 of 20 runs interrupted mid-run, against 0 of 20 with the order [M].
+
+Nothing in a failure path or a close calls `unresolved()` on a run's task. A
+reply that landed uncollected maps a region the run's clear frees, and
+unserialising it then raises "mori: shared memory region not found";
+`stop_mirai()` on such a handle returns `FALSE` without reading it [M, mirai
+2.7.2].
+
+A cancel drops a queued task; one already running resumes through the
+interrupt and runs to its end (`.task_mirai()`), so a Ctrl-C or a failed run
+returns once the tasks already running have ended. An interrupt
+that lands inside cli's message code leaves the daemon's cli unable to format
+any later message: 5 of 30 cancels did so with cli 3.6.6, and a pool that
+survives a failed run's cancel would then report its next failures as cli's
+own error. With the resume, 0 of 30 did.
 
 ## When nanonext fixes it
 

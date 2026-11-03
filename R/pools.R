@@ -720,6 +720,114 @@ NULL
   )
 }
 
+# A run's store broadcasts: the region drops it sends while it works, and
+# the clear at its end, to the profiles that ran a task of the run (`used`,
+# and use(p) as tasks go out). A daemon pins only regions its own tasks
+# created, so a profile with no task holds none of the run's, and a
+# broadcast to it would wait out whatever it is doing, such as a kernel
+# warm-up. A drop is not waited for when sent, as it queues behind each
+# reader's current read, but the run waits for every broadcast before it
+# returns, and a daemon lost under one fails the run with a
+# garry_pool_error naming the pool (.pool_await()). .run_guard() ends the
+# run with finish() or fail().
+.store_broadcasts <- function(used = character(0), call = rlang::caller_env()) {
+  what <- "releasing the run's shared memory"
+  sent <- list()
+  done <- FALSE
+  send <- function(expr, profiles, ...) {
+    got <- .pool_send(expr, profiles, ...)
+    for (p in names(got)) {
+      sent[[p]] <<- c(sent[[p]], got[[p]])
+    }
+  }
+  clear <- function(profiles) {
+    send(quote(asNamespace("garry")$.daemon_shm_clear()), profiles)
+  }
+  # Wait for the broadcasts on `profiles`, all of them or those landed.
+  settle <- function(profiles, landed = FALSE) {
+    got <- list()
+    for (p in intersect(names(sent), profiles)) {
+      take <- !landed | !vapply(sent[[p]], mirai::unresolved, logical(1))
+      got[[p]] <- sent[[p]][take]
+      sent[[p]] <<- sent[[p]][!take]
+    }
+    .pool_await(got, what = what, call = call)
+  }
+  list(
+    use = function(p) used <<- union(used, p),
+    used = function() used,
+    # Drop regions `regs`, after settling the drops that have landed, so a
+    # daemon lost under one fails the run as soon as its reply comes back.
+    drop = function(regs) {
+      settle(names(sent), landed = TRUE)
+      send(
+        quote(asNamespace("garry")$.daemon_shm_drop(regs)),
+        used,
+        regs = regs
+      )
+    },
+    finish = function() {
+      done <<- TRUE
+      clear(used)
+      settle(used)
+    },
+    # A failed run's end, once the run's own frames have cancelled their
+    # tasks and settled the writer: the clear and the wait as finish()
+    # does, on every used pool that is not down (a pool that is down fails
+    # every later run, and a wait on it only waits out the loss). Nothing
+    # here touches a task of the run: a reply that landed uncollected maps
+    # a region the clear frees. What fails is said once, as a message, so
+    # the caller receives the run's own condition whatever `warn` is.
+    fail = function() {
+      if (done) {
+        return(invisible(NULL))
+      }
+      done <<- TRUE
+      fails <- character(0)
+      keep <- function(expr) {
+        tryCatch(expr, error = function(e) {
+          fails <<- c(fails, gsub("\\s*\n\\s*", " ", conditionMessage(e)))
+          NULL
+        })
+      }
+      live <- keep(used[!.pools_down(used)$down])
+      # The compute profiles (FALSE) first: the readers' clear frees regions
+      # a compute task still running has yet to read, and its daemon died of
+      # it (14 of 20 runs interrupted mid-run).
+      for (ps in split(live, live == "garry_read")) {
+        keep(clear(ps))
+        keep(settle(ps))
+      }
+      if (length(fails)) {
+        cli::cli_inform(
+          c(
+            "!" = "garry could not clean up after the run:",
+            stats::setNames(
+              gsub("([{}])", "\\1\\1", fails),
+              rep("x", length(fails))
+            ),
+            "i" = "Call {.fn garry_daemons} to restart the pools."
+          ),
+          class = c("garry_pool_message", "garry_message")
+        )
+      }
+      invisible(NULL)
+    }
+  )
+}
+
+# Evaluate `expr`, a run's body, and end its store broadcasts (`store`,
+# .store_broadcasts()): finish() once it returns, fail() however else it
+# ends (an error, an interrupt, a time limit). fail() runs as this frame
+# exits, after the run's own frames have cancelled their tasks and settled
+# the writer on their way out.
+.run_guard <- function(expr, store) {
+  on.exit(store$fail())
+  out <- withVisible(expr)
+  store$finish()
+  if (out$visible) out$value else invisible(out$value)
+}
+
 # Close the outputs the writer daemon holds. A writer that dies under
 # the close leaves its last blocks unflushed, so its loss aborts here
 # (.await_task()) as a failed close does.

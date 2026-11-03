@@ -149,6 +149,17 @@ NULL
 # formals are dotted so no data name partially matches them (`ex = ex`
 # once bound to an `expr` formal).
 .task_mirai <- function(.expr, ..., .compute, .timed = FALSE) {
+  # A cancel (stop_mirai()) interrupts a running task. One that lands inside
+  # cli's formatting leaves the daemon's cli unable to format any later
+  # message (5 of 30 cancels, cli 3.6.6), so a task resumes through an
+  # interrupt and runs to its end: a cancel drops a queued task, and the
+  # host stops waiting for a running one's reply.
+  .expr <- bquote(withCallingHandlers(
+    .(.expr),
+    interrupt = function(cnd) {
+      if (!is.null(findRestart("resume"))) invokeRestart("resume")
+    }
+  ))
   if (.timed) {
     .expr <- bquote({
       .garry_t0 <- Sys.time()
@@ -415,6 +426,15 @@ execute_plan_mirai <- function(
   band_names = NULL,
   wspec = NULL
 ) {
+  store <- .store_broadcasts()
+  .run_guard(
+    .execute_plan_mirai(plan, path, nodata, band_names, wspec, store),
+    store
+  )
+}
+
+# execute_plan_mirai()'s run, with its store (.store_broadcasts()).
+.execute_plan_mirai <- function(plan, path, nodata, band_names, wspec, store) {
   .garry_opt_check()
   # Distributed execution runs on the garry_daemons() split pools: read/warp
   # tasks route to the read pool: where anvl/PJRT never loads, so a reader
@@ -583,14 +603,19 @@ execute_plan_mirai <- function(
   # region they created for this run and release them once the host is done
   # (regions outlive tasks, not the run); host-side handles die with
   # `chunk_vals`. Both pools pin regions (readers: windows; computers:
-  # results).
+  # results). The run waits for every drop and its closing clear before it
+  # returns, and sends them only to the profiles that ran a task
+  # (.store_broadcasts()). A failed run first cancels the reads it gave up
+  # on, before its clear (.run_guard()): the read pool drops a queued one,
+  # and a running one ends first. A width-1 compute profile has no
+  # dispatcher to drop a task, so the clear waits behind what it holds.
+  inflight <- list()
   on.exit(
-    for (p in profiles) {
-      try(
-        mirai::everywhere(asNamespace("garry")$.daemon_shm_clear(), .compute = p),
-        silent = TRUE
-      )
-    },
+    mirai::stop_mirai(inflight[vapply(
+      names(inflight),
+      function(k) tasks[[k]]$pool == "read",
+      NA
+    )]),
     add = TRUE
   )
   chunk_vals <- new.env(parent = emptyenv()) # task key -> shared value
@@ -1294,14 +1319,7 @@ execute_plan_mirai <- function(
     ) {
       return(invisible(NULL))
     }
-    regs <- .glue("r{run_id}_{pending_drop}")
-    for (p in profiles) {
-      mirai::everywhere(
-        asNamespace("garry")$.daemon_shm_drop(regs),
-        regs = regs,
-        .compute = p
-      )
-    }
+    store$drop(.glue("r{run_id}_{pending_drop}"))
     # Per-key exists() filter: ls() on the store env sorts every key
     # (~40 ms at 20k entries) once per flush.
     rm(
@@ -1503,9 +1521,8 @@ execute_plan_mirai <- function(
   if (writer_on) {
     .assert_pools_alive("garry_write")
     # Abort path: queued writer tasks still map store regions by name,
-    # so this handler must run BEFORE the earlier-registered
-    # .daemon_shm_clear handler unlinks them (`after = FALSE` prepends;
-    # on.exit otherwise runs in registration order).
+    # so this handler must run BEFORE the run's clear unlinks them
+    # (`after = FALSE` prepends; .run_guard() clears once this frame exits).
     on.exit(.writer_settle(wr_inflight), add = TRUE, after = FALSE)
   }
   # Every sink that streams gets its output now and writes each chunk the
@@ -1750,7 +1767,7 @@ execute_plan_mirai <- function(
   # task would load anvl on a lean reader and spin up a whole all-cores
   # XLA client there, reintroducing the thread contention and unbounded
   # per-daemon working set a small compute pool exists to avoid.
-  inflight <- list()
+  # `inflight` (task key -> handle) is declared with the store above.
   n_inflight <- c(read = 0L, comp = 0L)
   # Launches self-limit on RESIDENT store bytes, not in-flight count:
   # a store region (read window or compute output) lives until its
@@ -1982,6 +1999,7 @@ execute_plan_mirai <- function(
           t$launch(prof, with_fn = !warm_now)
         }
         tasks[[k]]$prof <- prof
+        store$use(prof)
         if (t$pool == "comp") {
           prof_slots[[prof]] <- prof_slots[[prof]] + 1L
           if (
@@ -2197,7 +2215,7 @@ execute_plan_mirai <- function(
   if (!is.null(fetch_root)) {
     .pool_broadcast(
       quote(asNamespace("garry")$.gdal_handles_release(targets)),
-      profiles = profiles,
+      profiles = store$used(),
       targets = character(0),
       live_only = TRUE,
       what = "closing the daemons' fetched files"

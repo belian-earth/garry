@@ -20,8 +20,9 @@ skip_on_os(c("windows", "mac"))   # /dev/shm scan
   sort(all[grepl(own, all)])
 }
 
-# The shm-clear handlers dispatch via everywhere() without awaiting, so
-# give the daemons a moment before asserting the store is clean.
+# A run waits for its shm clear before it returns, failed or not, on every
+# pool it ran a task on that still has all its daemons. The poll is a
+# bound, not a delay: it returns as soon as the store is clean.
 .sf_expect_shm_restored <- function(before, pids, timeout = 30) {
   t0 <- Sys.time()
   repeat {

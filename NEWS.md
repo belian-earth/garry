@@ -461,6 +461,31 @@
   and the pids of its daemons still mid-task. A Ctrl-C, or a minute's wait,
   stops those daemons and closes the pools; after a Ctrl-C no pool is started
   and `garry_daemons_set()` is `FALSE`.
+* A run waits for the store drops it sends and the clear at its end before it
+  returns, and sends them only to the pools that ran its tasks, so it never
+  waits on a kernel warm-up of a compute daemon it gave no task. A store drop
+  that fails mid-run, such as one whose reader is lost, fails the run with a
+  `garry_pool_error` naming the pool, where it was ignored. The wait costs a
+  small scheduler run 6 ms, 154 to 160 ms at the median of 240 runs; a small
+  composite is unchanged at 103 ms. Over ten interleaved rounds of the small
+  benchmark tasks, cold and warm, medians moved by -5 to +5 % with no
+  consistent sign, and every output was identical.
+* A failed run cancels the reads it left queued, on every route, and the
+  caller receives the run's own error whatever `options(warn)` is: what fails
+  in its cleanup is said once, as a message. A cancelled read that has started
+  runs to its end: interrupting one inside cli's message code broke cli on
+  that daemon for every later task.
+* A failed or interrupted run no longer takes compute daemons down with it.
+  Its clear on the read pool freed inputs that a compute task still running
+  had yet to read, and that daemon died, in 14 of 20 runs interrupted
+  mid-run. The readers' clear now waits until the compute daemons' clears
+  have come back: 0 of 20. A Ctrl-C or a failed run therefore returns once the tasks already
+  running have ended, as its clears queue behind them: a read on each reader,
+  and on a compute daemon its running task, the one queued behind it and any
+  kernel warm-up queued there, which can take tens of seconds behind a scan
+  compile. With reads and compute tasks of 0.4 to 0.9 s, a Ctrl-C returned
+  after a median 1.24 s, at most 2.0 s, where it returned at once and left
+  them running.
 * An in-process read-only collect no longer needs `withr`, which garry
   only suggests, and a token refresh during a run says so when `httr2` is
   missing.
