@@ -274,7 +274,10 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
     "mask bomb on a daemon"
   )
   expect_identical(garry_last_route(), "composite_direct")
-  expect_identical(ran(), 2L)
+  # A queued band read can start before the cancel lands on a slow host
+  # (R-devel on CI started 3 of the 4), and then runs to its end; without the
+  # cancel all 4 run.
+  expect_lt(ran(), 4L)
 })
 
 test_that("a failed cleanup is said once, and the run's error stays its own, whatever warn is", {
