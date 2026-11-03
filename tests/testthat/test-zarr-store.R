@@ -1,15 +1,17 @@
 # lazy_dataset() pointed at a Zarr store's root: garry lists a v3 store's
-# arrays from its consolidated metadata (else GDAL lists them), takes each
-# one's CRS and extent from its zarr-conventions attributes as GDAL reads
-# them (else GDAL gives them), keeps those that overlap the grid and reads
-# them as an explicit list of them, GDAL checked against what the store
-# declares. Gates: which arrays a grid keeps and in what order, cells
-# identical to the explicit list, Zarr v2 and v3, declared and GDAL-placed
-# arrays, GDAL's rules for a declaration, the connection string GDAL
-# places a declared array through, arrays a grid misses left unopened,
-# GDAL's disagreement with a declaration, declarations that abort, arrays
-# with no CRS named, a store of one array alone or in a vector, the remote
-# listing kept, and classed errors that say what to do.
+# arrays from its consolidated metadata (GDAL lists a v2 store's from its
+# .zmetadata), takes each one's CRS and extent from its zarr-conventions
+# attributes as GDAL reads them (else GDAL gives them), keeps those that
+# overlap the grid and reads them as an explicit list of them, GDAL
+# checked against what the store declares. A store without consolidated
+# metadata reads as any other source. Gates: which arrays a grid keeps and
+# in what order, cells identical to the explicit list, Zarr v2 and v3,
+# declared and GDAL-placed arrays, GDAL's rules for a declaration, the
+# connection string GDAL places a declared array through, arrays a grid
+# misses left unopened, GDAL's disagreement with a declaration,
+# declarations that abort, arrays with no CRS named, a store of one array
+# alone or in a vector, the remote listing kept, and classed errors that
+# say what to do.
 
 # The source paths a dataset reads, in the order its nodes hold them.
 .ds_paths <- function(ds) {
@@ -131,6 +133,16 @@ test_that("consolidated metadata lists a store's arrays and what they declare", 
   a <- gdal_zarr_arrays(.zarr_store_root(store))
   expect_false(a$declared)
   expect_identical(a$crs, "")
+  # an affine, north-up spatial:transform only: GDAL places no other
+  store <- fixture_zarr_declared(at3(
+    g2 = list(attrs = list(`spatial:transform_type` = "other")),
+    g3 = list(
+      attrs = list(`spatial:transform` = c(10, 1, 500100, 0, -10, 4600000))
+    )
+  ))
+  a <- gdal_zarr_arrays(.zarr_store_root(store))
+  expect_identical(a$declared, c(TRUE, FALSE, FALSE))
+  expect_identical(a$crs[2:3], c("", ""))
 })
 
 test_that("a declared array is read through the connection string GDAL places it by", {
@@ -187,7 +199,11 @@ test_that("GDAL lists a v2 store and places what it declares", {
 
 test_that("GDAL places the arrays of a store that declares nothing", {
   for (fmt in c("ZARR_V3", "ZARR_V2")) {
-    for (cons in c(TRUE, FALSE)) {
+    # unlisted without consolidated metadata
+    expect_null(gdal_zarr_arrays(.zarr_store_root(
+      fixture_zarr_store(fmt, FALSE)$store
+    )))
+    for (cons in TRUE) {
       fx <- fixture_zarr_store(fmt, cons)
       a <- gdal_zarr_arrays(.zarr_store_root(fx$store))
       expect_identical(
@@ -270,7 +286,7 @@ test_that("arrays in the grid's CRS go last, the rest in path order", {
 
 test_that("a store reads the cells of the explicit list of its arrays", {
   for (fmt in c("ZARR_V3", "ZARR_V2")) {
-    for (cons in c(TRUE, FALSE)) {
+    for (cons in TRUE) {
       fx <- fixture_zarr_store(fmt, cons)
       # each grid is in EPSG:32632 or 32631: those arrays go last
       cases <- list(
@@ -312,15 +328,13 @@ test_that("in one CRS, the later array in path order wins where it holds data", 
 })
 
 test_that("GDAL must place a declared array where the store declares it", {
-  # an extent GDAL does not give: GDAL places by the array's shape
-  store <- fixture_zarr_declared(
-    at3(g1 = list(attrs = list(`spatial:shape` = c(20L, 31L))))
-  )
-  expect_error(
-    suppressMessages(lazy_dataset(store, g_one())),
-    class = "garry_source_error",
-    regexp = "over 500000, 4599800, 500310, 4600000 .*GDAL gives EPSG:32632 over 500000, 4599800, 500300, 4600000, opening .*/g1"
-  )
+  # spatial:shape, which GDAL ignores: g1 declares 10 of its 30 columns
+  # there, and GDAL places all 30, over the grid
+  ten <- list(attrs = list(`spatial:shape` = c(20L, 10L)))
+  store <- fixture_zarr_declared(at3(g1 = ten)[1L])
+  grid <- grid_spec("EPSG:32632", c(500150, 4599850, 500250, 4599950), res = 10)
+  got <- collect(lazy_dataset(store, grid)$b1, distributed = FALSE)
+  expect_equal(unname(got), .ref_declared(1)[6:15, 16:25], ignore_attr = TRUE)
   # a connection string GDAL gives no CRS through, which the error does
   # not name: the group's, for a group declaration only the store's root
   # consolidates
@@ -360,14 +374,28 @@ test_that("a declaration GDAL cannot take aborts before any array opens", {
     class = "garry_source_error",
     regexp = '"/g2/v" of .* declares .*spatial:dimensions.* it lacks \\("lat" and "lon"\\), on which GDAL 3.13 crashes'
   )
+  # spatial registered without proj: no declaration to garry, but GDAL 3.13
+  # crashes all the same
+  sp_only <- list(
+    attrs = list(
+      zarr_conventions = NULL,
+      `proj:code` = NULL,
+      `spatial:dimensions` = c("lat", "lon")
+    ),
+    group_attrs = list(zarr_conventions = list(list(uuid = .zarr_spatial)))
+  )
+  store <- fixture_zarr_declared(at3(g2 = sp_only))
+  expect_error(
+    lazy_dataset(store, g_one()),
+    class = "garry_source_error",
+    regexp = '"/g2/v" of .* declares .*spatial:dimensions.* it lacks \\("lat" and "lon"\\)'
+  )
   expect_length(.gdal_cache$handles, 0L)
 })
 
 test_that("an array whose declared extent misses the grid is not opened", {
-  # g1 declares 10 of its 30 columns, so GDAL would place it over the grid
-  ten <- list(attrs = list(`spatial:shape` = c(20L, 10L)))
-  store <- fixture_zarr_declared(at3(g1 = ten)[1L])
-  grid <- grid_spec("EPSG:32632", c(500150, 4599850, 500250, 4599950), res = 10)
+  store <- fixture_zarr_declared(at3()[1L])
+  grid <- grid_spec("EPSG:32632", c(500350, 4599850, 500450, 4599950), res = 10)
   .gdal_handle_reset()
   expect_error(
     lazy_dataset(store, grid),
@@ -405,18 +433,21 @@ test_that("a store of one array reads as that array, whatever its form", {
         ignore_attr = TRUE
       )
     }
-    # the overlap check holds for one array too
-    expect_error(
-      lazy_dataset(store, g_off()),
-      class = "garry_source_error",
-      regexp = "None of the 1 .*array of .* overlaps the grid"
-    )
   }
-  # the array has a name to pick, however the store is listed
-  for (cons in c(TRUE, FALSE)) {
-    store <- fixture_zarr_root("a", consolidated = cons)
-    expect_no_message(lazy_dataset(store, array = "a"))
-  }
+  # listed, the overlap check holds for one array too, and the array has
+  # a name to pick; unlisted, there is none
+  store <- fixture_zarr_root("a")
+  expect_error(
+    lazy_dataset(store, g_off()),
+    class = "garry_source_error",
+    regexp = "None of the 1 .*array of .* overlaps the grid"
+  )
+  expect_no_message(lazy_dataset(store, array = "a"))
+  expect_error(
+    lazy_dataset(fixture_zarr_root("a", consolidated = FALSE), array = "a"),
+    class = "garry_source_error",
+    regexp = "consolidated metadata lists"
+  )
 })
 
 test_that("a vector of single-array stores reads as a vector of files", {
@@ -476,13 +507,17 @@ test_that("store errors are classed and say what to do", {
     class = "garry_source_error",
     regexp = 'None of the arrays of .* has a CRS and extent: "/other/lut"'
   )
-  # nor from a store without consolidated metadata, the root GDAL opens
-  # as one array named
+  # a store without consolidated metadata, or none at all, passes through
+  # as any other source
   store <- fixture_zarr_declared(at3()[1L], consolidated = "none")
+  gone <- file.path(withr::local_tempdir(), "gone.zarr")
+  for (src in c(store, gone)) {
+    expect_identical(.ds_store_sources(src, g_one(), NULL), src)
+  }
   expect_error(
-    lazy_dataset(store, g_one()),
+    lazy_dataset(store, g_one(), array = "v"),
     class = "garry_source_error",
-    regexp = 'None of the arrays of .* has a CRS and extent: "/g1/v"'
+    regexp = "consolidated metadata lists, and .* has none"
   )
   expect_error(
     lazy_dataset(fx$paths[["utm32"]], g_one(), array = "emb"),
@@ -514,13 +549,6 @@ test_that("store errors are classed and say what to do", {
     lazy_dataset(data.frame(asset = "x"), g_one(), assets = "x", array = "emb"),
     class = "garry_source_error",
     regexp = "STAC items have none"
-  )
-  # a store GDAL cannot open fails as a read, naming it
-  gone <- file.path(withr::local_tempdir(), "gone.zarr")
-  expect_error(
-    .gdal_hushed(lazy_dataset(gone, g_one()), "gone.zarr"),
-    class = "garry_read_error",
-    regexp = "could not open .*gone.zarr.* as a Zarr store"
   )
 })
 

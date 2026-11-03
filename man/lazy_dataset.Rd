@@ -168,12 +168,13 @@ given alone, reads the store's arrays that overlap \code{grid}, so a store
 of one array per UTM zone needs no connection string per zone. In a
 Zarr v3 store with consolidated metadata, one document, garry reads
 each array's CRS and extent where GDAL 3.13 does: the zarr-conventions
-\code{proj:code}, \code{proj:wkt2} or \code{proj:projjson}, and \code{spatial:transform}
-with \code{spatial:dimensions} and \code{spatial:shape}, on the array or its
-parent group, registered by uuid in the \code{zarr_conventions} of the
-first of the two that has one. GDAL places the other arrays, and
-lists the arrays of any other store (over HTTP, only from consolidated
-metadata or where the server lists directories). An array whose
+\code{proj:code}, \code{proj:wkt2} or \code{proj:projjson}, and an affine, north-up
+\code{spatial:transform} over the array's own shape along
+\code{spatial:dimensions}, on the array or its parent group, registered by
+uuid in the \code{zarr_conventions} of the first of the two that has one.
+GDAL places the other arrays, and lists the arrays of a Zarr v2 store
+from its \code{.zmetadata}. A store without consolidated metadata reads as
+any other source: GDAL opens its root as one dataset. An array whose
 declared extent misses \code{grid} is not opened, so GDAL is not asked
 where it lies. garry reads the arrays that overlap \code{grid} as it reads
 a vector of them, and says which; GDAL must place each one where the

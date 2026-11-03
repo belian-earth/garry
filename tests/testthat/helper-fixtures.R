@@ -420,8 +420,9 @@ fixture_zarr_root <- function(
 
 # A Zarr store written by hand as zarr-python lays one out: GDAL's own
 # georeferencing is absent, and each array is placed only by the
-# zarr-conventions attributes proj:code, spatial:dimensions,
-# spatial:transform and spatial:shape, registered in zarr_conventions. One
+# zarr-conventions attributes proj:code, spatial:dimensions and
+# spatial:transform, registered in zarr_conventions (spatial:shape is
+# written too, as OlmoEarth writes it, and GDAL ignores it). One
 # Int16 array `v` (dimensions y, x) of 20 x 30 px at 10 m, uncompressed,
 # sits in a group per element of `at`: name = list(crs, x0, y1), plus
 # `attrs` to add to those attributes or, as NULL, drop one, and

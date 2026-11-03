@@ -195,12 +195,14 @@ NULL
 # declares the CRS and extent (.zarr_listing()), FALSE when GDAL gives
 # them on opening the array, as it does for those named `array` (all
 # without it) and leaves the rest NA; and `via_group`, TRUE when the
-# array's group declares part of them (.zarr_placed_paths()). A remote
-# store's listing, with what GDAL gave, is kept for the session.
+# array's group declares part of them (.zarr_placed_paths()). NULL for a
+# store without consolidated metadata, which garry does not list. A
+# remote store's listing, with what GDAL gave, is kept for the session.
 gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
-  out <- .gdal_cache$zarr_stores[[root]] %||%
-    .zarr_listing(root, call) %||%
-    .zarr_gdal_listing(root, call)
+  out <- .gdal_cache$zarr_stores[[root]] %||% .zarr_listing(root, call)
+  if (is.null(out)) {
+    return(NULL)
+  }
   for (i in which(is.na(out$crs) & (is.null(array) | out$name %in% array))) {
     g <- .gdal_georef(out$path[[i]])
     out$crs[[i]] <- g$crs
@@ -217,22 +219,30 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 .zarr_proj <- "f17cb550-5864-4468-aeb7-f3180cfb622f"
 .zarr_spatial <- "689b58e2-cf7b-45e0-9fff-9cfc0883d6b4"
 
-# The arrays of a Zarr v3 store from the consolidated metadata in its
-# root's zarr.json, one document, as gdal_zarr_arrays() rows; NULL for a
-# store without it. Declarations are read as GDAL 3.13 reads them: from
-# the array's attributes, else its parent group's, registered by the
+# The arrays of a Zarr store, as gdal_zarr_arrays() rows, from its
+# consolidated metadata: a v3 store's in its root's zarr.json, one
+# document, or a v2 store's .zmetadata, which GDAL lists
+# (.zarr_gdal_listing()); NULL for a store without it. A v3 store's
+# declarations are read as GDAL 3.13 reads them: from the array's
+# attributes, else its parent group's, registered by uuid in the
 # zarr_conventions of the first of those that has any; a CRS from
-# proj:code, proj:wkt2 or proj:projjson, and an extent from the
-# spatial:transform beside spatial:dimensions, over spatial:shape (else
-# the array's last two dimensions). GDAL places the arrays they do not.
-# A CRS PROJ cannot resolve aborts, as do spatial:dimensions the array
-# lacks: GDAL 3.13 crashes on opening such an array.
+# proj:code, proj:wkt2 or proj:projjson, and an affine, north-up
+# spatial:transform over the array's own shape along spatial:dimensions
+# (GDAL ignores spatial:shape). GDAL places the arrays they do not. A CRS
+# PROJ cannot resolve aborts, as do spatial:dimensions an array of two or
+# more dimensions lacks once spatial is registered, declared or not:
+# GDAL 3.13 crashes on opening any array of such a store.
 .zarr_listing <- function(root, call) {
   store <- sub('^ZARR:"(.*)"$', "\\1", root)
   doc <- .gdal_read_json(.glue("{store}/zarr.json"))
   md <- doc$consolidated_metadata$metadata
   if (is.null(md)) {
-    return(NULL)
+    v2 <- is.null(doc) &&
+      isTRUE(.gdal_quiet_remote(
+        gdalraster::vsi_stat(.glue("{store}/.zmetadata")),
+        zarr = TRUE
+      ))
+    return(if (v2) .zarr_gdal_listing(root, call))
   }
   is_arr <- vapply(
     md,
@@ -264,40 +274,41 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
       if (is.list(json)) yyjsonr::write_json_str(json, auto_unbox = TRUE)
     tr <- sp[["spatial:transform"]]
     dims <- utils::tail(sp[["spatial:dimensions"]], 2L)
-    if (
-      !all(c(.zarr_proj, .zarr_spatial) %in% ids) ||
-        !rlang::is_string(crs) ||
-        !(is.numeric(tr) && length(tr) == 6L && all(is.finite(tr))) ||
-        length(dims) != 2L
-    ) {
-      next
-    }
     a <- out$array[[i]]
     where <- .url_scrub(store)
-    resolves <- tryCatch(
-      nzchar(.gdal_quiet_errors(gdalraster::srs_to_wkt(crs))),
-      error = function(e) FALSE
-    )
-    bad <- if (!all(dims %in% m$dimension_names)) {
-      "{.code spatial:dimensions} it lacks ({.val {dims}}), on which GDAL 3.13 crashes"
-    } else if (!resolves) {
-      "a CRS that PROJ cannot resolve: {.val {crs}}"
-    }
-    if (length(bad)) {
+    abort <- function(bad) {
       cli::cli_abort(
         paste0("{.val {a}} of {.path {where}} declares ", bad, "."),
         class = c("garry_source_error", "garry_error"),
         call = call
       )
     }
-    hw <- sp[["spatial:shape"]]
-    if (!(is.numeric(hw) && length(hw) == 2L)) {
-      hw <- utils::tail(m$shape, 2L)
+    if (.zarr_spatial %in% ids && !all(dims %in% m$dimension_names)) {
+      abort(
+        "{.code spatial:dimensions} it lacks ({.val {dims}}), on which GDAL 3.13 crashes"
+      )
     }
-    col <- c(0, hw[[2L]], 0, hw[[2L]])
-    row <- c(0, 0, hw[[1L]], hw[[1L]])
-    xs <- tr[[1L]] * col + tr[[2L]] * row + tr[[3L]]
-    ys <- tr[[4L]] * col + tr[[5L]] * row + tr[[6L]]
+    if (
+      !all(c(.zarr_proj, .zarr_spatial) %in% ids) ||
+        !rlang::is_string(crs) ||
+        !(is.numeric(tr) && length(tr) == 6L && all(is.finite(tr))) ||
+        tr[[2L]] != 0 ||
+        tr[[4L]] != 0 ||
+        !(sp[["spatial:transform_type"]] %||% "affine") %in% "affine" ||
+        length(dims) != 2L
+    ) {
+      next
+    }
+    wkt <- tryCatch(
+      .gdal_quiet_errors(gdalraster::srs_to_wkt(crs)),
+      error = function(e) ""
+    )
+    if (!nzchar(wkt)) {
+      abort("a CRS that PROJ cannot resolve: {.val {crs}}")
+    }
+    hw <- m$shape[match(dims, m$dimension_names)]
+    xs <- tr[[3L]] + c(0, hw[[2L]]) * tr[[1L]]
+    ys <- tr[[6L]] + c(0, hw[[1L]]) * tr[[5L]]
     via <- grepl("/", keys[[i]]) && 2L %in% w
     out[i, c("crs", "xmin", "ymin", "xmax", "ymax", "declared", "via_group")] <-
       list(crs, min(xs), min(ys), max(xs), max(ys), TRUE, via)
@@ -345,9 +356,8 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   )
 }
 
-# The arrays of a store without Zarr v3 consolidated metadata, as GDAL
-# lists them (gdalmdiminfo): from a v2 store's .zmetadata, or else from
-# the store's directories, which a server must list over HTTP.
+# The arrays of a Zarr v2 store, as GDAL lists them (gdalmdiminfo) from its
+# .zmetadata.
 .zarr_gdal_listing <- function(root, call) {
   info <- tryCatch(
     .gdal_with_retry(
@@ -364,9 +374,8 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
       where <- .url_scrub(root)
       cli::cli_abort(
         c(
-          "GDAL could not open {.path {where}} as a Zarr store.",
-          "i" = "Without consolidated metadata, GDAL finds a store's arrays in its directories, which a server over HTTP must list.",
-          "i" = "Or give the arrays as connection strings, such as {.code ZARR:\"<store>\":/<group>/<array>}."
+          "GDAL could not list the arrays of {.path {where}} from its {.file .zmetadata}.",
+          "i" = "Give the arrays as connection strings, such as {.code ZARR:\"<store>\":/<group>/<array>}."
         ),
         class = c("garry_read_error", "garry_error"),
         call = call,
@@ -434,12 +443,17 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 
 # Where GDAL places the dataset at `path`: `crs`, "" when it has none, and
 # `extent` (xmin, ymin, xmax, ymax in `crs`), NA without a CRS and a
-# geotransform.
+# north-up geotransform.
 .gdal_georef <- function(path) {
   ds <- .gdal_probe(path)
   gt <- .gdal_unplaced_quiet(ds$getGeoTransform())
   crs <- .gdal_unplaced_quiet(ds$getProjection())
-  if (!nzchar(crs) || identical(as.numeric(gt), c(0, 1, 0, 0, 0, 1))) {
+  if (
+    !nzchar(crs) ||
+      identical(as.numeric(gt), c(0, 1, 0, 0, 0, 1)) ||
+      gt[[3L]] != 0 ||
+      gt[[5L]] != 0
+  ) {
     return(list(crs = "", extent = rep(NA_real_, 4L)))
   }
   list(
@@ -488,10 +502,12 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     }
     said <- .glue("{.crs_label(a$crs)} over {.extent_txt(want)}")
     path <- .url_scrub(a$path)
-    gdal <- if (nzchar(p$srs)) {
-      .glue("{.crs_label(p$srs)} over {.extent_txt(got)}, opening {path}")
-    } else {
+    gdal <- if (!nzchar(p$srs)) {
       "no CRS"
+    } else if (identical(as.numeric(p$gt), c(0, 1, 0, 0, 0, 1))) {
+      .glue("{.crs_label(p$srs)} and no geotransform, opening {path}")
+    } else {
+      .glue("{.crs_label(p$srs)} over {.extent_txt(got)}, opening {path}")
     }
     cli::cli_abort(
       c(

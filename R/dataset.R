@@ -186,12 +186,13 @@ LazyDataset <- S7::new_class(
 #'   of one array per UTM zone needs no connection string per zone. In a
 #'   Zarr v3 store with consolidated metadata, one document, garry reads
 #'   each array's CRS and extent where GDAL 3.13 does: the zarr-conventions
-#'   `proj:code`, `proj:wkt2` or `proj:projjson`, and `spatial:transform`
-#'   with `spatial:dimensions` and `spatial:shape`, on the array or its
-#'   parent group, registered by uuid in the `zarr_conventions` of the
-#'   first of the two that has one. GDAL places the other arrays, and
-#'   lists the arrays of any other store (over HTTP, only from consolidated
-#'   metadata or where the server lists directories). An array whose
+#'   `proj:code`, `proj:wkt2` or `proj:projjson`, and an affine, north-up
+#'   `spatial:transform` over the array's own shape along
+#'   `spatial:dimensions`, on the array or its parent group, registered by
+#'   uuid in the `zarr_conventions` of the first of the two that has one.
+#'   GDAL places the other arrays, and lists the arrays of a Zarr v2 store
+#'   from its `.zmetadata`. A store without consolidated metadata reads as
+#'   any other source: GDAL opens its root as one dataset. An array whose
 #'   declared extent misses `grid` is not opened, so GDAL is not asked
 #'   where it lies. garry reads the arrays that overlap `grid` as it reads
 #'   a vector of them, and says which; GDAL must place each one where the
@@ -648,7 +649,8 @@ lazy_dataset <- function(
 # attribute "zarr_arrays" for .zarr_check_placed(). They read as an
 # explicit list of them does, a later one winning where two hold data:
 # those in the grid's CRS go last, so their own pixels win, the rest in
-# the order of their paths. Anything else passes through, a vector too,
+# the order of their paths. A store without consolidated metadata passes
+# through as any other source, and so does anything else, a vector too,
 # unless it holds a store's root that GDAL opens with no bands, a store
 # of several arrays.
 .ds_store_sources <- function(
@@ -696,6 +698,16 @@ lazy_dataset <- function(
   }
   where <- .url_scrub(sources)
   arrays <- gdal_zarr_arrays(root, array, call = call)
+  if (is.null(arrays)) {
+    if (!is.null(array)) {
+      cli::cli_abort(
+        "{.arg array} picks arrays that a store's consolidated metadata lists, and {.path {where}} has none.",
+        class = err,
+        call = call
+      )
+    }
+    return(sources)
+  }
   if (!is.null(array)) {
     if (!array %in% arrays$name) {
       cli::cli_abort(
@@ -714,12 +726,12 @@ lazy_dataset <- function(
     none <- if (nrow(arrays)) {
       c(
         "None of the arrays of {.path {where}} has a CRS and extent: {.val {arrays$array}}.",
-        "i" = "garry reads {.code proj:} and {.code spatial:} declarations only from a Zarr v3 store's consolidated metadata, and GDAL places none of these arrays."
+        "i" = "GDAL 3.13 places a Zarr array by its own georeferencing, or by {.code proj:} and {.code spatial:} keys on the array or its parent group, registered by uuid in the {.code zarr_conventions} of the first of the two that has any. garry reads those keys from a Zarr v3 store's consolidated metadata."
       )
     } else {
       "{.path {where}} holds no array of two or more dimensions."
     }
-    cli::cli_abort(c(none, by_hand), class = err, call = call)
+    cli::cli_abort(none, class = err, call = call)
   }
   nms <- unique(arrays$name[placed])
   if (length(nms) > 1L) {
