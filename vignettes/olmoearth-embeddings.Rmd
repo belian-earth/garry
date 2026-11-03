@@ -32,22 +32,22 @@ embedding moved between 2023 and 2025.
 
 ## Open the store
 
-GDAL's Zarr driver reads the store directly. A `ZARR:` connection string
-names the zone group and the array; garry adds the `/vsicurl/` prefix to a
-bare `https` store, as it does for any URL.
+GDAL's Zarr driver reads the store directly, and `lazy_dataset()` takes the
+store's URL as it is: GDAL lists the store's arrays and where each one lies,
+and garry reads those that overlap the grid it is given. garry adds the
+`ZARR:` and `/vsicurl/` prefixes GDAL needs for a store over `https`.
 
 
 ``` r
 library(garry)
 
 store <- "https://data.source.coop/olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr"
-src <- paste0('ZARR:"', store, '/utm11":/embeddings')
 ```
 
 Each zone is in its own UTM CRS (Jasper is in zone 11, `EPSG:32611`), on a
 10 m grid anchored at the zone origin. A grid in that CRS at 10 m with edges
-on multiples of 10 m is a plain window of the array, so the read needs no
-resampling. Edges on multiples of 2560 m also line up with the store's
+on multiples of 10 m is a plain window of zone 11's array, so its read needs
+no resampling. Edges on multiples of 2560 m also line up with the store's
 256-pixel chunks, so every chunk fetched is used in full.
 
 
@@ -58,14 +58,24 @@ dim(grid)
 #> 3584 2816
 ```
 
-`lazy_dataset()` reads the array's dimension tags (GDAL flattens
-`(time, band)` into classic bands and labels each one) and lays the array out
-as dataset bands by year. `bands = 1:64` keeps the 64-dimension embedding,
-which halves the bytes read.
+`lazy_dataset()` asks GDAL for the store's arrays and keeps those whose
+extent overlaps the grid, and its message names them. Each zone's array
+reaches well past its zone (983 km east to west), so the grid overlaps zones
+10 and 12 as well as 11. Where zones overlap, the one later in the store wins
+wherever it holds data, and each zone holds embeddings only a little past its
+edges (see [Across zones](#across-zones)), so every cell here comes from zone
+11. Listing the store's 60 zones takes about 250 metadata requests, once per
+session. To read zone 11 alone, give its array instead:
+`ZARR:"<store>/utm11":/embeddings`.
+
+`lazy_dataset()` then reads the arrays' dimension tags (GDAL flattens
+`(time, band)` into classic bands and labels each one) and lays them out as
+dataset bands by year. `bands = 1:64` keeps the 64-dimension embedding, which
+halves the bytes read.
 
 
 ``` r
-oe <- lazy_dataset(src, grid, bands = 1:64)
+oe <- lazy_dataset(store, grid, bands = 1:64)
 oe
 #> ── <LazyDataset> ───────────────────────────────────────────────────────────────
 #>   bands  b1 b2 b3 b4 b5 b6 b7 b8 ... (+56)
@@ -209,18 +219,23 @@ round(moved)
 ## Across zones
 
 Each zone is a separate array in its own CRS, so an area across a zone
-boundary reads from both. Give `lazy_dataset()` every zone's array and a
-grid in any CRS: the warper reprojects each zone into every window and
-mosaics them, still reading all of a year's bands in one task.
+boundary reads from both. The store and a grid in any CRS are still all
+`lazy_dataset()` needs: the warper reprojects each zone it finds into every
+window and mosaics them, still reading all of a year's bands in one task.
 Greenwich, on the meridian between zones 30 and 31, on the British National
 Grid:
 
 
 ``` r
-zones <- paste0('ZARR:"', store, "/utm", c(30, 31), '":/embeddings')
 london <- grid_spec("EPSG:27700", c(528900, 172400, 548900, 182400), res = 10)
+zones <- lazy_dataset(store, london, bands = 1:64)
+```
 
-greenwich <- lazy_dataset(zones, london, bands = 1:64) |>
+The grid overlaps zones 30 and 31 only, and the message says so.
+
+
+``` r
+greenwich <- zones |>
   time_sel("2025") |>
   lazy_map(fn = dequantize_olmoearth, dtype = "f32") |>
   stack_bands() |>
@@ -241,20 +256,22 @@ lines(gdalraster::transform_xy(cbind(0, seq(51.4, 51.6, by = 0.01)),
 ![plot of chunk zones-map](https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/zones-map-1.png)
 
 The dashed line is the meridian. Each zone carries embeddings a little past
-its own meridian, so near the boundary both zones hold a vector for the same
-pixel, and the later zone in `zones` wins. How far apart are the two? Read
-each zone alone and take the cosine distance where both have data:
+its own edge, so near the boundary both zones hold a vector for the same
+pixel, and the zone later in the store, zone 31, wins. How far apart are the
+two? Give each zone's array to read it alone, and take the cosine distance
+where both have data:
 
 
 ``` r
 zone <- function(z) {
-  lazy_dataset(z, london, bands = 1:64) |>
+  src <- paste0('ZARR:"', store, "/utm", z, '":/embeddings')
+  lazy_dataset(src, london, bands = 1:64) |>
     time_sel("2025") |>
     lazy_map(fn = dequantize_olmoearth, dtype = "f32") |>
     stack_bands()
 }
-z30 <- zone(zones[1])
-z31 <- zone(zones[2])
+z30 <- zone(30)
+z31 <- zone(31)
 gap <- collect(1 - reduce_over(z30 * z31, "sum", "band") /
   sqrt(reduce_over(z30 * z30, "sum", "band") *
        reduce_over(z31 * z31, "sum", "band")))
