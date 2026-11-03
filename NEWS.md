@@ -146,20 +146,31 @@
 * `lazy_dataset()` reads a Zarr store from its root: given the store (a
   `.zarr` path or URL, or `ZARR:"<root>"`) and a grid, it reads the store's
   arrays whose extents overlap the grid, as it reads a list of them, and
-  says which. garry lists the arrays from the store's consolidated
-  metadata and takes each one's CRS and extent from the zarr-conventions
-  `proj:` and `spatial:` attributes it declares; GDAL places the arrays
-  that declare none, and lists the arrays of a store without consolidated
-  metadata. GDAL must place each array read where the store declares it,
-  or the call aborts and names connection strings to pass instead. Arrays
-  in the grid's CRS go last, so their own pixels win where they hold data;
-  the others keep the order of their paths. `array` names the array to
-  read in each group when the arrays carry more than one name. Building
-  the Jasper dataset of the OlmoEarth vignette from the store took 18
-  requests and about 11 s from source.coop, against 8 requests and 6 s
-  for zone 11 named by hand; Greenwich took 14 requests and 12 s against
-  12 and 9 s. A remote store's listing is kept for the session, and a second
-  build made no request.
+  says which. From a Zarr v3 store's consolidated metadata, garry lists the
+  arrays and takes each one's CRS and extent from the zarr-conventions
+  `proj:` and `spatial:` attributes where GDAL 3.13 reads them, on the
+  array or its parent group; an array whose declared extent misses the grid
+  is not opened. GDAL lists the arrays of any other store, Zarr v2
+  included, and places the arrays that declare nothing. GDAL must place
+  each array read where the store declares it, or the call aborts; so does
+  a declared CRS that PROJ cannot resolve. Arrays in the grid's CRS go
+  last, so their own pixels win where they hold data; the others keep the
+  order of their paths. `array` names the array to read in each group when
+  the arrays carry more than one name. In a vector of sources, a store of
+  one array reads as that array, as before, and a store of several aborts
+  with a classed error: give it alone. Building the Jasper dataset of the OlmoEarth vignette from the store took
+  18 requests to source.coop against 8 for zone 11's array named by hand,
+  and 14 to 18 s against 7 to 12 s at about 0.75 s a request; Greenwich
+  took 14 requests and 17 to 20 s against 12 requests and 10 to 11 s. A
+  remote store's listing is kept for the session, and a second build made
+  no request. garry opens an array through its group, as OlmoEarth's are
+  read, when the declarations are the array's own or the group's zarr.json
+  consolidates it; otherwise through the store's root, the only way GDAL
+  3.13 takes up a group's declarations when only the root consolidates, as
+  zarr-python writes by default. From the root, GDAL looks for the
+  coordinate arrays of every array in the store: on a local server, opening
+  one array of such a store of 60, each with a `band` dimension, took 188
+  requests and 7 s, against 11 requests and 0.2 s through its group.
 * `band_sel()`, `time_sel()` and per-slice operations work on a stack after
   it has been collected (the planner rewrites collected stacks in place).
 * `time_sel()` takes a dataset and keeps the matching slices of every band.

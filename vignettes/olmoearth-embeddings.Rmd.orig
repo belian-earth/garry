@@ -64,10 +64,10 @@ to west), so the grid overlaps zones 10 and 12 as well as 11. Zone 11 is in
 the grid's CRS, so it is read last: wherever it holds data its own pixels are
 read, and zones 10 and 12 show only where it holds none. GDAL opens the three
 arrays, and garry checks that GDAL places each one where the store declares.
-Building the dataset from the store took 18 requests and about 11 s against
-source.coop, and zone 11's array named by hand,
-`ZARR:"<store>/utm11":/embeddings`, took 8 requests and 6 s; a second build
-in the session made none. Naming the array also reads zone 11 alone, without
+Building the dataset from the store took 18 requests to source.coop, against
+8 for zone 11's array named by hand, `ZARR:"<store>/utm11":/embeddings`: at
+about 0.75 s a request, 14 to 18 s against 7 to 12 s. A second build in the
+session made no request. Naming the array also reads zone 11 alone, without
 warping zones 10 and 12 into every window.
 
 `lazy_dataset()` then reads the arrays' dimension tags (GDAL flattens
