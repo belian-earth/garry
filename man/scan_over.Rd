@@ -17,7 +17,9 @@ and grid (multi-input scan), or a \code{LazyDataset}.}
 \item{direction}{\code{"forward"}, \code{"backward"}, or \code{"bidir"} (the body
 encapsulates direction; this is declarative metadata).}
 
-\item{dtype}{Optional output dtype override (default: input dtype).}
+\item{dtype}{Optional output dtype. Left out, it is the dtype \code{fn} returns,
+found by tracing \code{fn} when the raster is built; given, \code{fn} is not traced
+then.}
 
 \item{bands}{\code{LazyDataset} only: bands to scan (default: all).}
 }

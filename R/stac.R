@@ -669,9 +669,9 @@ stac_drop_duplicates <- function(sources) {
 #' @param sources A `stac_sources()` table.
 #' @param granularity "day", "month", "exact", or "solar_day".
 #' @param lon Longitude (degrees, WGS84) whose solar time defines
-#'   `"solar_day"`: use the centre of the analysis area. Defaults to
-#'   the circular mean of the source footprint centres (safe across
-#'   the antimeridian).
+#'   `"solar_day"`, and only with it: use the centre of the analysis area.
+#'   Defaults to the circular mean of the source footprint centres (safe
+#'   across the antimeridian).
 #' @return The table with a `slice` column.
 #' @family stac helpers
 #' @export

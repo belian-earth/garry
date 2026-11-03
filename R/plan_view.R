@@ -365,10 +365,10 @@ NULL
 #' kind: a compute stage is classified by the IR nodes fused into it
 #' (`focal`, `scan`, `patch`, `stack`, `map`, most informative first,
 #' the same vocabulary as [plan_draw()]), and reduce stages carry their
-#' reducer (`reduce\u00b7median`). When a `LazyDataset` is passed, derived
+#' reducer (`reduce·median`). When a `LazyDataset` is passed, derived
 #' bands (`ds[["ndvi"]] <- ...`) are recovered from the dataset's step
 #' record and the stage computing one is labelled with the band name
-#' (`derive\u00b7ndvi`); the derivation is bounded structurally at the first
+#' (`derive·ndvi`); the derivation is bounded structurally at the first
 #' non-elementwise node, so it survives subsetting (`ds["ndvi"]`).
 #' Hovering a stage shows its full op composition and any recoverable
 #' metadata: acquisition dates on slice sources and t-spans on
@@ -395,7 +395,8 @@ NULL
 #'   times the widest level's node count; lower it to compress.
 #' @param height,width Widget size, as CSS units.
 #' @return A `visNetwork` htmlwidget.
-#' @seealso [plan_dot()] for DOT text, [plan_draw()] for pixels.
+#' @seealso [plan_dot()] for DOT text, [plan_draw()] for a terminal drawing of
+#'   the pipeline.
 #' @examples
 #' \dontrun{
 #' lr <- lazy_source("cube.tif")

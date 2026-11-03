@@ -11,8 +11,9 @@ garry_last_route()
 or \code{"read_only"}; \code{NULL} before any \code{collect()} in the session.
 }
 \description{
-A diagnostics helper. The distributed \code{collect()} picks its execution
-route automatically, and this reports the route the last call took,
+A diagnostics helper. garry picks the execution route automatically, and
+this reports the route the last \code{\link[=collect]{collect()}}, \code{\link[=write_tif]{write_tif()}} or
+\code{\link[=materialise]{materialise()}} took,
 so pipelines can log it or assert a plan has not changed route.
 The values are:
 }
@@ -21,7 +22,7 @@ The values are:
 \item \code{"composite_direct"}: the specialised masked-composite executor;
 \item \code{"gd_reduce"}: the general reduce-decomposition executor;
 \item \code{"scheduler"}: the general distributed scheduler;
-\item \code{"single"}: the in-process single-threaded executor
+\item \code{"single"}: the in-process executor
 (\code{distributed = FALSE});
 \item \code{"read_only"}: a plan that only reads and stacks rasters, copied
 from GDAL straight into the result in either mode.

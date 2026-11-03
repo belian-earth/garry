@@ -30,7 +30,9 @@ identity for algebraic decomposition and dtype rules. \code{nan_rm = TRUE}
 NaN nodata sentinel. A pixel that is nodata in every input stays
 nodata (NaN) for \code{"mean"}, \code{"median"}, \code{"min"} and \code{"max"}; \code{"sum"}
 gives 0 and \code{"count"} gives 0. (The \code{\link[=g_min]{g_min()}} / \code{\link[=g_max]{g_max()}} primitives
-return their identity, \code{Inf} / \code{-Inf}, instead.)
+return their identity, \code{Inf} / \code{-Inf}, instead.) A spatial reduction (over
+\code{x} and \code{y}) is combined on the host after every chunk has run, so computing
+on it fails when planned, with a \code{garry_reduce_unsupported_error}.
 }
 \details{
 Over a \code{LazyDataset}, each band is reduced independently (over \code{"t"}: stack

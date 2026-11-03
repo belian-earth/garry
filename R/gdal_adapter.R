@@ -1128,6 +1128,7 @@ gdal_grid_spec <- function(path, band = 1L, open_options = character(0)) {
 #'   a single band, or a `(band, y, x)` numeric array when `band` is a
 #'   vector. With `out = "raw_f32"`: a raw row-major f32 payload (band
 #'   planes contiguous when `band` is a vector).
+#' @keywords internal
 gdal_read_window <- function(
   path,
   band,
@@ -2080,6 +2081,7 @@ stage_raw_cube <- function(src, dst_vrt) {
 #'   the VRT takes from the file, its type and row order among them
 #'   (`.warp_read_plan()`). `NULL` builds.
 #' @return Path to the VRT file (in `tempdir()`).
+#' @keywords internal
 gdal_warp_vrt <- function(
   src_path,
   band,
@@ -2522,6 +2524,7 @@ gdal_mosaic_vrt <- function(dst, files) {
 #'   `stored * scale + offset`.
 #' @return An open dataset object; the caller closes it with
 #'   `gdal_close_output()`, which reports a failed close.
+#' @keywords internal
 gdal_create_output <- function(
   path,
   grid,
@@ -2729,6 +2732,7 @@ gdal_translate_plane <- function(src, band, grid, resampling, nodata, bin) {
 #' @param plane For a rank-3 `(band, y, x)` raw store payload, the
 #'   1-based plane to write (taken by byte offset, no copy of the rest).
 #' @return Invisibly, `NULL`.
+#' @keywords internal
 gdal_write_window <- function(
   ds,
   x_off,

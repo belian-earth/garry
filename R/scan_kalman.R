@@ -64,7 +64,7 @@
 #' pipeline (for example by marginal-likelihood MLE on sampled pixel
 #' series). Pixels with fewer than 3 valid observations return
 #' all-NaN. Initialisation is the large-variance diffuse approximation
-#' `P1 = kappa * I`.
+#' `P1 = 1e7 * I`.
 #'
 #' @param sigma_lvl,sigma_slp,sigma_obs Noise standard deviations (level
 #'   disturbance, slope disturbance, observation).

@@ -58,3 +58,4 @@ Returns the window with row 1 = northernmost. Offsets are 0-based
 pixel coordinates. If \code{nodata} is supplied, matching cells (and any
 file-level NA) are rewritten to NaN and the result is numeric.
 }
+\keyword{internal}

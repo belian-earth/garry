@@ -15,8 +15,10 @@ A data.frame with columns \code{option}, \code{tier}, \code{default},
 The registry surface for the flat \verb{garry.*} option namespace: one row
 per option with its tier (\code{user} day-one switches, \code{tuning}
 budgets/targets), package default, current session value and a
-one-line description. Values are
-validated against the same registry when execution starts.
+one-line description. Every \verb{garry.*} option is checked against this
+registry when a run starts and at \code{\link[=garry_daemons]{garry_daemons()}}: a name it does not
+hold (a typo or a retired option) or an invalid value aborts with a
+\code{garry_option_error}.
 }
 \seealso{
 \code{\link[=garry_opt]{garry_opt()}}

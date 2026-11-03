@@ -16,9 +16,9 @@ stac_time_slices(
 \item{granularity}{"day", "month", "exact", or "solar_day".}
 
 \item{lon}{Longitude (degrees, WGS84) whose solar time defines
-\code{"solar_day"}: use the centre of the analysis area. Defaults to
-the circular mean of the source footprint centres (safe across
-the antimeridian).}
+\code{"solar_day"}, and only with it: use the centre of the analysis area.
+Defaults to the circular mean of the source footprint centres (safe
+across the antimeridian).}
 }
 \value{
 The table with a \code{slice} column.

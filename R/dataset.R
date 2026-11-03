@@ -20,9 +20,9 @@ NULL
 #'
 #' The dataset holds one entry per band; each entry is a list of per-time-slice
 #' `LazyRaster`s on a shared grid and intermediate representation (IR) graph.
-#' Construct one with [lazy_dataset()] (from a STAC source table) or
-#' [as_dataset()] (from `LazyRaster`s you already have) rather than calling
-#' this class constructor directly. Apply [lazy_map()], [focal_map()],
+#' Construct one with [lazy_dataset()] (from a STAC source table or raster
+#' files) or [as_dataset()] (from `LazyRaster`s you already have) rather than
+#' calling this class constructor directly. Apply [lazy_map()], [focal_map()],
 #' [reduce_over()] and [apply_mask()] across all bands; index a single band with
 #' `ds[["B04"]]` or a sub-dataset with `ds[c("B04", "B03")]`; [collect()] to
 #' materialise.
@@ -155,7 +155,8 @@ LazyDataset <- S7::new_class(
 #' * a character path, or a vector of tile paths (mosaicked where they
 #'   share a CRS and one pixel lattice, kept apart and warped together
 #'   otherwise; tiles off that lattice need `grid`, and tiles kept apart
-#'   must agree on dtype and on any nodata they declare): one band
+#'   must agree on dtype, on any nodata they declare and, with
+#'   `scale = TRUE`, on their scale and offset): one band
 #'   per file band, one time slice. This is the multi-band raster entry --
 #'   geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 #'   GDAL driver, any multi-band file GDAL reads. Each band is its own
@@ -167,9 +168,10 @@ LazyDataset <- S7::new_class(
 #'   instead, so the shared bytes are fetched once. Bands are named by
 #'   their file band descriptions when present, else `b<index>`;
 #'   `grid = NULL` stays on the file's native grid, and a supplied `grid`
-#'   inserts an [align_to()] warp per band. Value transforms (e.g.
-#'   [dequantize_aef()]) go downstream as [lazy_map()]s, which fuse onto
-#'   the read at [collect()].
+#'   inserts an [align_to()] warp per band. Value transforms go downstream as
+#'   [lazy_map()]s, which fuse onto the read at [collect()]; 8-bit codes that
+#'   must be decoded before resampling, such as [dequantize_aef()]'s, go
+#'   through `decode`.
 #'
 #'   An N-D array with a time dimension, such as a `(time, band, y, x)`
 #'   Zarr array (`ZARR:"<store>":/<array>`), becomes bands x time slices:
@@ -186,7 +188,8 @@ LazyDataset <- S7::new_class(
 #' @param sources A STAC `doc_items` (from [stac_query()], optionally
 #'   filtered), a `stac_sources()` table, or a character path / vector of
 #'   paths to (multi-band) raster file(s) -- local, `/vsicurl/`, or bare
-#'   `http(s)://` (prefixed automatically).
+#'   `http(s)://` (prefixed automatically) -- or `ZARR:"<store>":/<array>`
+#'   strings, a bare `https://` store prefixed the same way.
 #' @param grid Target [GridSpec()] for every band. Required for the table
 #'   form; `NULL` (the default) keeps the file form on its native grid.
 #' @param assets Character vector of value assets to load (table form), or of
@@ -207,19 +210,24 @@ LazyDataset <- S7::new_class(
 #'   grid 3x coarser, each target cell is the mean of the valid decoded
 #'   values of its 3 x 3 source cells, the order a nonlinear code needs,
 #'   and a cell whose source cells are all nodata stays NaN. Values are
-#'   Float32. Reads go through a lookup-table VRT; the source's own grid,
-#'   a window of its pixels, or an aligned coarser grid read with
-#'   `"near"` or `"average"` read the codes and decode them directly,
-#'   2-3x faster. `NULL` (the default) reads the codes as they are.
+#'   Float32. A `mask_asset` band is read as stored, not decoded, and every
+#'   band and source must declare one nodata code. Reads go through a
+#'   lookup-table VRT; the source's own grid, a window of its pixels, or an
+#'   aligned coarser grid read with `"near"` or `"average"` read the codes
+#'   and decode them directly, about five times faster. `NULL` (the
+#'   default) reads the codes as they are.
 #' @param time File form, N-D array: the time slices to build, selected
 #'   by label as [time_sel()] selects them (`"2024"`, or positions).
 #'   `lazy_dataset(src, grid, time = "2024")` is
 #'   `time_sel(lazy_dataset(src, grid), "2024")` without building the
 #'   other slices' bands first, which matters for long time series of
 #'   many bands. `NULL` (the default) builds every slice.
-#' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded
-#'   alongside the value assets and used as the default `from` in [apply_mask()].
-#' @param granularity Time-slice granularity (see [stac_time_slices()]).
+#' @param mask_asset Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`), or in the
+#'   file form the name of one selected band; loaded alongside the value assets
+#'   and used as the default `from` in [apply_mask()].
+#' @param granularity Table form: time-slice granularity (see
+#'   [stac_time_slices()]). The file form refuses it: a file's slices come
+#'   from the file; select them with `time`.
 #' @param nodata Nodata handling: `NULL` (per-band file metadata), a scalar
 #'   (applied to every asset), or a named numeric keyed by dataset band name
 #'   or by asset (a band name wins; bands with no key fall back to file
@@ -1524,9 +1532,12 @@ fill_gaps <- function(x, method = c("ffill", "bfill", "linear")) {
 #'
 #' The dataset -> array operation (xarray's `Dataset.to_dataarray()`): stacks
 #' the bands along a new `band` axis. Needs one layer per band, so reduce time
-#' first (`reduce_over(ds, "median", "t")`). This is the hook for a multiband
-#' reducer that must see all bands jointly (e.g. geometric median); `collect()`
-#' calls it implicitly.
+#' first (`reduce_over(ds, "median", "t")`). This is the hook for a reducer
+#' over the band axis, such as [band_project()] or [mlp_project()] with
+#' `over = "band"`; `collect()` calls it implicitly. A reducer that needs
+#' bands and time together, such as [geomedian()], takes a `(band, t, y, x)`
+#' cube from `lazy_stack(list(B02 = ds[["B02"]], ...), along = "band")`
+#' instead.
 #'
 #' @param x A `LazyDataset`.
 #' @return A `LazyRaster` (the single band if there is one, else a `(band, y, x)`
@@ -1573,9 +1584,11 @@ stack_bands <- function(x) {
 #'   * [qa_bits()] -> a bitmask test (bad if any listed bit is set), for
 #'     packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. `qa_bits(0:3)`;
 #'   * a function `\(f) ...` -> a predicate returning a 0/1 (or logical)
-#'     mask, written in the `g_*` vocabulary. NaN reads as clear.
+#'     mask, written in the `g_*` vocabulary. A value above 0.5 counts as set,
+#'     in `open`/`dilate` as at the end; NaN reads as clear.
 #' @param open Opening radius (despeckle): erosion then dilation at this radius,
-#'   removing isolated flagged pixels up to the radius. `0` skips it.
+#'   removing flagged patches too small to hold a disk of that radius. `0`
+#'   skips it.
 #' @param dilate Dilation radius (buffer): grows the surviving bad regions
 #'   outward, a safety margin around clouds. `0` skips it. Applied after `open`.
 #' @param join How value and mask slices pair when both carry slice
@@ -1726,7 +1739,7 @@ apply_mask <- function(
 #' Fmask, Landsat QA_PIXEL) where a value list cannot express the test;
 #' categorical bands (Sentinel-2 SCL) use a plain value vector instead.
 #'
-#' @param bits Integer bit positions (0-based) that mark a pixel as bad.
+#' @param bits Whole bit positions, 0 to 30, that mark a pixel as bad.
 #' @return A predicate function of one array, returning a 0/1 mask:
 #'   pass it as [apply_mask()]'s `where`, or apply it directly with
 #'   [lazy_map()].

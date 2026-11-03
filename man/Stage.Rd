@@ -64,7 +64,7 @@ each export value carries (post-focal exports carry less than
 pre-focal ones). Empty means all zero.}
 
 \item{strip_rows}{Rows per strip when \code{fn} runs a compute stage's
-members over row strips of each chunk (\code{.scan_strip_px} cells each);
+members over row strips of each chunk (about 4,096 cells each);
 0 runs the whole chunk at once.}
 }
 \value{

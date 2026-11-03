@@ -28,13 +28,14 @@ in \code{path}).}
 \item{path}{Destination path. For a named-list input: a directory
 (files named \verb{<sink>.tif}) or a named character vector keyed by sink.}
 
-\item{dtype}{Output dtype override (e.g. \code{"i16"}, \code{"u8"}); default
-keeps the plan's dtype (usually \code{"f32"}). Values past an integer
+\item{dtype}{Output dtype override, one of \code{"u8"}, \code{"i8"}, \code{"u16"}, \code{"i16"},
+\code{"u32"}, \code{"i32"}, \code{"f32"} or \code{"f64"}; default keeps the plan's dtype
+(usually \code{"f32"}). Values past an integer
 dtype's range saturate at its ends, so writing arithmetic on \code{u8} data,
 which declares \code{i16}, back to Byte means asking for \code{dtype = "u8"}.}
 
 \item{scale, offset}{Quantization affine (see Details). Requires an
-integer \code{dtype}; \code{offset} defaults to 0.}
+integer \code{dtype} other than \code{"u32"}; \code{offset} defaults to 0.}
 
 \item{nodata}{Sentinel written to the file and used for NaN demotion,
 in stored (DN) units. It must fit the output dtype, \code{dtype} or else
@@ -65,9 +66,11 @@ list, directory, and \code{{group}} forms).
 }
 \description{
 The file-writing sibling of \code{\link[=collect]{collect()}}: executes the plan (same
-routes, same daemons) and streams the result to \code{path} chunk by chunk,
-so the full raster never sits in memory. Returns the path invisibly;
-\code{collect()} always returns the in-session array.
+routes, same daemons) and writes the result to \code{path}. On the
+distributed scheduler, chunks stream to the file as they land, so the
+full raster never sits in memory; the single-process executor and the
+direct composite routes hold the result, then write it. Returns the path
+invisibly; \code{collect()} always returns the in-session array.
 }
 \details{
 \code{dtype} with \code{scale}/\code{offset} quantizes at the sink boundary: values

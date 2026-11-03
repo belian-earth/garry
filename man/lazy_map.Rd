@@ -14,8 +14,8 @@ lazy_map(..., fn, dtype = NULL, bands = NULL)
 \item{dtype}{Optional output dtype. Given, \code{fn} is not traced when the
 raster is built, so a kernel that only traces at chunk time can use it.
 Left out, it is what \code{fn} returns. Unsigned inputs compute in a wider
-signed dtype (\code{u8} in \code{i16}, \code{u16} in \code{i32}), so \code{fn} over them returns
-that unless told otherwise.}
+dtype (\code{u8} in \code{i16}, \code{u16} in \code{i32}, \code{u32} in \code{i64}, \code{u64} in \code{f64}), so
+\code{fn} over them returns that unless told otherwise.}
 
 \item{bands}{\code{LazyDataset} only: bands to map over (default: all value bands).}
 }

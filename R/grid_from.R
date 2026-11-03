@@ -146,7 +146,7 @@ grid_from_bbox <- function(
 #' # Vector footprint -> equal-area 30 m grid.
 #' target <- grid_from_src("catchment.gpkg", res = 30)
 #' # Raster -> its own CRS/extent at 30 m.
-#' g <- grid_from_src("s3://.../embedding.tif", res = 30)
+#' g <- grid_from_src("/vsis3/bucket/embedding.tif", res = 30)
 #' }
 #' @export
 grid_from_src <- function(

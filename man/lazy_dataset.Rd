@@ -23,7 +23,8 @@ lazy_dataset(
 \item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally
 filtered), a \code{stac_sources()} table, or a character path / vector of
 paths to (multi-band) raster file(s) -- local, \verb{/vsicurl/}, or bare
-\verb{http(s)://} (prefixed automatically).}
+\verb{http(s)://} (prefixed automatically) -- or \verb{ZARR:"<store>":/<array>}
+strings, a bare \verb{https://} store prefixed the same way.}
 
 \item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band. Required for the table
 form; \code{NULL} (the default) keeps the file form on its native grid.}
@@ -32,10 +33,13 @@ form; \code{NULL} (the default) keeps the file form on its native grid.}
 band names to select (file form, when the file carries band
 descriptions).}
 
-\item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}); loaded
-alongside the value assets and used as the default \code{from} in \code{\link[=apply_mask]{apply_mask()}}.}
+\item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}), or in the
+file form the name of one selected band; loaded alongside the value assets
+and used as the default \code{from} in \code{\link[=apply_mask]{apply_mask()}}.}
 
-\item{granularity}{Time-slice granularity (see \code{\link[=stac_time_slices]{stac_time_slices()}}).}
+\item{granularity}{Table form: time-slice granularity (see
+\code{\link[=stac_time_slices]{stac_time_slices()}}). The file form refuses it: a file's slices come
+from the file; select them with \code{time}.}
 
 \item{nodata}{Nodata handling: \code{NULL} (per-band file metadata), a scalar
 (applied to every asset), or a named numeric keyed by dataset band name
@@ -92,10 +96,12 @@ works on the decoded values. With \code{resampling = "average"} onto a
 grid 3x coarser, each target cell is the mean of the valid decoded
 values of its 3 x 3 source cells, the order a nonlinear code needs,
 and a cell whose source cells are all nodata stays NaN. Values are
-Float32. Reads go through a lookup-table VRT; the source's own grid,
-a window of its pixels, or an aligned coarser grid read with
-\code{"near"} or \code{"average"} read the codes and decode them directly,
-2-3x faster. \code{NULL} (the default) reads the codes as they are.}
+Float32. A \code{mask_asset} band is read as stored, not decoded, and every
+band and source must declare one nodata code. Reads go through a
+lookup-table VRT; the source's own grid, a window of its pixels, or an
+aligned coarser grid read with \code{"near"} or \code{"average"} read the codes
+and decode them directly, about five times faster. \code{NULL} (the
+default) reads the codes as they are.}
 
 \item{time}{File form, N-D array: the time slices to build, selected
 by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or positions).
@@ -122,7 +128,8 @@ file carries no band descriptions; \code{bands} selects and renames them.
 \item a character path, or a vector of tile paths (mosaicked where they
 share a CRS and one pixel lattice, kept apart and warped together
 otherwise; tiles off that lattice need \code{grid}, and tiles kept apart
-must agree on dtype and on any nodata they declare): one band
+must agree on dtype, on any nodata they declare and, with
+\code{scale = TRUE}, on their scale and offset): one band
 per file band, one time slice. This is the multi-band raster entry --
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 GDAL driver, any multi-band file GDAL reads. Each band is its own
@@ -134,9 +141,10 @@ spanning bands), \code{\link[=collect]{collect()}} reads a window's bands in one
 instead, so the shared bytes are fetched once. Bands are named by
 their file band descriptions when present, else \verb{b<index>};
 \code{grid = NULL} stays on the file's native grid, and a supplied \code{grid}
-inserts an \code{\link[=align_to]{align_to()}} warp per band. Value transforms (e.g.
-\code{\link[=dequantize_aef]{dequantize_aef()}}) go downstream as \code{\link[=lazy_map]{lazy_map()}}s, which fuse onto
-the read at \code{\link[=collect]{collect()}}.
+inserts an \code{\link[=align_to]{align_to()}} warp per band. Value transforms go downstream as
+\code{\link[=lazy_map]{lazy_map()}}s, which fuse onto the read at \code{\link[=collect]{collect()}}; 8-bit codes that
+must be decoded before resampling, such as \code{\link[=dequantize_aef]{dequantize_aef()}}'s, go
+through \code{decode}.
 
 An N-D array with a time dimension, such as a \verb{(time, band, y, x)}
 Zarr array (\verb{ZARR:"<store>":/<array>}), becomes bands x time slices:

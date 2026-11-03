@@ -41,10 +41,10 @@ Stages are labelled by what they compute, not just their scheduler
 kind: a compute stage is classified by the IR nodes fused into it
 (\code{focal}, \code{scan}, \code{patch}, \code{stack}, \code{map}, most informative first,
 the same vocabulary as \code{\link[=plan_draw]{plan_draw()}}), and reduce stages carry their
-reducer (\verb{reduce\\u00b7median}). When a \code{LazyDataset} is passed, derived
+reducer (\verb{reduce·median}). When a \code{LazyDataset} is passed, derived
 bands (\code{ds[["ndvi"]] <- ...}) are recovered from the dataset's step
 record and the stage computing one is labelled with the band name
-(\verb{derive\\u00b7ndvi}); the derivation is bounded structurally at the first
+(\verb{derive·ndvi}); the derivation is bounded structurally at the first
 non-elementwise node, so it survives subsetting (\code{ds["ndvi"]}).
 Hovering a stage shows its full op composition and any recoverable
 metadata: acquisition dates on slice sources and t-spans on
@@ -64,5 +64,6 @@ plan_view(focal_map(lr * 2, radius = 1L, fn = function(sh) Reduce(`+`, sh) / len
 }
 }
 \seealso{
-\code{\link[=plan_dot]{plan_dot()}} for DOT text, \code{\link[=plan_draw]{plan_draw()}} for pixels.
+\code{\link[=plan_dot]{plan_dot()}} for DOT text, \code{\link[=plan_draw]{plan_draw()}} for a terminal drawing of
+the pipeline.
 }

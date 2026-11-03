@@ -7,7 +7,8 @@
 bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 }
 \arguments{
-\item{sigma_r}{Range Gaussian standard deviation (data units).}
+\item{sigma_r}{Range Gaussian standard deviation (data units): one value, or
+one per channel for a \verb{(channel, y, x)} input.}
 
 \item{sigma_d}{Spatial Gaussian standard deviation in pixels
 (default 1, matching the default 3x3 window).}

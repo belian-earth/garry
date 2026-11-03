@@ -27,9 +27,9 @@ A \code{LazyDataset}.
 \description{
 The dataset holds one entry per band; each entry is a list of per-time-slice
 \code{LazyRaster}s on a shared grid and intermediate representation (IR) graph.
-Construct one with \code{\link[=lazy_dataset]{lazy_dataset()}} (from a STAC source table) or
-\code{\link[=as_dataset]{as_dataset()}} (from \code{LazyRaster}s you already have) rather than calling
-this class constructor directly. Apply \code{\link[=lazy_map]{lazy_map()}}, \code{\link[=focal_map]{focal_map()}},
+Construct one with \code{\link[=lazy_dataset]{lazy_dataset()}} (from a STAC source table or raster
+files) or \code{\link[=as_dataset]{as_dataset()}} (from \code{LazyRaster}s you already have) rather than
+calling this class constructor directly. Apply \code{\link[=lazy_map]{lazy_map()}}, \code{\link[=focal_map]{focal_map()}},
 \code{\link[=reduce_over]{reduce_over()}} and \code{\link[=apply_mask]{apply_mask()}} across all bands; index a single band with
 \code{ds[["B04"]]} or a sub-dataset with \code{ds[c("B04", "B03")]}; \code{\link[=collect]{collect()}} to
 materialise.

@@ -105,8 +105,8 @@ LazyRaster <- S7::new_class(
 #'   source, and not to a decoded one.
 #' @param grid Optional `GridSpec` declaring the source's grid and
 #'   dtype, skipping metadata discovery (see Details).
-#' @param block_dim Optional native block size (x, y), only meaningful
-#'   with `grid`; defaults to unconstrained.
+#' @param block_dim Optional block size (x, y) the chunks snap to, in place of
+#'   the file's own. With `grid`, the default is unconstrained.
 #' @param resampling GDAL resampling used when a read reprojects or rescales
 #'   this source onto the analysis grid. `"near"` (default) preserves exact
 #'   source values; use `"bilinear"`, `"average"`, `"cubic"`, ... to interpolate.
@@ -321,8 +321,8 @@ lazy_source <- function(
 #' @param dtype Optional output dtype. Given, `fn` is not traced when the
 #'   raster is built, so a kernel that only traces at chunk time can use it.
 #'   Left out, it is what `fn` returns. Unsigned inputs compute in a wider
-#'   signed dtype (`u8` in `i16`, `u16` in `i32`), so `fn` over them returns
-#'   that unless told otherwise.
+#'   dtype (`u8` in `i16`, `u16` in `i32`, `u32` in `i64`, `u64` in `f64`), so
+#'   `fn` over them returns that unless told otherwise.
 #' @param bands `LazyDataset` only: bands to map over (default: all value bands).
 #' @return A `LazyRaster`, or a `LazyDataset` when given one.
 #' @seealso [collect()]
@@ -1171,7 +1171,8 @@ lazy_patch <- function(
 #' (the band's own sd) is a whole-raster statistic, so compute it in a
 #' separate reduce pass (or reuse fitted values) and pass it in.
 #'
-#' @param sigma_r Range Gaussian standard deviation (data units).
+#' @param sigma_r Range Gaussian standard deviation (data units): one value, or
+#'   one per channel for a `(channel, y, x)` input.
 #' @param sigma_d Spatial Gaussian standard deviation in pixels
 #'   (default 1, matching the default 3x3 window).
 #' @param radius Window radius the body is built for; must match the
@@ -1261,7 +1262,9 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 #' NaN nodata sentinel. A pixel that is nodata in every input stays
 #' nodata (NaN) for `"mean"`, `"median"`, `"min"` and `"max"`; `"sum"`
 #' gives 0 and `"count"` gives 0. (The [g_min()] / [g_max()] primitives
-#' return their identity, `Inf` / `-Inf`, instead.)
+#' return their identity, `Inf` / `-Inf`, instead.) A spatial reduction (over
+#' `x` and `y`) is combined on the host after every chunk has run, so computing
+#' on it fails when planned, with a `garry_reduce_unsupported_error`.
 #'
 #' Over a `LazyDataset`, each band is reduced independently (over `"t"`: stack
 #' the band's slices and collapse time to a composite); `bands` restricts which
@@ -1356,7 +1359,9 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
 #' @param over Single dim name to scan along (default `"t"`).
 #' @param direction `"forward"`, `"backward"`, or `"bidir"` (the body
 #'   encapsulates direction; this is declarative metadata).
-#' @param dtype Optional output dtype override (default: input dtype).
+#' @param dtype Optional output dtype. Left out, it is the dtype `fn` returns,
+#'   found by tracing `fn` when the raster is built; given, `fn` is not traced
+#'   then.
 #' @param bands `LazyDataset` only: bands to scan (default: all).
 #' @return A `LazyRaster` on the unchanged grid, or a `LazyDataset`.
 #' @examples

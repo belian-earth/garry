@@ -285,7 +285,9 @@ g_value_and_gradient <- function(f, wrt) {
 
 #' Upload an R array to an AnvlArray of the given garry dtype.
 #'
-#' Unsigned dtypes upload via a wider signed carrier.
+#' `u8`, `u16` and `u32` upload as `i16`, `i32` and `i64`, and `u64` as `f64`.
+#' An integer buffer holds no NaN, so a missing value in `x` aborts with a
+#' `garry_nodata_error` when the upload dtype is an integer.
 #'
 #' @param x R array/matrix.
 #' @param dtype garry dtype string (anvl-aligned).
@@ -876,9 +878,10 @@ g_index_scalar <- function(v, i) {
 #' filters, cumulative custom ops). At step `t`, `body(carry, x)` gets
 #' the current carry and the step-`t` slice of `xs` (taken along dim 1
 #' with that unit axis dropped) and returns `list(carry = , out = )`;
-#' the `out`s are stacked into `(length, ...)` buffers. `reverse = TRUE`
-#' runs `t = length..1`, still reading and writing at position `t` (what
-#' a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+#' the `out`s are stacked into `(n, ...)` buffers, `n` being the size of
+#' dim 1 of `xs`. `reverse = TRUE` runs `t = n..1`, still reading and
+#' writing at position `t` (what a backward smoothing pass needs, e.g.
+#' Rauch-Tung-Striebel). Traced
 #' values route to `anvl::nv_scan`; plain R arrays take the pure-R
 #' reference implementation with identical semantics.
 #'
