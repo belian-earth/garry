@@ -459,7 +459,9 @@ NULL
 # and no daemon of it is mid-task. At `say` seconds the wait names the pools
 # still mid-task and the daemons that have not answered. A Ctrl-C, or `kill`
 # seconds, stops those daemons with SIGKILL, as a dead daemon cannot be
-# mid-reply; the pools then close, and a Ctrl-C is raised again.
+# mid-reply; the pools then close, and a Ctrl-C is raised again. A pool
+# still mid-task with no daemon garry can identify (no pid recorded, or on
+# Windows, where garry reads no command line) fails the close instead.
 .pools_close <- function(profiles) {
   live <- profiles[vapply(profiles, .gd_n_compute, integer(1)) > 0L]
   probe <- .pool_send(quote(Sys.getpid()), live)
@@ -467,31 +469,41 @@ NULL
     got <- Filter(Negate(mirai::unresolved), unlist(probe, recursive = FALSE))
     unlist(Filter(is.integer, lapply(got, function(h) h$data)))
   }
-  # tasks running, by pool still mid-task
+  # the pools still mid-task
   busy <- function() {
-    n <- vapply(
-      live,
+    Filter(
       function(p) {
         s <- mirai::status(.compute = p)
         q <- s$mirai
         open <- any(vapply(probe[[p]], mirai::unresolved, logical(1)))
         if (is.null(q)) {
-          as.integer(open && s$connections > 0L)
-        } else if (open && (q[["executing"]] > 0L || q[["awaiting"]] == 0L)) {
-          max(1L, q[["executing"]])
+          open && s$connections > 0L
         } else {
-          0L
+          open && (q[["executing"]] > 0L || q[["awaiting"]] == 0L)
         }
       },
-      integer(1)
+      live
     )
-    n[n > 0L]
   }
-  pending <- function(p) setdiff(.garry_state$prof_pids[[p]], answered())
-  # pools `n`, with the daemons `pids` of each that have not answered
-  mid_task <- function(n, pids = lapply(names(n), pending)) {
+  # The daemons of pool `p` that have not answered, as pids whose process
+  # still runs one: its command line names the pool's URL. A daemon lost
+  # before the close never answers, and its pid may since have gone to
+  # another process.
+  pending <- function(p) {
+    url <- mirai::nextget("url", .compute = p)
+    pids <- setdiff(.garry_state$prof_pids[[p]], answered())
+    ours <- vapply(
+      pids,
+      function(i) grepl(url, .pid_cmdline(i), fixed = TRUE),
+      logical(1)
+    )
+    pids[ours]
+  }
+  # pools `ps`, with the daemons `pids` of each that have not answered
+  mid_task <- function(ps, pids = lapply(ps, pending)) {
+    who <- vapply(pids, paste, "", collapse = ", ")
     .glue(
-      "\"{names(n)}\" ({n} running, pid {vapply(pids, paste, '', collapse = ', ')})"
+      "\"{ps}\" ({ifelse(nzchar(who), paste('pid', who), 'no daemon garry can stop')})"
     )
   }
   wait <- .pools_close_s()
@@ -501,14 +513,14 @@ NULL
   idle <- tryCatch(
     {
       repeat {
-        n <- busy()
+        ps <- busy()
         waited <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
-        if (!length(n) || waited >= wait[["kill"]]) {
+        if (!length(ps) || waited >= wait[["kill"]]) {
           break
         }
         if (!said && waited >= wait[["say"]]) {
           said <- TRUE
-          lines <- mid_task(n)
+          lines <- mid_task(ps)
           cli::cli_inform(
             c(
               "i" = "Closing garry's pools once no daemon is mid-task: {lines}.",
@@ -520,14 +532,25 @@ NULL
         }
         Sys.sleep(0.005)
       }
-      !length(n)
+      !length(ps)
     },
     interrupt = function(i) NA
   )
-  n <- if (isTRUE(idle)) integer(0) else busy()
-  if (length(n)) {
-    pids <- lapply(names(n), pending)
-    lines <- mid_task(n, pids)
+  ps <- if (isTRUE(idle)) character(0) else busy()
+  if (length(ps)) {
+    pids <- lapply(ps, pending)
+    lines <- mid_task(ps, pids)
+    if (!all(lengths(pids))) {
+      cli::cli_abort(
+        c(
+          "garry's pools cannot close while a daemon is mid-task: {lines}.",
+          "x" = "garry cannot identify a daemon to stop in each of these pools.",
+          "i" = "Wait for their tasks or stop their daemons, then call {.fn garry_daemons} again."
+        ),
+        class = c("garry_pool_error", "garry_error"),
+        call = NULL
+      )
+    }
     tools::pskill(unlist(pids), tools::SIGKILL)
     cli::cli_inform(
       "Stopped {length(unlist(pids))} daemon{?s} still mid-task to close garry's pools: {lines}.",
@@ -791,13 +814,18 @@ NULL
         })
       }
       live <- keep(used[!.pools_down(used)$down])
-      # The compute profiles (FALSE) first: the readers' clear frees regions
-      # a compute task still running has yet to read, and its daemon died of
-      # it (14 of 20 runs interrupted mid-run).
-      for (ps in split(live, live == "garry_read")) {
-        keep(clear(ps))
-        keep(settle(ps))
-      }
+      # No clear goes out before every compute daemon has received the tasks
+      # queued for it. A daemon that receives a task whose input region a
+      # clear has freed exits; a task already running keeps its input. A
+      # compute task's inputs live on readers and on other compute daemons,
+      # and a width-1 profile runs its queue in order, so a no-op's reply
+      # means every task before it has been received.
+      comp <- setdiff(live, "garry_read")
+      keep(send(quote(NULL), comp))
+      keep(settle(comp))
+      live <- keep(live[!.pools_down(live)$down])
+      keep(clear(live))
+      keep(settle(live))
       if (length(fails)) {
         cli::cli_inform(
           c(
@@ -903,6 +931,32 @@ NULL
 # measurements work from, so a daemon that will not answer stops the pool.
 .garry_pool_pids <- function(profile) {
   unlist(.pool_broadcast(quote(Sys.getpid()), profiles = profile, what = "the pid query"))
+}
+
+# The command line of process `pid`, or "" for none: from /proc on Linux,
+# from ps elsewhere on Unix (macOS). Windows gives "".
+.pid_cmdline <- function(pid) {
+  if (dir.exists("/proc/self")) {
+    b <- tryCatch(
+      readBin(file.path("/proc", pid, "cmdline"), "raw", 65536L),
+      error = function(e) raw(0),
+      warning = function(w) raw(0)
+    )
+    b[b == as.raw(0L)] <- as.raw(32L)
+    rawToChar(b)
+  } else if (.Platform$OS.type == "unix") {
+    paste(
+      suppressWarnings(system2(
+        "ps",
+        c("-o", "command=", "-p", pid),
+        stdout = TRUE,
+        stderr = FALSE
+      )),
+      collapse = " "
+    )
+  } else {
+    ""
+  }
 }
 
 # Measured ANONYMOUS resident memory (MB) summed over the daemon
@@ -1129,7 +1183,9 @@ NULL
 #' After three seconds garry names the pools it waits on and the daemons
 #' still mid-task. A Ctrl-C, or a minute's wait, stops those daemons and
 #' closes the pools; after a Ctrl-C [garry_daemons_set()] is `FALSE` and
-#' no pool is started.
+#' no pool is started. A pool still mid-task with no daemon garry can
+#' identify to stop, as on Windows, fails the close with a
+#' `garry_pool_error`.
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses all
 #'   logical cores. `0` tears the pool down.
@@ -1251,6 +1307,37 @@ garry_daemons <- function(
     if (compute > 0L) .comp_profiles(),
     if (read > 0L || compute > 0L) "garry_write"
   )
+  # Fleet pids, recorded once per pool generation and before any other
+  # task, so a close can stop a daemon stuck in this setup: the per-daemon
+  # RSS poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
+  # and the affinity/shaping calls mask them by global index (one pid
+  # collection round trip per generation, shared by both).
+  .garry_state$comp_pids <- if (compute > 0L) {
+    unlist(lapply(.comp_profiles(), .garry_pool_pids))
+  } else {
+    integer(0)
+  }
+  p_read <- if (read > 0L) .garry_pool_pids("garry_read") else integer(0)
+  p_write <- if (read > 0L || compute > 0L) {
+    .garry_pool_pids("garry_write")
+  } else {
+    integer(0)
+  }
+  .garry_state$pool_pids <- c(p_read, .garry_state$comp_pids, p_write)
+  # by profile: the widths .assert_pools_alive() holds each pool to, and
+  # the daemons a close may have to stop mid-task
+  .garry_state$prof_pids <- c(
+    list(garry_read = p_read, garry_write = p_write),
+    stats::setNames(as.list(.garry_state$comp_pids), .comp_profiles())
+  )
+  # pid -> role, for the task log's per-daemon rss rows
+  .garry_state$pid_role <- stats::setNames(
+    rep(
+      c("read", "comp", "write"),
+      c(length(p_read), length(.garry_state$comp_pids), length(p_write))
+    ),
+    .garry_state$pool_pids
+  )
   # GDAL's block cache defaults to 5% of RAM PER PROCESS: ~12 GB on a
   # 240 GB worker for each compute daemon and the writer, which read and
   # write through GDAL but never ran garry_gdal_config(). Cap every pool
@@ -1291,36 +1378,6 @@ garry_daemons <- function(
   # GPU; pinning their host threads buys nothing and can starve H2D).
   .garry_state$abi_ok <- NULL # fresh pools: re-check the ABI token
   .garry_state$prof_warm <- NULL # fresh pools hold no compiled programs
-  # Fleet pids, recorded once per pool generation: the per-daemon RSS
-  # poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
-  # and the affinity/shaping calls mask them by global index (one pid
-  # collection round trip per generation, shared by both).
-  .garry_state$comp_pids <- if (compute > 0L) {
-    unlist(lapply(.comp_profiles(), .garry_pool_pids))
-  } else {
-    integer(0)
-  }
-  p_read <- if (read > 0L) .garry_pool_pids("garry_read") else integer(0)
-  p_write <- if (read > 0L || compute > 0L) {
-    .garry_pool_pids("garry_write")
-  } else {
-    integer(0)
-  }
-  .garry_state$pool_pids <- c(p_read, .garry_state$comp_pids, p_write)
-  # by profile: the widths .assert_pools_alive() holds each pool to, and
-  # the daemons a close may have to stop mid-task
-  .garry_state$prof_pids <- c(
-    list(garry_read = p_read, garry_write = p_write),
-    stats::setNames(as.list(.garry_state$comp_pids), .comp_profiles())
-  )
-  # pid -> role, for the task log's per-daemon rss rows
-  .garry_state$pid_role <- stats::setNames(
-    rep(
-      c("read", "comp", "write"),
-      c(length(p_read), length(.garry_state$comp_pids), length(p_write))
-    ),
-    .garry_state$pool_pids
-  )
   aff <- identical(garry_opt("pool_affinity"), "auto")
   .garry_state$reader_threads <- if (aff && read > 0L) {
     .pool_affinity_apply(p_read)

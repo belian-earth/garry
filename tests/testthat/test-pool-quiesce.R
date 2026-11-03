@@ -372,10 +372,18 @@ test_that("closing the pools waits for what runs, and names the daemons it waits
   )
   expect_gt(took, 2.5)
   expect_length(msgs, 1L)
-  expect_match(msgs, "\"garry_read\" (2 running, pid", fixed = TRUE)
   expect_match(
     msgs,
-    paste0("\"", comp, "\" (1 running, pid ", pids[[comp]], ")"),
+    paste0(
+      "\"garry_read\" (pid ",
+      paste(pids$garry_read, collapse = ", "),
+      ")"
+    ),
+    fixed = TRUE
+  )
+  expect_match(
+    msgs,
+    paste0("\"", comp, "\" (pid ", pids[[comp]], ")"),
     fixed = TRUE
   )
   expect_match(msgs, "Press Ctrl-C", fixed = TRUE)
@@ -510,7 +518,7 @@ test_that("a Ctrl-C during a close stops the daemons still mid-task, closes, and
   expect_match(
     msgs[[2L]],
     paste0(
-      "Stopped 1 daemon still mid-task to close garry's pools: \"garry_read\" (1 running, pid ",
+      "Stopped 1 daemon still mid-task to close garry's pools: \"garry_read\" (pid ",
       spin,
       ")"
     ),
@@ -519,6 +527,107 @@ test_that("a Ctrl-C during a close stops the daemons still mid-task, closes, and
   expect_true(.pid_gone(spin))
   # closed, and no pool started after the Ctrl-C
   expect_false(garry_daemons_set())
+  expect_identical(garry:::.gd_n_compute("garry_read"), 0L)
+})
+
+# A reader in a task that never ends and cannot be interrupted; its pid.
+.spin_reader <- function(env = parent.frame()) {
+  f <- tempfile()
+  mirai::mirai(
+    {
+      writeLines(as.character(Sys.getpid()), f)
+      suspendInterrupts(
+        repeat {
+          for (i in 1:100) {
+            NULL
+          }
+        }
+      )
+    },
+    f = f,
+    .compute = "garry_read"
+  )
+  while (!file.exists(f) || !length(readLines(f))) {
+    Sys.sleep(0.01)
+  }
+  spin <- as.integer(readLines(f))
+  withr::defer(tools::pskill(spin, tools::SIGKILL), envir = env)
+  spin
+}
+
+test_that("a close stops no daemon lost before it, nor a process that took its pid", {
+  local_pools(2, 1)
+  .local_wait_limit()
+  testthat::local_mocked_bindings(
+    .pools_close_s = function() c(say = 0.2, kill = 1),
+    .package = "garry"
+  )
+  # a reader lost, its pid now another process's: a daemon of a pool garry
+  # does not own, which the close sends no probe
+  mirai::daemons(1L, dispatcher = FALSE, .compute = "decoy")
+  withr::defer(mirai::daemons(0L, .compute = "decoy"))
+  decoy <- mirai::call_mirai(mirai::mirai(
+    Sys.getpid(),
+    .compute = "decoy"
+  ))$data
+  lost <- garry:::.garry_state$prof_pids$garry_read[[1L]]
+  tools::pskill(lost, tools::SIGKILL)
+  while (garry:::.gd_n_compute("garry_read") > 1L) {
+    Sys.sleep(0.01)
+  }
+  state <- garry:::.garry_state
+  state$prof_pids$garry_read[[1L]] <- decoy
+  spin <- .spin_reader()
+  msgs <- .pool_messages(garry_daemons(0, 0, gdal_config = FALSE))
+  expect_length(msgs, 2L)
+  expect_match(
+    msgs[[1L]],
+    paste0("\"garry_read\" (pid ", spin, ")"),
+    fixed = TRUE
+  )
+  expect_match(
+    msgs[[2L]],
+    paste0(
+      "Stopped 1 daemon still mid-task to close garry's pools: \"garry_read\" (pid ",
+      spin,
+      ")"
+    ),
+    fixed = TRUE
+  )
+  expect_true(.pid_gone(spin))
+  expect_identical(
+    mirai::call_mirai(mirai::mirai(Sys.getpid(), .compute = "decoy"))$data,
+    decoy
+  )
+  expect_false(garry_daemons_set())
+})
+
+test_that("a close that can stop no daemon of a pool still mid-task fails, naming the pool", {
+  local_pools(1, 1)
+  .local_wait_limit()
+  testthat::local_mocked_bindings(
+    .pools_close_s = function() c(say = 0.2, kill = 1),
+    .package = "garry"
+  )
+  spin <- .spin_reader()
+  # as a start interrupted before it recorded its pids leaves the pool
+  state <- garry:::.garry_state
+  state$prof_pids$garry_read <- integer(0)
+  err <- expect_error(
+    .pool_messages(garry_daemons(0, 0, gdal_config = FALSE)),
+    class = "garry_pool_error"
+  )
+  expect_match(
+    conditionMessage(err),
+    "\"garry_read\" (no daemon garry can stop)",
+    fixed = TRUE
+  )
+  expect_false(garry_daemons_set())
+  tools::pskill(spin, tools::SIGKILL)
+  while (garry:::.gd_n_compute("garry_read") > 0L) {
+    Sys.sleep(0.01)
+  }
+  expect_no_error(garry_daemons(0, 0, gdal_config = FALSE))
   expect_identical(garry:::.gd_n_compute("garry_read"), 0L)
 })
 
@@ -532,9 +641,9 @@ test_that("a failed run's clear spares a compute task still reading its input", 
   )
   comp <- garry:::.comp_profiles()
   garry:::.garry_abi_check(c("garry_read", comp))
-  # the first read lands and its compute task starts, but maps its input only
-  # after 1.5 s; every other read fails at 0.3 s. The readers' clear would
-  # free that input under the task, and its daemon dies of it.
+  # the first read lands and its compute task is held 1.5 s; every other
+  # read fails at 0.3 s. The readers' clear, sent before the compute daemon
+  # is done with what was queued for it, took that daemon down.
   .daemon_mock(
     "garry_read",
     ".daemon_run_source_shm",
@@ -556,6 +665,39 @@ test_that("a failed run's clear spares a compute task still reading its input", 
   expect_length(msgs, 0L)
   expect_identical(garry:::.gd_n_compute(comp), 1L)
   expect_no_error(garry:::.assert_pools_alive(c("garry_read", comp)))
+})
+
+test_that("a failed run's clear spares a compute task queued for another compute daemon's output", {
+  local_pools(1, 2)
+  .local_wait_limit()
+  comp <- garry:::.comp_profiles()
+  # an upstream output, pinned on the first compute daemon as a compute task
+  # pins its own
+  up <- garry:::.task_mirai(
+    quote({
+      sh <- mori::share(stats::setNames(list(as.raw(rep(1:250, 400))), "k"))
+      reg <- asNamespace("garry")$.daemon_shm
+      reg[["r9_s2_c1"]] <- sh
+      sh
+    }),
+    .compute = comp[[1L]]
+  )
+  v <- mirai::call_mirai(up)$data
+  # on the second, a task running and the downstream task queued behind it:
+  # received after the first daemon's clear, its input would be gone, and the
+  # daemon with it
+  garry:::.task_mirai(quote(Sys.sleep(1.5)), .compute = comp[[2L]])
+  Sys.sleep(0.2)
+  down <- garry:::.task_mirai(
+    quote(sum(as.integer(v[["k"]]))),
+    v = v,
+    .compute = comp[[2L]]
+  )
+  store <- garry:::.store_broadcasts(comp)
+  msgs <- .pool_messages(store$fail())
+  expect_length(msgs, 0L)
+  expect_identical(mirai::call_mirai(down)$data, sum(rep(1:250, 400)))
+  expect_identical(garry:::.gd_n_compute(comp[[2L]]), 1L)
 })
 
 test_that("a failed run cancels its own tasks and never a broadcast's", {
@@ -690,7 +832,7 @@ test_that("a run waits for no warm-up on a compute daemon it gave no task", {
   # the close waits for the warm-ups the run left compiling
   expect_message(
     garry_daemons(1, 4, gdal_config = FALSE),
-    paste0("\"", comps[[2L]], "\"\\s+\\(1 running, pid"),
+    paste0("\"", comps[[2L]], "\"\\s+\\(pid "),
     class = "garry_pool_message"
   )
   # the composite route leaves its warm-ups the same way: one strip each
@@ -704,7 +846,7 @@ test_that("a run waits for no warm-up on a compute daemon it gave no task", {
   expect_lt(took, 2.5)
   expect_message(
     garry_daemons(0, 0, gdal_config = FALSE),
-    paste0("\"", comps[[4L]], "\"\\s+\\(1 running, pid"),
+    paste0("\"", comps[[4L]], "\"\\s+\\(pid "),
     class = "garry_pool_message"
   )
 })

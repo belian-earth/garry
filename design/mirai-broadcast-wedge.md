@@ -118,22 +118,46 @@ finished what it holds, and the close waits:
 - on a width-1 profile, which has no dispatcher, until its probe has replied
   or its daemon is gone.
 
-At 3 s the wait names each pool still mid-task, its running count and the
-daemons that have not answered the probe, by pid. A Ctrl-C, or 60 s, stops
-those daemons with SIGKILL, since a dead daemon cannot be mid-reply; the close
-waits until each pool has seen them go, then closes, says which daemons it
-stopped, and raises the Ctrl-C again so `garry_daemons()` starts no pool.
+At 3 s the wait names each pool still mid-task and the daemons that have not
+answered the probe, by pid. A Ctrl-C, or 60 s, stops those daemons with
+SIGKILL, since a dead daemon cannot be mid-reply; the close waits until each
+pool has seen them go, then closes, says which daemons it stopped, and raises
+the Ctrl-C again so `garry_daemons()` starts no pool. A pid counts only while
+its process's command line names the pool's URL: a daemon lost before the
+close never answers, and its pid may since belong to another process. A pool
+still mid-task with no daemon garry can identify, such as one whose start was
+interrupted before its pids were recorded, or any pool on Windows, where garry
+reads no command line, fails the close with a `garry_pool_error` naming it.
+`garry_daemons()` records the pids before any other task, so a daemon stuck
+in the pool's setup can be stopped.
 
 A close cancels nothing. Each run cancels its own queued reads, through the
 handles it holds, before its clear: the scheduler's in-flight table, the
 read-only loop's, and the composite routes' fetches (`.run_guard()` clears once
 the run's own frames have exited). A width-1 profile has no dispatcher to drop
-a task, so nothing is cancelled there, and a failed run's clear on a compute
-profile waits behind its running task, the task queued behind it and any
-kernel warm-up queued there: tens of seconds behind a scan compile. The
-readers' clear goes only once the compute profiles' have come back: it frees
-regions a compute task still running has yet to read, and that daemon died of
-it in 14 of 20 runs interrupted mid-run, against 0 of 20 with the order [M].
+a task, so nothing is cancelled there.
+
+A daemon that receives a task whose input region a clear has already freed
+exits; a task already running keeps its input [M]. A compute task's inputs live
+on the readers and on other compute daemons, so a failed run sends no clear
+until every compute daemon has received what was queued for it: a no-op goes
+to each used compute profile first, and a width-1 profile runs its queue in
+order, so the no-op's reply means every task before it has run. The clears then
+go to every used pool at once. The wait is each compute daemon's running task,
+the tasks queued behind it and any kernel warm-up queued there: tens of seconds
+behind a scan compile.
+
+Measured with SIGINT mid-run [M]:
+- A map plan lost a compute daemon in 14 of 20 runs with every clear sent at
+  once.
+- A plan whose compute tasks read other compute daemons' outputs (two 6-band
+  sources, each a mean over band, stacked) lost one in 8 of 8 runs on main, and
+  in 1 of 20 with the readers' clear merely sent after the compute profiles'.
+- With the no-op first it lost none in 20 runs. A Ctrl-C returned a median
+  1.19 s after the interrupt, at most 1.54 s.
+- A deterministic case, a task queued on one compute daemon behind a 1.5 s task
+  with its input on another, lost the daemon in 3 of 3 runs without the no-op
+  and in 0 of 5 with it.
 
 Nothing in a failure path or a close calls `unresolved()` on a run's task. A
 reply that landed uncollected maps a region the run's clear frees, and

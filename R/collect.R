@@ -1097,8 +1097,9 @@ garry_last_route <- function() .garry_state$route
   on.exit(tl$line("host_end", "-"), add = TRUE)
   # A drop is a broadcast to every reader, which waits for each one's
   # current read: drop in large batches (a quarter of the read budget),
-  # not per write. The rest go at the end, and the run waits for every
-  # drop and its closing clear before it returns (.store_broadcasts()).
+  # not per write. The run's closing clear frees the rest, and the run
+  # waits for every drop and that clear before it returns
+  # (.store_broadcasts()).
   drop <- function(regs) {
     if (length(regs)) {
       store$drop(regs)
@@ -1229,6 +1230,5 @@ garry_last_route <- function() .garry_state$route
   }
   done <- TRUE
   .writer_close()
-  flush()
   invisible(path)
 }

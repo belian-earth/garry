@@ -2233,17 +2233,19 @@ execute_plan_mirai <- function(
       }
     }
     .writer_close()
-    flush_drops(force = TRUE)
   }
   out_of <- function(s) {
     it <- chunk_iter(.stage_out_chunks(plan, s))
     lapply(seq_len(nrow(it)), function(j) chunk_of(s@id, j))
   }
 
-  # Streaming write already put every sink chunk on disk as it landed.
+  # Streaming write already put every sink chunk on disk as it landed. The
+  # run's closing clear frees what the writes held (.run_guard()); a run
+  # that assembles on the host drops it first.
   if (!multi && length(stream_sinks)) {
     return(invisible(path))
   }
+  flush_drops(force = TRUE)
 
   combine_vals <- new.env(parent = emptyenv())
   for (s in plan@stages) {

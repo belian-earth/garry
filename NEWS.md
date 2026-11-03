@@ -457,10 +457,13 @@
   task, such as a read or a kernel warm-up: a pool closed while a daemon
   replies can hang R for good, read pools and compute pools alike, through a
   race in NNG's IPC transport (fixed in NNG 1.12.5, not yet in nanonext).
-  After three seconds it names each pool still mid-task, its running count
-  and the pids of its daemons still mid-task. A Ctrl-C, or a minute's wait,
-  stops those daemons and closes the pools; after a Ctrl-C no pool is started
-  and `garry_daemons_set()` is `FALSE`.
+  After three seconds it names each pool still mid-task and the pids of its
+  daemons still mid-task. A Ctrl-C, or a minute's wait, stops those daemons
+  and closes the pools; after a Ctrl-C no pool is started and
+  `garry_daemons_set()` is `FALSE`. A pid counts only while its process still
+  runs that pool's daemon, so a daemon lost earlier is neither named nor
+  stopped. A pool still mid-task with no daemon garry can identify, as on
+  Windows, fails the close with a `garry_pool_error` naming it.
 * A run waits for the store drops it sends and the clear at its end before it
   returns, and sends them only to the pools that ran its tasks, so it never
   waits on a kernel warm-up of a compute daemon it gave no task. A store drop
@@ -476,16 +479,18 @@
   runs to its end: interrupting one inside cli's message code broke cli on
   that daemon for every later task.
 * A failed or interrupted run no longer takes compute daemons down with it.
-  Its clear on the read pool freed inputs that a compute task still running
-  had yet to read, and that daemon died, in 14 of 20 runs interrupted
-  mid-run. The readers' clear now waits until the compute daemons' clears
-  have come back: 0 of 20. A Ctrl-C or a failed run therefore returns once the tasks already
-  running have ended, as its clears queue behind them: a read on each reader,
-  and on a compute daemon its running task, the one queued behind it and any
-  kernel warm-up queued there, which can take tens of seconds behind a scan
-  compile. With reads and compute tasks of 0.4 to 0.9 s, a Ctrl-C returned
-  after a median 1.24 s, at most 2.0 s, where it returned at once and left
-  them running.
+  A daemon exits when it receives a task whose input a clear has already
+  freed, and a compute task's inputs live on the readers and on other compute
+  daemons. A run's clears now go out only once every compute daemon has
+  received the tasks queued for it. Interrupted mid-run, a map plan lost a
+  compute daemon in 14 of 20 runs, and a plan whose compute tasks read each
+  other's outputs in 8 of 8; now neither does, in 20 runs each. A Ctrl-C or a
+  failed run therefore returns once the tasks already running have ended: a
+  read on each reader, and on a compute daemon its running task, the tasks
+  queued behind it and any kernel warm-up queued there, which can take tens of
+  seconds behind a scan compile. With reads and compute tasks of 0.4 to 0.9 s,
+  a Ctrl-C returned a median 1.2 s after the interrupt, at most 1.7 s, where
+  it returned at once and left them running.
 * An in-process read-only collect no longer needs `withr`, which garry
   only suggests, and a token refresh during a run says so when `httr2` is
   missing.

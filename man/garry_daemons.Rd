@@ -93,7 +93,9 @@ NNG's IPC transport (fixed in NNG 1.12.5, not yet bundled in nanonext).
 After three seconds garry names the pools it waits on and the daemons
 still mid-task. A Ctrl-C, or a minute's wait, stops those daemons and
 closes the pools; after a Ctrl-C \code{\link[=garry_daemons_set]{garry_daemons_set()}} is \code{FALSE} and
-no pool is started.
+no pool is started. A pool still mid-task with no daemon garry can
+identify to stop, as on Windows, fails the close with a
+\code{garry_pool_error}.
 }
 \seealso{
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, \code{\link[=garry_pool_hygiene]{garry_pool_hygiene()}}, \code{\link[=collect]{collect()}}
