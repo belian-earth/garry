@@ -149,7 +149,12 @@ test_that("lazy_map over a dataset skips the mask band; bands= selects", {
 
 test_that("stack_bands needs one layer per band", {
   ds <- ds_fixture(fixture_gradient_f32())
-  expect_error(stack_bands(ds), "one layer per band")
+  expect_error(
+    stack_bands(ds),
+    "one layer per band",
+    class = "garry_plan_error"
+  )
+  expect_error(stack_bands(ds), "lazy_stack\\(.*along = \"band\"\\)")
   expect_silent(stack_bands(reduce_over(ds["V1"], "mean", "t")))
 })
 

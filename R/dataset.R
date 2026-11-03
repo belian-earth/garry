@@ -1547,14 +1547,17 @@ stack_bands <- function(x) {
   .assert_class(x, LazyDataset, "LazyDataset")
   nl <- lengths(x@bands)
   if (any(nl != 1L)) {
-    cli::cli_abort(c(
-      "{.fn stack_bands} needs one layer per band.",
-      "i" = "Reduce time first, e.g. {.code reduce_over(ds, \"median\", \"t\")}.",
-      "i" = paste(
-        "Stacking bands over a time dimension (4D) is not yet",
-        "supported."
-      )
-    ))
+    cli::cli_abort(
+      c(
+        "{.fn stack_bands} needs one layer per band.",
+        "i" = "Reduce time first, e.g. {.code reduce_over(ds, \"median\", \"t\")}.",
+        "i" = paste(
+          "For a (band, t, y, x) cube, stack the bands with",
+          "{.code lazy_stack(list(B02 = ds[[\"B02\"]], ...), along = \"band\")}."
+        )
+      ),
+      class = c("garry_plan_error", "garry_error")
+    )
   }
   layers <- lapply(x@bands, function(b) b[[1L]])
   if (length(layers) == 1L) {
