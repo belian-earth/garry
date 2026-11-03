@@ -412,6 +412,25 @@ NULL
   )
 }
 
+# gdalraster notes each open of an Int64 or UInt64 band, in a cli alert and
+# then a warning, as it reads the band as doubles. A warp widens a 32-bit
+# integer band to Int64 so its empty cells have a value (.warp_dst_nodata()),
+# and a double holds every value that band can, so on the VRT garry widened
+# itself (.warp_vrt_file()) the note is untrue. Every other open keeps it.
+.warp_int64_prefix <- "garry-warp-int64-"
+.gdal_int64_note <- c(
+  "Int64/UInt64 raster data types are not fully supported. Loss of precision will occur for values > 2^53.",
+  "Int64/UInt64 raster data are currently handled as 'double'"
+)
+.gdal_int64_noted <- function(path, cnd) {
+  if (!startsWith(basename(path), .warp_int64_prefix)) {
+    return(FALSE)
+  }
+  said <- trimws(cli::ansi_strip(conditionMessage(cnd)))
+  # the alert leads with its bullet
+  said %in% .gdal_int64_note || sub("^\\S+\\s+", "", said) %in% .gdal_int64_note
+}
+
 .gdal_handle <- function(path, open_options = character(0)) {
   path <- .gdal_href(path) # range-read remote COGs, never pull whole
   key <- paste(c(path, open_options), collapse = "\x1f")
@@ -458,8 +477,9 @@ NULL
   # (HLS spans several zones), so PROJ reports "several coordinate operations
   # ... artifacts may appear". The ambiguity is inherent to warping multi-zone
   # sources onto one grid and the divergence is sub-pixel; muffle just that
-  # benign notice so it does not spam once per asset. Every other warning
-  # surfaces.
+  # benign notice so it does not spam once per asset. Nor does gdalraster's
+  # Int64 note on a VRT garry widened (.gdal_int64_noted()). Every other
+  # warning surfaces.
   h <- withCallingHandlers(
     open_ds(),
     warning = function(w) {
@@ -468,9 +488,15 @@ NULL
           "Several coordinate operations",
           conditionMessage(w),
           fixed = TRUE
-        )
+        ) ||
+          .gdal_int64_noted(path, w)
       ) {
         invokeRestart("muffleWarning")
+      }
+    },
+    message = function(m) {
+      if (.gdal_int64_noted(path, m)) {
+        invokeRestart("muffleMessage")
       }
     }
   )
@@ -2066,12 +2092,12 @@ gdal_warp_vrt <- function(
   if (length(src_path) != 1L) {
     cli::cli_abort("gdal_warp_vrt() takes one source; several are read by gdal_warp_window().")
   }
-  vrt <- tempfile(fileext = ".vrt")
   key <- .warp_vrt_key(alike, band, target_grid, resampling, src_nodata, open_options)
   named <- .xml_escape(.gdal_href(src_path))
   memo <- .gdal_cache$warp_vrt
   hit <- if (!is.null(key)) memo[[key]]
   if (!is.null(hit)) {
+    vrt <- .warp_vrt_file(hit$dst)
     writeLines(gsub(hit$named, named, hit$xml, fixed = TRUE), vrt)
     return(vrt)
   }
@@ -2098,7 +2124,8 @@ gdal_warp_vrt <- function(
   # through the cached handle: only a dataset carries open options to the
   # warper, and the handle's open has the remote hygiene
   ds <- .gdal_handle(src_path, open_options)
-  args <- c(args, .warp_dst_nodata(.gdal_band_dtype(ds, band[[1L]]), src_nodata))
+  dst <- .warp_dst_nodata(.gdal_band_dtype(ds, band[[1L]]), src_nodata)
+  args <- c(args, dst)
   own <- ds$getNoDataValue(band[[1L]])
   if (.mosaic_source(src_path, open_options) && .nodata_replaces(own, src_nodata)) {
     where <- .url_scrub(src_path)
@@ -2107,6 +2134,7 @@ gdal_warp_vrt <- function(
       "i" = "The warper would take that value, and every gap of the mosaic, as data. Leave {.arg nodata} unset."
     ), class = c("garry_source_error", "garry_error"))
   }
+  vrt <- .warp_vrt_file(dst)
   gdalraster::warp(
     list(ds),
     vrt,
@@ -2120,9 +2148,17 @@ gdal_warp_vrt <- function(
     if (length(memo) >= .gti_meta_max) {
       rm(list = ls(memo, all.names = TRUE), envir = memo)
     }
-    memo[[key]] <- list(named = named, xml = xml)
+    memo[[key]] <- list(named = named, xml = xml, dst = dst)
   }
   vrt
+}
+
+# A warped VRT's file, where `dst` is its .warp_dst_nodata(). One that widens
+# its band to Int64 is named for it, so every process that opens it knows the
+# type is garry's own (.gdal_int64_noted()).
+.warp_vrt_file <- function(dst) {
+  wide <- identical(dst[1:2], c("-ot", "Int64"))
+  tempfile(if (wide) .warp_int64_prefix else "file", fileext = ".vrt")
 }
 
 # What a warped VRT is remembered under: see gdal_warp_vrt()'s `alike`.

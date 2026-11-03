@@ -90,7 +90,8 @@ test_that("declared-grid lazy_source matches discovery and skips the open", {
   ghost <- lazy_source(file.path(tempdir(), "garry-no-such-file.tif"),
                        grid = meta$grid)
   expect_s3_class(ghost, "garry::LazyRaster")
-  expect_error(collect(ghost), class = "garry_read_error")
+  expect_error(.gdal_hushed(collect(ghost), .gdal_missing("garry-no-such-file.tif")),
+               class = "garry_read_error")
 
   # With a declared grid, file nodata is not consulted: the i16
   # fixture's -9999 stays raw unless passed explicitly.

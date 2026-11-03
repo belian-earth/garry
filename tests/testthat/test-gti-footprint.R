@@ -40,10 +40,10 @@ test_that("a geographic tile reads onto a projected grid", {
   grid <- grid_from_bbox(c(14.65, 1.95, 14.85, 2.15), res = 100,
                          projection = "utm")
   x <- lazy_dataset(.geo_sources(f), grid, assets = "v")@bands$v[[1L]]
-  .expect_matches_oracle(
-    unclass(collect(x, distributed = FALSE))[, ],
-    .geo_oracle(f, grid)
-  )
+  # under GTI's warp, libtiff notes a strip array it did not chop in GDAL's
+  # in-memory dataset, not in the tile
+  got <- .gdal_hushed(collect(x, distributed = FALSE), "allocChoppedUpStripArrays")
+  .expect_matches_oracle(unclass(got)[, ], .geo_oracle(f, grid))
 })
 
 test_that("pooled reads of a geographic tile match, fetched or direct", {

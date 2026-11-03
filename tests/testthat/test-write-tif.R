@@ -353,8 +353,8 @@ test_that("a bad block size or a malformed creation option never reaches GDAL", 
 test_that("a valid block size reaches the COG driver", {
   x <- lazy_source(fixture_gradient_f32())
   p <- tempfile(fileext = ".tif")
-  write_tif(x, p, cog = TRUE, creation_options = "BLOCKSIZE=32", distributed = FALSE)
-  expect_identical(gdal_grid_spec(p)$block_dim, c(32L, 32L))
+  write_tif(x, p, cog = TRUE, creation_options = "BLOCKSIZE=128", distributed = FALSE)
+  expect_identical(gdal_grid_spec(p)$block_dim, c(128L, 128L))
 })
 
 test_that("band_names must name every output band", {

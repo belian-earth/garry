@@ -259,6 +259,23 @@ test_that("an integer warp marks the cells past its footprint as missing", {
   expect_false(all(is.nan(b)))
 })
 
+test_that("a 32-bit band's warp says nothing of the Int64 band garry widens it to", {
+  big <- grid_spec("EPSG:3857", extent = c(-20, -20, 60, 60), dims = c(8L, 8L))
+  src <- lazy_source(fixture_tile(c(0, 4294967295), "UInt32"))
+  x <- align_to(src, big)
+  rp <- .warp_read_plan(graph_get(x@graph, x@node_id), graph_get(x@graph, src@node_id))
+  expect_true(any(grepl('dataType="Int64"', readLines(rp$path), fixed = TRUE)))
+  # each collect warps to a VRT of its own, which the read opens
+  expect_no_warning(m <- collect(x, distributed = FALSE))
+  expect_identical(sort(unique(as.numeric(m[!is.nan(m)]))), c(0, 4294967295))
+  expect_no_message(collect(x, distributed = FALSE), message = "Int64")
+  # any other Int64 open keeps the note: the same VRT under a name of its own
+  own <- file.path(dirname(rp$path), "own-int64.vrt")
+  expect_true(file.copy(rp$path, own))
+  withr::defer(unlink(own))
+  expect_warning(expect_message(gdal_grid_spec(own), "Int64"), "handled as 'double'", fixed = TRUE)
+})
+
 test_that("a warp of an integer band keeps its values whatever marks the empty cells", {
   big <- grid_spec("EPSG:3857", extent = c(-20, -20, 60, 60), dims = c(8L, 8L))
   f <- fixture_tile(c(0, 3, 0, 3), "Byte")
@@ -349,7 +366,8 @@ test_that("a file on a warped file's grid takes its VRT with the source renamed"
 
   # no open comes with a rename, and any other `alike` opens to build
   expect_no_error(warp(gone, alike))
-  expect_error(warp(gone, list("another grid")))
+  # this report names no file
+  expect_error(.gdal_hushed(warp(gone, list("another grid")), "No such file or directory"))
 
   # an exact warp is a VRT of its own
   expect_true(any(grepl("MaxError", readLines(first), fixed = TRUE)))
@@ -488,6 +506,8 @@ test_that("a grid that cannot align declines a direct read before any open", {
   integers@dtype <- "i16"
   expect_null(garry:::.rio_direct_spec(gone, decimated, "bilinear", src_grid = integers))
   # on its own pixels an interpolating read of integers may go direct, so it opens
-  expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers))
-  expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = g))
+  missing <- .gdal_missing(gone)
+  expect_error(.gdal_hushed(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers),
+                            missing))
+  expect_error(.gdal_hushed(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = g), missing))
 })

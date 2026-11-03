@@ -76,7 +76,8 @@ test_that("a failed read aborts, naming the file and the cause", {
   ghost <- lazy_source(file.path(tempdir(), "garry-gone.tif"),
                        grid = meta$grid, block_dim = meta$block_dim)
   withr::local_options(garry.read_retry = 0L)
-  err <- expect_error(suppressMessages(collect(ghost + 1)), class = "garry_read_error")
+  err <- expect_error(.gdal_hushed(collect(ghost + 1), .gdal_missing("garry-gone.tif")),
+                      class = "garry_read_error")
   expect_match(conditionMessage(err), "garry-gone.tif", fixed = TRUE)
   expect_match(conditionMessage(err), "No such file", fixed = TRUE)
 })
