@@ -198,8 +198,8 @@ graph_ids <- function(graph) {
 #' @export
 graph_toposort <- function(graph) {
   ids <- graph_ids(graph)
-  indeg <- setNames(integer(length(ids)), as.character(ids))
-  children <- setNames(vector("list", length(ids)), as.character(ids))
+  indeg <- stats::setNames(integer(length(ids)), as.character(ids))
+  children <- stats::setNames(vector("list", length(ids)), as.character(ids))
 
   for (id in ids) {
     n <- graph_get(graph, id)

@@ -25,3 +25,4 @@
 ^garry-logo\.png$
 ^package-graph$
 ^vignettes/articles$
+^\.git$
