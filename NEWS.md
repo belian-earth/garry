@@ -453,6 +453,14 @@
   as a pool that "takes no more tasks". garry sends each broadcast whole and
   never cancels a broadcast's task, the two ways a dispatcher gets there. No
   pool is closed from inside a wait.
+* `garry_daemons()` closes a pool only once none of its daemons is running a
+  task, such as a read or a kernel warm-up: a pool closed while a daemon
+  replies can hang R for good, read pools and compute pools alike, through a
+  race in NNG's IPC transport (fixed in NNG 1.12.5, not yet in nanonext).
+  After three seconds it names each pool still mid-task, its running count
+  and the pids of its daemons still mid-task. A Ctrl-C, or a minute's wait,
+  stops those daemons and closes the pools; after a Ctrl-C no pool is started
+  and `garry_daemons_set()` is `FALSE`.
 * An in-process read-only collect no longer needs `withr`, which garry
   only suggests, and a token refresh during a run says so when `httr2` is
   missing.

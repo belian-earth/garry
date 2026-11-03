@@ -168,9 +168,9 @@ test_that("a stranded pool is left out of live-only work and refused by the rest
 
 test_that("a pool short of the daemons it started with fails the check", {
   state <- garry:::.garry_state
-  old <- state$pool_width
-  withr::defer(state$pool_width <- old)
-  state$pool_width <- c(r = 3L, c1 = 1L)
+  old <- state$prof_pids
+  withr::defer(state$prof_pids <- old)
+  state$prof_pids <- list(r = 1:3, c1 = 4L)
   have <- c(r = 3L, c1 = 1L, x = 0L)
   testthat::local_mocked_bindings(
     .gd_n_compute = function(prof) have[[prof]],
@@ -206,9 +206,13 @@ test_that("a pool short of the daemons it started with fails the check", {
 
 test_that("only a queue that stopped moving at full width counts as stuck, and it stays down", {
   state <- garry:::.garry_state
-  old <- state$pool_stuck
-  withr::defer(state$pool_stuck <- old)
+  old <- list(state$pool_stuck, state$prof_pids)
+  withr::defer({
+    state$pool_stuck <- old[[1L]]
+    state$prof_pids <- old[[2L]]
+  })
   state$pool_stuck <- NULL
+  state$prof_pids <- list(p = 1:3)
   q <- function(awaiting, executing, completed) {
     c(awaiting = awaiting, executing = executing, completed = completed)
   }
@@ -218,10 +222,6 @@ test_that("only a queue that stopped moving at full width counts as stuck, and i
     status = function(.compute) list(connections = 3L, mirai = queue),
     daemons = function(n, .compute) closed <<- c(closed, .compute),
     .package = "mirai"
-  )
-  testthat::local_mocked_bindings(
-    .pool_width = function(profiles) rep(3L, length(profiles)),
-    .package = "garry"
   )
   check <- function(before, now) {
     queue <<- now

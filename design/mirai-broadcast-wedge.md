@@ -82,8 +82,7 @@ garry prevents the second at its source and catches it if it happens anyway:
 - `.pool_send()` runs each `everywhere()` under `suspendInterrupts()`, so a
   broadcast is sent whole. It cannot block: garry's pools set no memory limit
   for mirai's gate.
-- garry cancels only ordinary tasks: a run's own (`.store_broadcasts()`) and
-  those `.task_mirai()` noted (`.tasks_cancel()`), never a broadcast's.
+- garry never cancels a broadcast's task.
 - The progress check catches a generation left open by anything else, such as
   a user's own `everywhere()` on garry's profile.
 
@@ -98,6 +97,32 @@ Measured with mirai 2.7.2 and nanonext 1.10.2 (2026-11-03):
   queued for it, that task cancelled, then garry's broadcast. The progress check
   raised in about 2 s, with the pool at 3 of 3; with the width check alone the
   wait ran until a 20 s time limit ended it.
+
+## Closing a pool
+
+A pool closed while a daemon is mid-reply can hang the host for good: a race in
+NNG's IPC transport, fixed in NNG 1.12.5 and not yet bundled in nanonext
+(nanonext 1.10.2 bundles NNG 1.12.0, and 1.10.4 bundles 1.12.3). It hangs
+dispatcher pools and width-1 direct profiles alike: on a fault-injection build
+that widens the race, a direct profile closed with replies in flight hung in 3
+of 3 runs, in `req0_pipe_stop()`.
+
+`.pools_close()` is the only place garry closes a pool, for `garry_daemons()`.
+Every daemon gets a pid probe, a `Sys.getpid()` broadcast it answers once it has
+finished what it holds, and the close waits:
+
+- on a dispatcher pool, until every probe has come back, or until its probes
+  sit queued with nothing running: a stranded task or an open generation holds
+  them for good, and no daemon of the pool is mid-task. `executing` alone is
+  not enough, as a dispatcher reports 0 before it has assigned the probes;
+- on a width-1 profile, which has no dispatcher, until its probe has replied
+  or its daemon is gone.
+
+At 3 s the wait names each pool still mid-task, its running count and the
+daemons that have not answered the probe, by pid. A Ctrl-C, or 60 s, stops
+those daemons with SIGKILL, since a dead daemon cannot be mid-reply; the close
+waits until each pool has seen them go, then closes, says which daemons it
+stopped, and raises the Ctrl-C again so `garry_daemons()` starts no pool.
 
 ## When nanonext fixes it
 

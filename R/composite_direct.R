@@ -710,7 +710,9 @@ NULL
 
 # Say if a warm-up failed. The bands all succeeded by now, so the kernels
 # compiled in their tasks instead, at a cost only in time. A warm-up runs
-# ahead of its daemon's strips, so this looks without waiting.
+# ahead of its daemon's strips, so this looks without waiting: one on a
+# daemon given no strip may still be compiling, and a close of its pool
+# waits for it (.pools_close()).
 .gd_warm_report <- function(warm, tl) {
   done <- Filter(Negate(mirai::unresolved), warm)
   for (key in names(done)) {
