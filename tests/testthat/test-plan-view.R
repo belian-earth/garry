@@ -61,9 +61,14 @@ test_that("plan_view subtypes compute stages by fused members", {
   # reducer name
   p2 <- plan_lazy(reduce_over(focal_map(lr + 1, radius = 1L, fn = g_mean),
                               "mean", c("x", "y")))
-  nodes2 <- plan_view(p2)$x$nodes
+  w2 <- plan_view(p2)
+  nodes2 <- w2$x$nodes
   expect_true(any(grepl("reduce·mean", nodes2$label)))
   expect_true(any(grepl("combine·mean", nodes2$label)))
+  # both stages hold the reduce node; the output hangs off the combine,
+  # which produces the 1 x 1 result, not off the partial's chunk grid
+  expect_identical(w2$x$edges$from[w2$x$edges$dashes], p2@sink)
+  expect_match(nodes2$label[nodes2$id == max(nodes2$id)], "1 x 1")
 })
 
 test_that("plan_view accepts a LazyDataset via stack_bands", {

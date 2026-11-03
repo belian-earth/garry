@@ -429,6 +429,11 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   info <- lapply(p@stages, .pv_stage_info, graph = p@graph,
                  derive_map = derive_map)
   sinks <- if (length(p@sinks)) p@sinks else stats::setNames(integer(0), NULL)
+  # The stage that produces a sink: the last holding it, since a spatial
+  # reduce's partial and combine stages both hold its node.
+  sink_stage <- function(id) {
+    Find(function(s) id %in% s@members, p@stages, right = TRUE)
+  }
 
   # Dataset sinks fuse the band-assembly stack with any derivation, so
   # every band's tail feeds the sink stage even when the derivation
@@ -438,7 +443,7 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   # drops the assembly stack.
   reroute <- NULL
   if (!is.null(band_names) && length(sinks) == 1L) {
-    S <- Find(function(s) sinks[[1L]] %in% s@members, p@stages)
+    S <- sink_stage(sinks[[1L]])
     if (!is.null(S)) {
       non_stack <- setdiff(S@members, sinks[[1L]])
       tagged <- any(vapply(non_stack, function(id)
@@ -543,7 +548,7 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   # it, describing the written product (dims, dtype, band names). The
   # dashed edge marks the compute -> write boundary.
   out_rows <- lapply(seq_along(sinks), function(i) {
-    sid <- Find(function(s) sinks[[i]] %in% s@members, p@stages)
+    sid <- sink_stage(sinks[[i]])
     if (is.null(sid)) {
       return(NULL)
     }
@@ -578,7 +583,7 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   if (length(out_rows)) {
     out_nodes <- do.call(rbind, out_rows)
     sink_stage_ids <- vapply(seq_along(sinks), function(i) {
-      Find(function(s) sinks[[i]] %in% s@members, p@stages)@id
+      sink_stage(sinks[[i]])@id
     }, integer(1))
     nodes <- rbind(nodes, out_nodes)
     edges <- rbind(edges, data.frame(from = sink_stage_ids,
