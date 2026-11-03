@@ -19,7 +19,7 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>", fig.path = "figure/",
 A multi-band file is just another source: give `lazy_dataset()` the path and
 it builds one band per file band, named from the file's band descriptions
 (`A00` .. `A63` here). Each band is its own source, so at `collect()` the
-reads fan out band-by-band across the reader pool -- many connections issuing
+reads fan out band-by-band across the reader pool, with many connections issuing
 range requests concurrently, which is what makes a 64-band remote read fast.
 This vignette reads one tile, decodes it and resamples it to 30 m on the read,
 and renders three arbitrary bands as a false-colour composite.
@@ -117,7 +117,7 @@ surrounding cell centres for continuous data measured off-grid, and
 
 **Assign.** Every 30 m pixel goes to its nearest centroid:
 `argmax_k (x . c_k - |c_k|^2 / 2)`, and `x . c_k` is a linear combination of
-bands -- the `band_project()` reducer from the
+bands: the `band_project()` reducer from the
 [PCA article](hls-harmonized-pca.html). The argmax is expressible in the
 same public vocabulary, so the WHOLE assignment runs inside the graph: a
 custom band reducer composes five projections with a comparison chain, and
@@ -156,7 +156,7 @@ One fused kernel reads the 64-band cube once, computes every projection and
 the argmax per pixel, and only the finished single-band cluster map ever
 reaches R. (Want the raw scores instead? Stack plain
 `band_project()` reducers with `lazy_stack(along = "band")` and take
-`max.col()` host-side -- same digital numbers.)
+`max.col()` host-side: same digital numbers.)
 
 The k-means prediction can also stream straight to disk. Note the
 `dtype` and `overview_resampling` arguments: COG overviews default to
@@ -185,5 +185,5 @@ preview(
 Five clusters, no labels, and the landscape decomposes into its structure:
 the dendritic drainage network, the river corridor and settlement strip,
 and the textured forest mosaic each claim their own class. The same
-dequantised dataset feeds any downstream verb the same way -- a band-axis
+dequantised dataset feeds any downstream verb the same way: a band-axis
 PCA, a similarity search, or a classifier fit on the collected array.

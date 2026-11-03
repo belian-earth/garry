@@ -193,7 +193,7 @@ plan_draw(composite[["ndvi"]])    # the NDVI band's node tree
 
 # preview() estimates a coarse grid from the graph and device, runs the pipeline
 # at that reduced resolution (reading only overviews / the windows it needs), and
-# plots the result -- a cheap look before committing to the full collect().
+# plots the result, a cheap look before committing to the full collect().
 preview(composite[["ndvi"]])   # single band -> colour ramp + colourbar
 ```
 

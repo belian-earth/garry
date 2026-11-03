@@ -653,8 +653,11 @@
   and `coarsen()` refuses a source read by anything but nearest neighbour.
 * `print(ocm_model())` prints the model's one-line summary, not the raw list.
 * `plan_draw()` labels `apply_mask()`'s nodes `mask`, not `node`.
-* `stack_bands()` on a time series points to `lazy_stack(along = "band")`.
-* `graph_toposort()` calls `stats::setNames()`, clearing an R CMD check NOTE.
+* `stack_bands()` on a time series fails with a `garry_plan_error` that names
+  `lazy_stack(along = "band")` for a (band, t, y, x) cube, where it said this
+  was unsupported.
+* `graph_toposort()` works without stats attached (for example under
+  `R_DEFAULT_PACKAGES=NULL`); it called `setNames()` unqualified.
 * `.Rbuildignore` drops `.git`, a file in a worktree, from the built package.
 
 ## Observability
