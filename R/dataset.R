@@ -189,10 +189,11 @@ LazyDataset <- S7::new_class(
 #'   `proj:code`, `proj:wkt2` or `proj:projjson`, and an affine, north-up
 #'   `spatial:transform` over the array's own shape along
 #'   `spatial:dimensions`, on the array or its parent group, registered by
-#'   uuid in the `zarr_conventions` of the first of the two that has one.
-#'   GDAL places the other arrays, and lists the arrays of a Zarr v2 store
-#'   from its `.zmetadata`. A store without consolidated metadata reads as
-#'   any other source: GDAL opens its root as one dataset. An array whose
+#'   uuid in the `zarr_conventions` of the first of the two that has one
+#'   (GDAL places arrays by them from 3.13 on). GDAL places the other
+#'   arrays, and lists the arrays of a Zarr v2 store from its `.zmetadata`.
+#'   A store without consolidated metadata reads as any other source: GDAL
+#'   opens its root as one dataset. An array whose
 #'   declared extent misses `grid` is not opened, so GDAL is not asked
 #'   where it lies. garry reads the arrays that overlap `grid` as it reads
 #'   a vector of them, and says which; GDAL must place each one where the

@@ -171,10 +171,11 @@ each array's CRS and extent where GDAL 3.13 does: the zarr-conventions
 \code{proj:code}, \code{proj:wkt2} or \code{proj:projjson}, and an affine, north-up
 \code{spatial:transform} over the array's own shape along
 \code{spatial:dimensions}, on the array or its parent group, registered by
-uuid in the \code{zarr_conventions} of the first of the two that has one.
-GDAL places the other arrays, and lists the arrays of a Zarr v2 store
-from its \code{.zmetadata}. A store without consolidated metadata reads as
-any other source: GDAL opens its root as one dataset. An array whose
+uuid in the \code{zarr_conventions} of the first of the two that has one
+(GDAL places arrays by them from 3.13 on). GDAL places the other
+arrays, and lists the arrays of a Zarr v2 store from its \code{.zmetadata}.
+A store without consolidated metadata reads as any other source: GDAL
+opens its root as one dataset. An array whose
 declared extent misses \code{grid} is not opened, so GDAL is not asked
 where it lies. garry reads the arrays that overlap \code{grid} as it reads
 a vector of them, and says which; GDAL must place each one where the

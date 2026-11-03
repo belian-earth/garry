@@ -151,8 +151,10 @@
   the zarr-conventions `proj:` and `spatial:` attributes where GDAL 3.13
   reads them, on the array or its parent group: the extent is an affine,
   north-up `spatial:transform` over the array's own shape, as GDAL ignores
-  `spatial:shape`. An array whose declared extent misses the grid is not
-  opened. GDAL lists a Zarr v2 store's arrays from its `.zmetadata`, and
+  `spatial:shape`. GDAL places arrays by these attributes from 3.13 on;
+  with older GDAL a declared array fails the placement check below, which
+  names the GDAL version. An array whose declared extent misses the grid is
+  not opened. GDAL lists a Zarr v2 store's arrays from its `.zmetadata`, and
   places the arrays that declare nothing. A store without consolidated
   metadata reads as any other source, as before. GDAL must place each
   array read where the store declares it, or the call aborts; so does a

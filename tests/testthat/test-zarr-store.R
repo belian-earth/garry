@@ -13,6 +13,16 @@
 # alone or in a vector, the remote listing kept, and classed errors that
 # say what to do.
 
+# GDAL places Zarr arrays by zarr-conventions, and writes a v3 store's
+# consolidated metadata into its zarr.json, from 3.13 on.
+.old_gdal <- function() gdal_version_num() < 3130000L
+.skip_before_gdal_313 <- function() {
+  skip_if(
+    .old_gdal(),
+    "GDAL < 3.13: no Zarr conventions, no v3 consolidated metadata"
+  )
+}
+
 # The source paths a dataset reads, in the order its nodes hold them.
 .ds_paths <- function(ds) {
   g <- ds@graph
@@ -80,6 +90,7 @@ test_that("a store's root is told from an array in it and gets what GDAL needs",
 })
 
 test_that("consolidated metadata lists a store's arrays and what they declare", {
+  .skip_before_gdal_313()
   wkt <- gdalraster::srs_to_wkt("EPSG:32633")
   pj <- yyjsonr::read_json_str(gdalraster::srs_to_projjson("EPSG:32632"))
   store <- fixture_zarr_declared(
@@ -146,6 +157,7 @@ test_that("consolidated metadata lists a store's arrays and what they declare", 
 })
 
 test_that("a declared array is read through the connection string GDAL places it by", {
+  .skip_before_gdal_313()
   # from its group, unless the group's part in its declaration reaches
   # GDAL only from the store's root, the group's own zarr.json holding no
   # consolidated metadata: zarr-python consolidates the root alone
@@ -181,6 +193,7 @@ test_that("a declared array is read through the connection string GDAL places it
 })
 
 test_that("GDAL lists a v2 store and places what it declares", {
+  .skip_before_gdal_313()
   store <- fixture_zarr_declared(at3(), on = "array", format = 2L)
   a <- gdal_zarr_arrays(.zarr_store_root(store))
   expect_identical(a$array, c("/g1/v", "/g2/v", "/g3/v"))
@@ -203,6 +216,9 @@ test_that("GDAL places the arrays of a store that declares nothing", {
     expect_null(gdal_zarr_arrays(.zarr_store_root(
       fixture_zarr_store(fmt, FALSE)$store
     )))
+    if (fmt == "ZARR_V3" && .old_gdal()) {
+      next
+    }
     for (cons in TRUE) {
       fx <- fixture_zarr_store(fmt, cons)
       a <- gdal_zarr_arrays(.zarr_store_root(fx$store))
@@ -231,6 +247,7 @@ test_that("GDAL places the arrays of a store that declares nothing", {
 })
 
 test_that("a grid opens and reads only the arrays it overlaps", {
+  .skip_before_gdal_313()
   store <- fixture_zarr_declared(at3())
   # /g2/v's declared extent misses the grid, so GDAL never opens it
   .gdal_handle_reset()
@@ -248,6 +265,7 @@ test_that("a grid opens and reads only the arrays it overlaps", {
 })
 
 test_that("arrays in the grid's CRS go last, the rest in path order", {
+  .skip_before_gdal_313()
   xy <- gdalraster::transform_xy(
     cbind(500000, 4600000),
     "EPSG:32632",
@@ -286,6 +304,9 @@ test_that("arrays in the grid's CRS go last, the rest in path order", {
 
 test_that("a store reads the cells of the explicit list of its arrays", {
   for (fmt in c("ZARR_V3", "ZARR_V2")) {
+    if (fmt == "ZARR_V3" && .old_gdal()) {
+      next
+    }
     for (cons in TRUE) {
       fx <- fixture_zarr_store(fmt, cons)
       # each grid is in EPSG:32632 or 32631: those arrays go last
@@ -306,6 +327,7 @@ test_that("a store reads the cells of the explicit list of its arrays", {
       }
     }
   }
+  .skip_before_gdal_313()
   fx <- fixture_zarr_store()
   # a nested group's array is found as any other
   far <- grid_spec("EPSG:32632", c(200000, 4999900, 200100, 5000000), res = 10)
@@ -315,6 +337,7 @@ test_that("a store reads the cells of the explicit list of its arrays", {
 })
 
 test_that("in one CRS, the later array in path order wins where it holds data", {
+  .skip_before_gdal_313()
   fx <- fixture_zarr_store()
   got <- .year(suppressMessages(lazy_dataset(fx$store, g_ov())))
   a <- .ref(fx, "ova", 2, 1)
@@ -328,6 +351,7 @@ test_that("in one CRS, the later array in path order wins where it holds data", 
 })
 
 test_that("GDAL must place a declared array where the store declares it", {
+  .skip_before_gdal_313()
   # spatial:shape, which GDAL ignores: g1 declares 10 of its 30 columns
   # there, and GDAL places all 30, over the grid
   ten <- list(attrs = list(`spatial:shape` = c(20L, 10L)))
@@ -406,6 +430,7 @@ test_that("an array whose declared extent misses the grid is not opened", {
 })
 
 test_that("arrays of the name read that have no CRS or extent are named", {
+  .skip_before_gdal_313()
   store <- fixture_zarr_declared(at3(
     g3 = list(attrs = list(`proj:code` = NULL))
   ))
@@ -436,6 +461,7 @@ test_that("a store of one array reads as that array, whatever its form", {
   }
   # listed, the overlap check holds for one array too, and the array has
   # a name to pick; unlisted, there is none
+  .skip_before_gdal_313()
   store <- fixture_zarr_root("a")
   expect_error(
     lazy_dataset(store, g_off()),
@@ -472,6 +498,7 @@ test_that("a vector of single-array stores reads as a vector of files", {
 })
 
 test_that("without a grid a store must hold one array with a CRS and extent", {
+  .skip_before_gdal_313()
   fx <- fixture_zarr_store()
   expect_error(
     lazy_dataset(fx$store),
@@ -484,6 +511,7 @@ test_that("without a grid a store must hold one array with a CRS and extent", {
 })
 
 test_that("store errors are classed and say what to do", {
+  .skip_before_gdal_313()
   fx <- fixture_zarr_store()
   cnd <- expect_error(
     lazy_dataset(fx$store, g_off()),
@@ -553,6 +581,7 @@ test_that("store errors are classed and say what to do", {
 })
 
 test_that("a remote store's listing is kept for the session and filtered by name", {
+  .skip_before_gdal_313()
   memo <- .gdal_cache$zarr_stores
   rm(list = ls(memo, all.names = TRUE), envir = memo)
   withr::defer(rm(list = ls(memo, all.names = TRUE), envir = memo))
@@ -645,6 +674,7 @@ local({
   local_pools(2, 1, gdal_config = TRUE)
 
   test_that("pooled reads of a store's arrays match the single-process read", {
+    .skip_before_gdal_313()
     fx <- fixture_zarr_store()
     ds <- suppressMessages(lazy_dataset(fx$store, g_two()))
     yr <- time_sel(ds, "2021")

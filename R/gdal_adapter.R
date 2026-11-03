@@ -383,11 +383,18 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
       )
     }
   )
-  walk <- function(g) {
+  # paths from the names groups and arrays are keyed by: GDAL before 3.13
+  # gives no full_name
+  walk <- function(g, at = "") {
     a <- Filter(function(m) length(m$dimensions) >= 2L, g$arrays)
     c(
-      vapply(a, `[[`, "", "full_name", USE.NAMES = FALSE),
-      unlist(lapply(g$groups, walk), use.names = FALSE)
+      paste0(at, "/", names(a), recycle0 = TRUE),
+      unlist(
+        lapply(names(g$groups), function(k) {
+          walk(g$groups[[k]], paste0(at, "/", k))
+        }),
+        use.names = FALSE
+      )
     )
   }
   a <- sort(walk(.json_parse(info, root)), method = "radix")
@@ -514,6 +521,9 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
         "GDAL does not place {.val {a$array}} where its store declares it.",
         "*" = "The store declares {said} (xmin, ymin, xmax, ymax).",
         "*" = "GDAL gives {gdal}.",
+        "i" = if (gdal_version_num() < 3130000L) {
+          "GDAL places Zarr arrays by these declarations from 3.13 on; garry runs {gdal_version_str()}."
+        },
         "i" = "garry reads a store's arrays only where GDAL and the store agree they lie."
       ),
       class = c("garry_source_error", "garry_error"),
