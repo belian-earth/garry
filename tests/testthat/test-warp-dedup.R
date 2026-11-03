@@ -9,9 +9,10 @@ n_warps <- function(x) {
 }
 
 without_dedup <- function(expr) {
-  old <- options(garry.warp_dedup = FALSE)
-  on.exit(options(old))
-  force(expr)
+  testthat::with_mocked_bindings(
+    force(expr),
+    .dedup_warps = function(graph, sink_ids) invisible(graph)
+  )
 }
 
 target_of <- function(f, fact = 2L) {
@@ -86,9 +87,14 @@ test_that("the pass is idempotent and leaves a reused graph valid", {
   mb <- fixture_multiband()
   target <- target_of(mb$path)
 
-  x <- align_to(lazy_source(mb$path, band = 1L), target)
-  y <- align_to(lazy_source(mb$path, band = 2L), target)
-  expr <- (x - y) / (x + y)
+  bands <- function() {
+    list(x = align_to(lazy_source(mb$path, band = 1L), target),
+         y = align_to(lazy_source(mb$path, band = 2L), target))
+  }
+  ratio <- function(b) (b$x - b$y) / (b$x + b$y)
+  b <- bands()
+  y <- b$y
+  expr <- ratio(b)
 
   first <- n_warps(expr)
   second <- n_warps(expr)          # same graph, planned twice
@@ -97,7 +103,8 @@ test_that("the pass is idempotent and leaves a reused graph valid", {
 
   # the rewired-away warp is still a valid root of its own
   expect_identical(dim(collect(y)), c(target@dims[["y"]], target@dims[["x"]]))
-  expect_equal(collect(expr), collect(expr))
+  # and the graph planned twice holds what a fresh, unshared build holds
+  expect_equal(collect(expr), without_dedup(collect(ratio(bands()))))
 })
 
 test_that("a warp that is itself a requested sink stays canonical", {

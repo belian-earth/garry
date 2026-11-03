@@ -10,6 +10,6 @@
 \code{TRUE} if anvl is installed.
 }
 \description{
-Internal capability check (exported for daemon use via \code{::}).
+Internal capability check.
 }
 \keyword{internal}

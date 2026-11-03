@@ -11,7 +11,8 @@ MapNode(
   parents = integer(0),
   grid = GridSpec(),
   role = character(0),
-  fn = function() NULL
+  fn = function() NULL,
+  dtype = character(0)
 )
 }
 \arguments{
@@ -26,6 +27,9 @@ Pure metadata: never read by the planner or executors; surfaced by
 \code{\link[=plan_draw]{plan_draw()}} and \code{\link[=plan_view]{plan_view()}}.}
 
 \item{fn}{Elementwise R function.}
+
+\item{dtype}{Length-0 (the dtype \code{fn} was traced to return) or length-1
+dtype named by the caller of \code{\link[=lazy_map]{lazy_map()}}.}
 }
 \value{
 A \code{MapNode}.

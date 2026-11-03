@@ -6,12 +6,6 @@
 # reduce/scan barriers, padded sink exports trim on write, distributed
 # == single-threaded, and the one remaining refusal (spatial reduce).
 
-.hp_px <- function(px, code) {
-  old <- options(garry.chunk_target_px = px)
-  on.exit(options(old))
-  force(code)
-}
-
 # NaN-non-preserving decode stand-in: an integer cast round-trip turns
 # a NaN ring into finite garbage unless the executor re-masks the
 # beyond-raster edge (the .exec_mask_edge gate).
@@ -45,7 +39,7 @@ test_that("focal over computed maps equals the materialise-first reference", {
   f <- fixture_gradient_f32()
   ref <- .hp_reference(f)
   for (px in c(300, 1e6)) {   # many chunks (ring recompute) and one
-    got <- .hp_px(px, collect(.hp_graph(f)$ctx, distributed = FALSE))
+    got <- .with_chunk_px(px, collect(.hp_graph(f)$ctx, distributed = FALSE))
     expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,
                  ignore_attr = TRUE)
     # raster-edge ring: NaN pattern must match the reference exactly
@@ -71,8 +65,8 @@ test_that("multi-export: a padded sink export writes trimmed and exact", {
   ref_stack <- collect(nodes$stack, distributed = FALSE)
   ref_ctx <- .hp_reference(f)
   for (px in c(300, 1e6)) {
-    got <- .hp_px(px, collect(list(raw = nodes$stack, ctx = nodes$ctx),
-                              distributed = FALSE))
+    got <- .with_chunk_px(px, collect(list(raw = nodes$stack, ctx = nodes$ctx),
+                                      distributed = FALSE))
     expect_equal(unclass(got$raw), unclass(ref_stack), tolerance = 1e-6,
                  ignore_attr = TRUE)
     expect_equal(unclass(got$ctx), unclass(ref_ctx), tolerance = 1e-6,
@@ -80,7 +74,7 @@ test_that("multi-export: a padded sink export writes trimmed and exact", {
   }
   # file mode: the raw sink chunk carries pad and must trim on write
   dir <- withr::local_tempdir("hp")
-  .hp_px(300, write_tif(list(raw = nodes$stack, ctx = nodes$ctx), dir, distributed = FALSE))
+  .with_chunk_px(300, write_tif(list(raw = nodes$stack, ctx = nodes$ctx), dir, distributed = FALSE))
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "raw.tif"))
   on.exit(d$close(), add = TRUE)
   expect_equal(c(d$getRasterXSize(), d$getRasterYSize()), c(60, 40))
@@ -101,8 +95,8 @@ test_that("focal after a t-reduce recomputes the ring across the barrier", {
   write_tif(build(graph_new()), p, distributed = FALSE)
   ref <- collect(focal_map(lazy_source(p), fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
-  got <- .hp_px(300, collect(focal_map(build(graph_new()), fn = .hp_mean9,
-                                   radius = 1L), distributed = FALSE))
+  got <- .with_chunk_px(300, collect(focal_map(build(graph_new()), fn = .hp_mean9,
+                                               radius = 1L), distributed = FALSE))
   expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,
                ignore_attr = TRUE)
 })
@@ -126,8 +120,8 @@ test_that("focal after a scan recomputes the ring across the barrier", {
   write_tif(build(graph_new()), p, distributed = FALSE)
   ref <- collect(focal_map(lazy_source(p), fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
-  got <- .hp_px(300, collect(focal_map(build(graph_new()), fn = .hp_mean9,
-                                   radius = 1L), distributed = FALSE))
+  got <- .with_chunk_px(300, collect(focal_map(build(graph_new()), fn = .hp_mean9,
+                                               radius = 1L), distributed = FALSE))
   expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,
                ignore_attr = TRUE)
 })
@@ -155,7 +149,7 @@ test_that("cross-stage focal towers accumulate pads", {
     lazy_source(p, band = b, graph = g2)), along = "band")
   ref <- collect(focal_map(cube, fn = .hp_mean9, radius = 1L),
                  distributed = FALSE)
-  got <- .hp_px(300, collect(build(graph_new()), distributed = FALSE))
+  got <- .with_chunk_px(300, collect(build(graph_new()), distributed = FALSE))
   expect_equal(unclass(got), unclass(ref), tolerance = 1e-6,
                ignore_attr = TRUE)
 })
@@ -164,18 +158,18 @@ test_that("distributed == single-threaded for compute-fed focals", {
   skip_on_cran()
   f <- fixture_gradient_f32()
   nodes <- .hp_graph(f)
-  ref <- .hp_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
-                             distributed = FALSE))
+  ref <- .with_chunk_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
+                                     distributed = FALSE))
   local_pools(2, 1, gdal_config = TRUE)
-  got <- .hp_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
-                             distributed = TRUE))
+  got <- .with_chunk_px(300, collect(list(raw = nodes$stack, ctx = nodes$ctx),
+                                     distributed = TRUE))
   expect_equal(unclass(got$raw), unclass(ref$raw), tolerance = 1e-6,
                ignore_attr = TRUE)
   expect_equal(unclass(got$ctx), unclass(ref$ctx), tolerance = 1e-6,
                ignore_attr = TRUE)
   # streamed file writes
   dir <- withr::local_tempdir("hpd")
-  .hp_px(300, write_tif(list(raw = nodes$stack, ctx = nodes$ctx), dir, distributed = TRUE))
+  .with_chunk_px(300, write_tif(list(raw = nodes$stack, ctx = nodes$ctx), dir, distributed = TRUE))
   d <- methods::new(gdalraster::GDALRaster, file.path(dir, "ctx.tif"))
   on.exit(d$close(), add = TRUE)
   got2 <- matrix(d$read(1, 0, 0, 60, 40, 60, 40), 40, 60, byrow = TRUE)

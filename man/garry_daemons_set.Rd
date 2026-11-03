@@ -2,7 +2,7 @@
 % Please edit documentation in R/pools.R
 \name{garry_daemons_set}
 \alias{garry_daemons_set}
-\title{Are the garry daemon pools running?}
+\title{Are the garry daemon pools set?}
 \usage{
 garry_daemons_set()
 }
@@ -10,8 +10,12 @@ garry_daemons_set()
 A single logical.
 }
 \description{
-\code{TRUE} when the read and compute daemon pools created by
-\code{\link[=garry_daemons]{garry_daemons()}} are running. This is the default for the \code{distributed}
-argument of \code{\link[=collect]{collect()}}, so \code{collect(x)} uses the pools when they are up and
-runs single-threaded otherwise. Mirrors \code{mirai::daemons_set()}.
+\code{TRUE} from \code{\link[=garry_daemons]{garry_daemons()}} creating read and compute pools until
+they are torn down. This is the default for the \code{distributed} argument
+of \code{\link[=collect]{collect()}}, so \code{collect(x)} uses the pools when they are set and
+runs single-threaded otherwise. Mirrors \code{mirai::daemons_set()}: it
+says the pools were set, not that every daemon is alive, so a pool that
+lost its daemons stays \code{TRUE} and the next run fails with a
+\code{garry_pool_error}, rather than moving onto the process the pools
+protect. \code{\link[=garry_daemons]{garry_daemons()}} restarts them.
 }

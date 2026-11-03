@@ -12,7 +12,7 @@
 \description{
 Reusing a daemon's cached JitFunction across RUNS stalls on macOS:
 the same family as the host-cache slowdown gated in
-\code{.exec_cached_jit} (test-kernel-cache tripwire, run 33505350958)
+\code{.host_kernel} (test-kernel-cache tripwire, run 33505350958)
 and the fused-on-reader hang (test-compute-on-read). It surfaced on
 the daemons once kernel signatures became stable across plans
 (\code{.fn_identity}, 2026-09-07): the macOS check went from a 37 min

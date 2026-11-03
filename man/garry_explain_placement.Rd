@@ -4,12 +4,7 @@
 \alias{garry_explain_placement}
 \title{Explain the scheduler's placement decisions for a computation.}
 \usage{
-garry_explain_placement(
-  x,
-  read = NULL,
-  compute = NULL,
-  mode = garry_opt("placement")
-)
+garry_explain_placement(x, read = NULL, compute = NULL)
 }
 \arguments{
 \item{x}{A \code{LazyRaster}, a named list of them (multi-export), or a
@@ -17,8 +12,6 @@ garry_explain_placement(
 
 \item{read, compute}{Pool widths to assume; default = the live pools
 (0 when none are running).}
-
-\item{mode}{\code{"rules"} or \code{"cost"}; default \code{garry_opt("placement")}.}
 }
 \value{
 A data.frame with columns \code{source}, \code{compute}, \code{bands},

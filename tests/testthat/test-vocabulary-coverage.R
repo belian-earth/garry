@@ -37,7 +37,8 @@ test_that("g_* shape and bitwise ops match their oracles when traced", {
 test_that("every documented reduce_over op runs through collect", {
   a <- lazy_source(fixture_gradient_f32())
   st <- lazy_stack(list(a, a * 2, a * 4))
-  v <- array(c(collect(a), collect(a * 2), collect(a * 4)), c(dim(a), 3L))
+  m <- .fixture_values(60, 40)
+  v <- array(c(m, m * 2, m * 4), c(40L, 60L, 3L))
   base_op <- list(
     sum = sum, mean = mean, min = min, max = max, median = stats::median,
     count = function(z) sum(!is.na(z))
@@ -60,27 +61,42 @@ test_that("stac_gti_index writes one footprint per item of an asset", {
   )
   src <- stac_time_slices(src, "day")
   idx <- stac_gti_index(src, "B1", path = withr::local_tempfile(fileext = ".gti.fgb"))
-  expect_true(file.exists(idx))
   expect_true(file.exists(paste0(idx, ".meta.rds")))
   meta <- readRDS(paste0(idx, ".meta.rds"))
   expect_identical(nrow(meta$entries), 2L)
+  # the index itself: one feature per item, its box padded 1% to stay a superset
+  lyr <- methods::new(gdalraster::GDALVector, idx)
+  on.exit(lyr$close(), add = TRUE)
+  feats <- lyr$fetch(-1)
+  expect_identical(feats$location, c("x.tif", "y.tif"))
+  expect_equal(
+    unname(gdalraster::g_envelope(feats$geom)),
+    rbind(c(-0.01, 1.01, -0.01, 1.01), c(0.99, 2.01, -0.01, 1.01)),
+    tolerance = 1e-9
+  )
 })
 
-test_that("garry_gdal_config sets the network options it documents", {
-  old <- gdalraster::get_config_option("GDAL_HTTP_MAX_RETRY")
-  on.exit(gdalraster::set_config_option("GDAL_HTTP_MAX_RETRY", old), add = TRUE)
+# What garry_gdal_config() sets, read off its calls. Its options are
+# process-wide: set for real, EMPTY_DIR alone would hide every sidecar from
+# the tests after it on this worker.
+.gdal_config_set <- function() {
+  set <- list()
+  testthat::local_mocked_bindings(
+    set_config_option = function(key, value) set[[key]] <<- value,
+    .package = "gdalraster"
+  )
   garry_gdal_config()
-  expect_identical(gdalraster::get_config_option("GDAL_HTTP_MAX_RETRY"), "10")
+  set
+}
+
+test_that("garry_gdal_config sets the network options it documents", {
+  expect_identical(.gdal_config_set()$GDAL_HTTP_MAX_RETRY, "10")
 })
 
 test_that("garry_gdal_config admits Zarr keys and keeps GDAL's retry codes", {
-  opts <- c("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", "GDAL_HTTP_RETRY_CODES")
-  old <- vapply(opts, gdalraster::get_config_option, "")
-  on.exit(for (o in opts) gdalraster::set_config_option(o, old[[o]]), add = TRUE)
-  gdalraster::set_config_option("GDAL_HTTP_RETRY_CODES", "")
-  garry_gdal_config()
-  ext <- strsplit(gdalraster::get_config_option(opts[[1]]), ",")[[1]]
+  set <- .gdal_config_set()
+  ext <- strsplit(set$CPL_VSIL_CURL_ALLOWED_EXTENSIONS, ",")[[1]]
   expect_true(all(c(".tif", ".json", "{noext}", ".zarray", ".zmetadata", "0") %in% ext))
   expect_false(".xml" %in% ext)
-  expect_identical(gdalraster::get_config_option("GDAL_HTTP_RETRY_CODES"), "")
+  expect_false("GDAL_HTTP_RETRY_CODES" %in% names(set))
 })

@@ -15,7 +15,8 @@ The deduplicated \code{doc_items} / data frame.
 \description{
 Duplicate items are a known Planetary Computer quirk; equality uses
 the footprint rounded to 4 decimal places plus the datetime, per
-asset.
+asset. A range-only item (no \code{datetime}) is dated by its
+\code{start_datetime}, as in \code{\link[=stac_sources]{stac_sources()}}.
 }
 \seealso{
 Other stac helpers:

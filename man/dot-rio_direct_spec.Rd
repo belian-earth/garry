@@ -12,7 +12,8 @@
   band = 1L,
   nodata = numeric(0),
   partial = FALSE,
-  decode = FALSE
+  decode = FALSE,
+  src_grid = NULL
 )
 }
 \arguments{
@@ -28,8 +29,9 @@
 \item{band}{1-based band index (or indices) the read will use. Their
 data types drive the integer gate above.}
 
-\item{nodata}{The source node's sentinel (length 0 or 1). Averaging
-declines unless the file declares the same value.}
+\item{nodata}{The source node's sentinel (length 0 or 1). A resampling
+read declines unless the file declares the same value; on the
+source's own pixels, unless the file declares none.}
 
 \item{partial}{\code{TRUE} for one source of several
 (\code{\link[=.mosaic_read_spec]{.mosaic_read_spec()}}): the target may reach beyond the source,
@@ -39,6 +41,9 @@ the file's nodata (if any) the node's, qualifies.}
 \item{decode}{\code{TRUE} for the codes behind a decoded source
 (\code{.gdal_read_decoded()}): integer bands qualify for \code{"near"} and
 \code{"average"}, the two reads that decode applies itself, and no others.}
+
+\item{src_grid}{The source node's \code{\link[=GridSpec]{GridSpec()}}, which can decline
+without opening the file.}
 }
 \value{
 \code{NULL}, or a list with \code{fx}, \code{fy}, \code{x_off}, \code{y_off} (the
@@ -71,8 +76,9 @@ rounds back to the band type itself, and under GDAL 3.13.1 on ARM
 (new NEON float->int conversion paths) RasterIO and the warper round
 .5 ties in opposite directions -- every tie came back +1 DN through
 the fast path on the macOS CI runners. Identity is the contract, so
-integer bands take the fast path only for NEAREST, where no rounding
-happens.
+integer bands take the fast path only where no rounding happens: for
+NEAREST, and for a kernel that returns the source cell on the source's
+own pixels (\code{.rio_cell_kernels}).
 
 A south-up source (positive y pixel size: every AEF tile) stores its
 rows from the south. A target on its own pixels is still a window of

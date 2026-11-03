@@ -50,34 +50,10 @@
   m
 }
 
-.f32 <- function(v) {
-  readBin(
-    writeBin(as.numeric(v), raw(), size = 4L),
-    "numeric",
-    length(v),
-    size = 4L
-  )
-}
-
 # Decoded values (f32, NaN at nodata) of codes `m`.
 .decoded <- function(m) {
-  out <- .f32(dequantize_aef(m))
+  out <- .as_f32(dequantize_aef(m))
   out[m == -128] <- NaN
-  dim(out) <- dim(m)
-  out
-}
-
-# k x k block means (row by row, in order) of a decoded [y, x] matrix,
-# NaN where no value is valid, rounded to f32.
-.block_mean_dec <- function(m, k) {
-  out <- matrix(NaN, nrow(m) %/% k, ncol(m) %/% k)
-  for (r in seq_len(nrow(out))) {
-    for (q in seq_len(ncol(out))) {
-      blk <- t(m[(k * r - k + 1):(k * r), (k * q - k + 1):(k * q)])
-      ok <- !is.nan(blk)
-      if (any(ok)) out[r, q] <- .f32(Reduce(`+`, blk[ok]) / sum(ok))
-    }
-  }
   out
 }
 
@@ -103,19 +79,12 @@
 
 # Keep the decode from reading codes itself, so every read takes the VRT.
 with_no_decode_read <- function(expr) {
-  ns <- asNamespace("garry")
-  orig <- get(".rio_direct_spec", envir = ns)
-  unlockBinding(".rio_direct_spec", ns)
-  assign(
-    ".rio_direct_spec",
-    function(..., decode = FALSE) if (decode) NULL else orig(...),
-    envir = ns
+  real <- garry:::.rio_direct_spec
+  testthat::with_mocked_bindings(
+    force(expr),
+    .rio_direct_spec = function(..., decode = FALSE) if (decode) NULL else real(...),
+    .package = "garry"
   )
-  on.exit({
-    assign(".rio_direct_spec", orig, envir = ns)
-    lockBinding(".rio_direct_spec", ns)
-  })
-  force(expr)
 }
 
 .warp_args <- function(ds) {
@@ -165,17 +134,7 @@ test_that("average takes the mean of decoded valid codes", {
   expect_false(is.null(.warp_args(ds)$decim$decode))
   got <- collect(stack_bands(ds), distributed = FALSE)
   for (b in 1:3) {
-    dv <- .decoded(.codes_of(f, b))
-    want <- matrix(NaN, 3L, 4L)
-    for (r in 1:3) {
-      for (q in 1:4) {
-        blk <- t(dv[(3 * r - 2):(3 * r), (3 * q - 2):(3 * q)]) # row by row
-        ok <- !is.nan(blk)
-        # summed in order in double, as the reader sums
-        if (any(ok)) want[r, q] <- .f32(Reduce(`+`, blk[ok]) / sum(ok))
-      }
-    }
-    expect_identical(unname(got[,, b]), want)
+    expect_identical(unname(got[,, b]), .block_mean(.decoded(.codes_of(f, b)), 3L))
     # the all-nodata block stays NaN
     expect_true(is.nan(got[1L, 1L, b]))
   }
@@ -398,7 +357,7 @@ test_that("no read decodes an overview's resampled codes", {
       c(500000, 8599040, 500960, 8600000),
       res = 30
     )
-    want <- .block_mean_dec(full, 3L)
+    want <- .block_mean(full, 3L)
     for (fast in c(TRUE, FALSE)) {
       run <- function() {
         collect(
@@ -414,7 +373,8 @@ test_that("no read decodes an overview's resampled codes", {
       got <- if (fast) run() else with_no_decode_read(run())
       expect_equal(unname(got), want, tolerance = 1e-6, ignore_attr = TRUE)
     }
-    # an unaligned average warps the VRT, at full resolution
+    # an unaligned average warps the VRT, at full resolution: GDAL's warp of
+    # the decoded pixels, from a file with no overview to reach for
     g15 <- grid_spec(
       "EPSG:32736",
       c(500005, 8599045, 500905, 8599945),
@@ -424,7 +384,14 @@ test_that("no read decodes an overview's resampled codes", {
       stack_bands(lazy_dataset(f, g15, resampling = "average", decode = sq)),
       distributed = FALSE
     )
-    expect_true(all(got >= 0 & got <= 40000, na.rm = TRUE))
+    plain <- fixture_tile(
+      t(full),
+      gt = c(500000, 10, 0, 8600000, 0, -10),
+      nx = 96L,
+      ny = 96L,
+      crs = "EPSG:32736"
+    )
+    .gg_close(got, .geo_oracle(plain, g15, "average"))
     # a decimating near read picks codes, never averaged ones
     g40 <- grid_spec(
       "EPSG:32736",
@@ -468,7 +435,7 @@ test_that("a mask band reads as stored, and the VRT keeps the codes' blocks", {
   ds <- lazy_dataset(f, decode = function(x) x / 100, mask_asset = "qa")
   got <- collect(stack_bands(ds), distributed = FALSE)
   expect_setequal(unique(as.vector(got[,, 2L])), c(0, 8))
-  expect_setequal(unique(as.vector(got[,, 1L])), .f32(c(0.1, 0.2, 0.3)))
+  expect_setequal(unique(as.vector(got[,, 1L])), .as_f32(c(0.1, 0.2, 0.3)))
   # chunks snap to the codes' blocks, not the VRT's
   src <- graph_get(ds@graph, min(graph_ids(ds@graph)))
   expect_identical(src@block_dim, gdal_grid_spec(f)$block_dim)

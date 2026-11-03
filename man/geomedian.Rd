@@ -4,12 +4,10 @@
 \alias{geomedian}
 \title{Geometric median reducer over time (multivariate).}
 \usage{
-geomedian(iters = 12L, eps = 1e-07)
+geomedian(iters = 12L)
 }
 \arguments{
-\item{iters}{Weiszfeld iterations (fixed, unrolled).}
-
-\item{eps}{Distance regulariser (guards the weight at zero distance).}
+\item{iters}{Weiszfeld iterations.}
 }
 \value{
 A reducer \code{fn(x, dims)} for \code{\link[=reduce_over]{reduce_over()}}.
@@ -24,10 +22,9 @@ tendency: every distance couples all bands.
 }
 \details{
 Solved by Weiszfeld iteration (a fixed-point weighted mean,
-weights inverse distance to the current estimate), unrolled to a
-fixed \code{iters} steps so it compiles to a static kernel. Timesteps
-with any NaN band are ignored; pixels with no valid timestep return
-NaN.
+weights inverse distance to the current estimate) for a fixed
+\code{iters} steps, so it compiles to a static kernel. Timesteps with any
+NaN band are ignored; pixels with no valid timestep return NaN.
 
 The input must be a \verb{(band, t, y, x)} cube: stack each band's
 \verb{(t, y, x)} stack along \code{"band"}, then reduce over \code{"t"}; the band

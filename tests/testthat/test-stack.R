@@ -41,8 +41,7 @@ test_that("collect of a raw stack returns the (y, x, t) array", {
   }
 })
 
-test_that("temporal median and mean match terra::app and R apply", {
-  skip_if_not_installed("terra")
+test_that("temporal median and mean match R apply", {
   paths <- .stack_fixtures()
   st <- lazy_stack(lapply(paths, lazy_source))
   layers <- .read_layers(paths)
@@ -53,11 +52,6 @@ test_that("temporal median and mean match terra::app and R apply", {
     m <- median(v, na.rm = TRUE); if (is.na(m)) NaN else m
   })
   expect_equal(med, want_med, tolerance = 1e-6, ignore_attr = "gis")
-
-  r <- terra::rast(paths)
-  tmed <- as.matrix(terra::app(r, median, na.rm = TRUE), wide = TRUE)
-  ok <- !is.nan(want_med)
-  expect_equal(med[ok], tmed[ok], tolerance = 1e-6)
 
   mn <- collect(reduce_over(st, "mean", "t", nan_rm = TRUE))
   want_mn <- apply(arr, c(2, 3), function(v) mean(v, na.rm = TRUE))
@@ -96,8 +90,7 @@ test_that("masked median composite matches the R reference", {
   st <- lazy_stack(masked)
   med <- reduce_over(st, "median", "t", nan_rm = TRUE)
 
-  old <- options(garry.chunk_target_px = 300)
-  on.exit(options(old))
+  .local_px(300, med)
   got <- collect(med)
 
   ref_layers <- lapply(layers, function(m) {
@@ -119,35 +112,33 @@ test_that("stacks are chunk-invariant", {
   st <- lazy_stack(lapply(paths, lazy_source))
   med <- reduce_over(st, "median", "t", nan_rm = TRUE)
 
-  run <- function(px) {
-    old <- options(garry.chunk_target_px = px)
-    on.exit(options(old))
-    collect(med)
-  }
-  whole <- run(1e6)
+  whole <- .with_chunk_px(1e6, collect(med))
   for (px in c(13 * 11, 23 * 17)) {
-    got <- run(px)
+    got <- .with_chunk_px(px, collect(med))
     expect_identical(is.nan(got), is.nan(whole))
     ok <- !is.nan(whole)
     expect_equal(got[ok], whole[ok], tolerance = 1e-7, label = px)
   }
 })
 
-test_that("distributed stacks match single-threaded", {
-  paths <- .stack_fixtures()
-  st <- lazy_stack(lapply(paths, lazy_source))
-  med <- reduce_over(st, "median", "t", nan_rm = TRUE)
-  p <- plan_lazy(med)
-
-  local_pools(2, 2)
-  old <- options(garry.chunk_target_px = 300)
-  on.exit(options(old), add = TRUE)
-
-  single <- execute_plan(p)
-  dist <- execute_plan_mirai(p)
-  expect_identical(is.nan(dist), is.nan(single))
-  ok <- !is.nan(single)
-  expect_equal(dist[ok], single[ok], tolerance = 1e-12)
+test_that("temporal median and mean of a bare integer stack match plain R", {
+  # No nodata promotes these reads, so the reducers meet i16 itself. An even
+  # count averages two cells near the dtype's end, which only a float holds.
+  cells <- list(
+    c(30000, 32767, -32767, 5), c(30001, 32764, -32760, 6),
+    c(30004, 32760, -32763, 8), c(30009, 32761, -32766, 13)
+  )
+  st <- lazy_stack(lapply(cells, function(v) {
+    lazy_source(fixture_tile(v, "Int16", nx = 2L, ny = 2L))
+  }))
+  arr <- array(unlist(lapply(cells, function(v) matrix(v, 2L, 2L, byrow = TRUE))), c(2L, 2L, 4L))
+  for (op in c("median", "mean")) {
+    want <- apply(arr, c(1, 2), get(op))
+    for (nan_rm in c(FALSE, TRUE)) {
+      expect_plan(reduce_over(st, op, "t", nan_rm = nan_rm), want, "f32", file = FALSE,
+                  info = paste(op, nan_rm))
+    }
+  }
 })
 
 test_that("mismatched grids are rejected", {

@@ -2,9 +2,8 @@
 # while PRESERVING the axis -- the length-keeping sibling of a custom
 # reducer. Gates: a cumsum scan matches plain-R apply(cumsum) and its last
 # slice equals reduce_over sum; chunked oracle == whole-array (pure R, no
-# anvl); reverse and multi-input scans; distributed == single-threaded;
-# the grid survives unchanged; distinct scan bodies get distinct kernel
-# cache signatures.
+# anvl); reverse and multi-input scans; the grid survives unchanged;
+# distinct scan bodies get distinct kernel cache signatures.
 
 cumsum_body <- function(xs, margin) {
   g_scan(
@@ -22,6 +21,12 @@ build_scan_stack <- function(f, body, direction = "forward") {
   b <- lazy_source(f)
   scan_over(lazy_stack(list(a + 1, b * 2, a * b)), body,
             over = "t", direction = direction)
+}
+
+# What build_scan_stack() stacks, in plain R: (t, y, x).
+.scan_cells <- function() {
+  m <- .fixture_values(60, 40)
+  aperm(array(c(m + 1, m * 2, m * m), c(40L, 60L, 3L)), c(3L, 1L, 2L))
 }
 
 # -- pure-R oracle: chunk-invariance without anvl ------------------------------
@@ -91,8 +96,7 @@ test_that("cumsum scan matches apply() and its last slice the reduce", {
 
   a <- lazy_source(f)
   b <- lazy_source(f)
-  stk <- execute_plan(plan_lazy(lazy_stack(list(a + 1, b * 2, a * b))))
-  expect_equal(out, apply(stk, c(2, 3), cumsum), tolerance = 1e-5)
+  expect_equal(out, apply(.scan_cells(), c(2, 3), cumsum), tolerance = 1e-5)
 
   red <- execute_plan(plan_lazy(
     reduce_over(lazy_stack(list(a + 1, b * 2, a * b)), "sum", "t")))
@@ -117,10 +121,9 @@ test_that("a multi-input scan reads parent cubes in lockstep", {
   }
   out <- execute_plan(plan_lazy(scan_over(list(s1, s2), pair_body)))
 
-  v1 <- execute_plan(plan_lazy(s1))
-  v2 <- execute_plan(plan_lazy(s2))
-  want <- v1 * v2
-  want[2, , ] <- want[1, , ] + want[2, , ]
+  m <- .fixture_values(60, 40)
+  first <- (m + 1) * (m * 2)
+  want <- aperm(array(c(first, first + (m + 2) * (m * 3)), c(40L, 60L, 2L)), c(3L, 1L, 2L))
   expect_equal(out, want, tolerance = 1e-5)
 })
 
@@ -139,20 +142,7 @@ test_that("a scan body can compute in f64 internally and emit f32", {
     g_cast(out, "f32")
   }
   got <- execute_plan(plan_lazy(build_scan_stack(f, f64_body)))
-  ref <- execute_plan(plan_lazy(build_scan_stack(f, cumsum_body)))
-  expect_equal(got, ref, tolerance = 1e-6)
-})
-
-test_that("scan: distributed == single-threaded", {
-  skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)   # force many spatial chunks
-  on.exit(options(old), add = TRUE)
-
-  f <- fixture_gradient_f32()
-  p <- plan_lazy(build_scan_stack(f, cumsum_body))
-  expect_equal(execute_plan_mirai(p), execute_plan(p), tolerance = 1e-6)
+  expect_equal(got, apply(.scan_cells(), c(2, 3), cumsum), tolerance = 1e-6)
 })
 
 # -- dataset dispatch ----------------------------------------------------------
@@ -169,7 +159,7 @@ test_that("scan_over a LazyDataset scans each band's t-stack", {
   expect_true(S7::S7_inherits(sc, LazyDataset))
   got <- execute_plan(plan_lazy(sc[["V2"]]))
 
-  m <- execute_plan(plan_lazy(src()))
+  m <- .fixture_values(60, 40)
   want <- array(NA_real_, c(2, dim(m)))
   want[1, , ] <- m * 3
   want[2, , ] <- m * 3 + m * 4
@@ -212,17 +202,19 @@ test_that("scan is a planner barrier with zero halo, full axis per chunk", {
   b <- lazy_source_stub("b.tif", graph = g)
   sc <- scan_over(lazy_stack(list(a, b)), cumsum_body, over = "t")
   node <- graph_get(sc@graph, sc@node_id)
-  expect_true(is_barrier(node))
   expect_identical(required_halo(node), 0L)
 
-  # the scan joins a compute stage chunked over space only
+  # the scan joins a compute stage chunked over space only: a chunk's window
+  # has no t, so every chunk carries the stage's whole axis
   p <- .with_chunk_px(17 * 17, collect(sc, plan_only = TRUE))
-  kinds <- vapply(p@stages, function(s) s@kind, character(1))
   cid <- which(vapply(p@stages, function(s)
     s@kind == "compute" && sc@node_id %in% s@members, logical(1)))
   expect_length(cid, 1L)
-  it <- chunk_iter(p@stages[[cid]]@chunks)
-  expect_gt(nrow(it), 1L)   # spatially tiled; t rides whole in every chunk
+  stage <- p@stages[[cid]]
+  expect_identical(stage@chunks@grid@dims[["t"]], 2L)
+  it <- chunk_iter(stage@chunks)
+  expect_gt(nrow(it), 1L)
+  expect_false(any(grepl("^t", names(it))))
 })
 
 test_that("distinct scan bodies get distinct kernel signatures", {

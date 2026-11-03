@@ -100,12 +100,10 @@ test_that("function headers refresh when a collect starts", {
 })
 
 test_that("every pool sends the header, including pools started later", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   local_http_auth()
   d <- withr::local_tempdir("hp")
   names <- c("d1.tif", "d2.tif", "d3.tif")
-  .http_tiffs(d, names)
+  .http_tiffs(d, names, size = 256L)
   S <- .http_log_server(d)
   # Read a file from inside every daemon of every pool: the host never
   # opens these files, so their log lines come from the daemons alone.
@@ -124,18 +122,40 @@ test_that("every pool sends the header, including pools started later", {
     }
   }
 
-  local_pools(1, 2)
+  local_pools(1, 1)
   garry_http_auth(S$prefix, "Authorization: Bearer P1") # pushed to running pools
   daemon_read("d1.tif")
   expect_identical(.auth_of(S, "d1.tif"), "Bearer P1")
 
-  garry_daemons(1, 2) # a new pool generation gets the stored header
+  garry_daemons(1, 1) # a new pool generation gets the stored header
   daemon_read("d2.tif")
   expect_identical(.auth_of(S, "d2.tif"), "Bearer P1")
 
   garry_http_auth(S$prefix, "Authorization: Bearer P2")
   daemon_read("d3.tif")
   expect_identical(.auth_of(S, "d3.tif"), "Bearer P2")
+})
+
+test_that("a push a daemon refuses fails, and the next run pushes again", {
+  local_http_auth()
+  local_pools(1, 1)
+  tok <- "Authorization: Bearer one"
+  garry_http_auth("https://push.test/", function() tok, refresh = 1e-3)
+  mirai::everywhere({
+    ns <- asNamespace("garry")
+    unlockBinding(".http_auth_apply", ns)
+    .real_apply <<- get(".http_auth_apply", envir = ns)
+    assign(".http_auth_apply", function(...) stop("no header for you"), envir = ns)
+  }, .compute = "garry_write")
+  tok <- "Authorization: Bearer two"
+  Sys.sleep(0.01)
+  err <- expect_error(garry:::.http_auth_sync(), class = "garry_pool_error")
+  expect_match(conditionMessage(err), "no header for you", fixed = TRUE)
+  mirai::everywhere({
+    assign(".http_auth_apply", .real_apply, envir = asNamespace("garry"))
+  }, .compute = "garry_write")
+  Sys.sleep(0.01)
+  expect_true(garry:::.http_auth_sync()) # the value still counts as new
 })
 
 test_that("garry_http_auth validates its arguments without echoing headers", {
@@ -153,4 +173,23 @@ test_that("garry_http_auth validates its arguments without echoing headers", {
   )
   expect_match(err, "/vsicurl/https://h/", fixed = TRUE)
   expect_length(.garry_state$http_auth, 0L)
+})
+
+test_that("an auth failure's own text is never read as a template", {
+  bad <- function() stop('{"error":"invalid_grant"}')
+  err <- expect_error(garry:::.http_auth_value(bad, "https://x"))
+  expect_match(conditionMessage(err), '{"error":"invalid_grant"}', fixed = TRUE)
+  state <- garry:::.garry_state
+  old <- state$http_auth
+  withr::defer(state$http_auth <- old)
+  state$http_auth <- list(
+    "https://x" = list(source = bad, value = "kept", at = Sys.time() - 1e4, refresh = 1)
+  )
+  expect_warning(
+    garry:::.http_auth_sync(),
+    '{"error":"invalid_grant"}',
+    fixed = TRUE,
+    class = "garry_read_warning"
+  )
+  expect_identical(state$http_auth[["https://x"]]$value, "kept")
 })

@@ -74,7 +74,7 @@ jobs:
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache-version: 3
-          extra-packages: any::pkgdown, local::., terra=?ignore, rstac=?ignore, rustyfilters=?ignore
+          extra-packages: any::pkgdown, terra=?ignore, rstac=?ignore
           needs: website
 
       # Force a source rebuild of gdalraster against the PPA GDAL
@@ -83,6 +83,12 @@ jobs:
       # missing at site build). Mirrors the R-CMD-check step.
       - name: Rebuild gdalraster from source
         run: Rscript -e "install.packages('gdalraster', type = 'source', repos = 'https://cloud.r-project.org')"
+
+      # garry goes in after that rebuild: its .onLoad asks gdalraster for the
+      # GDAL version, so installing it against a binary with the wrong soname
+      # fails at the load test.
+      - name: Install garry
+        run: R CMD INSTALL .
 
       - name: Build site
         run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)

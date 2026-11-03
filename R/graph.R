@@ -51,7 +51,7 @@ graph_new <- function() {
   .graph_uid_state$n <- n
   tag <- .graph_uid_state$tag
   if (is.null(tag)) {
-    tag <- paste0(Sys.getpid(), "-", sprintf("%.6f", as.numeric(Sys.time())))
+    tag <- paste0(Sys.getpid(), "-", formatC(as.numeric(Sys.time()), format = "f", digits = 6))
     .graph_uid_state$tag <- tag
   }
   paste0(tag, "-", n)
@@ -273,19 +273,7 @@ graph_import <- function(dst, src, root_id) {
     return(root_id)
   }
 
-  # Reachable set via reverse DFS over parents.
-  seen <- integer(0)
-  stack <- root_id
-  while (length(stack) > 0L) {
-    id <- stack[[1L]]
-    stack <- stack[-1L]
-    if (id %in% seen) {
-      next
-    }
-    seen <- c(seen, id)
-    stack <- c(stack, graph_get(src, id)@parents)
-  }
-  seen <- .topo_order(src, seen)
+  seen <- .topo_order(src, .reachable(src, root_id))
 
   idx <- .source_index(dst)
   # Import memo: (source graph identity, source id) -> id in dst. A
@@ -357,9 +345,9 @@ graph_import <- function(dst, src, root_id) {
     c(
       node@path,
       node@band,
-      formatC(node@nodata, format = "g", digits = 17, width = 1),
-      formatC(node@scale, format = "g", digits = 17, width = 1),
-      formatC(node@offset, format = "g", digits = 17, width = 1),
+      .gdal_num(node@nodata),
+      .gdal_num(node@scale),
+      .gdal_num(node@offset),
       node@resampling,
       node@open_options
     ),

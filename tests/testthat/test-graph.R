@@ -8,15 +8,12 @@ test_that("graph build and topo-sort works", {
   map_id   <- graph_add(g, MapNode,    parents = src_id, grid = gs,
                         fn = function(x) x + 1)
   focal_id <- graph_add(g, FocalNode,  parents = map_id, grid = gs,
-                        fn = function(n) mean(n), radius = 1L,
-                        boundary = "nodata")
+                        fn = function(n) mean(n), radius = 1L)
   red_id   <- graph_add(g, ReduceNode, parents = focal_id, grid = gs,
                         op = "mean", over = "x", nan_rm = TRUE)
 
   order <- graph_toposort(g)
   expect_equal(order, c(src_id, map_id, focal_id, red_id))
-  expect_true(is_barrier(graph_get(g, red_id)))
-  expect_false(is_barrier(graph_get(g, map_id)))
   expect_equal(required_halo(graph_get(g, focal_id)), 1L)
 })
 
@@ -26,7 +23,6 @@ test_that("LazyRaster composes via operators", {
   c <- a + b
   d <- focal_map(c, fn = function(n) mean(n), radius = 1L)
 
-  expect_true(S7::S7_inherits(d, LazyRaster))
   expect_true(grid_equal(d@grid, a@grid))
   expect_equal(length(graph_ids(a@graph)), 4L)   # 2 sources + map + focal
 })

@@ -40,8 +40,9 @@ test_that("shrink_footprint erodes nodata boundaries by the radius", {
 test_that("shrink_footprint validates radius", {
   f <- fixture_gradient_f32()
   a <- lazy_source(f)
-  expect_error(shrink_footprint(a, radius = 0), "positive")
-  expect_error(shrink_footprint(a, radius = c(1, 2)), "positive")
+  expect_error(shrink_footprint(a, radius = 0), "whole number")
+  expect_error(shrink_footprint(a, radius = 1.9), "whole number")
+  expect_error(shrink_footprint(a, radius = c(1, 2)), "whole number")
 })
 
 test_that("boundary = 'keep' erodes real nodata only and keeps the frame", {
@@ -65,17 +66,13 @@ test_that("boundary = 'keep' erodes real nodata only and keeps the frame", {
 })
 
 test_that("boundary = 'keep' matches pooled and applies per dataset slice", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
   h <- .holed()
   exp <- .grow_nan(h$ref, 2L, edge_bad = FALSE)
   ds <- as_dataset(list(V = list(s1 = h$lz, s2 = h$lz * 2)))
   out_ds <- shrink_footprint(ds, radius = 2, boundary = "keep")
   local_pools(2, 1)
-  got <- collect(shrink_footprint(h$lz, radius = 2, boundary = "keep"))
-  expect_identical(is.nan(got), is.nan(exp))
-  s2 <- collect(out_ds@bands$V$s2)
-  expect_identical(is.nan(s2), is.nan(exp))
+  .gg_close(collect(shrink_footprint(h$lz, radius = 2, boundary = "keep"), distributed = TRUE), exp)
+  .gg_close(collect(out_ds@bands$V$s2, distributed = TRUE), exp * 2)
 })
 
 test_that("boundary = 'keep' refuses rasters with outer dims", {

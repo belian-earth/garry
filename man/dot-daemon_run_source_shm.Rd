@@ -5,26 +5,18 @@
 \title{Daemon task body: read one source window into shared memory.}
 \usage{
 .daemon_run_source_shm(
-  path,
-  band,
-  nodata,
+  ra,
   cg,
   core,
   key,
   reg_key,
   parts = NULL,
-  open_options = character(0),
   fuse = NULL,
-  read_raw = FALSE,
-  store_raw = FALSE,
-  scale = numeric(0),
-  offset = numeric(0),
-  decim = NULL,
-  resampling = "near"
+  read_raw = FALSE
 )
 }
 \arguments{
-\item{path, band, nodata}{Source identity.}
+\item{ra}{Read arguments (as \code{.stage_read_args()}).}
 
 \item{cg}{\code{ChunkGrid}; \code{core} the chunk row; \code{key} the node key;
 \code{reg_key} the daemon registry slot pinning the region.}
@@ -33,17 +25,16 @@
 whole under \code{key}), else per-compute-chunk windows (\code{r0}/\code{c0}
 0-based offsets, \code{nr}/\code{nc} sizes, \code{elt} the element name).}
 
-\item{decim}{Optional decimating-read spec (see \code{\link[=gdal_read_window]{gdal_read_window()}}),
-set when an aligned warp is served by a direct RasterIO read.}
+\item{fuse}{The fused kernel to run on the window, or NULL.}
+
+\item{read_raw}{Read as a raw f32 payload?}
 }
 \value{
 The shared object (serialises as its region name).
 }
 \description{
-The mori-store counterpart of \code{.daemon_run_source} and
-\code{.daemon_run_source_split}. Coarse reads share their per-compute-
-chunk parts as elements of one shared list: consumers extract their
-element zero-copy. (Consumer-side RANGE subsetting of a mapped
+Coarse reads share their per-compute-chunk parts as elements of one
+shared list: consumers extract their element zero-copy. (Consumer-side RANGE subsetting of a mapped
 matrix would materialise the whole window per input, a large
 transient allocation, so the split happens producer-side here too.)
 Internal; daemons reach it through \code{asNamespace("garry")}.

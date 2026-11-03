@@ -5,12 +5,11 @@
 
 # ---------------------------------------------------------------------------
 # Option registry: tier + one-liner + value validator per option, so the
-# 30-plus flat garry.* namespace is discoverable (garry_options()) and a
-# typo'd VALUE fails loudly at execute entry instead of silently meaning
-# something else (a read_fail typo used to silently mean "error",
-# inverting the operator's stated intent on a long run).
-# Tiers: "user" (day-one switches), "tuning" (budgets/targets),
-# "calibration" (cost-model constants measured on one machine).
+# flat garry.* namespace is discoverable (garry_options()) and a typo'd
+# VALUE fails loudly at execute entry instead of silently meaning
+# something else on a long run. A figure nobody tunes is a named constant
+# beside its use, not an option.
+# Tiers: "user" (day-one switches), "tuning" (budgets/targets).
 # ---------------------------------------------------------------------------
 
 # Validator constructors (used in .garry_options_table's check
@@ -65,28 +64,27 @@
 .garry_options_table <- list(
   # Minimum pixels per chunk the planner aims for. Below this, per-call
   # dispatch overhead (~410 us measured in the spike) stops being
-  # negligible relative to kernel runtime.
+  # negligible relative to kernel runtime. A plan with a patch (model)
+  # stage takes the largest chunk ram_budget_mb allows instead, unless
+  # this is set: .plan_chunk_dim() asks whether it was, so setting it to
+  # its default changes such a plan.
   chunk_target_px = list(
     default = 1e6,
     tier = "tuning",
-    desc = "minimum pixels per compute chunk the planner aims for",
+    desc = "pixels per compute chunk the planner aims for (a patch plan takes the RAM cap unless set)",
     check = .opt_num(min = 1e-9)
   ),
-  # Per-worker RAM budget (MB) used by the chunking pass to cap chunk size.
+  # RAM budget (MB) of one kernel call. The chunking pass caps chunks to
+  # it, and a pointwise fused kernel whose window's activations exceed it
+  # runs as row tiles on the reader (design/placement-cost-pass.md, "tiled
+  # fused kernels"), so its in-flight bytes are the input window plus one
+  # tile's activations rather than the whole window's. It does not bound
+  # in-flight compute: exec_ram_fraction does.
   ram_budget_mb = list(
     default = 512,
     tier = "tuning",
-    desc = "per-worker RAM budget (MB) capping chunk size",
+    desc = "RAM budget (MB) of one kernel call: caps chunks, tiles wide fused windows",
     check = .opt_num(min = 1e-9)
-  ),
-  # Safety margin, in input cells, added to cross-CRS planning windows.
-  # Planning windows must CONTAIN the true window (decision D5); the
-  # margin absorbs residual densification error.
-  window_margin = list(
-    default = 2L,
-    tier = "tuning",
-    desc = "safety margin (input cells) on cross-CRS planning windows",
-    check = .opt_num(min = 0, int = TRUE)
   ),
   # Print task-completion progress from the distributed scheduler.
   # Long network-bound plans are otherwise silent for minutes.
@@ -96,28 +94,21 @@
     desc = "print task-completion progress during distributed drains",
     check = .opt_flag()
   ),
-  # Warp windows (several sources together, a Zarr array, a source of a
-  # mosaic read source by source) with GDAL's exact transformer, as the
-  # warped VRT of one source already is: which source pixel a cell takes
-  # then never depends on where windows fall. GDAL's default
-  # interpolates the transform along each row of the window it is given
-  # to within 0.125 px, so a cell near a pixel boundary can take the
-  # neighbouring pixel in another window layout. Off by default: a
-  # one-band window warp across projections costs 3-15x more with it.
+  # Warp with GDAL's exact transformer. GDAL's default interpolates the
+  # transform along each row to within 0.125 source pixels. A warped VRT of
+  # one source reads by fixed blocks, so its cells never depend on chunks
+  # either way. A window warp (several sources together, a Zarr array, a
+  # source of a mosaic read source by source) takes the window's rows, so
+  # there a cell near a pixel boundary can take the neighbouring pixel in
+  # another window layout unless this is on. A STAC band's warps (the GTI
+  # driver, the composite routes) always take GDAL's default. Off by
+  # default: it costs about 5x on a warped VRT and 3-15x on a one-band
+  # window warp across projections.
   warp_exact = list(
     default = FALSE,
     tier = "tuning",
-    desc = "exact transformer for window warps (window-independent picks, slower)",
+    desc = "exact transformer for warps of plain files and windows (slower)",
     check = .opt_flag()
-  ),
-  # Max open GDAL dataset handles per process (LRU-evicted, closed on
-  # eviction). Open warped/GTI mosaics pin warper + cache memory; on
-  # daemons this bounds it. Reopening an evicted dataset is cheap.
-  handle_cache_max = list(
-    default = 4L,
-    tier = "tuning",
-    desc = "max open GDAL dataset handles per process (LRU)",
-    check = .opt_num(min = 1, int = TRUE)
   ),
   # Default open-handle cache depth on READ daemons (garry_daemons()'s
   # read_handles argument when not given explicitly). Depth 1 suits
@@ -132,35 +123,17 @@
     desc = "default open-handle cache depth on read daemons",
     check = .opt_num(min = 1, int = TRUE)
   ),
-  # GDAL block cache (MB, per process) applied by garry_gdal_config()
-  # on read daemons. GDAL's own default is 5% of RAM PER PROCESS,
-  # which a read fleet multiplies; this caps it. Raise it when reads
-  # revisit interleaved multi-band files: a pixel-interleaved strip
-  # decompresses ALL bands, and only blocks that stay cached let
-  # later band reads of the same window skip the re-inflate.
-  # Daemon-side memory hygiene: a task body's transients (read window,
-  # part list, device buffers, chunk payload) are dead when it returns,
-  # but only a full gc frees them and only malloc_trim returns the
-  # pages. Both run once this many MB of transients have accumulated
-  # since the last pass, not after every task: a full gc is ~35 ms on
-  # a daemon (150 ms under a busy fleet) against ~20 ms of real work
-  # in a 2 M pixel band read (issue #25's drain).
-  daemon_gc_mb = list(
-    default = 128,
-    tier = "tuning",
-    desc = "MB of task transients between daemon gc + malloc_trim passes",
-    check = .opt_num(min = 0)
-  ),
+  # GDAL block cache (MB, per process) on every daemon, taken at pool
+  # creation and fixed for the pool's life. GDAL's own default is 5% of
+  # RAM PER PROCESS, which a read fleet multiplies; this caps it. Raise
+  # it when reads revisit interleaved multi-band files: a
+  # pixel-interleaved strip decompresses ALL bands, and only blocks that
+  # stay cached let later band reads of the same window skip the
+  # re-inflate.
   gdal_cachemax_mb = list(
     default = 256,
     tier = "tuning",
     desc = "GDAL block cache (MB per process) on every garry daemon",
-    check = .opt_num(min = 1)
-  ),
-  zarr_handle_mb = list(
-    default = 256,
-    tier = "tuning",
-    desc = "MB read through one Zarr handle before it is closed (GDAL keeps every decoded chunk)",
     check = .opt_num(min = 1)
   ),
   # Pixels a single source/warp read task aims for. Reads are coarser
@@ -176,7 +149,7 @@
   ),
   # Cap (MB) on RESIDENT inter-stage read regions. Source/warp store
   # values live in shared memory from launch until every consumer has
-  # retired, so residency — not concurrency — is what a read fleet
+  # retired, so residency: not concurrency: is what a read fleet
   # costs. Two things are sized against this: the coarse read window
   # (a stage consuming n bands pins n regions at once, so the read
   # target shrinks as n grows) and the scheduler's read-launch gate
@@ -205,19 +178,7 @@
     desc = "collapse same-file band stacks into multi-band reads",
     check = .opt_flag()
   ),
-  # Share one WarpNode between consumers that ask the same source for
-  # the same target grid. graph_import() dedups SourceNodes (D6) but
-  # copies derived nodes, so a band used in two subexpressions is read
-  # once per use. FALSE restores the duplicated plan shape (A/B and
-  # debugging); the flag is scaffolding and goes away once the pass has
-  # proven itself on real pipelines.
-  warp_dedup = list(
-    default = TRUE,
-    tier = "user",
-    desc = "share identical warp-on-read stages between consumers",
-    check = .opt_flag()
-  ),
-  # Path to a CSV the distributed scheduler appends task events to.
+  # Path to a CSV every distributed route appends task events to.
   # Schema (header written on a fresh file):
   #   time,event,key,pool,slot,mb,store_mb,ready
   # Events: launch (with pool/slot, admission-priced MB, store MB and
@@ -237,75 +198,40 @@
     desc = "CSV path for task events (see garry_task_report()); NULL off",
     check = .opt_path()
   ),
-  # What a failed source read does: "error" aborts the plan; "nodata"
-  # logs a warning and yields an all-NaN window, so one bad object /
-  # expired token / 404 costs a hole in the composite instead of the
-  # whole run (odc-stac's fail_on_error=FALSE, stackstac's
-  # errors_as_nodata).
-  read_fail = list(
-    default = "error",
-    tier = "user",
-    desc = "failed read: abort the plan, or warn and read a nodata hole",
-    check = .opt_choice("error", "nodata")
-  ),
   # Task-scoped retries for read/fetch/warp operations, on top of
   # GDAL's per-request HTTP retry. GDAL retries individual range
   # requests inside one operation; a whole-operation failure (curl
   # timeout after 60 s, TLS reset, transient DNS, a failed open) is
-  # otherwise terminal for the task — under read_fail = "nodata" that
-  # is the difference between a transient blip and a silent hole in a
-  # composite. Reads are idempotent, so each failed operation is
-  # re-attempted up to this many times with jittered exponential
-  # backoff (0.5 * 2^k s) before the read_fail contract fires.
-  # 0 disables.
+  # otherwise terminal for the run. Reads are idempotent, so each failed
+  # operation is re-attempted up to this many times with jittered
+  # exponential backoff (0.5 * 2^k s) before the run aborts. 0 disables.
   read_retry = list(
     default = 2L,
     tier = "user",
     desc = "task-scoped retries for reads/fetches (jittered backoff)",
     check = .opt_num(min = 0, max = 10, int = TRUE)
   ),
-  # Pooled scheduler (garry_daemons): optional hard cap on in-flight
-  # compute chunks, on top of the byte budget (per-task resident
-  # estimates gated against ram_budget_mb x pool size — small chunks
-  # flow at full pool width, big fused medians self-limit). NULL =
-  # twice the compute pool.
-  compute_inflight = list(
-    default = NULL,
-    tier = "tuning",
-    desc = "optional hard cap on in-flight compute chunks",
-    check = .opt_num(min = 1, int = TRUE, null_ok = TRUE)
-  ),
-  # Fraction of AVAILABLE RAM (MemAvailable, re-read during the drain)
-  # the distributed scheduler may commit to in-flight compute working
-  # sets plus resident read regions. The configured budgets
-  # (ram_budget_mb x compute pool, read_budget_mb) are CAPS, not
-  # entitlements: a fixed budget is blind to what else is resident, so
-  # a caller whose own session already holds tens of GB (fits, point
-  # tables, a previous stage's outputs) would otherwise have the
-  # scheduler launch as though it owned the machine and OOM mid-drain.
-  # Re-read on a clock so a host that grows DURING the run tightens the
-  # gates instead of overcommitting. The remainder (1 - fraction) covers
-  # the host, the read daemons' buffers and the OS. Ignored where
-  # available RAM cannot be read (no /proc/meminfo).
+  # Fraction of AVAILABLE RAM (MemAvailable, re-read during the drain) a
+  # distributed run may commit to in-flight compute working sets plus
+  # resident read regions, on the scheduler and the fetch-ordered
+  # pipeline alike. read_budget_mb is a CAP, not an entitlement: a fixed
+  # budget is blind to what else is resident, so a caller whose own
+  # session already holds tens of GB (fits, point tables, a previous
+  # stage's outputs) would otherwise have the scheduler launch as though
+  # it owned the machine and OOM mid-drain. Re-read on a clock so a host
+  # that grows DURING the run tightens the gates instead of
+  # overcommitting. The remainder (1 - fraction) covers the host, the
+  # read daemons' buffers and the OS. Ignored where available RAM cannot
+  # be read (no /proc/meminfo).
   exec_ram_fraction = list(
     default = 0.6,
     tier = "tuning",
-    desc = "fraction of available RAM the scheduler may commit",
+    desc = "fraction of available RAM a distributed run may commit",
     check = .opt_num(min = 1e-300, max = 1)
-  ),
-  # Pooled scheduler: pre-compile each compute stage's modal chunk
-  # shape on every compute-pool daemon at run start, while the read
-  # pool owns the drain. Removes the first-execution compile
-  # (~0.9 s/stage measured) from the tail. Ignored without pools.
-  jit_warmup = list(
-    default = TRUE,
-    tier = "user",
-    desc = "pre-compile modal chunk shapes on the compute pool at run start",
-    check = .opt_flag()
   ),
   # Device compute stages jit and upload on: "cpu" (anvl's default
   # device) or "cuda" (requires the CUDA PJRT plugin; pair with a
-  # small compute pool — concurrent chunks share the GPU's memory).
+  # small compute pool: concurrent chunks share the GPU's memory).
   # Reads and host-side combines are always CPU.
   device = list(
     default = "cpu",
@@ -313,29 +239,27 @@
     desc = "device compute stages jit and upload on",
     check = .opt_choice("cpu", "cuda")
   ),
-  # Fetch/assemble split for GTI sources in the distributed scheduler
-  # (phase 12): "auto" fetches per-item native windows to local tmpfs
-  # first when the index holds remote (/vsi*) locations, then
-  # assembles the mosaic locally — a remote warped read is ~74%
-  # sequential network wait, so many tiny fetches saturate the link
-  # where few big warped reads cannot. "direct" reads remote mosaics
-  # as before; "force" fetches even local sources (testing; staging
-  # slow filesystems).
+  # Fetch/assemble split for GTI sources in the distributed scheduler:
+  # "auto" fetches per-item native windows to local tmpfs first when the
+  # index holds remote (/vsi*) locations, then assembles the mosaic
+  # locally: a remote warped read is ~74% sequential network wait, so many
+  # tiny fetches saturate the link where few big warped reads cannot.
+  # "direct" reads remote mosaics directly; "force" fetches even local
+  # sources (testing; staging slow filesystems).
   fetch = list(
     default = "auto",
     tier = "user",
     desc = "fetch/assemble split for GTI sources",
     check = .opt_choice("auto", "direct", "force")
   ),
-  # Phase 12d GDAL-direct temporal-composite fast path (default ON). When the
-  # plan is an eligible composite (GTI source reads -> masked temporal reduce,
-  # optionally with morphology and multiple bands), collect(distributed=TRUE)
-  # warps each slice's f32 pixels straight into device-bound memory and runs
-  # one lean cube kernel, bypassing the staged scheduler (~30-40% faster on
-  # HLS median). Needs the raw-f32 upload path. HEAVY composites (estimated
-  # whole-grid compute > gd_compute_budget) fall through to the scheduler,
-  # whose warm parallel compute pool overlaps compute with the fetch drain.
-  # FALSE forces the scheduler.
+  # GDAL-direct temporal-composite route. When the plan is an eligible
+  # composite (GTI source reads -> masked temporal reduce, optionally with
+  # morphology and multiple bands), collect(distributed=TRUE) warps each
+  # slice's f32 pixels straight into device-bound memory and runs one lean
+  # cube kernel, bypassing the staged scheduler. A heavy single-band
+  # composite (.gd_compute_budget) falls through to the scheduler, whose
+  # warm parallel compute pool overlaps compute with the fetch drain. FALSE
+  # forces the scheduler.
   composite_direct = list(
     default = TRUE,
     tier = "user",
@@ -350,44 +274,6 @@
     desc = "copy read-only plans from GDAL straight into the result",
     check = .opt_flag()
   ),
-  # Route decision for composite_direct: n_bands (+1 if morphology) x
-  # n_slices x grid pixels. Above this, the whole-grid single-process compute
-  # is heavy enough that the scheduler's overlapped parallel compute wins, so
-  # the plan falls through. Calibrated ~ the 3-band morphology crossover;
-  # machine/link dependent, so tunable.
-  gd_compute_budget = list(
-    default = 2.2e8,
-    tier = "tuning",
-    desc = "composite-direct routing threshold (bands x slices x px)",
-    check = .opt_num(min = 1e-9)
-  ),
-  # Fraction of AVAILABLE RAM the fetch-ordered pipeline may commit to
-  # concurrent compute working sets. Each band median holds ~3.5 cubes (band +
-  # shared mask + median scratch); the pipeline caps how many run at once so
-  # their combined resident set stays under this fraction, regardless of how big
-  # the compute pool is. The headroom (1 - fraction) covers the read daemons,
-  # the host, and the OS. Users never set this; it exists so "use every daemon"
-  # can't OOM on a many-band job. Ignored when available RAM can't be read.
-  compute_ram_fraction = list(
-    default = 0.6,
-    tier = "tuning",
-    desc = "fraction of available RAM for pipeline compute working sets",
-    check = .opt_num(min = 1e-300, max = 1)
-  ),
-  # Multi-band composites (n_bands > 1): fan the per-band medians out to the
-  # (XLA-pre-warmed) compute pool instead of one whole-grid kernel in-process.
-  # On a garry_daemons SPLIT pool this uses the fetch-ordered pipeline (fetch
-  # fmask first, compute the shared mask + each band's median overlapping the
-  # remaining band fetches) for ODC-parity wall time; on a single pool it fans
-  # the medians across the shared pool. Single-band runs are unaffected (the
-  # whole-grid kernel is already fetch-bound). FALSE forces the whole-grid
-  # kernel and re-enables the scheduler route for heavy composites.
-  gd_parallel = list(
-    default = TRUE,
-    tier = "user",
-    desc = "fan multi-band composite medians across the compute pool",
-    check = .opt_flag()
-  ),
   # Fetch-ordered pipeline: split each band's median into this many
   # horizontal strips so the post-fetch drain spreads across the whole
   # compute pool instead of leaving the last band's median on one
@@ -399,45 +285,19 @@
     default = 0,
     tier = "tuning",
     desc = "band-median strips in the fetch-ordered pipeline (0 = auto)",
-    check = .opt_num(min = 0)
-  ),
-  # Pooled scheduler: /dev/shm headroom the store must leave free, in MB.
-  # The mori store, the fetch cache and gdal-direct cubes all live on
-  # tmpfs, whose pages are unreclaimable RAM; the budget's resident-byte
-  # accounting is an estimate decremented at queue-drop time, so it can
-  # run ahead of the physical unlink. refresh_mem_budgets clamps the
-  # store budget against ACTUAL free /dev/shm minus this headroom and
-  # force-flushes queued drops when free space falls below it.
-  shm_headroom_mb = list(
-    default = 512,
-    tier = "tuning",
-    desc = "/dev/shm headroom (MB) the store must leave free",
-    check = .opt_num(min = 0)
+    check = .opt_num(min = 0, int = TRUE)
   ),
   # Per-daemon measured-memory correction (refresh_mem_budgets): when
   # the fleet's anon RSS grows beyond the run-start baseline + the
   # trailing tolerated window + in-flight work, the compute budget
   # shrinks by the excess (estimate defects become throughput dips, not
   # OOMs). FALSE disables the correction (measurement samples still log
-  # to the task log) — the A/B switch for attributing wall-time to it.
+  # to the task log): the A/B switch for attributing wall-time to it.
   rss_correction = list(
     default = TRUE,
     tier = "user",
     desc = "tighten the compute budget on measured fleet-RSS growth",
     check = .opt_flag()
-  ),
-  # Cells per row strip a scan stage's kernel runs over (.strip_stage_fn).
-  # XLA runs a scan step as a sequence of whole-plane passes, so on a
-  # full chunk every pass streams its f64 planes from memory and the
-  # kernel is bandwidth-bound (on 6 cores it ran 2.1x faster than on 1);
-  # a strip of ~4k cells keeps each step's planes in cache. hutan's SI
-  # smoother stage took 0.28 s a 480 x 480 chunk in 8-row strips on one
-  # core, against 0.71 s whole on one core and 0.34 s on six.
-  scan_strip_px = list(
-    default = 4096,
-    tier = "tuning",
-    desc = "cells per row strip of a scan stage's kernel (0 = whole chunk)",
-    check = .opt_num(min = 0)
   ),
   # Grow a compute stage's edge chunks to its modal chunk shape at
   # execution, so they run the kernel the warm-up compiled for that
@@ -462,68 +322,45 @@
   scan_profiles = list(
     default = 2L,
     tier = "tuning",
-    desc = "routed mode: profiles designated for scan (cold) kernels",
+    desc = "compute profiles designated for scan kernels",
     check = .opt_num(min = 1, int = TRUE)
+  ),
+  # What crosses to a compute daemon for a kernel. "closure" ships the
+  # stage's R closure and the daemon traces it; "program" traces once on
+  # the host and ships the StableHLO text, so no R closure crosses a
+  # process (design/stablehlo-kernels.md).
+  kernel_wire = list(
+    default = "program",
+    tier = "tuning",
+    desc = "kernels reach daemons as R closures or StableHLO programs",
+    check = .opt_choice("closure", "program")
+  ),
+  # "guarded" merges stages under .merge_stages()'s guards. "auto" also folds a
+  # group of chunk-aligned compute stages into one XLA program when the
+  # task overhead it saves outweighs the compile it costs (.merge_worth(),
+  # design/stablehlo-kernels.md).
+  stage_merge = list(
+    default = "auto",
+    tier = "tuning",
+    desc = "merge compute stages as guarded, or further when worthwhile",
+    check = .opt_choice("guarded", "auto")
   ),
   # Placement decision mode for source->compute chains in the pooled
   # scheduler (design/placement-cost-pass.md): "cost" (default)
   # compares modelled fuse-vs-materialise wall time per chain, with
   # thread, memory and window-working-set admission; "rules" restores
-  # the phase 12b structural predicate (single-band non-sink chains
-  # fuse, everything else materialises) as the escape hatch. Flipped
-  # 2026-07-30 after the SI sweep validation: crop=2048 predict
-  # 551 -> 175 s with both arms fused, crop=0 completes, morphology
-  # and ndvi/composite unregressed (benchmarks/README.md).
+  # a structural predicate (single-band non-sink chains fuse, everything
+  # else materialises) as the escape hatch.
   placement = list(
     default = "cost",
     tier = "user",
     desc = "fuse-vs-materialise decision mode for source->compute chains",
     check = .opt_choice("cost", "rules")
   ),
-  # Cost-mode calibration: sustained per-core throughput (GFLOP/s) of
-  # jitted kernels, and effective /dev/shm copy bandwidth (MB/s).
-  # Order-of-magnitude constants; tune from garry.task_log traces of
-  # both routes rather than a priori.
-  cost_gflops_core = list(
-    default = 4,
-    tier = "calibration",
-    desc = "sustained per-core kernel throughput (GFLOP/s)",
-    check = .opt_num(min = 1e-9)
-  ),
-  cost_shm_bw_mbs = list(
-    default = 2000,
-    tier = "calibration",
-    desc = "effective /dev/shm copy bandwidth (MB/s)",
-    check = .opt_num(min = 1e-9)
-  ),
-  # Effective parallel efficiency of the FAT compute pool relative to
-  # spread-out narrow clients: 2 all-cores XLA daemons measured 81.4
-  # win/s vs 159.8 for 10 x 2-CPU clients on the MLP kernel shape
-  # (spike B, benchmarks/README.md 2026-07-29) = 0.51. Applied to the
-  # materialise route's compute term; without it the model credits the
-  # warm pool with machine-wide throughput it does not deliver and
-  # keeps wide kernels off the readers by a false margin.
-  cost_comp_efficiency = list(
-    default = 0.55,
-    tier = "calibration",
-    desc = "fat compute pool efficiency vs narrow clients",
-    check = .opt_num(min = 1e-9, max = 1)
-  ),
-  # Cost mode: without a reader thread cap (garry.pool_affinity), a
-  # kernel above this flops/px never fuses. Fusing wide compute onto N
-  # uncapped readers spawns N all-cores XLA clients — a bigger thread
-  # cliff than the 2-daemon pool it escapes (scheduling review
-  # 2026-07-29). Mask cleanup (~10 flops/px) fuses either way; a
-  # 145-band MLP (~2e4) needs the cap.
-  fuse_flops_max = list(
-    default = 128,
-    tier = "calibration",
-    desc = "flops/px above which kernels never fuse onto uncapped readers",
-    check = .opt_num(min = 0)
-  ),
   # Pool CPU affinity: "auto" pins each daemon of BOTH pools to a
   # disjoint interleaved set of k = max(2, cores %/% pool_size) CPUs at
-  # pool creation (Linux + taskset only; silently off elsewhere). Any
+  # pool creation (Linux only: it warns where taskset is missing or
+  # fails, and does nothing on other systems). Any
   # XLA client created there then sizes its thread pool to k instead of
   # all cores. This is the general rule that makes pool width a free
   # parameter: threads are bounded per daemon, byte admission bounds
@@ -538,39 +375,6 @@
     tier = "user",
     desc = "disjoint per-daemon CPU pinning at pool creation",
     check = .opt_choice("auto", "off")
-  ),
-  # Cost mode: per-reader budget (MB) for a FUSED kernel's live working
-  # set — the read window plus its activation cubes at READ granularity
-  # (fused kernels are unchunked; see .stage_fuse_act_bytes_px). Fusion
-  # is refused for chains whose window working set exceeds this: the
-  # AEF MLP fits a ~1 Mpx window (~2.4 GB) and OOM-killed readers at
-  # ~4.2 Mpx (~9 GB).
-  fuse_reader_mb = list(
-    default = 2500,
-    tier = "tuning",
-    desc = "per-reader budget (MB) for a fused kernel's working set",
-    check = .opt_num(min = 1e-9)
-  ),
-  # Activation budget per fused kernel INVOCATION: a pointwise chain
-  # (no halo, no out_pad) whose whole-window activations exceed it
-  # runs as row tiles on the reader (design/placement-cost-pass.md,
-  # "tiled fused kernels"), so its in-flight bytes are the input
-  # window plus one tile's activations rather than the whole window's.
-  fuse_tile_mb = list(
-    default = 512,
-    tier = "tuning",
-    desc = "activation budget (MB) per fused-kernel invocation; wider pointwise windows tile by rows",
-    check = .opt_num(min = 1e-9)
-  ),
-  # Cost-mode memory admission: estimated resident cost of one XLA CPU
-  # client on a read daemon (client + jitted kernel state; spike A
-  # measured ~277 MB after one trivial jit). Fusion is refused when
-  # n_read x this does not fit in the RAM the exec budget leaves free.
-  cost_xla_client_mb = list(
-    default = 350,
-    tier = "calibration",
-    desc = "estimated resident cost (MB) of one XLA CPU client",
-    check = .opt_num(min = 0)
   )
 )
 
@@ -598,8 +402,8 @@ garry_opt <- function(name) {
 #'
 #' The registry surface for the flat `garry.*` option namespace: one row
 #' per option with its tier (`user` day-one switches, `tuning`
-#' budgets/targets, `calibration` cost-model constants), package
-#' default, current session value and a one-line description. Values are
+#' budgets/targets), package default, current session value and a
+#' one-line description. Values are
 #' validated against the same registry when execution starts.
 #'
 #' @return A data.frame with columns `option`, `tier`, `default`,
@@ -629,17 +433,29 @@ garry_options <- function() {
   )
 }
 
-# Validate every registered option's CURRENT value; classed abort naming
-# the option, its value and the constraint. Runs at execute entry
+# Validate every garry.* option: a name the registry does not hold (a
+# typo, a retired option, a misnamed HUTAN_GARRY_* variable) would mean
+# the default, so it aborts, as does a registered option's bad value,
+# naming the option, its value and the constraint. Runs at execute entry
 # (execute_plan / execute_plan_mirai / collect routes), so a typo fails
 # the run in seconds, not silently after hours.
 .garry_opt_check <- function() {
+  unknown <- setdiff(
+    grep("^garry\\.", names(options()), value = TRUE),
+    paste0("garry.", names(.garry_defaults))
+  )
+  if (length(unknown)) {
+    cli::cli_abort(
+      c(
+        "unknown garry option{?s}: {.val {unknown}}.",
+        "i" = "{.fn garry_options} lists the options garry has."
+      ),
+      class = c("garry_option_error", "garry_error"),
+      call = NULL
+    )
+  }
   for (n in names(.garry_defaults)) {
-    info <- .garry_options_table[[n]]
-    if (is.null(info)) {
-      next
-    }
-    ok <- info$check(garry_opt(n))
+    ok <- .garry_options_table[[n]]$check(garry_opt(n))
     if (!isTRUE(ok)) {
       .garry_error(
         .glue(

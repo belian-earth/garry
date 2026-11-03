@@ -33,12 +33,20 @@
 #     P_s = F^-1 (Q - Q S^-1 Q) F^-1' + J P_s_next J'
 #   whose terms are all O(q) or O(P_s_next); with them the KFAS diff
 #   stays ~1e-7 across dense, gappy, and minimal (3-obs) series.
-# - kappa stays at 1e7: large enough to be diffuse (error in the smoothed
-#   moments is O(H/kappa)), small enough that squared terms (~1e14) keep
-#   f64 headroom.
+# - kappa stays at 1e7 (.kalman_kappa): large enough to be diffuse (error
+#   in the smoothed moments is O(H/kappa)), small enough that squared
+#   terms (~1e14) keep f64 headroom.
 # - Missing years (NaN under D8) skip the update: the NaN propagates
 #   through the update arithmetic and g_ifelse selects the prediction.
 # ---------------------------------------------------------------------------
+
+# The diffuse-initialisation variance (P1 = kappa * I).
+.kalman_kappa <- 1e7
+
+# A variance as a standard deviation. A value a hair below zero is
+# rounding and reads 0; a NaN, from a covariance that broke, stays NaN,
+# as the mean beside it does.
+.variance_sd <- function(v) sqrt(g_ifelse(v <= 0, 0, v))
 
 #' Kalman local-linear-trend smoother body for [scan_over()].
 #'
@@ -83,7 +91,6 @@
 #'   Each pass inflates the level noise at years whose smoothed-level
 #'   innovation exceeds `robust_threshold` MADs by `robust_inflation`.
 #' @param robust_threshold,robust_inflation Robust loop constants.
-#' @param kappa Diffuse-initialisation variance.
 #' @param dtype Output dtype the body casts to (align with
 #'   `scan_over(dtype = )`; default `"f32"`).
 #' @return A scan body `fn(xs, margin)` for [scan_over()].
@@ -97,11 +104,10 @@ kalman_llt <- function(
   robust_iters = 0L,
   robust_threshold = 3,
   robust_inflation = 100,
-  kappa = 1e7,
   dtype = "f32"
 ) {
   output <- match.arg(output)
-  for (v in list(sigma_lvl, sigma_slp, sigma_obs, kappa)) {
+  for (v in list(sigma_lvl, sigma_slp, sigma_obs)) {
     if (!is.numeric(v) || length(v) != 1L || !is.finite(v) || v <= 0) {
       cli::cli_abort("hyperparameters must be finite positive scalars")
     }
@@ -145,7 +151,7 @@ kalman_llt <- function(
     q_lvl0 <- kv(sigma_lvl^2)
     q_slp <- kv(sigma_slp^2)
     h0 <- kv(sigma_obs^2)
-    kap <- kv(kappa)
+    kap <- kv(.kalman_kappa)
 
     ok <- g_count(y, dims = 1L) >= 3 # hutan: < 3 valid obs -> all-NaN
 
@@ -231,7 +237,7 @@ kalman_llt <- function(
 
       # outputs at one step, gap-masked
       emit <- function(a1s, P11s) {
-        sd <- sqrt(g_ifelse(P11s > 0, P11s, 0))
+        sd <- .variance_sd(P11s)
         list(m = g_ifelse(ok, a1s, NaN), s = g_ifelse(ok, sd, NaN))
       }
       last <- emit(fwd$carry$a1, fwd$carry$P11) # smoothed(T) = filtered(T)
@@ -239,7 +245,7 @@ kalman_llt <- function(
       okT <- g_rep_t(ok, T_)
       filt <- list(
         m = g_ifelse(okT, fwd$out$a1f, NaN),
-        s = g_ifelse(okT, sqrt(g_ifelse(fwd$out$P11f > 0, fwd$out$P11f, 0)), NaN),
+        s = g_ifelse(okT, .variance_sd(fwd$out$P11f), NaN),
         z = g_ifelse(okT, fwd$out$z, NaN)
       )
       if (T_ == 1L) {

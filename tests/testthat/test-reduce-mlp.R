@@ -2,7 +2,9 @@
 # body reproduces a plain per-pixel R forward pass exactly (untraced), the
 # traced (PJRT) kernel matches the untraced oracle, a full band-stacked
 # plan matches, NaN features poison exactly their own pixel
-# (complete-cases semantics), and extracted torch weights drop in.
+# (complete-cases semantics), and extracted torch weights drop in: the weights
+# and the net's output are saved in fixtures/torch/ by
+# tools/torch_make_fixture.R.
 
 # per-pixel reference forward pass
 .ref_mlp <- function(v, weights, biases, center = NULL, scale = NULL,
@@ -95,28 +97,9 @@ test_that("a full band-stacked plan predicts through execute_plan", {
 })
 
 test_that("torch nn_linear weights drop in as-is", {
-  skip_if_not_installed("torch")
-  skip_if(!torch::torch_is_installed(), "libtorch not installed")
-  set.seed(4)
-  n_in <- 6L; hidden <- 8L
-  net <- torch::nn_sequential(
-    torch::nn_linear(n_in, hidden), torch::nn_relu(),
-    torch::nn_dropout(0.2),
-    torch::nn_linear(hidden, hidden), torch::nn_relu(),
-    torch::nn_dropout(0.2),
-    torch::nn_linear(hidden, 1)
-  )
-  net$eval()
-  lin <- Filter(function(m) inherits(m, "nn_linear"), net$children)
-  fn <- mlp_project(
-    weights = lapply(lin, function(l) as.matrix(l$weight)),
-    biases = lapply(lin, function(l) as.numeric(l$bias))
-  )
-  cube <- array(rnorm(n_in * 5 * 4), c(n_in, 5, 4))
-  got <- fn(cube, 1L)
-  X <- torch::torch_tensor(t(matrix(cube, n_in)))     # (npix, n_in)
-  want <- matrix(as.numeric(net(X)), dim(cube)[2], dim(cube)[3])
-  expect_equal(got, want, tolerance = 1e-6)
+  fx <- oracle_cases("torch", "conv-bn-mlp")$mlp
+  fn <- mlp_project(weights = fx$weights, biases = fx$biases)
+  expect_equal(fn(fx$cube, 1L), fx$want, tolerance = 1e-6)
 })
 
 test_that("mlp_project validates its arguments", {

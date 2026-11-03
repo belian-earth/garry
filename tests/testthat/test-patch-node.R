@@ -2,29 +2,8 @@
 # propagation to source reads; narrow-stage guard (no merge across the
 # patch stage); content-addressed kernel signature (never a fn
 # serialization); chunk-size invariance for a translation-invariant
-# body (the halo mechanics proof); distributed == single-threaded;
-# draw/gradient behaviour.
-
-
-# Translation-invariant toy body: collapse band, add two fixed shifts.
-# Size-preserving; needs radius >= 2 to crop the pad-contaminated ring,
-# so chunked results must equal whole-frame results exactly.
-.toy_patch_fn <- function(x) {
-  s <- g_sum(x, dims = 1L)
-  sh <- if (garry:::.g_traced(s)) garry:::.g_shape(s) else dim(s)
-  sp <- g_pad(s, 2L, value = 0)
-  s + 0.5 * g_shift_slice(sp, 2L, 0L, sh[[1L]], sh[[2L]], 2L) +
-    0.25 * g_shift_slice(sp, 0L, -2L, sh[[1L]], sh[[2L]], 2L)
-}
-
-.toy_patch <- function(out_bands = 0L, kernel_id = "toy-v1") {
-  f <- fixture_gradient_f32()
-  g <- graph_new()
-  st <- lazy_stack(list(lazy_source(f, graph = g),
-                        lazy_source(f, graph = g) * 2), along = "band")
-  lazy_patch(st, .toy_patch_fn, radius = 2L, out_bands = out_bands,
-             kernel_id = kernel_id, bytes_px = 64, flops_px = 500)
-}
+# body (the halo mechanics proof); draw/gradient behaviour. The toy patch is
+# in helper-kernels.R; test-route-kernels.R runs it on daemons.
 
 test_that("output grid drops or replaces the band axis; dtype override", {
   p0 <- .toy_patch()
@@ -58,7 +37,8 @@ test_that("the patch stage carries its halo; new external inputs stay out", {
   expect_false(join_in_stage)
   # and the join still computes correctly end to end
   got <- execute_plan(p)
-  expect_identical(dim(got), dim(execute_plan(plan_lazy(other))))
+  want <- .toy_patch_want() * 2 + 1 + .fixture_values(60, 40)
+  .expect_cells(unclass(got), want, tolerance = 1e-6)
 })
 
 test_that("kernel signature is content-addressed via kernel_id", {
@@ -78,23 +58,10 @@ test_that("kernel signature is content-addressed via kernel_id", {
 })
 
 test_that("chunked equals whole-frame (halo mechanics)", {
-  whole <- withr::with_options(list(garry.chunk_target_px = 1e7),
-                               execute_plan(plan_lazy(.toy_patch())))
-  small <- withr::with_options(list(garry.chunk_target_px = 400),
-                               execute_plan(plan_lazy(.toy_patch())))
-  expect_identical(dim(whole), dim(small))
-  expect_equal(small, whole, tolerance = 1e-6)
-})
-
-test_that("patch: distributed == single-threaded", {
-  skip_if(!requireNamespace("garry", quietly = TRUE), "garry not installed")
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  p <- plan_lazy(.toy_patch())
-  expect_equal(execute_plan_mirai(p), execute_plan(p), tolerance = 1e-6)
+  whole <- .with_chunk_px(1e7, execute_plan(plan_lazy(.toy_patch())))
+  small <- .with_chunk_px(400, execute_plan(plan_lazy(.toy_patch())))
+  .expect_cells(unclass(whole), .toy_patch_want(), tolerance = 1e-6)
+  .expect_cells(unclass(small), .toy_patch_want(), tolerance = 1e-6)
 })
 
 test_that("draw renders and gradients refuse", {
@@ -105,7 +72,9 @@ test_that("draw renders and gradients refuse", {
     lazy_value_and_grad(
       reduce_over(.toy_patch(), "mean", c("x", "y"), nan_rm = TRUE),
       wrt = ln),
-    "not")
+    "patch kernels",
+    class = "garry_grad_unsupported_error"
+  )
 })
 
 test_that(".fn_identity ignores closure call state, bytecode and slimming", {

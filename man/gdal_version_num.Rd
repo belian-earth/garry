@@ -7,11 +7,11 @@
 gdal_version_num()
 }
 \value{
-Integer version number, or \code{NA_integer_}.
+Integer version number.
 }
 \description{
-\code{MAJOR*1000000 + MINOR*10000 + REV*100}, so 3.9.0 is \code{3090000}. \code{NA} if it
-cannot be parsed. garry needs >= 3.9 for the GTI (GDAL Tile Index) mosaic
-driver that backs \code{lazy_dataset()}.
+\code{MAJOR*1000000 + MINOR*10000 + REV*100}, so 3.9.0 is \code{3090000}. garry
+needs >= 3.9 for the GTI (GDAL Tile Index) mosaic driver that backs
+\code{lazy_dataset()}.
 }
 \keyword{internal}

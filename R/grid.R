@@ -6,8 +6,7 @@
 # via explicit `align_to()`, which injects a WarpNode.
 #
 # Locked conventions (decision register D1-D3, design/implementation-plan.md):
-# - extent order is (xmin, ymin, xmax, ymax) everywhere in garry; vaster's
-#   (xmin, xmax, ymin, ymax) order exists only behind `as_vaster_extent()`.
+# - extent order is (xmin, ymin, xmax, ymax) everywhere in garry.
 # - CRS is canonicalised to GDAL WKT at construction; fast equality is
 #   string identity, semantic fallback is gdalraster::srs_is_same().
 # - dtypes are anvl's vocabulary; promotion is XLA-style (float beats int;
@@ -40,6 +39,16 @@
     return(1L)
   }
   as.integer(sub("^[fiu]", "", dtype))
+}
+
+# Dtypes f32 holds exactly. The f32 read paths (raw store payloads, window
+# warps of tiles, the warp-on-read routes) serve these and no others.
+.f32_exact_dtypes <- c("f32", "u8", "i8", "u16", "i16", "pred")
+
+# The float dtype that holds every value of `dtype`: f32 up to 16 bits,
+# else f64, exact to 2^53.
+.exact_float <- function(dtype) {
+  if (dtype %in% .f32_exact_dtypes) "f32" else "f64"
 }
 
 #' Is `dtype` a member of garry's dtype vocabulary?
@@ -125,7 +134,7 @@ dtype_promote <- function(a, b, divide = FALSE) {
   if (!is.null(hit)) {
     return(hit)
   }
-  wkt <- gdalraster::srs_to_wkt(crs)
+  wkt <- tryCatch(gdalraster::srs_to_wkt(crs), error = function(e) "")
   if (!nzchar(wkt)) {
     cli::cli_abort("cannot interpret CRS: {.val {crs}}")
   }
@@ -398,34 +407,21 @@ grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
   )
 }
 
-#' Reorder a garry extent for vaster calls.
-#'
-#' garry orders extents (xmin, ymin, xmax, ymax); vaster expects
-#' (xmin, xmax, ymin, ymax). This helper performs that reordering, so
-#' extents cross the package boundary in one place.
-#'
-#' @param x A `GridSpec` or a length-4 garry-order extent.
-#' @return Length-4 numeric in vaster order.
-#' @keywords internal
-as_vaster_extent <- function(x) {
-  ext <- if (S7::S7_inherits(x, GridSpec)) x@extent else as.numeric(x)
-  stopifnot(length(ext) == 4L)
-  ext[c(1L, 3L, 2L, 4L)]
-}
-
 # -- Equality -----------------------------------------------------------------
+
+# Tolerance on transforms and extents, in the CRS's own units.
+.grid_tol <- 1e-9
 
 #' Structural equality of two grids (geometry only, not dtype).
 #'
 #' @param a,b `GridSpec` objects.
-#' @param tol Numeric tolerance for transform/extent comparison.
 #' @return `TRUE` or `FALSE`.
 #' @seealso [grid_diff()], which describes how two grids differ.
 #' @export
-grid_equal <- function(a, b, tol = 1e-9) {
+grid_equal <- function(a, b) {
   crs_equal(a@crs, b@crs) &&
-    all(abs(a@transform - b@transform) < tol) &&
-    all(abs(a@extent - b@extent) < tol) &&
+    all(abs(a@transform - b@transform) < .grid_tol) &&
+    all(abs(a@extent - b@extent) < .grid_tol) &&
     length(a@dims) == length(b@dims) &&
     all(a@dims == b@dims) &&
     identical(names(a@dims), names(b@dims))
@@ -439,23 +435,22 @@ grid_equal <- function(a, b, tol = 1e-9) {
 #' something is wrong. Embedded in every alignment error.
 #'
 #' @param a,b `GridSpec` objects.
-#' @param tol Numeric tolerance, as in [grid_equal()].
 #' @return A single character description; `"grids are equal"` when
 #'   [grid_equal()] holds.
 #' @export
-grid_diff <- function(a, b, tol = 1e-9) {
+grid_diff <- function(a, b) {
   if (!crs_equal(a@crs, b@crs)) {
     return("CRS differs")
   }
   ra <- c(a@transform[[2L]], -a@transform[[6L]])
   rb <- c(b@transform[[2L]], -b@transform[[6L]])
-  if (any(abs(ra - rb) > tol)) {
+  if (any(abs(ra - rb) > .grid_tol)) {
     return(.glue(
       "resolution differs: {format(ra[[1L]])} x {format(ra[[2L]])}",
       " vs {format(rb[[1L]])} x {format(rb[[2L]])}"
     ))
   }
-  if (any(abs(a@extent - b@extent) > tol)) {
+  if (any(abs(a@extent - b@extent) > .grid_tol)) {
     off <- (b@extent - a@extent) / c(ra[[1L]], ra[[2L]], ra[[1L]], ra[[2L]])
     return(.glue(
       "extents differ by {formatC(max(abs(off[c(1L, 3L)])), format = 'g', digits = 3, width = 1)}",
@@ -476,10 +471,21 @@ grid_diff <- function(a, b, tol = 1e-9) {
 # Internal: same CRS, spatial dims and affine transform; non-spatial
 # dims and dtype ignored (a stack and its median share spatial
 # geometry). Used by the planner's stage-merge pass.
-.spatial_equal <- function(a, b, tol = 1e-9) {
+.spatial_equal <- function(a, b) {
   crs_equal(a@crs, b@crs) &&
-    all(abs(a@transform - b@transform) < tol) &&
+    all(abs(a@transform - b@transform) < .grid_tol) &&
     identical(unname(a@dims[c("x", "y")]), unname(b@dims[c("x", "y")]))
+}
+
+# A grid's outer dims: every dim but x and y.
+.grid_outer <- function(grid) {
+  d <- grid@dims
+  d[!names(d) %in% c("x", "y")]
+}
+
+# Planes of a grid: the product of its outer dims, 1 for a plain raster.
+.grid_planes <- function(grid) {
+  max(1, prod(.grid_outer(grid)))
 }
 
 # Internal: same grid, different dtype (dtype promotion on binary ops,

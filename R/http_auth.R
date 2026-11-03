@@ -83,7 +83,7 @@ garry_http_auth <- function(prefix, header, refresh = 1800) {
   v <- tryCatch(source(), error = function(e) {
     cli::cli_abort(c(
       "The {.arg header} function for {.val {key}} failed.",
-      "x" = conditionMessage(e)
+      "x" = "{conditionMessage(e)}"
     ))
   })
   if (!.http_auth_valid(v)) {
@@ -109,9 +109,9 @@ garry_http_auth <- function(prefix, header, refresh = 1800) {
   invisible(TRUE)
 }
 
-# Apply the registered headers on the host and every running daemon.
-.http_auth_push <- function(clear = character(0)) {
-  auth <- .garry_state$http_auth %||% list()
+# Apply headers (by default the registered ones) on the host and every
+# running daemon.
+.http_auth_push <- function(clear = character(0), auth = .garry_state$http_auth %||% list()) {
   set <- vapply(auth, function(e) e$value, character(1))
   .http_auth_apply(set, clear)
   .pool_broadcast(
@@ -119,14 +119,16 @@ garry_http_auth <- function(prefix, header, refresh = 1800) {
     profiles = c("garry_read", .comp_profiles(), "garry_write"),
     s = set,
     cl = clear,
-    quiet = TRUE
+    live_only = TRUE,
+    what = "setting the HTTP headers"
   )
   invisible(NULL)
 }
 
 # Run-start refresh (collect): re-resolve function headers older than
 # their `refresh`, and push when any value changed. A failed refresh
-# keeps the previous header and is retried at the next run.
+# keeps the previous header and is retried at the next run. So is a
+# failed push: the new values are stored only once every daemon has them.
 .http_auth_sync <- function() {
   auth <- .garry_state$http_auth
   if (!length(auth)) {
@@ -141,10 +143,13 @@ garry_http_auth <- function(prefix, header, refresh = 1800) {
       next
     }
     v <- tryCatch(.http_auth_value(e$source, k), error = function(err) {
-      cli::cli_warn(c(
-        "Could not refresh the header for {.val {k}}; keeping the previous one.",
-        "x" = conditionMessage(err)
-      ))
+      cli::cli_warn(
+        c(
+          "Could not refresh the header for {.val {k}}; keeping the previous one.",
+          "x" = "{conditionMessage(err)}"
+        ),
+        class = c("garry_read_warning", "garry_warning")
+      )
       NULL
     })
     if (is.null(v)) {
@@ -156,9 +161,9 @@ garry_http_auth <- function(prefix, header, refresh = 1800) {
       changed <- TRUE
     }
   }
-  .garry_state$http_auth <- auth
   if (changed) {
-    .http_auth_push()
+    .http_auth_push(auth = auth)
   }
+  .garry_state$http_auth <- auth
   invisible(changed)
 }

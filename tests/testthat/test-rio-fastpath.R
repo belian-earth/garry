@@ -5,20 +5,12 @@
 # Force the warper for `expr`, whatever the predicates say: no direct
 # read of a source, and several sources warped together.
 with_warper <- function(expr) {
-  ns <- asNamespace("garry")
-  fns <- c(".rio_direct_spec", ".mosaic_read_spec")
-  orig <- lapply(fns, get, envir = ns)
-  for (f in fns) {
-    unlockBinding(f, ns)
-    assign(f, function(...) NULL, envir = ns)
-  }
-  on.exit(
-    for (i in seq_along(fns)) {
-      assign(fns[[i]], orig[[i]], envir = ns)
-      lockBinding(fns[[i]], ns)
-    }
+  testthat::with_mocked_bindings(
+    force(expr),
+    .rio_direct_spec = function(...) NULL,
+    .mosaic_read_spec = function(...) NULL,
+    .package = "garry"
   )
-  force(expr)
 }
 
 # Is every part of a mosaic spec warped (TRUE), or read directly?
@@ -96,8 +88,8 @@ test_that("the fast path refuses anything the warper is needed for", {
   expect_null(.rio_direct_spec(f, ok, "average", "OVERVIEW_LEVEL=NONE"))
   # resampling with no RasterIO analogue
   expect_null(.rio_direct_spec(f, ok, "med"))
-  # multi-band request: the decimating read is single-band
-  expect_null(.rio_direct_spec(f, ok, "average", band = 1:2))
+  # a band the file does not have is an error, not a reason to warp
+  expect_error(.rio_direct_spec(f, ok, "average", band = 1:2), "band")
 
   # integer band + interpolating resampler: RasterIO and the warper
   # round .5 ties oppositely on ARM under GDAL 3.13.1, so identity only
@@ -159,31 +151,6 @@ test_that("an aligned align_to() pipeline is unchanged by the fast path", {
 
   expect_identical(got, want)
   expect_identical(dim(got), c(20L, 30L))
-})
-
-test_that("a warp needing reprojection still builds a VRT", {
-  f <- fixture_gradient_f32()
-  g <- gdal_grid_spec(f)$grid
-  b <- gdalraster::transform_bounds(g@extent, g@crs, "EPSG:4326")
-  target <- grid_spec("EPSG:4326", extent = b, dims = c(30L, 20L))
-
-  calls <- 0L
-  ns <- asNamespace("garry")
-  orig <- get("gdal_warp_vrt", envir = ns)
-  unlockBinding("gdal_warp_vrt", ns)
-  assign("gdal_warp_vrt",
-         function(...) {
-           calls <<- calls + 1L
-           orig(...)
-         },
-         envir = ns)
-  on.exit({
-    assign("gdal_warp_vrt", orig, envir = ns)
-    lockBinding("gdal_warp_vrt", ns)
-  })
-
-  collect(align_to(lazy_source(f), target))
-  expect_gt(calls, 0L)
 })
 
 # A Float32 raster in UTM 37N south of the equator (negative northings),
@@ -270,43 +237,26 @@ test_that("a target on the source's southern UTM grid reads directly", {
   }
 })
 
-test_that("a northern-zone Zarr year writes onto its southern grid as the warper does", {
-  skip_on_cran()
-  skip_if_not_installed("jsonlite")
+# A year of a store in UTM 37N, on the zone's southern grid: the store's
+# first 20 x 12 px, nodata corner included.
+.zarr_south <- function() {
   fx <- fixture_zarr_nd(epsg = 32637L, y1 = -1000000)
-  # the store's first 20 x 12 px, nodata corner included
   g <- grid_spec("EPSG:32737", c(500000, 9e6 - 120, 500200, 9e6), res = 10)
-  yr <- stack_bands(time_sel(lazy_dataset(fx$path, g), "2023"))
-  p <- plan_lazy(yr)
+  list(fx = fx, yr = stack_bands(time_sel(lazy_dataset(fx$path, g), "2023")))
+}
+
+test_that("a northern-zone Zarr year reads onto its southern grid as the warper does", {
+  z <- .zarr_south()
+  p <- plan_lazy(z$yr)
   ws <- Filter(function(s) s@kind == "warp", p@stages)[[1L]]
   expect_false(is.null(.stage_read_args(p@graph, ws)$decim$fx))
-  got <- collect(yr, distributed = FALSE)
+  got <- collect(z$yr, distributed = FALSE)
   for (b in 1:4) {
-    ref <- fx$vals[3L, b, 1:12, 1:20] * 1.0
+    ref <- z$fx$vals[3L, b, 1:12, 1:20] * 1.0
     ref[ref == -128] <- NaN
     expect_equal(unname(got[,, b]), ref)
   }
-  expect_identical(got, with_warper(collect(yr, distributed = FALSE)))
-  # pooled and single-process i8 writes, the pooled one reading straight
-  # into integer planes
-  local_pools(2, 1)
-  f1 <- withr::local_tempfile(fileext = ".tif")
-  f2 <- withr::local_tempfile(fileext = ".tif")
-  write_tif(yr, f1, dtype = "i8", nodata = -128L, distributed = TRUE)
-  with_warper(write_tif(
-    yr,
-    f2,
-    dtype = "i8",
-    nodata = -128L,
-    distributed = FALSE
-  ))
-  bands <- function(f) {
-    ds <- methods::new(gdalraster::GDALRaster, f)
-    on.exit(ds$close())
-    lapply(1:4, function(b) ds$read(b, 0L, 0L, 20L, 12L, 20L, 12L))
-  }
-  expect_identical(bands(f1), bands(f2))
-  expect_identical(bands(f1)[[1L]][[1L]], NA_integer_)
+  expect_identical(got, with_warper(collect(z$yr, distributed = FALSE)))
 })
 
 # Two south-up Int16 tiles (positive y pixel size, as AEF stores them),
@@ -348,6 +298,30 @@ test_that("a northern-zone Zarr year writes onto its southern grid as the warper
   grid_spec("EPSG:32736", c(499990, 8599990, 500110, 8600060), res = res)
 }
 
+test_that("an integer file reads plainly on its own pixels, for the kernels that allow it", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", f, 40L, 30L, 1L, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 5000000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32633"))
+  ds$setNoDataValue(1L, -9999)
+  v <- ((seq_len(1200) * 37L) %% 2000L) - 500L
+  v[seq(1, 1200, by = 11)] <- -9999L
+  ds$write(1L, 0L, 0L, 40L, 30L, v)
+  ds$close()
+  x <- lazy_source(f)
+  crop <- grid_spec(x@grid@crs, extent = c(500090, 4999250, 500900, 4999940), dims = c(27L, 23L), dtype = "f32")
+  for (r in c("bilinear", "cubic", "lanczos", "average", "mode")) {
+    expect_identical(.rio_direct_spec(f, crop, r)$resamp, "NEAREST")
+    expect_identical(
+      collect(align_to(x, crop, resampling = r), distributed = FALSE),
+      with_warper(collect(align_to(x, crop, resampling = r), distributed = FALSE))
+    )
+  }
+  for (r in c("cubicspline", "rms")) {
+    expect_null(.rio_direct_spec(f, crop, r))
+  }
+})
+
 test_that("a south-up source on its own pixels reads directly, rows flipped", {
   f <- .south_up_tiles(1L)[[1L]]
   sub <- grid_spec("EPSG:32736", c(500010, 8600010, 500050, 8600040), res = 10)
@@ -363,7 +337,14 @@ test_that("a south-up source on its own pixels reads directly, rows flipped", {
     res = 20
   )
   expect_null(.rio_direct_spec(f, sub20, "near"))
-  expect_null(.rio_direct_spec(f, sub, "bilinear"))
+  expect_null(.rio_direct_spec(f, sub20, "bilinear"))
+  # on its own pixels no kernel moves a cell
+  expect_identical(.rio_direct_spec(f, sub, "bilinear")$resamp, "NEAREST")
+  own <- function() lazy_dataset(f, sub, resampling = "bilinear")
+  expect_identical(
+    collect(stack_bands(own()), distributed = FALSE),
+    with_warper(collect(stack_bands(own()), distributed = FALSE))
+  )
   for (g in list(sub, sub20)) {
     expr <- function() lazy_dataset(f, g, resampling = "near")
     got <- collect(stack_bands(expr()), distributed = FALSE)
@@ -380,24 +361,6 @@ test_that("a south-up source on its own pixels reads directly, rows flipped", {
   # row 1 is the target's northern row: the file's fourth from the
   # south, columns 2 to 5
   expect_identical(as.vector(got[1L, ]), c(1120, 1121, 1122, 1123))
-  # the pooled integer write reads straight into flipped integer planes
-  local_pools(1, 1)
-  f1 <- withr::local_tempfile(fileext = ".tif")
-  f2 <- withr::local_tempfile(fileext = ".tif")
-  write_tif(yr, f1, dtype = "i16", nodata = -1L, distributed = TRUE)
-  with_warper(write_tif(
-    yr,
-    f2,
-    dtype = "i16",
-    nodata = -1L,
-    distributed = FALSE
-  ))
-  rd <- function(f) {
-    d <- methods::new(gdalraster::GDALRaster, f)
-    on.exit(d$close())
-    d$read(1L, 0L, 0L, 4L, 3L, 4L, 3L)
-  }
-  expect_identical(rd(f1), rd(f2))
 })
 
 test_that("south-up tiles no mosaic can hold read directly, tile by tile", {
@@ -455,26 +418,6 @@ test_that("south-up tiles no mosaic can hold read directly, tile by tile", {
     c(NaN, NaN, NaN, 1104, 1105, 1106, NaN, 2104, 2105, 2106)
   )
   expect_identical(b1[2L, 6:7], c(2125, 2126))
-
-  # the pooled i16 write matches the warper's
-  local_pools(2, 1)
-  f1 <- withr::local_tempfile(fileext = ".tif")
-  f2 <- withr::local_tempfile(fileext = ".tif")
-  withr::local_options(garry.chunk_target_px = 9)
-  write_tif(ds(), f1, dtype = "i16", nodata = -1L, distributed = TRUE)
-  with_warper(write_tif(
-    ds(),
-    f2,
-    dtype = "i16",
-    nodata = -1L,
-    distributed = FALSE
-  ))
-  bands <- function(f) {
-    d <- methods::new(gdalraster::GDALRaster, f)
-    on.exit(d$close())
-    lapply(1:2, function(b) d$read(b, 0L, 0L, 12L, 7L, 12L, 7L))
-  }
-  expect_identical(bands(f1), bands(f2))
 })
 
 test_that("rows flip and mosaic parts paste in C", {
@@ -738,4 +681,139 @@ test_that("a multi-band warp masks each band's nodata alone", {
   )
   expect_identical(both[2L, , ], one)
   expect_false(any(both == -1, na.rm = TRUE))
+})
+
+test_that("a source that will not open fails the plan, it does not change the route", {
+  f <- fixture_gradient_f32()
+  g <- gdal_grid_spec(f)$grid
+  real <- garry:::.gdal_handle
+  broken <- TRUE
+  testthat::local_mocked_bindings(.gdal_handle = function(path, ...) {
+    if (broken) stop("the network blinked")
+    real(path, ...)
+  })
+  for (probe in list(
+    function() garry:::.rio_direct_spec(f, g, "near"),
+    function() garry:::.mosaic_read_spec(c(f, f), g, nodata = NaN),
+    function() garry:::.bands_share_blocks(f)
+  )) {
+    err <- expect_error(probe(), class = "garry_read_error")
+    expect_match(conditionMessage(err), "the network blinked", fixed = TRUE)
+    expect_match(conditionMessage(err), basename(f), fixed = TRUE)
+  }
+  broken <- FALSE
+  # the failed attempt left no memo behind
+  expect_false(is.null(garry:::.mosaic_read_spec(c(f, f), g, nodata = NaN)))
+})
+
+test_that("a dtype that cannot be read is no reason to guess its size", {
+  ds <- list(
+    getBlockSize = function(b) c(16L, 16L),
+    getDataTypeName = function(b) stop("band gone")
+  )
+  expect_error(garry:::.gdal_band_slab(ds, 1L, 16L, 16L), "band gone")
+})
+
+test_that("a local .vrt that cannot be read fails, and a /vsi one is not local", {
+  d <- tempfile(fileext = ".vrt")
+  dir.create(d) # exists, cannot be read
+  on.exit(unlink(d, recursive = TRUE))
+  expect_error(suppressWarnings(garry:::.raw_vrt_info(d)))
+  expect_null(garry:::.raw_vrt_info("/vsicurl/https://x.test/a.vrt"))
+})
+
+# Every band of a file as GDAL reads it: row by row, NA at nodata.
+.file_bands <- function(f) {
+  d <- methods::new(gdalraster::GDALRaster, f)
+  on.exit(d$close())
+  nx <- d$getRasterXSize()
+  ny <- d$getRasterYSize()
+  lapply(seq_len(d$getRasterCount()), function(b) d$read(b, 0L, 0L, nx, ny, nx, ny))
+}
+
+# Band `b` of the two south-up tiles on .south_up_grid(), in plain R: the
+# second tile wins where it holds data, shows the first through its nodata.
+.south_up_mosaic <- function(b) {
+  out <- matrix(NA_integer_, 7L, 12L)
+  for (seed in 1:2) {
+    v <- seed * 1000L + b * 100L + seq_len(30L)
+    v[1:3] <- NA
+    tile <- matrix(v, 5L, 6L, byrow = TRUE)[5:1, ] # north first
+    ok <- !is.na(tile)
+    out[2:6, 4L * seed - 2L + 0:5][ok] <- tile[ok]
+  }
+  as.vector(t(out))
+}
+
+# A skip here ends the file, so this block stays last.
+local({
+  skip_on_cran()
+  local_pools(2, 1)
+
+  test_that("pooled integer writes of direct reads match the warper", {
+    z <- .zarr_south()
+    flip <- grid_spec("EPSG:32736", c(500010, 8600010, 500050, 8600040), res = 10)
+    cases <- list(
+      # straight into integer planes
+      "Zarr year" = list(
+        x = function() z$yr,
+        dtype = "i8",
+        nodata = -128L,
+        want = lapply(1:4, function(b) {
+          v <- as.vector(t(z$fx$vals[3L, b, 1:12, 1:20]))
+          v[v == -128L] <- NA
+          v
+        })
+      ),
+      # straight into flipped integer planes: the file's rows 4 to 2 from
+      # the south, columns 2 to 5
+      "flipped source" = list(
+        x = function() stack_bands(lazy_dataset(.south_up_tiles(1L)[[1L]], flip, resampling = "near")),
+        dtype = "i16",
+        nodata = -1L,
+        want = list(as.vector(t(outer(4:2, 2:5, function(r, q) 1100L + (r - 1L) * 6L + q))))
+      ),
+      # windows of 3 x 3 px straddle the tiles, their overlap and the margin
+      "mosaic parts" = list(
+        x = function() lazy_dataset(.south_up_tiles(2L), .south_up_grid(), resampling = "near"),
+        dtype = "i16",
+        nodata = -1L,
+        want = lapply(1:2, .south_up_mosaic),
+        px = 9
+      )
+    )
+    for (nm in names(cases)) {
+      case <- cases[[nm]]
+      pooled <- tempfile(fileext = ".tif")
+      warped <- tempfile(fileext = ".tif")
+      .with_chunk_px(case$px, {
+        write_tif(case$x(), pooled, dtype = case$dtype, nodata = case$nodata, distributed = TRUE)
+        with_warper(
+          write_tif(case$x(), warped, dtype = case$dtype, nodata = case$nodata, distributed = FALSE)
+        )
+      })
+      expect_identical(gdal_grid_spec(pooled)$grid@dtype, case$dtype, info = nm)
+      expect_identical(.file_bands(pooled), case$want, info = nm)
+      expect_identical(.file_bands(warped), case$want, info = nm)
+    }
+  })
+})
+
+test_that("a tile across the antimeridian leaves a mosaic to the warper", {
+  tile <- function(crs, x0, value) {
+    fixture_tile(value, gt = c(x0, 100, 0, 8120000, 0, -100), nx = 200L, ny = 200L, crs = crs)
+  }
+  # both straddle 180 degrees, near Fiji
+  west <- tile("EPSG:32760", 810000, 1)
+  east <- tile("EPSG:32701", 170000, 2)
+  b <- gdal_grid_spec(west)$grid
+  edges <- gdalraster::transform_bounds(b@extent, b@crs, "EPSG:4326", densify_pts = 1001L)
+  expect_gt(edges[[1L]], edges[[3L]]) # transform_bounds' sign of the crossing
+  g <- grid_spec("EPSG:4326", extent = c(179.7, edges[[2L]], 180, edges[[4L]]), dims = c(120L, 80L), dtype = "f32")
+  expect_null(gdal_footprint_px(west, g))
+  expect_null(.mosaic_read_spec(c(west, east), g, 1L, numeric(0)))
+  got <- collect(lazy_dataset(c(west, east), grid = g), distributed = FALSE)
+  expect_gt(sum(!is.nan(got)), 0L)
+  testthat::local_mocked_bindings(.reads_tile_by_tile = function(...) FALSE)
+  expect_identical(collect(lazy_dataset(c(west, east), grid = g), distributed = FALSE), got)
 })

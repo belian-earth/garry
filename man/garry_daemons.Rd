@@ -8,8 +8,7 @@ garry_daemons(
   read = NULL,
   compute = NULL,
   read_handles = NULL,
-  gdal_config = TRUE,
-  ...
+  gdal_config = TRUE
 )
 }
 \arguments{
@@ -42,9 +41,6 @@ call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself for host-sid
 mixing local multi-file reads). Either way every daemon's GDAL
 block cache is capped at \code{garry_opt("gdal_cachemax_mb")}: GDAL's
 own default is 5\% of RAM per process.}
-
-\item{...}{Passed to \code{mirai::daemons()} for every pool; \code{dispatcher} is
-garry's to set.}
 }
 \value{
 Invisibly, \code{list(read =, compute =)}.
@@ -65,9 +61,8 @@ wide read pool keeps the network drain full) and \code{compute} = a
 third of the logical cores, capped at 8 with a floor of 2; on CUDA
 the compute pool is 2, since concurrent clients share one card.
 \code{collect(distributed = TRUE)} detects the pools automatically and
-pre-compiles stage kernels at run start
-(\code{garry_opt("jit_warmup")}), scan kernels included, targeted at
-the \code{garry_opt("scan_profiles")} designated profiles only.
+pre-compiles stage kernels on idle daemons at run start, scan kernels
+on the \code{garry_opt("scan_profiles")} designated profiles only.
 }
 \details{
 You should not need to tune these. The cases for overriding: a
@@ -76,6 +71,13 @@ daemon per device on multi-GPU, or one per socket on NUMA
 (\code{compute}); a memory-tight box (smaller \code{compute}, each daemon's
 base XLA client is ~300 MB once warmed).
 
+garry runs its own parallelism through these pools, so run one garry
+session and let it use the machine. Wrapping garry calls in forked or
+multi-process workers, such as \code{parallel::mclapply()} or a parallel
+\code{future} plan, is discouraged and at your own risk: GDAL, curl and XLA
+hold state that does not survive a fork, and each worker's pools would
+compete for the same cores, memory and \verb{/dev/shm}.
+
 It also applies the sensible defaults so a workload script needs no
 preamble: the glibc \verb{MALLOC_*} thresholds are exported BEFORE the
 daemons spawn (read at exec, so children inherit them), and
@@ -83,8 +85,8 @@ daemons spawn (read at exec, so children inherit them), and
 host's own GDAL config (that would hide local sidecars for the
 caller's reads); call \code{\link[=garry_gdal_config]{garry_gdal_config()}} yourself to tune host-side
 discovery. \verb{MALLOC_*} is only-if-unset, and \code{gdal_config = FALSE}
-skips the GDAL settings entirely. Headers registered with
-\code{\link[=garry_http_auth]{garry_http_auth()}} are applied to the new pools.
+skips the GDAL settings entirely, on every route. Headers registered
+with \code{\link[=garry_http_auth]{garry_http_auth()}} are applied to the new pools.
 }
 \seealso{
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, \code{\link[=garry_pool_hygiene]{garry_pool_hygiene()}}, \code{\link[=collect]{collect()}}

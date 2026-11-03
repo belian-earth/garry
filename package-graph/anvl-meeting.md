@@ -84,9 +84,6 @@ candidates:
 - **Unsigned array construction**: anvl cannot build u8/u16/u32/u64 arrays
   from R numerics, so garry uploads QA bands through wider signed carriers
   (i16/i32/i64/f64). Noted in ops.R as a candidate upstream contribution.
-- **`.g_has_raw_upload` probes behaviour, not versions**, because the
-  patched branch shares upstream's version string. A capability flag or
-  version bump policy would remove the probe.
 
 ## Implicit behaviour we lean on (worth making contractual)
 
@@ -97,7 +94,7 @@ candidates:
   change garry's compile behaviour.
 - **The dispatcher cache hangs off the JitFunction object**, keyed on
   input shapes only. garry therefore content-addresses and reuses
-  JitFunction objects across daemon tasks (`.gd_cached_jit`, daemon.R);
+  JitFunction objects across daemon tasks (`.daemon_kernel`, daemon.R);
   an inline `jit()` per task recompiles every time. If anvl ever offered a
   process-level keyed cache, garry's daemon-side cache could shrink or
   disappear.

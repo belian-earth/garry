@@ -67,9 +67,15 @@ LazyRaster <- S7::new_class(
 #'
 #' Grid, dtype, native block size, and file nodata come from GDAL via
 #' the adapter (`gdal_grid_spec()`). A user-supplied `nodata` overrides
-#' the file's. An integer source with nodata is promoted to f32 so NaN
-#' can carry nodata downstream; the sentinel-to-NaN rewrite happens at
-#' read time in the adapter.
+#' the file's. An integer source with nodata is promoted to the float
+#' that holds it (f32 up to 16 bits, else f64) so NaN can carry nodata
+#' downstream; the sentinel-to-NaN rewrite happens at read time in the
+#' adapter. An integer source without nodata has nowhere to put a missing
+#' cell, so a compute stage that meets one (a failed read, a cell no tile
+#' reaches, a cell a warp leaves past the source's footprint) fails: declare
+#' `nodata` where cells can be missing. An Int32 cell holding `-2147483648`
+#' reads as missing, `nodata` or not: gdalraster returns R integers, and that
+#' value is R's `NA_integer_`.
 #'
 #' Passing `grid` skips the GDAL open entirely: no metadata is read
 #' until execution. Use it when the dataset's grid is known by
@@ -78,15 +84,25 @@ LazyRaster <- S7::new_class(
 #' rediscover the grid costs a serial remote COG header fetch per
 #' slice. `grid` must describe the dataset exactly as `path` +
 #' `open_options` open it, including the source dtype; it is trusted,
-#' not checked. With `grid` given, file nodata is NOT consulted (pass
-#' `nodata` explicitly if the source has a sentinel).
+#' not checked. With `grid` given, the file's nodata is not read, so pass
+#' `nodata` if the source has a sentinel, and pass that sentinel: a plain
+#' read masks the file's own sentinel whatever the node says, and a warp
+#' sees only the value given. A warp also opens the file: only a source that
+#' has been opened can show that it stores the same type and row order as
+#' the file whose warped VRT it would take.
 #'
-#' @param path Path or VSI URL readable by GDAL.
+#' @param path Path or VSI URL readable by GDAL. A relative path is taken
+#'   against the working directory here, so a later [setwd()] or a pool
+#'   started elsewhere reads the same file.
 #' @param band 1-based band index.
 #' @param graph `Graph` to add the source to; defaults to a fresh graph.
-#' @param nodata Optional nodata sentinel overriding the file metadata.
+#' @param nodata Optional nodata sentinel replacing the file's: cells
+#'   holding the file's own sentinel then read as data. A tile index, a
+#'   source opened with `open_options` or a source given `grid` masks its
+#'   own sentinel as well.
 #' @param open_options GDAL open options ("KEY=VALUE"), e.g. a GTI
-#'   `FILTER` selecting one time slice of a tile index.
+#'   `FILTER` selecting one time slice of a tile index. They apply to one
+#'   source, and not to a decoded one.
 #' @param grid Optional `GridSpec` declaring the source's grid and
 #'   dtype, skipping metadata discovery (see Details).
 #' @param block_dim Optional native block size (x, y), only meaningful
@@ -100,7 +116,7 @@ LazyRaster <- S7::new_class(
 #'   `v * scale + offset`, applied after the nodata sentinel becomes NaN.
 #'   A length-1 numeric supplies the scale explicitly (with `offset`),
 #'   skipping discovery. Discovery only consults the file: STAC-side
-#'   metadata is never read.
+#'   metadata is never read. A band that reports none warns and reads raw.
 #' @param offset Explicit additive offset used when `scale` is numeric;
 #'   defaults to 0. Ignored when `scale` is logical.
 #' @param name Optional display name (e.g. the asset or band name).
@@ -132,6 +148,18 @@ lazy_source <- function(
   name = NULL,
   decode = NULL
 ) {
+  if (!is.numeric(band) || length(band) != 1L || is.na(band) || band < 1 || band != round(band)) {
+    cli::cli_abort(c(
+      "{.arg band} must be one whole band number from 1, not {.val {band}}.",
+      "i" = "{.fn lazy_dataset} reads several bands of a file."
+    ))
+  }
+  if (length(open_options) && (length(path) > 1L || !is.null(decode))) {
+    cli::cli_abort(c(
+      "{.arg open_options} apply to one plain source.",
+      "i" = "Open each source on its own, without {.arg decode}, and combine them on a common grid."
+    ), class = c("garry_source_error", "garry_error"))
+  }
   # A decoded source reads its lookup-table VRT (Float32, nodata NaN);
   # lazy_dataset() prepares the decode once for all its bands.
   if (!is.null(decode)) {
@@ -165,6 +193,7 @@ lazy_source <- function(
     )
     grid <- meta$grid
     nodata <- if (is.null(nodata)) meta$nodata else as.numeric(nodata)
+    path <- .source_for_nodata(path, meta$nodata, nodata, open_options)
     block_dim <- if (is.null(block_dim)) {
       meta$block_dim
     } else {
@@ -195,14 +224,14 @@ lazy_source <- function(
     (length(nodata) == 1L || length(aff$scale) == 1L) &&
       .dtype_family(grid@dtype) != "float"
   ) {
-    grid <- .grid_retype(grid, "f32")
+    grid <- .grid_retype(grid, .exact_float(grid@dtype))
   }
   id <- graph_add(
     graph,
     SourceNode,
     parents = integer(0),
     grid = grid,
-    path = path,
+    path = .gdal_absolute(path),
     band = as.integer(band),
     nodata = nodata,
     block_dim = block_dim,
@@ -215,7 +244,8 @@ lazy_source <- function(
       list()
     } else {
       unclass(decode)[c("src", "lo", "table", "nodata")]
-    }
+    },
+    stored = meta$stored %||% list()
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
@@ -223,7 +253,10 @@ lazy_source <- function(
 # Resolve a lazy_source()/lazy_dataset() `scale` argument to a normalised
 # affine: list(scale, offset), both length 0 (absent) or both length 1.
 # `probe` is a zero-arg closure returning a gdal_grid_spec() list, called
-# only when scale = TRUE needs discovery.
+# only when scale = TRUE needs discovery. That warns, and does not
+# abort, where the band reports none: a file declaring the identity
+# (1, 0) reads back the same as one with no scale at all, so raw values
+# may be right.
 .resolve_scale <- function(scale, offset, probe, what) {
   if (isFALSE(scale)) {
     return(list(scale = numeric(0), offset = numeric(0)))
@@ -231,21 +264,30 @@ lazy_source <- function(
   if (isTRUE(scale)) {
     meta <- probe()
     if (length(meta$scale) != 1L) {
-      cli::cli_inform(c(
-        "i" = "{.arg scale}: no scale/offset metadata on {.file {what}}; reading raw values."
-      ))
+      where <- .url_scrub(what)
+      cli::cli_warn(
+        c(
+          "{.arg scale}: no scale/offset metadata on {.file {where}}; reading raw values.",
+          "i" = "Pass the scale yourself, or {.code scale = FALSE} if these values need none."
+        ),
+        class = c("garry_scale_warning", "garry_warning")
+      )
       return(list(scale = numeric(0), offset = numeric(0)))
     }
     return(list(scale = meta$scale, offset = meta$offset))
   }
-  if (!is.numeric(scale) || length(scale) != 1L) {
+  if (!is.numeric(scale) || length(scale) != 1L || !is.finite(scale)) {
     cli::cli_abort(
-      "{.arg scale} must be `FALSE`, `TRUE`, or a length-1 numeric."
+      "{.arg scale} must be `FALSE`, `TRUE`, or a finite length-1 numeric.",
+      class = c("garry_source_error", "garry_error")
     )
   }
   off <- if (is.null(offset)) 0 else as.numeric(offset)
-  if (length(off) != 1L) {
-    cli::cli_abort("{.arg offset} must be a length-1 numeric.")
+  if (length(off) != 1L || !is.finite(off)) {
+    cli::cli_abort(
+      "{.arg offset} must be a finite length-1 numeric.",
+      class = c("garry_source_error", "garry_error")
+    )
   }
   if (scale == 1 && off == 0) {
     return(list(scale = numeric(0), offset = numeric(0)))
@@ -262,9 +304,13 @@ lazy_source <- function(
 #' grid ([align_to()] first otherwise); rasters on different graphs merge
 #' automatically.
 #'
-#' The output dtype defaults to the promoted input dtype; pass
-#' `dtype` when `fn` changes the value domain, e.g. `"f32"` for a mask
-#' that introduces NaN over an integer band.
+#' The output dtype is the dtype `fn` returns, found by tracing it on
+#' abstract inputs (nothing runs and nothing compiles). `dtype` overrides
+#' it: the kernel's output is cast to `dtype`, which truncates a float to
+#' an integer dtype and saturates at the ends of an unsigned one, and
+#' everything downstream reads the cast value. A
+#' kernel returning a logical stores 0/1 at the promoted input dtype, and
+#' [g_ifelse()] reads such a mask with nonzero as true.
 #'
 #' Over a `LazyDataset`, `fn` is applied to every value band (a single dataset
 #' input only); `bands` restricts which bands, and non-selected bands pass
@@ -272,7 +318,11 @@ lazy_source <- function(
 #'
 #' @param ... `LazyRaster` inputs (at least one), or a single `LazyDataset`.
 #' @param fn Function of as many arrays as there are inputs.
-#' @param dtype Optional output dtype override.
+#' @param dtype Optional output dtype. Given, `fn` is not traced when the
+#'   raster is built, so a kernel that only traces at chunk time can use it.
+#'   Left out, it is what `fn` returns. Unsigned inputs compute in a wider
+#'   signed dtype (`u8` in `i16`, `u16` in `i32`), so `fn` over them returns
+#'   that unless told otherwise.
 #' @param bands `LazyDataset` only: bands to map over (default: all value bands).
 #' @return A `LazyRaster`, or a `LazyDataset` when given one.
 #' @seealso [collect()]
@@ -291,7 +341,6 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
   }
   .assert_class(xs[[1L]], LazyRaster, "LazyRaster", arg = "...")
   graph <- xs[[1L]]@graph
-  .outer_dims <- function(g) g@dims[!names(g@dims) %in% c("x", "y")]
   ids <- vapply(
     seq_along(xs),
     function(i) {
@@ -308,7 +357,7 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
       # parents computed rather than bare sources and so blocks multi-band
       # read coalescing.
       ok <- grid_equal(xs[[1L]]@grid, x@grid) ||
-        (length(.outer_dims(x@grid)) == 0L &&
+        (length(.grid_outer(x@grid)) == 0L &&
           .spatial_equal(xs[[1L]]@grid, x@grid))
       if (!ok) {
         cli::cli_abort(paste0(
@@ -316,26 +365,28 @@ lazy_map <- function(..., fn, dtype = NULL, bands = NULL) {
           "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align_to} it first"
         ))
       }
-      if (identical(graph@nodes, x@graph@nodes)) {
-        x@node_id
-      } else {
-        graph_import(graph, x@graph, x@node_id)
-      }
+      graph_import(graph, x@graph, x@node_id)
     },
     integer(1)
   )
 
-  out_dtype <- dtype %||%
-    Reduce(
-      dtype_promote,
-      vapply(
-        seq_along(ids),
-        function(i) graph_get(graph, ids[[i]])@grid@dtype,
-        character(1)
-      )
-    )
-  grid <- .grid_retype(xs[[1L]]@grid, out_dtype)
-  id <- graph_add(graph, MapNode, parents = ids, grid = grid, fn = fn)
+  grids <- lapply(ids, function(i) graph_get(graph, i)@grid)
+  grid <- .grid_retype(
+    xs[[1L]]@grid,
+    dtype %||% Reduce(dtype_promote, vapply(grids, function(g) g@dtype, character(1)))
+  )
+  if (is.null(dtype)) {
+    probe <- MapNode(id = 0L, parents = ids, grid = grid, fn = fn)
+    grid <- .grid_retype(grid, .node_dtype(probe, grids))
+  }
+  id <- graph_add(
+    graph,
+    MapNode,
+    parents = ids,
+    grid = grid,
+    fn = fn,
+    dtype = dtype %||% character(0)
+  )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
 
@@ -371,11 +422,7 @@ lazy_stack <- function(xs, along = "t") {
           "({grid_diff(xs[[1L]]@grid, x@grid)}); {.fn align_to} it first"
         ))
       }
-      if (identical(graph@nodes, x@graph@nodes)) {
-        x@node_id
-      } else {
-        graph_import(graph, x@graph, x@node_id)
-      }
+      graph_import(graph, x@graph, x@node_id)
     },
     integer(1)
   )
@@ -391,7 +438,7 @@ lazy_stack <- function(xs, along = "t") {
   # Layer names become the stacked axis's labels (slice dates on t,
   # band names on band): metadata the planner never reads, carried so
   # label selection / labelled output / dt-aware scans stay possible
-  # downstream. Unnamed lists leave the grid unlabelled, as before.
+  # downstream. Unnamed lists leave the grid unlabelled.
   grid <- .grid_relabel(grid, along, names(xs))
   id <- graph_add(
     graph,
@@ -531,9 +578,21 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
 # Operators
 # ---------------------------------------------------------------------------
 
+# R's int^int is double, and the node declares so. anvl's power stays at the
+# integer dtype, where it wraps and truncates a negative exponent, so an
+# integer operand takes the declared float first.
+.float_pow <- function(dtype) {
+  force(dtype)
+  function(x, y) {
+    if (.g_is_integer(x)) x <- g_cast(x, dtype)
+    if (.g_is_integer(y)) y <- g_cast(y, dtype)
+    x^y
+  }
+}
+
 # Binary op helper. Grid mismatch errors (align stays explicit, decision
 # D8's cousin); graph mismatch auto-merges by importing b's subgraph into
-# a's graph (decision D6) — users never manage graphs by hand.
+# a's graph (decision D6): users never manage graphs by hand.
 .lazy_binop <- function(a, b, op, divide = FALSE, dtype = NULL) {
   if (!grid_equal(a@grid, b@grid)) {
     cli::cli_abort(paste0(
@@ -542,29 +601,26 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
     ))
   }
   graph <- a@graph
-  b_id <- if (identical(graph@nodes, b@graph@nodes)) {
-    b@node_id
-  } else {
-    graph_import(graph, b@graph, b@node_id)
-  }
+  b_id <- graph_import(graph, b@graph, b@node_id)
   grid <- .grid_retype(
     a@grid,
-    dtype %||% dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide)
+    dtype %||% .carrier_dtype(dtype_promote(a@grid@dtype, b@grid@dtype, divide = divide))
   )
   id <- graph_add(
     graph,
     MapNode,
     parents = c(a@node_id, b_id),
     grid = grid,
-    fn = op
+    fn = if (identical(op, `^`)) .float_pow(grid@dtype) else op
   )
   LazyRaster(graph = graph, node_id = id, grid = grid)
 }
 
 # Scalar op helper: scalar on one side. The declared dtype follows what
-# the kernel computes (anvl's rules): an R integer keeps the raster's
-# dtype, while an R double, like division, makes an integer raster f32.
-# A float raster keeps its own float dtype either way.
+# the kernel computes (anvl's rules): an R integer keeps a signed raster's
+# dtype and an unsigned raster's carrier, while an R double, like
+# division, makes an integer raster f32. A float raster keeps its own
+# float dtype either way.
 .lazy_scalar_op <- function(
   lr,
   s,
@@ -582,27 +638,31 @@ band_sel <- function(x, sel) .axis_sel(x, "band", sel)
   if (is.logical(s)) {
     s <- as.integer(s)
   }
-  fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
   floats <- divide || is.double(s)
-  grid <- .grid_retype(
-    lr@grid,
-    dtype %||% dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
+  declared <- dtype %||% .carrier_dtype(
+    dtype_promote(lr@grid@dtype, lr@grid@dtype, divide = floats)
   )
-  id <- graph_add(
-    lr@graph,
-    MapNode,
-    parents = lr@node_id,
-    grid = grid,
-    fn = fn
-  )
-  LazyRaster(graph = lr@graph, node_id = id, grid = grid)
+  if (identical(op, `^`)) {
+    op <- .float_pow(declared)
+  }
+  fn <- if (scalar_first) function(x) op(s, x) else function(x) op(x, s)
+  .arith_map(lr, fn, declared)
+}
+
+# A map whose dtype is already known, so nothing is traced.
+.arith_map <- function(x, fn, dtype) {
+  grid <- .grid_retype(x@grid, dtype)
+  id <- graph_add(x@graph, MapNode, parents = x@node_id, grid = grid, fn = fn)
+  LazyRaster(graph = x@graph, node_id = id, grid = grid)
 }
 
 # S7 registers methods on the base arithmetic generics via double dispatch.
-# We register + - * / for (LazyRaster, LazyRaster) and the scalar mixes.
-for (op_name in c("+", "-", "*", "/")) {
+# We register each for (LazyRaster, LazyRaster) and the scalar mixes. / and
+# ^ promote to float (R's semantics: int^int is double); %% keeps the input
+# dtype.
+for (op_name in c("+", "-", "*", "/", "^", "%%")) {
   op_fn <- get(op_name, envir = baseenv())
-  is_div <- op_name == "/"
+  is_div <- op_name %in% c("/", "^")
   S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
     local({
       f <- op_fn
@@ -653,7 +713,7 @@ for (op_name in c("+", "-", "*", "/", "^", "%%", ">", "<", ">=", "<=", "==", "!=
 #' @rawNamespace S3method("-", "garry::LazyRaster", .lazy_minus_raster)
 .lazy_minus_raster <- function(e1, e2) {
   if (missing(e2)) {
-    return(lazy_map(e1, fn = function(v) -v, dtype = e1@grid@dtype))
+    return(.arith_map(e1, function(v) -v, .carrier_dtype(e1@grid@dtype)))
   }
   .lazy_pm(`-`, e1, e2, "-")
 }
@@ -670,10 +730,10 @@ for (op_name in c("+", "-", "*", "/", "^", "%%", ">", "<", ">=", "<=", "==", "!=
 .mask_of <- function(v) g_cast(v != 0, "f32")
 #' @rawNamespace S3method("!", "garry::LazyRaster", .lazy_not_raster)
 .lazy_not_raster <- function(x) {
-  lazy_map(
+  .arith_map(
     x,
-    fn = function(v) g_ifelse(g_is_nodata(v), NaN, 1 - .mask_of(v)),
-    dtype = "f32"
+    function(v) g_ifelse(g_is_nodata(v), NaN, 1 - .mask_of(v)),
+    "f32"
   )
 }
 for (op_name in c("&", "|")) {
@@ -756,31 +816,6 @@ for (op_name in c(">", "<", ">=", "<=", "==", "!=")) {
     })
 }
 
-# ^ promotes to float (R's semantics: int^int is double); %% keeps the
-# input dtype.
-for (op_name in c("^", "%%")) {
-  op_fn <- get(op_name, envir = baseenv())
-  is_pow <- op_name == "^"
-  S7::method(op_fn, list(LazyRaster, LazyRaster)) <-
-    local({
-      f <- op_fn
-      d <- is_pow
-      function(e1, e2) .lazy_binop(e1, e2, f, divide = d)
-    })
-  S7::method(op_fn, list(LazyRaster, S7::class_numeric)) <-
-    local({
-      f <- op_fn
-      d <- is_pow
-      function(e1, e2) .lazy_scalar_op(e1, e2, f, FALSE, divide = d)
-    })
-  S7::method(op_fn, list(S7::class_numeric, LazyRaster)) <-
-    local({
-      f <- op_fn
-      d <- is_pow
-      function(e1, e2) .lazy_scalar_op(e2, e1, f, TRUE, divide = d)
-    })
-}
-
 # Math group generic (sqrt, log, exp, abs, floor, sin, ...): one
 # elementwise MapNode over the g_-compatible base function. cum*
 # members need an axis and are refused (scan_over is that verb).
@@ -797,8 +832,9 @@ for (op_name in c("^", "%%")) {
   }
   fn <- get(generic, envir = baseenv())
   dots <- list(...)
-  keeps_dtype <- generic %in%
-    c("abs", "sign", "floor", "ceiling", "trunc", "round", "signif")
+  # round(x, digits) divides, so it leaves the integers
+  keeps_dtype <- !length(dots) && generic %in%
+    c("abs", "sign", "floor", "ceiling", "trunc", "round")
   digits_only <- generic == "round" && length(dots) == 1L &&
     (is.null(names(dots)) || identical(names(dots), "digits"))
   if (length(dots) && !digits_only) {
@@ -823,21 +859,18 @@ for (op_name in c("^", "%%")) {
   }
   if (S7::S7_inherits(x, LazyDataset)) {
     # per layer: bands may carry different dtypes
-    newbands <- x@bands
-    for (a in .ds_value_bands(x)) {
-      newbands[[a]] <- lapply(x@bands[[a]], .lazy_math, generic, ...)
+    bands <- .ds_map_layers(x, .ds_value_bands(x), function(lr) .lazy_math(lr, generic, ...))
+    return(.ds_step(x, bands, "math", generic))
+  }
+  .arith_map(
+    x,
+    body_fn,
+    if (keeps_dtype) {
+      x@grid@dtype
+    } else {
+      dtype_promote(x@grid@dtype, x@grid@dtype, divide = TRUE)
     }
-    return(LazyDataset(
-      graph = x@graph,
-      bands = newbands,
-      mask_asset = x@mask_asset,
-      steps = c(x@steps, list(.step("math", "math", detail = generic)))
-    ))
-  }
-  dtype <- if (!keeps_dtype) {
-    dtype_promote(x@grid@dtype, x@grid@dtype, divide = TRUE)
-  }
-  lazy_map(x, fn = body_fn, dtype = dtype)
+  )
 }
 
 #' @rawNamespace S3method(Math, "garry::LazyRaster", .lazy_math_raster)
@@ -848,64 +881,65 @@ for (op_name in c("^", "%%")) {
 # ---------------------------------------------------------------------------
 
 # The input a halo-consuming verb (focal_map, focal_kernel, lazy_patch)
-# should read: an integer raster is read as f32. Its stage pads beyond
-# the raster edge with NaN, which an integer upload cannot hold (it
-# zero-fills), so window cells past the edge would read as 0 instead of
-# nodata. Integer sources are re-read as f32 copies (exact up to 2^24)
-# and integer maps over them rebuilt at f32. Other consumers of the same
-# sources keep their integer reads. A QA band is untouched: masking
-# morphology runs on the decoded (float) mask, not on the integers.
+# should read: everything beneath it at a float dtype. Its stage pads
+# beyond the raster edge with NaN, which an integer buffer cannot hold,
+# so an integer source under a window would show cells past the edge as
+# 0 rather than nodata. Other consumers keep their integer reads.
 .float_halo_input <- function(x) {
-  if (.dtype_family(x@grid@dtype) == "float") {
+  g <- x@graph
+  if (is.null(g@nodes$.float_copies)) {
+    g@nodes$.float_copies <- new.env(parent = emptyenv())
+  }
+  id <- .float_copy(g, x@node_id, g@nodes$.float_copies)
+  if (identical(id, x@node_id)) {
     return(x)
   }
-  g <- x@graph
-  memo <- new.env(parent = emptyenv())
-  float_copy <- function(id) {
-    key <- as.character(id)
-    if (!is.null(memo[[key]])) {
-      return(memo[[key]])
-    }
-    n <- graph_get(g, id)
-    fg <- .grid_retype(n@grid, "f32")
-    out <- if (.dtype_family(n@grid@dtype) == "float") {
-      id
-    } else if (S7::S7_inherits(n, SourceNode)) {
-      p <- S7::props(n)
-      p$id <- NULL
-      p$parents <- integer(0)
-      p$grid <- fg
-      do.call(graph_add, c(list(g, SourceNode), p))
-    } else if (S7::S7_inherits(n, MapNode)) {
-      # parents first: graph_add() allocates this node's id before
-      # forcing its arguments
-      parents <- vapply(n@parents, float_copy, integer(1))
-      graph_add(g, MapNode, parents = parents, grid = fg, fn = n@fn, role = n@role)
-    } else {
-      # no float form to rebuild (a reduce, a warp of integers): cast
-      graph_add(
-        g,
-        MapNode,
-        parents = id,
-        grid = fg,
-        fn = function(v) g_cast(v, "f32")
-      )
-    }
-    memo[[key]] <- out
-    out
-  }
-  id <- float_copy(x@node_id)
   LazyRaster(graph = g, node_id = id, grid = graph_get(g, id)@grid)
 }
 
-# A halo radius: one non-negative whole number.
-.check_radius <- function(radius, call = rlang::caller_env()) {
+# Node `id` with every integer below it, itself included, at the float
+# dtype that holds it, sharing copies through `memo`. A float warp is a
+# read that needs nothing below it. So is a kernel that names its float
+# dtype over integers: it decodes them (QA bits, g_bitand()), so it keeps
+# its integer read, whose ring beyond the raster it reads as 0, clear.
+.float_copy <- function(g, id, memo) {
+  key <- .key(id)
+  hit <- memo[[key]]
+  if (!is.null(hit)) {
+    return(hit)
+  }
+  n <- graph_get(g, id)
+  float <- .dtype_family(n@grid@dtype) == "float"
+  named <- S7::S7_inherits(n, MapNode) && length(n@dtype) == 1L
+  out <- id
+  if (!float || !(named || S7::S7_inherits(n, WarpNode))) {
+    parents <- vapply(n@parents, .float_copy, integer(1), g = g, memo = memo)
+    if (!float || !identical(parents, n@parents)) {
+      p <- S7::props(n)
+      p$id <- NULL
+      p$parents <- parents
+      p$grid <- .grid_retype(n@grid, .exact_float(n@grid@dtype))
+      if (S7::S7_inherits(n, WarpNode)) {
+        p$target_grid <- .grid_retype(n@target_grid, p$grid@dtype)
+      }
+      if (length(p$dtype)) {
+        p$dtype <- p$grid@dtype
+      }
+      out <- do.call(graph_add, c(list(g, S7::S7_class(n)), p))
+    }
+  }
+  memo[[key]] <- out
+  out
+}
+
+# A halo radius: one whole number of at least `min`.
+.check_radius <- function(radius, arg = "radius", min = 0L, call = rlang::caller_env()) {
   if (
     !is.numeric(radius) || length(radius) != 1L || is.na(radius) ||
-      radius < 0 || radius != round(radius)
+      radius < min || radius != round(radius)
   ) {
     cli::cli_abort(
-      "{.arg radius} must be a single non-negative whole number, not {.val {radius}}.",
+      "{.arg {arg}} must be a single whole number >= {min}, not {.val {radius}}.",
       call = call
     )
   }
@@ -920,10 +954,12 @@ for (op_name in c("^", "%%")) {
 #' plain arithmetic and the `g_*` vocabulary ([g_ifelse()], [g_cast()],
 #' ...). Example, a 3x3 sum: `function(sh) Reduce("+", sh)`.
 #'
-#' Cells beyond the raster edge are NaN (nodata): v1 supports only this
-#' `boundary = "nodata"` policy; reflect/wrap are not implemented. An
-#' integer raster is read as f32 for the stencil, so the edge can be NaN,
-#' and the result is f32.
+#' Cells beyond the raster edge are NaN (nodata), whatever a kernel before
+#' this one made of them. An integer raster is read as a float for the
+#' stencil (f32 up to 16 bits, else f64), so the edge can be NaN, and the
+#' result is that float. A map that names its float `dtype` over integers
+#' keeps its integer read: its kernel decodes them, and sees cells beyond
+#' the edge as 0.
 #'
 #' Over a `LazyDataset`, the stencil is applied to every value band per slice;
 #' `bands` restricts which bands.
@@ -932,7 +968,6 @@ for (op_name in c("^", "%%")) {
 #' @param fn       Function over the list of shifted arrays (see above).
 #' @param radius   Halo in pixels (mandatory: the footprint cannot be
 #'                 inferred from `fn`).
-#' @param boundary Boundary policy; only "nodata" in v1.
 #' @param bands    `LazyDataset` only: bands to apply to (default: all value
 #'                 bands).
 #' @return A `LazyRaster` on the same grid as `x`, or a `LazyDataset`
@@ -945,18 +980,11 @@ for (op_name in c("^", "%%")) {
 #' sm <- focal_map(red, radius = 1L, fn = function(sh) Reduce(`+`, sh) / length(sh))
 #' collect(sm)[1:3, 1:3]
 #' @export
-focal_map <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
+focal_map <- function(x, fn, radius, bands = NULL) {
   if (S7::S7_inherits(x, LazyDataset)) {
-    return(.ds_focal(
-      x,
-      fn,
-      radius,
-      rlang::arg_match(boundary, "nodata"),
-      bands
-    ))
+    return(.ds_focal(x, fn, radius, bands))
   }
   .assert_class(x, LazyRaster, "LazyRaster")
-  boundary <- rlang::arg_match(boundary, "nodata")
   radius <- .check_radius(radius)
   x <- .float_halo_input(x)
   id <- graph_add(
@@ -965,8 +993,7 @@ focal_map <- function(x, fn, radius, boundary = "nodata", bands = NULL) {
     parents = x@node_id,
     grid = x@grid,
     fn = fn,
-    radius = radius,
-    boundary = boundary
+    radius = radius
   )
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
 }
@@ -1006,10 +1033,7 @@ shrink_footprint <- function(
   bands = NULL,
   boundary = c("nodata", "keep")
 ) {
-  radius <- as.integer(radius)
-  if (length(radius) != 1L || is.na(radius) || radius < 1L) {
-    cli::cli_abort("{.arg radius} must be a positive integer")
-  }
+  radius <- .check_radius(radius, min = 1L)
   boundary <- rlang::arg_match(boundary)
   if (boundary == "nodata") {
     return(focal_map(x, radius = radius, bands = bands, fn = function(sh) {
@@ -1019,25 +1043,11 @@ shrink_footprint <- function(
   if (S7::S7_inherits(x, LazyDataset)) {
     bands <- .ds_check_bands(x, bands)
     sel <- bands %||% .ds_value_bands(x)
-    newbands <- x@bands
-    for (a in sel) {
-      newbands[[a]] <- lapply(x@bands[[a]], .shrink_keep, radius = radius)
-    }
-    return(LazyDataset(
-      graph = x@graph,
-      bands = newbands,
-      mask_asset = x@mask_asset,
-      steps = c(
-        x@steps,
-        list(.step(
-          "focal",
-          "focal",
-          detail = .glue(
-            "shrink r={radius} keep {cli::symbol$bullet %||% '-'} ",
-            "{paste(sel, collapse = ' ')}"
-          )
-        ))
-      )
+    return(.ds_step(
+      x,
+      .ds_map_layers(x, sel, function(lr) .shrink_keep(lr, radius)),
+      "focal",
+      .glue("shrink r={radius} keep {cli::symbol$bullet %||% '-'} {paste(sel, collapse = ' ')}")
     ))
   }
   .assert_class(x, LazyRaster, "LazyRaster")
@@ -1056,6 +1066,7 @@ shrink_footprint <- function(
       "i" = "Apply it before stacking, or to a {.cls LazyDataset} (per slice)."
     ))
   }
+  x <- .float_halo_input(x) # the shrink writes NaN
   inside <- lazy_source(
     gdal_blank_vrt(x@grid),
     graph = x@graph,
@@ -1072,17 +1083,20 @@ shrink_footprint <- function(
   lazy_map(x, near, fn = function(v, n) g_ifelse(n > 0.5, NaN, v))
 }
 
-#' Whole-window model op (advanced): apply `fn` to the raw padded chunk.
+#' Whole-window model op (advanced): apply `fn` to the whole padded chunk.
 #'
 #' The escape hatch behind model-inference verbs such as [ocm_mask()]:
 #' where [focal_map()] materialises a shift list (unusable beyond small
-#' radii), a patch op hands `fn` the raw window carrying `radius` halo
+#' radii), a patch op hands `fn` the whole window carrying `radius` halo
 #' cells per side and crops the contaminated ring off the result. `fn`
 #' must be size-preserving on the last two (spatial) dims, derive every
 #' size from its input's shape, be written in the `g_*` vocabulary, and
 #' reduce the leading band axis to `out_bands` channels (0 = a plain
 #' 2D result). Not differentiable. [ocm_model()]-based cloud-mask
 #' prediction is the in-package example of its use.
+#'
+#' Cells beyond the raster edge hold NaN: `x` reads as a float here whatever
+#' its dtype, and whatever a kernel before this one made of them.
 #'
 #' `kernel_id` stands in for `fn` in kernel signatures: give two calls
 #' the same id ONLY if their fns are interchangeable (same weights,
@@ -1151,8 +1165,8 @@ lazy_patch <- function(
 #' as `focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)`.
 #'
 #' A NaN centre stays NaN; NaN neighbours (and the NaN halo garry pads
-#' outside the raster) drop out of the weighted mean (the semantics of
-#' `rustyfilters::rf_bilateral(edge = "shrink", na_policy = "omit")`).
+#' outside the raster) drop out of the weighted mean, so the window shrinks
+#' at raster edges and around holes.
 #' `sigma_r` must be supplied: the parameter-free per-band default
 #' (the band's own sd) is a whole-raster statistic, so compute it in a
 #' separate reduce pass (or reuse fitted values) and pass it in.
@@ -1274,11 +1288,14 @@ bilateral_focal <- function(sigma_r, sigma_d = 1, radius = 1L) {
 #' dim(collect(reduce_over(stk, "median", "t")))
 #' @export
 reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
+  if (!isTRUE(nan_rm) && !isFALSE(nan_rm)) {
+    cli::cli_abort("{.arg nan_rm} must be TRUE or FALSE, not {.val {nan_rm}}.")
+  }
   if (S7::S7_inherits(x, LazyDatasetGroups)) {
-    return(.dsg_reduce(x, op, over, isTRUE(nan_rm), bands))
+    return(.dsg_reduce(x, op, over, nan_rm, bands))
   }
   if (S7::S7_inherits(x, LazyDataset)) {
-    return(.ds_reduce(x, op, over, isTRUE(nan_rm), bands))
+    return(.ds_reduce(x, op, over, nan_rm, bands))
   }
   .assert_class(x, LazyRaster, "LazyRaster")
   # A custom reducer arrives as a function: an anvl kernel `fn(x, dims)`
@@ -1290,6 +1307,18 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
     op <- "custom"
   }
   grid <- .reduce_grid(x@grid, op, over) # validates `over`, applies D7
+  if (length(fn)) {
+    probe <- ReduceNode(
+      id = 0L,
+      parents = x@node_id,
+      grid = grid,
+      op = op,
+      over = over,
+      nan_rm = nan_rm,
+      fn = fn
+    )
+    grid <- .grid_retype(grid, .node_dtype(probe, list(x@grid)))
+  }
   id <- graph_add(
     x@graph,
     ReduceNode,
@@ -1297,7 +1326,7 @@ reduce_over <- function(x, op, over, nan_rm = TRUE, bands = NULL) {
     grid = grid,
     op = op,
     over = over,
-    nan_rm = isTRUE(nan_rm),
+    nan_rm = nan_rm,
     fn = fn
   )
   LazyRaster(graph = x@graph, node_id = id, grid = grid)
@@ -1367,11 +1396,7 @@ scan_over <- function(
           "({grid_diff(lead@grid, lr@grid)})"
         ))
       }
-      if (identical(graph@nodes, lr@graph@nodes)) {
-        lr@node_id
-      } else {
-        graph_import(graph, lr@graph, lr@node_id)
-      }
+      graph_import(graph, lr@graph, lr@node_id)
     },
     integer(1)
   )
@@ -1382,6 +1407,21 @@ scan_over <- function(
   }
   if (length(over) != 1L || !over %in% names(lead@grid@dims)) {
     cli::cli_abort("{.arg over} must name one dim of the input grid")
+  }
+  if (is.null(dtype)) {
+    probe <- ScanNode(
+      id = 0L,
+      parents = parents,
+      grid = lead@grid,
+      over = over,
+      direction = direction,
+      fn = list(fn),
+      dtype = character(0)
+    )
+    real <- .node_dtype(probe, lapply(parents, function(i) graph_get(graph, i)@grid))
+    if (!identical(real, lead@grid@dtype)) {
+      dtype <- real
+    }
   }
   grid <- if (is.null(dtype)) lead@grid else .grid_retype(lead@grid, dtype)
   id <- graph_add(
@@ -1452,13 +1492,11 @@ band_project <- function(weights, center = NULL) {
 #'
 #' @param x A `LazyRaster`.
 #' @param weights Square odd-sided numeric matrix, rows = dy, cols = dx.
-#' @param boundary Boundary policy; only "nodata" in v1.
-#' @return A `LazyRaster` (f32 for an integer `x`, which is read as f32
-#'   so cells beyond the raster edge can be NaN).
+#' @return A `LazyRaster` (a float for an integer `x`, which is read as
+#'   the float that holds it so cells beyond the raster edge can be NaN).
 #' @export
-focal_kernel <- function(x, weights, boundary = "nodata") {
+focal_kernel <- function(x, weights) {
   .assert_class(x, LazyRaster, "LazyRaster")
-  boundary <- rlang::arg_match(boundary, "nodata")
   x <- .float_halo_input(x)
   weights <- as.matrix(weights)
   stopifnot(nrow(weights) == ncol(weights), nrow(weights) %% 2L == 1L)
@@ -1474,7 +1512,6 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
       cli::cli_abort("kernel focal is evaluated from weights", .internal = TRUE)
     },
     radius = radius,
-    boundary = boundary,
     weights = w
   )
   LazyRaster(graph = x@graph, node_id = id, grid = x@grid)
@@ -1484,6 +1521,10 @@ focal_kernel <- function(x, weights, boundary = "nodata") {
 #'
 #' Inserts an explicit warp step, executed as a GDAL VRT warp.
 #' Alignment stays explicit: binary ops never auto-resample.
+#'
+#' A warp takes GDAL's default tolerance, 0.125 source pixels, so a cell
+#' can sit that far from where the exact transform puts it. Set
+#' `garry.warp_exact = TRUE` for exact warps, at about five times the cost.
 #'
 #' Paste fast path: when `x` is already exactly on the target grid
 #' (same CRS, transform, extent and dims; `grid_equal()`), `align_to()`
@@ -1518,7 +1559,7 @@ align_to <- function(x, to, resampling = "near") {
   resampling <- .check_resampling(resampling)
   # Only `to`'s spatial geometry: x keeps its own outer axes and labels
   # (a warp of a 2-D raster onto a stack's grid is still 2-D).
-  outer <- x@grid@dims[setdiff(names(x@grid@dims), c("x", "y"))]
+  outer <- .grid_outer(x@grid)
   target <- GridSpec(
     crs = to_grid@crs,
     transform = to_grid@transform,
@@ -1532,14 +1573,7 @@ align_to <- function(x, to, resampling = "near") {
   }
   src <- graph_get(x@graph, x@node_id)
   if (!S7::S7_inherits(src, SourceNode) || length(src@band) > 1L || length(src@collapsed)) {
-    .garry_error(
-      paste0(
-        "warping a computed raster is not supported in v1: align_to() ",
-        "sources before computing on them, or materialise to disk ",
-        "first (write_tif() / materialise())."
-      ),
-      "garry_warp_unsupported_error"
-    )
+    .warp_refusal()
   }
   id <- graph_add(
     x@graph,
@@ -1586,11 +1620,9 @@ align_to <- function(x, to, resampling = "near") {
 #'
 #' @param x A `LazyRaster` or `LazyDataset` reading its sources.
 #' @param factor Integer block size (>= 1).
-#' @param fun Block statistic; only `"mean"`.
 #' @return A `LazyRaster` or `LazyDataset` on the coarser grid (f32).
 #' @export
-coarsen <- function(x, factor, fun = "mean") {
-  fun <- rlang::arg_match(fun, "mean")
+coarsen <- function(x, factor) {
   if (
     !is.numeric(factor) ||
       length(factor) != 1L ||
@@ -1608,7 +1640,7 @@ coarsen <- function(x, factor, fun = "mean") {
       ))
     }
     bands <- lapply(x@bands, function(slices) {
-      lapply(slices, coarsen, factor = k, fun = fun)
+      lapply(slices, coarsen, factor = k)
     })
     return(LazyDataset(
       graph = x@graph,

@@ -16,8 +16,9 @@ the band axis via \code{stack_bands()} first), a named list of lazy rasters
 
 \item{distributed}{Execute across the \code{\link[=garry_daemons]{garry_daemons()}} pools? Defaults to
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, so \code{collect(x)} uses the pools when they are running
-and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override; the
-distributed result is identical to the single-threaded one.}
+and runs single-threaded otherwise. Pass \code{TRUE}/\code{FALSE} to override. One
+plan gives the same cells either way; a reprojected STAC band warps by a
+different route on each, so its cells can differ within GDAL's tolerance.}
 }
 \value{
 With \code{plan_only = TRUE}, the \code{Plan}. Otherwise the materialised
@@ -29,6 +30,7 @@ A matrix/array result also carries a \code{gis} attribute in the style of
 \code{gdalraster::read_ds()} (\code{type}, \code{bbox} = \code{c(xmin, ymin, xmax, ymax)},
 \code{dim} = \code{c(nx, ny, nbands)}, \code{srs} = WKT, \code{datatype}), so the array is
 self-describing and \code{\link[=preview]{preview()}} can set real-world axes without the grid.
+An \code{i32} cell of -2^31 reads as \code{NA}, the value R's integers keep for it.
 }
 \description{
 Executes the plan and returns the result in the R session, always.

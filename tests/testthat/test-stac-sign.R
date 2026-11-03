@@ -100,3 +100,27 @@ test_that("a cached token inside the margin is a cache miss", {
   expect_identical(.mpc_token_lookup(coll), "t")
   expect_null(.mpc_token_lookup(coll, margin = 600))
 })
+
+test_that("a cache that cannot be written warns, naming where", {
+  f <- "/proc/garry-no-such-dir/x.rds"
+  expect_warning(
+    garry:::.cache_save(1, f, "the token"),
+    "/proc/garry-no-such-dir",
+    fixed = TRUE,
+    class = "garry_cache_warning"
+  )
+  ok <- withr::local_tempfile(fileext = ".rds")
+  expect_no_warning(garry:::.cache_save(2, ok, "the token"))
+  expect_identical(readRDS(ok), 2)
+})
+
+test_that("signing no items warns by class", {
+  skip_if_not_installed("rstac")
+  skip_if_not_installed("httr2")
+  expect_warning(
+    got <- stac_sign_mpc(list(features = list())),
+    "No STAC items",
+    class = "garry_stac_warning"
+  )
+  expect_identical(got, list(features = list()))
+})

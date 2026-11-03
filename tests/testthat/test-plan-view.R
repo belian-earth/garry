@@ -200,9 +200,6 @@ test_that("plan_lazy and plan_dot accept a LazyDataset", {
 
   p <- plan_lazy(ds)
   expect_true(S7::S7_inherits(p, Plan))
-  # same plan as the explicit stack_bands route
-  p2 <- plan_lazy(stack_bands(ds))
-  expect_identical(length(p@stages), length(p2@stages))
 
   d <- plan_dot(ds)
   expect_type(d, "character")
@@ -236,14 +233,6 @@ test_that("level_separation and node_spacing set the packed coordinates", {
   src_y <- sort(nodes$y[nodes$level == 1L])
   expect_identical(diff(src_y), 60)
   expect_identical(sum(src_y), 0)
-})
-
-test_that("plan_view accepts a lazy object directly", {
-  skip_if_not_installed("visNetwork")
-  lr <- lazy_source(fixture_gradient_f32())
-  w <- plan_view(lr * 2 + 1)
-  expect_s3_class(w, "visNetwork")
-  expect_gte(nrow(w$x$nodes), 1L)
 })
 
 test_that("plan_view tooltips hide URL tokens and escape names", {

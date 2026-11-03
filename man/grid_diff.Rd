@@ -4,12 +4,10 @@
 \alias{grid_diff}
 \title{Describe how two grids differ.}
 \usage{
-grid_diff(a, b, tol = 1e-09)
+grid_diff(a, b)
 }
 \arguments{
 \item{a, b}{\code{GridSpec} objects.}
-
-\item{tol}{Numeric tolerance, as in \code{\link[=grid_equal]{grid_equal()}}.}
 }
 \value{
 A single character description; \code{"grids are equal"} when

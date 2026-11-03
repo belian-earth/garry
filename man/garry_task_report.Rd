@@ -7,7 +7,7 @@
 garry_task_report(path)
 }
 \arguments{
-\item{path}{Path to a task-log CSV written by the scheduler.}
+\item{path}{Path to a task-log CSV written by a distributed run.}
 }
 \value{
 Invisibly, a list: \code{events} (event counts), \code{tasks} (one row
@@ -24,7 +24,7 @@ and \code{min_comp_budget_mb} (\code{NA} when the log has no such rows).
 Printed as a cli summary.
 }
 \description{
-Summarises the task log CSV the distributed scheduler writes when
+Summarises the task log CSV the distributed routes write when
 the \code{garry.task_log} option is set (see \code{\link[=garry_options]{garry_options()}}; schema
 \verb{time,event,key,pool,slot,mb,store_mb,ready}): per-stage task counts
 and run/queue-wait quantiles, maximum concurrency, the drain vs

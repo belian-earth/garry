@@ -2,7 +2,7 @@
 % Please edit documentation in R/lazy_raster.R
 \name{lazy_patch}
 \alias{lazy_patch}
-\title{Whole-window model op (advanced): apply \code{fn} to the raw padded chunk.}
+\title{Whole-window model op (advanced): apply \code{fn} to the whole padded chunk.}
 \usage{
 lazy_patch(
   x,
@@ -38,7 +38,7 @@ A \code{LazyRaster} on the spatial grid (plus \code{out_bands} bands).
 \description{
 The escape hatch behind model-inference verbs such as \code{\link[=ocm_mask]{ocm_mask()}}:
 where \code{\link[=focal_map]{focal_map()}} materialises a shift list (unusable beyond small
-radii), a patch op hands \code{fn} the raw window carrying \code{radius} halo
+radii), a patch op hands \code{fn} the whole window carrying \code{radius} halo
 cells per side and crops the contaminated ring off the result. \code{fn}
 must be size-preserving on the last two (spatial) dims, derive every
 size from its input's shape, be written in the \verb{g_*} vocabulary, and
@@ -47,6 +47,9 @@ reduce the leading band axis to \code{out_bands} channels (0 = a plain
 prediction is the in-package example of its use.
 }
 \details{
+Cells beyond the raster edge hold NaN: \code{x} reads as a float here whatever
+its dtype, and whatever a kernel before this one made of them.
+
 \code{kernel_id} stands in for \code{fn} in kernel signatures: give two calls
 the same id ONLY if their fns are interchangeable (same weights,
 same code). \code{bytes_px}/\code{flops_px} price the kernel for chunk sizing,

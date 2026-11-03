@@ -82,6 +82,36 @@ test_that("existing targets are refused without overwrite", {
   expect_s7_class(m, garry::LazyDataset)
 })
 
+local({
+  local_pools(2, 1)
+
+  test_that("an overwrite replaces the checkpoint on either route", {
+    a <- matrix(as.numeric(1:24), 4L, 6L)
+    for (type in c("Float32", "Int16")) {
+      x <- lazy_source(fixture_tile(t(a), type, nx = 6L))
+      for (distributed in c(FALSE, TRUE)) {
+        d <- withr::local_tempdir()
+        materialise(x + 1L, d, name = "m", distributed = FALSE)
+        m <- materialise(x * 2L, d, name = "m", overwrite = TRUE, distributed = distributed)
+        .expect_cells(unclass(collect(m, distributed = FALSE)), a * 2,
+                      info = paste(type, distributed))
+      }
+    }
+  })
+
+  test_that("an overwrite leaves nothing of a larger cube", {
+    x <- lazy_source(fixture_tile(1, nx = 6L))
+    for (distributed in c(FALSE, TRUE)) {
+      d <- withr::local_tempdir()
+      materialise(lazy_stack(list(a = x + 1, b = x + 2), along = "band"), d, name = "m",
+                  distributed = FALSE)
+      m <- materialise(x + 3, d, name = "m", overwrite = TRUE, distributed = distributed)
+      expect_identical(file.size(file.path(d, "m.bin")), 6 * 4 * 4)
+      .expect_cells(unclass(collect(m, distributed = FALSE)), matrix(4, 4L, 6L))
+    }
+  })
+})
+
 test_that("masking works unchanged on the rebuilt dataset", {
   ds <- .mat_fixture()
   d <- withr::local_tempdir()

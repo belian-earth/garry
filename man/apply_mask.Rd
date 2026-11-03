@@ -4,15 +4,7 @@
 \alias{apply_mask}
 \title{Mask a dataset from a QA band.}
 \usage{
-apply_mask(
-  x,
-  from = NULL,
-  where,
-  open = 0L,
-  dilate = 0L,
-  drop = TRUE,
-  join = "exact"
-)
+apply_mask(x, from = NULL, where, open = 0L, dilate = 0L, join = "exact")
 }
 \arguments{
 \item{x}{A \code{LazyDataset}.}
@@ -28,7 +20,7 @@ e.g. \code{c(0, 1, 2, 3, 8, 9, 10, 11)};
 \item \code{\link[=qa_bits]{qa_bits()}} -> a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. \code{qa_bits(0:3)};
 \item a function \verb{\\(f) ...} -> a predicate returning a 0/1 (or logical)
-mask, written in the \verb{g_*} vocabulary.
+mask, written in the \verb{g_*} vocabulary. NaN reads as clear.
 }}
 
 \item{open}{Opening radius (despeckle): erosion then dilation at this radius,
@@ -36,8 +28,6 @@ removing isolated flagged pixels up to the radius. \code{0} skips it.}
 
 \item{dilate}{Dilation radius (buffer): grows the surviving bad regions
 outward, a safety margin around clouds. \code{0} skips it. Applied after \code{open}.}
-
-\item{drop}{Drop the QA band from the returned dataset? (default \code{TRUE}.)}
 
 \item{join}{How value and mask slices pair when both carry slice
 names that do not fully align: \code{"exact"} (default) aborts;

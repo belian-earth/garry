@@ -7,25 +7,32 @@ NULL
 #
 # A Stage is one schedulable unit: a set of composed IR nodes, ONE closure
 # built from the garry op vocabulary, a halo, a chunk grid, and its input
-# stages. The same closure runs under the pure-R oracle (Phase 3 tests)
-# and under anvl jit() (Phase 5) — that equivalence is the point.
+# stages. The same closure runs under the pure-R oracle and under anvl
+# jit(): that equivalence is the point.
 #
 # Calling conventions by kind:
 # - "source_read":    fn is identity; the executor reads the (halo-padded)
 #                     GDAL window and passes it through.
 # - "compute":        fn(inputs) with `inputs` a list of chunk arrays in
-#                     `input_nodes` order, each padded to the stage halo;
-#                     returns the chunk-core array.
+#                     `input_nodes` order, each padded to the stage halo,
+#                     then the chunk's .ring_cells() if the stage takes
+#                     them (.ring_windows); returns the chunk-core array.
 # - "reduce_partial": fn(inputs) -> named list of per-chunk partials.
 # - "reduce_combine": fn(partials) with `partials` a list over chunks of
 #                     the partial lists; returns the final array/scalar.
-# - "warp":           executed by GDAL (Phase 4b); fn is identity.
+# - "warp":           executed by GDAL; fn is identity.
 #
 # Halo contract (D14, generalised by D22): stage inputs arrive padded to
 # exactly `halo + out_pad` cells per side; cells outside the raster are
-# NaN (nodata semantics). Each focal member consumes `radius` cells of
-# padding via shifted slices, so each export carries its `export_pads`
-# entry (0 when the stage has no downstream halo consumers).
+# nodata (.sv_fill: NaN for a float). Each focal member consumes `radius`
+# cells of padding via shifted slices, so each export carries its
+# `export_pads` entry (0 when the stage has no downstream halo consumers).
+# Members compute the cells outside the raster too, and can leave anything
+# there, so a window over a member reads them back at nodata for its
+# parent's dtype, on exactly those cells (.ring_windows, .g_mask_ring), as
+# a boundary leaves an export (.exec_mask_edge). A chain gives one answer
+# inside a stage and across a boundary. Any other member reads them as
+# computed: nothing it does moves them onto the raster.
 # ---------------------------------------------------------------------------
 
 #' One schedulable unit of a Plan.
@@ -36,12 +43,13 @@ NULL
 #' @param members IR node ids composed into this stage (ascending = topo).
 #' @param fn The composed stage closure. For "compute" stages it is
 #'   called as `fn(inputs)` with a list of chunk arrays in
-#'   `input_nodes` order, each padded to the stage halo, and returns
-#'   the chunk-core array; a "reduce_partial" stage returns a named
-#'   list of per-chunk partials and "reduce_combine" combines those
-#'   lists into the final value; for "source_read" and "warp" stages
-#'   `fn` is the identity (the executor and the GDAL warper supply the
-#'   values).
+#'   `input_nodes` order, each padded to the stage halo, followed by
+#'   the chunk's cells past the raster when a window reads a member,
+#'   and returns the chunk-core array; a "reduce_partial" stage returns
+#'   a named list of per-chunk partials and "reduce_combine" combines
+#'   those lists into the final value; for "source_read" and "warp"
+#'   stages `fn` is the identity (the executor and the GDAL warper
+#'   supply the values).
 #' @param halo Halo radius in pixels the stage requires on its inputs.
 #' @param grid Output `GridSpec` of the stage.
 #' @param chunks `ChunkGrid` partitioning the stage's output.
@@ -58,7 +66,7 @@ NULL
 #'   each export value carries (post-focal exports carry less than
 #'   pre-focal ones). Empty means all zero.
 #' @param strip_rows Rows per strip when `fn` runs a compute stage's
-#'   members over row strips of each chunk (see `garry.scan_strip_px`);
+#'   members over row strips of each chunk (`.scan_strip_px` cells each);
 #'   0 runs the whole chunk at once.
 #' @return A `Stage`.
 #' @export

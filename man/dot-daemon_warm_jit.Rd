@@ -10,7 +10,7 @@ shape.}
 \arguments{
 \item{specs}{List of per-stage specs: \code{ck} cache key, \code{fn} stage
 closure, \code{dtypes} per-input upload dtypes, \code{nr}/\code{nc} modal input
-dims.}
+dims, \code{ring} whether the kernel takes \code{.ring_cells()}.}
 }
 \value{
 \code{NULL}, invisibly.
@@ -18,11 +18,12 @@ dims.}
 \description{
 Runs on compute-pool daemons at run start (see \code{garry_daemons()}),
 while the read pool owns the network drain: fills the per-daemon
-jit cache and triggers one dummy execution per stage so the XLA
-compile never lands on a tail chunk.
-Get-or-create against the same cache keys the real tasks use;
-failures are swallowed (warm-up is an optimisation, never a
-correctness dependency).
+jit cache, compiling a program's first shape or tracing a closure
+through one dummy execution, so the XLA compile never lands on a
+tail chunk.
+Get-or-create against the same cache keys the real tasks use. A
+failure raises: the host clears the kernel's warm mark, reports it,
+and the kernel's first task compiles it.
 }
 \details{
 Internal; daemons reach it through \code{asNamespace("garry")}.

@@ -2,20 +2,23 @@
 % Please edit documentation in R/daemon.R
 \name{.daemon_hygiene}
 \alias{.daemon_hygiene}
-\title{Daemon task body: memory hygiene — trim arenas, optionally evict the
+\title{Daemon task body: memory hygiene: trim arenas, optionally evict the
 jit cache.}
 \usage{
-.daemon_hygiene(deep = FALSE)
+.daemon_hygiene(deep = FALSE, trim = TRUE)
 }
 \arguments{
 \item{deep}{Also evict the jit cache?}
+
+\item{trim}{Also collect and trim? A full collection, about 70 ms a
+daemon, which a run that only reads has no need of.}
 }
 \value{
 \code{TRUE} if the trim ran (glibc), invisibly.
 }
 \description{
 \code{deep = TRUE} additionally clears the jit cache (forces recompiles:
-~1 s for map kernels, ~20 s for scans) — reserve it for memory
+~1 s for map kernels, ~20 s for scans): reserve it for memory
 pressure; the default trim-only pass costs microseconds and gives
 back what glibc is hoarding. Every pass also closes cached Zarr
 handles, whose decoded chunks no trim can return.

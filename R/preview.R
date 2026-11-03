@@ -244,7 +244,6 @@ NULL
   axes = TRUE,
   xlab = "",
   ylab = "",
-  interpolate = TRUE,
   na_col = NULL
 ) {
   if (length(dim(arr)) > 3L) {
@@ -313,7 +312,7 @@ NULL
     ylim[[1L]],
     xlim[[2L]],
     ylim[[2L]],
-    interpolate = interpolate
+    interpolate = TRUE
   )
   if (axes) {
     .pv_axes(xlim, ylim, main, xlab, ylab)
@@ -336,7 +335,7 @@ NULL
   dx <- (ext[[3L]] - ext[[1L]]) / nx
   dy <- (ext[[4L]] - ext[[2L]]) / ny
   GridSpec(
-    crs = gis$srs %||% "EPSG:4326",
+    crs = gis$srs,
     transform = c(ext[[1L]], dx, 0, ext[[4L]], 0, -dy),
     extent = ext,
     dims = c(x = nx, y = ny),
@@ -351,6 +350,7 @@ NULL
   if (!is.null(max_px)) {
     return(as.integer(max_px))
   }
+  # only a preview's resolution, and not every device reports pixels
   sz <- tryCatch(grDevices::dev.size("px"), error = function(e) c(720, 720))
   max(as.integer(sz))
 }
@@ -423,84 +423,31 @@ NULL
   if (!length(oo)) {
     return(oo)
   }
-  num <- function(v) formatC(v, format = "g", digits = 17, width = 1)
   keep <- oo[!grepl("^RES[XY]=", oo)]
   c(
     keep,
-    paste0("RESX=", num(cg@transform[[2L]])),
-    paste0("RESY=", num(-cg@transform[[6L]]))
+    paste0("RESX=", .gdal_num(cg@transform[[2L]])),
+    paste0("RESY=", .gdal_num(-cg@transform[[6L]]))
   )
 }
 
+# Node `n` on the coarse grid, its other properties as they are. A patch
+# kernel's input is its model's, so it has no coarse form: NULL.
 .coarsen_node <- function(ng, n, parents, cg) {
-  if (S7::S7_inherits(n, SourceNode)) {
-    graph_add(
-      ng,
-      SourceNode,
-      parents = integer(0),
-      grid = cg,
-      path = n@path,
-      band = n@band,
-      nodata = n@nodata,
-      block_dim = n@block_dim,
-      open_options = .coarsen_open_options(n@open_options, cg),
-      resampling = n@resampling,
-      scale = n@scale,
-      offset = n@offset,
-      name = n@name,
-      role = n@role
-    )
-  } else if (S7::S7_inherits(n, MapNode)) {
-    graph_add(ng, MapNode, parents = parents, grid = cg, fn = n@fn, role = n@role)
-  } else if (S7::S7_inherits(n, FocalNode)) {
-    graph_add(
-      ng,
-      FocalNode,
-      parents = parents,
-      grid = cg,
-      fn = n@fn,
-      radius = n@radius,
-      boundary = n@boundary,
-      weights = n@weights
-    )
-  } else if (S7::S7_inherits(n, ReduceNode)) {
-    graph_add(
-      ng,
-      ReduceNode,
-      parents = parents,
-      grid = cg,
-      op = n@op,
-      over = n@over,
-      nan_rm = n@nan_rm,
-      fn = n@fn
-    )
-  } else if (S7::S7_inherits(n, ScanNode)) {
-    graph_add(
-      ng,
-      ScanNode,
-      parents = parents,
-      grid = cg,
-      over = n@over,
-      direction = n@direction,
-      fn = n@fn,
-      dtype = n@dtype
-    )
-  } else if (S7::S7_inherits(n, StackNode)) {
-    graph_add(ng, StackNode, parents = parents, grid = cg, along = n@along)
-  } else if (S7::S7_inherits(n, WarpNode)) {
-    graph_add(
-      ng,
-      WarpNode,
-      parents = parents,
-      grid = cg,
-      target_grid = cg,
-      resampling = n@resampling,
-      bands = n@bands,
-      coarsen = n@coarsen
-    )
-  } else {
-    NULL
+  if (S7::S7_inherits(n, PatchNode)) {
+    return(NULL)
   }
+  p <- S7::props(n)
+  p$id <- NULL
+  p$parents <- parents
+  p$grid <- cg
+  if (S7::S7_inherits(n, SourceNode)) {
+    p$open_options <- .coarsen_open_options(n@open_options, cg)
+  }
+  if (S7::S7_inherits(n, WarpNode)) {
+    p$target_grid <- cg
+  }
+  do.call(graph_add, c(list(ng, S7::S7_class(n)), p))
 }
 
 # A LazyRaster re-planned to ~target_px on the long axis, or NULL when the
@@ -551,6 +498,11 @@ NULL
 .pv_collect <- function(lr, target) {
   coarse <- .preview_coarsen(lr, target)
   if (is.null(coarse)) {
+    px <- formatC(prod(as.numeric(lr@grid@dims)), format = "d", big.mark = ",")
+    cli::cli_inform(c(
+      "preview: reading all {px} cells at full resolution.",
+      "i" = "Sources pinned to a grid (RESX and RESY) read their overviews instead."
+    ))
     return(list(arr = .pv_decimate(collect(lr), target), grid = lr@grid))
   }
   list(arr = .pv_decimate(collect(coarse), target), grid = coarse@grid)

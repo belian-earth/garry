@@ -266,7 +266,7 @@ NULL
         "reduce: {op} over {paste(n@over, collapse = ',')}",
         "{if (isTRUE(n@nan_rm)) ', nan_rm' else ''}"))
     } else if (S7::S7_inherits(n, FocalNode)) {
-      lines <- c(lines, .glue("focal: radius {n@radius}, {n@boundary}"))
+      lines <- c(lines, .glue("focal: radius {n@radius}"))
     } else if (S7::S7_inherits(n, ScanNode)) {
       lines <- c(lines, .glue("scan: over {n@over}, {n@direction}"))
     }

@@ -48,12 +48,21 @@ Node <- S7::new_class(
   lr
 }
 
+# Stamp what the file stores on a LazyRaster's source (in place, via the
+# graph env), for a builder that opened the file and declared its grid.
+.with_stored <- function(lr, stored) {
+  n <- graph_get(lr@graph, lr@node_id)
+  n@stored <- stored
+  graph_replace(lr@graph, lr@node_id, n)
+  lr
+}
+
 #' A GDAL-readable source: path + band + optional nodata sentinel.
 #'
 #' Created by [lazy_source()]. A declared `nodata` on an integer source
-#' promotes the source's output dtype to f32 so NaN can carry nodata
-#' downstream; the executor rewrites `value == nodata` to NaN at read
-#' time.
+#' promotes the source's output dtype to the float that holds it (f32 up
+#' to 16 bits, else f64) so NaN can carry nodata downstream; the executor
+#' rewrites `value == nodata` to NaN at read time.
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -80,6 +89,9 @@ Node <- S7::new_class(
 #'   [lazy_dataset()]): the codes file (`src`), its first code (`lo`) and
 #'   the table of decoded values (`table`); `path` is then the
 #'   lookup-table VRT. Empty for an ordinary source.
+#' @param stored What the file stores that `grid` does not show: the band's
+#'   `dtype` before any widening and whether it is `south_up`. Empty for a
+#'   source given its grid, which is not opened to find out.
 #' @return A `SourceNode`.
 #' @export
 SourceNode <- S7::new_class(
@@ -115,7 +127,10 @@ SourceNode <- S7::new_class(
     # holds the codes file (`src`), the first code (`lo`) and the table
     # of decoded values (f32, NaN at the nodata code), which an aligned
     # read applies itself (.gdal_read_decoded()). Empty = no decode.
-    decode = S7::new_property(S7::class_list, default = quote(list()))
+    decode = S7::new_property(S7::class_list, default = quote(list())),
+    # .gdal_stored() of the file, as the source's opener saw it. Empty =
+    # not opened: a given `grid` promises neither.
+    stored = S7::new_property(S7::class_list, default = quote(list()))
   ),
   validator = function(self) {
     if (length(self@nodata) > 1L) {
@@ -145,19 +160,21 @@ SourceNode <- S7::new_class(
 #'   Pure metadata: never read by the planner or executors; surfaced by
 #'   [plan_draw()] and [plan_view()].
 #' @param fn Elementwise R function.
+#' @param dtype Length-0 (the dtype `fn` was traced to return) or length-1
+#'   dtype named by the caller of [lazy_map()].
 #' @return A `MapNode`.
 #' @export
 MapNode <- S7::new_class(
   "MapNode",
   parent = Node,
   properties = list(
-    fn = S7::class_function
+    fn = S7::class_function,
+    dtype = S7::class_character
   )
 )
 
-#' Focal (stencil) op. `radius` is the halo in pixels; `boundary` is
-#' "nodata", the only policy: cells beyond the raster edge are NaN.
-#' Created by [focal_map()] and [focal_kernel()].
+#' Focal (stencil) op. `radius` is the halo in pixels; cells beyond the
+#' raster edge are NaN. Created by [focal_map()] and [focal_kernel()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).
@@ -167,7 +184,6 @@ MapNode <- S7::new_class(
 #'   [plan_draw()] and [plan_view()].
 #' @param fn Neighbourhood function (over the list of shifted arrays).
 #' @param radius Halo radius in pixels.
-#' @param boundary Boundary policy: `"nodata"`.
 #' @param weights Optional linear kernel, flattened row-major over
 #'   (dy, dx), length (2*radius+1)^2. When present the op is the
 #'   weighted sum and is differentiable wrt the weights.
@@ -179,13 +195,9 @@ FocalNode <- S7::new_class(
   properties = list(
     fn = S7::class_function,
     radius = S7::class_integer,
-    boundary = S7::class_character,
     weights = S7::class_numeric
   ),
   validator = function(self) {
-    if (!identical(self@boundary, "nodata")) {
-      return("`boundary` must be \"nodata\"")
-    }
     if (length(self@radius) != 1L || is.na(self@radius) || self@radius < 0L) {
       return("`radius` must be a single non-negative integer")
     }
@@ -376,29 +388,6 @@ StackNode <- S7::new_class(
   parent = Node,
   properties = list(
     along = S7::class_character
-  )
-)
-
-#' Output of the composition pass. Holds a composed R function assembled
-#' from its members; ready for `anvl::jit()` at execution time.
-#'
-#' @param id Integer node id (assigned by `graph_add()`).
-#' @param parents Integer ids of parent nodes (may be empty).
-#' @param grid Output `GridSpec` of this node.
-#' @param role Optional semantic role tag (e.g. "mask", set by [apply_mask()]).
-#'   Pure metadata: never read by the planner or executors; surfaced by
-#'   [plan_draw()] and [plan_view()].
-#' @param fn Composed stage function.
-#' @param members Ids of the absorbed nodes.
-#' @param halo Combined halo radius of the members.
-#' @return A `FusedNode`.
-FusedNode <- S7::new_class(
-  "FusedNode",
-  parent = Node,
-  properties = list(
-    fn = S7::class_function,
-    members = S7::class_integer, # ids of absorbed nodes
-    halo = S7::class_integer
   )
 )
 

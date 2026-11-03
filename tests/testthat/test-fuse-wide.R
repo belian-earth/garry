@@ -1,136 +1,49 @@
 # End-to-end gate for cost-mode fusion of a WIDE kernel (the PR5
 # pathway of design/placement-cost-pass.md): with capped readers and
 # placement = "cost", a coalesced multi-band MLP chain executes fused
-# on the read tasks — no chunk tasks of its own — and the result is
-# identical to the single-threaded oracle (which never fuses). This is
-# the correctness half of PR5; the wall-time half is the SI predict
-# benchmark.
+# on the read tasks, with no chunk tasks of its own, and the result is
+# the MLP's forward pass in plain R. This is the correctness half of
+# PR5; the wall-time half is the SI predict benchmark.
 
-skip_if(Sys.info()[["sysname"]] != "Linux", "affinity is Linux-only")
-skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
-skip_if(parallel::detectCores() < 5L, "reader cap is a no-op below 5 cores")
+# The fixture's bands as one stack.
+.fw_stack <- function(fx, bands = seq_len(fx$nb), g = graph_new()) {
+  lazy_stack(lapply(bands, function(b) lazy_source(fx$path, band = b, graph = g)), along = "band")
+}
 
-test_that("cost mode fuses a multi-band MLP chain onto capped readers", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  fx <- fixture_multiband()
-  g <- graph_new()
-  bands <- lapply(seq_len(fx$nb), function(b)
-    lazy_source(fx$path, band = b, graph = g))
-  st <- lazy_stack(bands, along = "band")
-  w1 <- matrix(runif(8L * fx$nb), 8L)
-  w2 <- matrix(runif(8L), 1L)
-  pred <- reduce_over(st, mlp_project(list(w1, w2),
-                                      list(rep(0, 8L), 0)),
-                      over = "band")
-  # a trailing spatial reduce keeps the predict chain in its own
-  # NON-SINK single-input compute stage (spatial reduces split into
-  # partial/combine stages); chunk-local consumers merge into the
-  # predict stage and ride the fusion with it
-  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"),
-                             nan_rm = TRUE))
+# One hidden layer `width` wide over `nb` bands. Fixed weights, so that a
+# failure replays.
+.fw_mlp <- function(width, nb) {
+  list(
+    weights = list(matrix(seq_len(width * nb) / 100, width), matrix(seq_len(width) / 10, 1L)),
+    biases = list(rep(0, width), 0)
+  )
+}
 
-  single <- execute_plan(p)
+.fw_predict <- function(st, m, ...) {
+  reduce_over(st, mlp_project(m$weights, m$biases, ...), over = "band")
+}
 
-  local_pools(4, 1, gdal_config = TRUE)
-  tlog <- tempfile(fileext = ".csv")
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.task_log = tlog)
-  on.exit(options(old), add = TRUE)
+# That forward pass in plain R, [y, x]: ReLU on the hidden layer.
+.fw_want <- function(fx, m, bands = seq_len(fx$nb)) {
+  h <- t(vapply(fx$vals[bands], as.numeric, numeric(fx$nx * fx$ny)))
+  h <- pmax(m$weights[[1L]] %*% h + m$biases[[1L]], 0)
+  matrix(m$weights[[2L]] %*% h + m$biases[[2L]], fx$ny, fx$nx)
+}
 
-  # the pass must have decided FUSE for the MLP chain under this
-  # topology (capped readers recorded by garry_daemons)
-  tab <- garry_explain_placement(p)
-  mlp <- tab[tab$bands > 1L, ]
-  expect_identical(mlp$decision, "fuse")
+# A trailing spatial reduce keeps the predict chain in its own NON-SINK
+# single-input compute stage (spatial reduces split into partial/combine
+# stages); chunk-local consumers merge into the predict stage and ride the
+# fusion with it.
+.fw_chain <- function(fx, m) {
+  plan_lazy(reduce_over(.fw_predict(.fw_stack(fx), m) * 2, "mean", c("x", "y"), nan_rm = TRUE))
+}
 
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist, single, tolerance = 1e-12)
-
-  # fused: the MLP stage ran on its read tasks, no chunk tasks of its own
-  tl <- read.csv(tlog)
-  expect_false(any(grepl(sprintf("^s%d_c", mlp$compute), tl$key)))
-})
-
-test_that("a SINK-shaped MLP predict fuses and streams (the SI shape)", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  # The SI predict collect: per-embedding predictions are multi-export
-  # SINKS. Under cost mode they fuse onto the readers and the streaming
-  # writers pull each sink chunk out of its source's read task.
-  fx <- fixture_multiband()
-  g <- graph_new()
-  mk_pred <- function(w_out) {
-    bands <- lapply(seq_len(fx$nb), function(b)
-      lazy_source(fx$path, band = b, graph = g))
-    st <- lazy_stack(bands, along = "band")
-    w1 <- matrix(runif(w_out * fx$nb), w_out)
-    w2 <- matrix(runif(w_out), 1L)
-    reduce_over(st, mlp_project(list(w1, w2), list(rep(0, w_out), 0)),
-                over = "band")
-  }
-  sinks <- list(p8 = mk_pred(8L), p16 = mk_pred(16L))
-  p <- plan_lazy(sinks)
-
-  single <- execute_plan(p)
-
-  local_pools(4, 1, gdal_config = TRUE)
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  tab <- garry_explain_placement(p)
-  expect_true(all(tab$decision == "fuse"))
-
-  # in-memory retrieval from the fused read tasks
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist$p8, single$p8, tolerance = 1e-12)
-  expect_equal(dist$p16, single$p16, tolerance = 1e-12)
-
-  # streamed writes from the fused read tasks
-  d <- withr::local_tempdir()
-  execute_plan_mirai(p, path = d)
-  for (nm in names(sinks)) {
-    got <- gdal_read_window(file.path(d, paste0(nm, ".tif")), 1L, 0, 0,
-                            ncol(single[[nm]]), nrow(single[[nm]]))
-    expect_equal(got, single[[nm]], tolerance = 1e-6, label = nm)
-  }
-})
-
-test_that("a QA-gated predict (QA as last plane) fuses and matches (the ESD shape)", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  # hutan predict_mlp_lazy's new shape: features + QA in ONE cube, the
-  # gate inside mlp_project — single-input, so the big arm can fuse.
-  fx <- fixture_multiband()
-  g <- graph_new()
-  nfe <- fx$nb - 1L
-  feats <- lapply(seq_len(nfe), function(b)
-    lazy_source(fx$path, band = b, graph = g))
-  qa <- lazy_source(fx$path, band = fx$nb, graph = g)
-  cube <- lazy_stack(c(feats, list(qa)), along = "band")
-  w1 <- matrix(runif(8L * nfe), 8L)
-  w2 <- matrix(runif(8L), 1L)
-  pred <- reduce_over(cube,
-                      mlp_project(list(w1, w2), list(rep(0, 8L), 0),
-                                  qa_plane = nfe + 1L, qa_floor = 500),
-                      over = "band")
-  p <- plan_lazy(list(pred = pred))
-
-  single <- execute_plan(p)
-  expect_true(any(is.na(single)))       # the floor gates something
-  expect_false(all(is.na(single)))
-
-  local_pools(4, 1, gdal_config = TRUE)
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  tab <- garry_explain_placement(p)
-  expect_identical(tab$decision, "fuse")
-  expect_identical(tab$bands, as.integer(fx$nb))
-
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist, single, tolerance = 1e-12)
-})
+# Cost mode in the caller's frame. RAM is fixed at plenty, so that what a test
+# asserts is the pass and not the host's free memory.
+.fw_cost <- function(..., env = parent.frame()) {
+  withr::local_options(garry.placement = "cost", ..., .local_envir = env)
+  testthat::local_mocked_bindings(.garry_ram_avail_mb = function() 1e6, .package = "garry", .env = env)
+}
 
 # -- tiled fused kernels ------------------------------------------------------
 
@@ -160,138 +73,72 @@ test_that(".apply_fuse_tiled equals one whole-window call", {
   expect_equal(tiled3, whole3, tolerance = 1e-6)
 })
 
-test_that("placement tiles a wide pointwise chain and the fused run matches", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
+test_that("tiling lets a window over .fuse_reader_mb fuse instead of materialising", {
   fx <- fixture_multiband()
-  g <- graph_new()
-  bands <- lapply(seq_len(fx$nb), function(b)
-    lazy_source(fx$path, band = b, graph = g))
-  st <- lazy_stack(bands, along = "band")
-  w1 <- matrix(runif(8L * fx$nb), 8L)
-  w2 <- matrix(runif(8L), 1L)
-  pred <- reduce_over(st, mlp_project(list(w1, w2),
-                                      list(rep(0, 8L), 0)),
-                      over = "band")
-  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"),
-                             nan_rm = TRUE))
-  single <- execute_plan(p)
-
-  local_pools(4, 1, gdal_config = TRUE)
-  # a tiny per-call activation budget forces several row tiles
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.fuse_tile_mb = 1e-4)
-  on.exit(options(old), add = TRUE)
-  tab <- garry_explain_placement(p)
-  mlp <- tab[tab$bands > 1L, ]
-  expect_identical(mlp$decision, "fuse")
-  expect_true("tiles" %in% names(tab))
-  expect_gt(mlp$tiles, 1L)
-
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist, single, tolerance = 1e-12)
-
-  # with the default budget the same small window is one tile
-  options(garry.fuse_tile_mb = 512)
-  tab1 <- garry_explain_placement(p)
-  expect_identical(tab1[tab1$bands > 1L, ]$tiles, 1L)
-})
-
-test_that("tiling lets a window over fuse_reader_mb fuse instead of materialising", {
-  fx <- fixture_multiband()
-  g <- graph_new()
-  bands <- lapply(seq_len(fx$nb), function(b)
-    lazy_source(fx$path, band = b, graph = g))
-  st <- lazy_stack(bands, along = "band")
-  w1 <- matrix(runif(8L * fx$nb), 8L)
-  w2 <- matrix(runif(8L), 1L)
-  pred <- reduce_over(st, mlp_project(list(w1, w2),
-                                      list(rep(0, 8L), 0)),
-                      over = "band")
-  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"),
-                             nan_rm = TRUE))
+  p <- .fw_chain(fx, .fw_mlp(8L, fx$nb))
   # reader budget below the whole-window working set but above the
   # input window: untiled it must materialise, tiled it fuses
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.fuse_tile_mb = getOption("garry.fuse_tile_mb"),
-                 garry.fuse_reader_mb = getOption("garry.fuse_reader_mb"))
-  on.exit(options(old), add = TRUE)
+  .fw_cost(garry.chunk_target_px = 400)
   tab0 <- garry_explain_placement(p, read = 4L, compute = 1L)
   cid <- tab0[tab0$bands > 1L, ]$compute
   C <- p@stages[[cid]]; S <- p@stages[[C@inputs[[1L]]]]
   win_px <- prod(pmin(as.numeric(S@chunks@chunk_dim),
                       as.numeric(S@grid@dims[c("x", "y")])))
   win_rows <- min(S@chunks@chunk_dim[[2L]], S@grid@dims[["y"]])
-  options(garry.fuse_tile_mb = 1e9)
+  withr::local_options(garry.ram_budget_mb = 1e9)
   whole <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
-  options(garry.fuse_tile_mb = whole$act_mb / 8)
+  withr::local_options(garry.ram_budget_mb = whole$act_mb / 8)
   tiled <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
   expect_gte(tiled$tiles, 8L)
   expect_lt(tiled$ws_mb, whole$ws_mb)
   # a reader budget between the tiled and the whole working set
-  options(garry.fuse_reader_mb = (tiled$ws_mb + whole$ws_mb) / 2)
-  options(garry.fuse_tile_mb = 1e9)
+  testthat::local_mocked_bindings(.fuse_reader_mb = (tiled$ws_mb + whole$ws_mb) / 2)
+  withr::local_options(garry.ram_budget_mb = 1e9)
   t_un <- garry_explain_placement(p, read = 4L, compute = 1L)
   expect_identical(t_un[t_un$bands > 1L, ]$decision, "comp")
-  options(garry.fuse_tile_mb = whole$act_mb / 8)
+  withr::local_options(garry.ram_budget_mb = whole$act_mb / 8)
   t_ti <- garry_explain_placement(p, read = 4L, compute = 1L)
   expect_identical(t_ti[t_ti$bands > 1L, ]$decision, "fuse")
 })
 
 test_that(".fuse_tiles keeps a halo chain whole and prices input plus activations", {
   fx <- fixture_multiband()
-  g <- graph_new()
-  bands <- lapply(seq_len(fx$nb), function(b)
-    lazy_source(fx$path, band = b, graph = g))
-  st <- lazy_stack(bands, along = "band")
-  w1 <- matrix(runif(8L * fx$nb), 8L); w2 <- matrix(runif(8L), 1L)
-  pred <- reduce_over(st, mlp_project(list(w1, w2), list(rep(0, 8L), 0)),
-                      over = "band")
-  p <- plan_lazy(reduce_over(pred * 2, "mean", c("x", "y"), nan_rm = TRUE))
-  old <- options(garry.placement = "cost", garry.chunk_target_px = 400,
-                 garry.fuse_tile_mb = 1e-4)
-  on.exit(options(old), add = TRUE)
+  p <- .fw_chain(fx, .fw_mlp(8L, fx$nb))
+  .fw_cost(garry.chunk_target_px = 400, garry.ram_budget_mb = 1e-4)
   tab <- garry_explain_placement(p, read = 4L, compute = 1L)
   C <- p@stages[[tab[tab$bands > 1L, ]$compute]]
-  S <- p@stages[[C@inputs[[1L]]]]
-  win_px <- prod(pmin(as.numeric(S@chunks@chunk_dim),
-                      as.numeric(S@grid@dims[c("x", "y")])))
-  win_rows <- min(S@chunks@chunk_dim[[2L]], S@grid@dims[["y"]])
-  tl <- garry:::.fuse_tiles(p@graph, C, win_px, win_rows, fx$nb)
+  win_px <- 60 * 40
+  tl <- garry:::.fuse_tiles(p@graph, C, win_px, 40L, fx$nb)
   expect_gt(tl$tiles, 1L)
   # a halo (or out_pad) chain is not tileable: whole window, full activations
   Ch <- C; Ch@halo <- 1L
-  th <- garry:::.fuse_tiles(p@graph, Ch, win_px, win_rows, fx$nb)
+  th <- garry:::.fuse_tiles(p@graph, Ch, win_px, 40L, fx$nb)
   expect_identical(th$tiles, 1L)
   expect_equal(th$ws_mb, th$in_mb + th$act_mb)
   Cp <- C; Cp@out_pad <- 1L
-  expect_identical(garry:::.fuse_tiles(p@graph, Cp, win_px, win_rows, fx$nb)$tiles, 1L)
-  # the input term is host buffer + device copy; activations exclude the copy
-  act_px <- garry:::.stage_fuse_act_bytes_px(p@graph, C@members, fx$nb)
-  expect_equal(tl$in_mb, win_px * 12 * fx$nb / 2^20)
-  expect_equal(tl$act_mb, win_px * (act_px - 4 * fx$nb) / 2^20)
+  expect_identical(garry:::.fuse_tiles(p@graph, Cp, win_px, 40L, fx$nb)$tiles, 1L)
+  # The input term is 8 bytes of host buffer + 4 of device copy on each of
+  # 6 bands. Activations leave the copy out: 4 bytes on the hidden layer's
+  # 8 planes and on the 8 its matmul holds.
+  expect_equal(tl$in_mb, 2400 * 72 / 2^20)
+  expect_equal(tl$act_mb, 2400 * 64 / 2^20)
 })
 
 # -- seal at a fanned-out reduce ----------------------------------------------
 
+.fw_fan <- function(fx) .fw_predict(.fw_stack(fx), .fw_mlp(8L, fx$nb))
+
 test_that("a fanned-out band reduce fed by a source keeps its own single-export stage", {
   fx <- fixture_multiband()
-  mk <- function() {
-    g <- graph_new()
-    bands <- lapply(seq_len(fx$nb), function(b)
-      lazy_source(fx$path, band = b, graph = g))
-    st <- lazy_stack(bands, along = "band")
-    w1 <- matrix(seq_len(8L * fx$nb) / 100, 8L); w2 <- matrix(seq_len(8L) / 10, 1L)
-    reduce_over(st, mlp_project(list(w1, w2), list(rep(0, 8L), 0)), over = "band")
+  withr::local_options(garry.placement = "cost")
+  own_stage <- function(p, pred) {
+    Filter(function(s) s@kind == "compute" && pred@node_id %in% s@members, p@stages)
   }
-  old <- options(garry.placement = "cost")
-  on.exit(options(old), add = TRUE)
-  pred <- mk()
+  pred <- .fw_fan(fx)
   x <- list(a = pred * 2, b = pred + 1,
             c = lazy_map(pred, fn = function(v) sqrt(abs(v)), dtype = "f32"))
   p <- plan_lazy(x)
-  own <- Filter(function(s) s@kind == "compute" && pred@node_id %in% s@members,
-                p@stages)
+  own <- own_stage(p, pred)
   expect_length(own, 1L)
   expect_identical(own[[1L]]@exports, pred@node_id)     # single export
   expect_identical(own[[1L]]@members, pred@node_id)     # consumers cut off
@@ -299,28 +146,127 @@ test_that("a fanned-out band reduce fed by a source keeps its own single-export 
                  p@stages)
   expect_length(down, 1L)                               # one downstream stage
   expect_identical(sort(down[[1L]]@exports), sort(unname(p@sinks)))
-  # it is a compute-on-read candidate and fuses on a capped pool
-  single <- execute_plan(p)
-  local_pools(4, 1, gdal_config = TRUE)
-  tab <- garry_explain_placement(p)
-  expect_identical(tab$compute, own[[1L]]@id)
-  expect_identical(tab$decision, "fuse")
-  # and the distributed run matches single-process
-  dist <- execute_plan_mirai(p)
-  for (nm in names(x)) expect_equal(dist[[nm]], single[[nm]], tolerance = 1e-6)
+  # a plan worth merging keeps the seal: small chunks clear .merge_worth()
+  withr::with_options(list(garry.chunk_target_px = 4L), {
+    expect_identical(own_stage(plan_lazy(x), pred)[[1L]]@members, pred@node_id)
+  })
 
   # ONE consumer: no seal, the map fuses into the reduce's stage as before
-  pred1 <- mk()
-  p1 <- plan_lazy(pred1 * 2)
-  own1 <- Filter(function(s) s@kind == "compute" && pred1@node_id %in% s@members,
-                 p1@stages)
-  expect_gt(length(own1[[1L]]@members), 1L)
+  pred1 <- .fw_fan(fx)
+  expect_gt(length(own_stage(plan_lazy(pred1 * 2), pred1)[[1L]]@members), 1L)
 
   # rules placement: no seal
-  options(garry.placement = "rules")
-  pred2 <- mk()
+  withr::local_options(garry.placement = "rules")
+  pred2 <- .fw_fan(fx)
   p2 <- plan_lazy(list(a = pred2 * 2, b = pred2 + 1))
-  own2 <- Filter(function(s) s@kind == "compute" && pred2@node_id %in% s@members,
-                 p2@stages)
-  expect_gt(length(own2[[1L]]@members), 1L)
+  expect_gt(length(own_stage(p2, pred2)[[1L]]@members), 1L)
+})
+
+# A skip here ends the file, so this block stays last.
+local({
+  skip_if(Sys.info()[["sysname"]] != "Linux", "affinity is Linux-only")
+  skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
+  skip_if(parallel::detectCores() < 3L, "a reader cap is a no-op below 3 cores")
+
+  local_pools(4, 1, gdal_config = TRUE)
+
+  test_that("cost mode fuses a multi-band MLP chain onto capped readers, tiled or not", {
+    fx <- fixture_multiband()
+    m <- .fw_mlp(8L, fx$nb)
+    p <- .fw_chain(fx, m)
+    want <- mean(.fw_want(fx, m) * 2)
+    tlog <- withr::local_tempfile(fileext = ".csv")
+    .fw_cost(garry.chunk_target_px = 400, garry.task_log = tlog)
+
+    # the pass must have decided FUSE for the MLP chain under this
+    # topology (capped readers recorded by garry_daemons), at one tile
+    # for so small a window
+    tab <- garry_explain_placement(p)
+    mlp <- tab[tab$bands > 1L, ]
+    expect_identical(mlp$decision, "fuse")
+    expect_identical(mlp$tiles, 1L)
+    expect_equal(execute_plan_mirai(p), want, tolerance = 1e-5)
+
+    # fused: the MLP stage ran on its read tasks, no chunk tasks of its own
+    keys <- read.csv(tlog)$key
+    expect_true(any(startsWith(keys, sprintf("s%d_", mlp$source))))
+    expect_false(any(startsWith(keys, sprintf("s%d_", mlp$compute))))
+
+    # a tiny per-call activation budget forces several row tiles
+    # (the plan is built, so this only reaches the per-call budget)
+    withr::local_options(garry.ram_budget_mb = 1e-4)
+    tab <- garry_explain_placement(p)
+    mlp <- tab[tab$bands > 1L, ]
+    expect_identical(mlp$decision, "fuse")
+    expect_gt(mlp$tiles, 1L)
+    expect_equal(execute_plan_mirai(p), want, tolerance = 1e-5)
+  })
+
+  test_that("a SINK-shaped MLP predict fuses and streams (the SI shape)", {
+    # The SI predict collect: per-embedding predictions are multi-export
+    # SINKS. Under cost mode they fuse onto the readers and the streaming
+    # writers pull each sink chunk out of its source's read task.
+    fx <- fixture_multiband()
+    g <- graph_new()
+    mlps <- list(p8 = .fw_mlp(8L, fx$nb), p16 = .fw_mlp(16L, fx$nb))
+    sinks <- lapply(mlps, function(m) .fw_predict(.fw_stack(fx, g = g), m))
+    p <- plan_lazy(sinks)
+    want <- lapply(mlps, function(m) .fw_want(fx, m))
+
+    .fw_cost(garry.chunk_target_px = 400)
+    tab <- garry_explain_placement(p)
+    expect_true(all(tab$decision == "fuse"))
+
+    # in-memory retrieval from the fused read tasks
+    dist <- execute_plan_mirai(p)
+    expect_equal(dist$p8, want$p8, tolerance = 1e-5)
+    expect_equal(dist$p16, want$p16, tolerance = 1e-5)
+
+    # streamed writes from the fused read tasks
+    d <- withr::local_tempdir()
+    execute_plan_mirai(p, path = d)
+    for (nm in names(sinks)) {
+      got <- gdal_read_window(file.path(d, paste0(nm, ".tif")), 1L, 0, 0, fx$nx, fx$ny)
+      expect_equal(got, want[[nm]], tolerance = 1e-5, label = nm)
+    }
+  })
+
+  test_that("a QA-gated predict (QA as last plane) fuses and matches (the ESD shape)", {
+    # hutan predict_mlp_lazy's new shape: features + QA in ONE cube, the
+    # gate inside mlp_project: single-input, so the big arm can fuse.
+    fx <- fixture_multiband()
+    feats <- seq_len(fx$nb - 1L)
+    m <- .fw_mlp(8L, length(feats))
+    pred <- .fw_predict(.fw_stack(fx), m, qa_plane = fx$nb, qa_floor = 500)
+    p <- plan_lazy(list(pred = pred))
+    want <- .fw_want(fx, m, feats)
+    gated <- fx$vals[[fx$nb]] < 500
+    want[gated] <- NaN
+    expect_true(any(gated))       # the floor gates something
+    expect_false(all(gated))
+
+    .fw_cost(garry.chunk_target_px = 400)
+    tab <- garry_explain_placement(p)
+    expect_identical(tab$decision, "fuse")
+    expect_identical(tab$bands, as.integer(fx$nb))
+
+    expect_equal(execute_plan_mirai(p), want, tolerance = 1e-5)
+  })
+
+  test_that("a fanned-out band reduce fuses on a capped pool and matches", {
+    fx <- fixture_multiband()
+    .fw_cost()
+    pred <- .fw_fan(fx)
+    x <- list(a = pred * 2, b = pred + 1,
+              c = lazy_map(pred, fn = function(v) sqrt(abs(v)), dtype = "f32"))
+    p <- plan_lazy(x)
+    own <- Filter(function(s) s@kind == "compute" && pred@node_id %in% s@members, p@stages)
+    tab <- garry_explain_placement(p)
+    expect_identical(tab$compute, own[[1L]]@id)
+    expect_identical(tab$decision, "fuse")
+    v <- .fw_want(fx, .fw_mlp(8L, fx$nb))
+    want <- list(a = v * 2, b = v + 1, c = sqrt(abs(v)))
+    dist <- execute_plan_mirai(p)
+    for (nm in names(x)) expect_equal(dist[[nm]], want[[nm]], tolerance = 1e-5)
+  })
 })

@@ -4,14 +4,12 @@
 \alias{fill_gaps}
 \title{Fill nodata gaps along the time axis.}
 \usage{
-fill_gaps(x, method = c("ffill", "bfill", "linear"), over = "t")
+fill_gaps(x, method = c("ffill", "bfill", "linear"))
 }
 \arguments{
 \item{x}{A \code{LazyRaster} with a \code{t} dim, or a \code{LazyDataset}.}
 
 \item{method}{\code{"ffill"}, \code{"bfill"} or \code{"linear"}.}
-
-\item{over}{Axis to fill along (only \code{"t"} is meaningful today).}
 }
 \value{
 The filled object, same class as \code{x}.

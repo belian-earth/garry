@@ -22,7 +22,7 @@ test_that("different reference systems are unequal", {
 })
 
 test_that("garbage CRS errors at construction", {
-  expect_error(grid_spec("not-a-crs", c(0, 0, 1, 1), c(2L, 2L)))
+  expect_error(grid_spec("not-a-crs", c(0, 0, 1, 1), c(2L, 2L)), "cannot interpret CRS")
 })
 
 test_that("geometry differences are caught with equal CRS", {

@@ -6,9 +6,12 @@ bbox_png <- c(144.13, -7.725, 144.47, -7.475)
 
 test_that("grid_from_bbox defaults to a centred equal-area grid", {
   g <- grid_from_bbox(bbox_png, res = 30)
-  expect_true(S7::S7_inherits(g, GridSpec))
   expect_match(g@crs, "Lambert_Azimuthal_Equal_Area")   # LAEA, not UTM
   expect_identical(g@dtype, "f32")
+  # the projection's origin is the AOI's midpoint
+  mid <- cbind(mean(bbox_png[c(1, 3)]), mean(bbox_png[c(2, 4)]))
+  expect_equal(gdalraster::transform_xy(mid, "EPSG:4326", g@crs)[1, 1:2], c(0, 0),
+               tolerance = 1e-6)
   # extent snapped: spans are exact multiples of res, matching integer dims
   expect_equal((g@extent[3] - g@extent[1]) / 30, unname(g@dims[["x"]]))
   expect_equal((g@extent[4] - g@extent[2]) / 30, unname(g@dims[["y"]]))

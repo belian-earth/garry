@@ -95,7 +95,13 @@ NULL
 
 S7::method(names, LazyDataset) <- function(x) names(x@bands)
 S7::method(length, LazyDataset) <- function(x) length(x@bands)
-S7::method(`$`, LazyDataset) <- function(x, name) x[[name]]
+
+# Plain S3 registration, not S7::method(): `S7::method(`$`, ...) <- f` is a
+# complex assignment, so it binds `$` in the namespace. codetools handles `$`
+# only when it is base's, and walks every `x$name` in the package otherwise,
+# which R CMD check reports as thousands of undefined globals.
+#' @rawNamespace S3method("$", "garry::LazyDataset", .lazy_dataset_dollar)
+.lazy_dataset_dollar <- function(x, name) x[[name]]
 
 # Plain S3 registration, as for `[[<-` (see .lazy_dataset_assign).
 #' @rawNamespace S3method("$<-", "garry::LazyDataset", .lazy_dataset_dollar_assign)

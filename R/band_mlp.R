@@ -105,7 +105,7 @@ mlp_project <- function(
   }
   # QA gating inside the kernel (rather than a separate gate chain):
   # the QA plane rides as the LAST plane of the input cube, so the
-  # whole predict consumes ONE coalesced multi-band read — the shape
+  # whole predict consumes ONE coalesced multi-band read: the shape
   # that keeps the chain single-input and therefore fusable onto the
   # read daemons (design/placement-cost-pass.md). Gating the OUTPUT is
   # equivalent to the upstream feature gate: the gate depends only on

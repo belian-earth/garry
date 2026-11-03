@@ -56,7 +56,6 @@ NULL
 #'   `"2023-06-01"` or `"2023-06-01 12:00:00"`). A date without a
 #'   time covers that whole day, so `end_date = "2023-12-31"` includes
 #'   acquisitions made on the 31st.
-#' @param limit Page size requested from the API.
 #' @return An rstac `doc_items` object.
 #' @seealso [stac_sign_mpc()], [stac_sources()], and [lazy_dataset()] as
 #'   the usual next steps.
@@ -67,8 +66,7 @@ stac_query <- function(
   stac_source,
   collection,
   start_date,
-  end_date,
-  limit = 999
+  end_date
 ) {
   .require_rstac()
   .check_bbox(bbox)
@@ -85,7 +83,7 @@ stac_query <- function(
     collections = collection,
     bbox = bbox,
     datetime = datetime,
-    limit = limit
+    limit = 999
   )
   # some APIs accept only POST searches; when that fails too, report both
   res <- tryCatch(rstac::get_request(search), error = function(get_err) {
@@ -116,23 +114,25 @@ stac_query <- function(
 #' expires (`msft:expiry`) -- one request per collection instead of one per item.
 #' Use it in place of `rstac::items_sign()` after [stac_query()].
 #'
+#' An MPC subscription key, not required for public data, is read from
+#' the `MPC_TOKEN` environment variable, here and whenever a long run
+#' re-signs an expiring href.
+#'
 #' @param items An rstac `doc_items` from [stac_query()].
-#' @param subscription_key Optional MPC subscription key (defaults to the
-#'   `MPC_TOKEN` environment variable). Not required for public data.
 #' @return `items` with every asset href signed.
 #' @family stac helpers
 #' @export
-stac_sign_mpc <- function(
-  items,
-  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA)
-) {
+stac_sign_mpc <- function(items) {
   .require_rstac()
   rlang::check_installed(
     "httr2",
     reason = "to request Planetary Computer tokens."
   )
   if (!length(items$features)) {
-    cli::cli_warn("No STAC items to sign.")
+    cli::cli_warn(
+      "No STAC items to sign.",
+      class = c("garry_stac_warning", "garry_warning")
+    )
     return(items)
   }
   colls <- vapply(items$features, function(f) f$collection %||% NA_character_, "")
@@ -143,7 +143,7 @@ stac_sign_mpc <- function(
   }
   # one token per collection: merged collections (HLS L30 + S30) live in
   # different storage containers
-  tokens <- lapply(stats::setNames(nm = unique(colls)), .mpc_token, subscription_key)
+  tokens <- lapply(stats::setNames(nm = unique(colls)), .mpc_token)
   items$features <- lapply(items$features, function(f) {
     token <- tokens[[f$collection]]
     f$assets <- lapply(f$assets, function(a) {
@@ -190,20 +190,21 @@ stac_sign_mpc <- function(
 }
 
 # Dispatch-time re-signing hook (io review R4). Hrefs are signed once at
-# discovery, so a run outliving its SAS token collects 403s — which are
-# not retriable — as aborts or holes. When a stored MPC blob URL's
+# discovery, so a run outliving its SAS token collects 403s, which are
+# not retriable, as aborts. When a stored MPC blob URL's
 # embedded token is within `margin` seconds of expiry, swap the query
 # string for a fresh cached account/container token (the MPC sas
 # endpoint accepts token/<account>/<container> as well as
 # token/<collection>; `.mpc_token`'s memory+disk cache and expiry logic
 # apply unchanged, so this is one request per container per token
 # lifetime, not a signing storm). Non-MPC, unsigned or unparseable URLs
-# pass through untouched; so do failures (the read retry / read_fail
-# contract still applies downstream).
+# pass through untouched. A token request that fails warns, once a
+# container, while the old URL lasts, and aborts once it has expired.
 .mpc_resign <- function(url, margin = 600) {
   if (!is.character(url) || !length(url)) {
     return(url)
   }
+  failed <- character(0) # containers whose token request failed
   vapply(
     url,
     function(u) {
@@ -225,12 +226,17 @@ stac_sign_mpc <- function(
       if (is.na(se) || se - margin > as.numeric(Sys.time())) {
         return(u)
       }
+      container <- paste0(parts[[3L]], "/", parts[[4L]])
+      if (container %in% failed && se > as.numeric(Sys.time())) {
+        return(u)
+      }
       # the cached token must outlive the same margin, or the "fresh"
       # URL carries one about to expire
-      tok <- tryCatch(
-        .mpc_token(paste0(parts[[3L]], "/", parts[[4L]]), margin = margin),
-        error = function(e) NULL
-      )
+      tok <- tryCatch(.mpc_token(container, margin = margin), error = function(e) {
+        .mpc_resign_failed(container, se, conditionMessage(e))
+        failed <<- c(failed, container)
+        NULL
+      })
       if (is.null(tok)) {
         return(u)
       }
@@ -241,22 +247,46 @@ stac_sign_mpc <- function(
   )
 }
 
+.mpc_resign_failed <- function(container, expiry, why) {
+  if (expiry > as.numeric(Sys.time())) {
+    cli::cli_warn(
+      c(
+        "could not refresh the Planetary Computer token for {.val {container}}; its current one expires soon.",
+        "x" = "{why}"
+      ),
+      class = c("garry_read_warning", "garry_warning")
+    )
+    return(invisible(NULL))
+  }
+  cli::cli_abort(
+    c(
+      "the Planetary Computer token for {.val {container}} has expired, and a new one could not be had.",
+      "x" = "{why}",
+      "i" = "Sign the items again with {.fn stac_sign_mpc}."
+    ),
+    class = c("garry_read_error", "garry_error"),
+    call = NULL
+  )
+}
+
 # The collection SAS token: memory cache, then disk cache, then a fresh request
 # (saved to both). Reused until msft:expiry.
-.mpc_token <- function(
-  collection,
-  subscription_key = Sys.getenv("MPC_TOKEN", unset = NA),
-  margin = 0
-) {
+.mpc_token <- function(collection, margin = 0) {
   hit <- .mpc_token_lookup(collection, margin)
   if (!is.null(hit)) {
     return(hit)
   }
+  # a re-sign reaches here at run time, past stac_sign_mpc()'s own check
+  rlang::check_installed(
+    "httr2",
+    reason = "to request Planetary Computer tokens."
+  )
   url <- paste0(
     "https://planetarycomputer.microsoft.com/api/sas/v1/token/",
     collection
   )
   req <- httr2::req_headers(httr2::request(url), Accept = "application/json")
+  subscription_key <- Sys.getenv("MPC_TOKEN", unset = NA)
   if (!is.na(subscription_key)) {
     req <- httr2::req_headers(
       req,
@@ -267,14 +297,36 @@ stac_sign_mpc <- function(
   req <- httr2::req_retry(req, max_tries = 5)
   tok <- httr2::resp_body_json(httr2::req_perform(req))
   assign(collection, tok, envir = .mpc_token_cache)
-  # daemons share the file: write beside it, then rename into place
-  f <- .mpc_token_file(collection)
-  tmp <- tempfile("tok-", tmpdir = dirname(f), fileext = ".rds")
-  saveRDS(tok, tmp)
-  if (!file.rename(tmp, f)) {
-    unlink(tmp)
-  }
+  .cache_save(tok, .mpc_token_file(collection), "the MPC token")
   tok$token
+}
+
+# Write a cache file beside its target, then rename it into place, so a
+# concurrent reader never meets a partial file. The value is already in
+# hand, so a cache that cannot be written warns and costs a later lookup.
+.cache_save <- function(x, f, what) {
+  tmp <- tempfile("cache-", tmpdir = dirname(f), fileext = ".rds")
+  on.exit(unlink(tmp), add = TRUE)
+  why <- tryCatch(
+    {
+      saveRDS(x, tmp)
+      file.rename(tmp, f)
+      NULL
+    },
+    error = function(e) conditionMessage(e),
+    warning = function(w) conditionMessage(w)
+  )
+  if (!is.null(why)) {
+    cli::cli_warn(
+      c(
+        "cannot cache {what} in {.path {dirname(f)}}.",
+        "x" = "{why}",
+        "i" = "Make it writable, or set {.envvar R_USER_CACHE_DIR}."
+      ),
+      class = c("garry_cache_warning", "garry_warning")
+    )
+  }
+  invisible(NULL)
 }
 
 # The valid token string from the memory or disk cache, or NULL. Expired entries
@@ -335,6 +387,16 @@ stac_sign_mpc <- function(
   invisible(b)
 }
 
+# A STAC item's date: a range-only item (datetime null) has its start.
+.item_datetime <- function(item) {
+  item$properties$datetime %||% item$properties$start_datetime
+}
+
+# Every asset name a set of STAC items carries.
+.stac_asset_names <- function(features) {
+  unique(unlist(lapply(features, function(ft) names(ft$assets))))
+}
+
 #' Rectangularise STAC items into a source table.
 #'
 #' One row per item x asset. The result is a plain data frame: the
@@ -357,6 +419,7 @@ stac_sources <- function(items, assets = NULL) {
   if (!length(feats)) {
     cli::cli_abort("{.arg items} has no features.")
   }
+  .stac_warn_missing(assets, .stac_asset_names(feats))
   rows <- lapply(seq_along(feats), function(i) {
     ft <- feats[[i]]
     bb <- suppressWarnings(as.numeric(unlist(ft$bbox)))
@@ -384,10 +447,7 @@ stac_sources <- function(items, assets = NULL) {
       item_id = ft$id %||% NA_character_,
       asset = anames,
       location = vapply(hrefs, .gdal_href, character(1), USE.NAMES = FALSE),
-      # a range-only item (datetime null) is dated by its start
-      datetime = ft$properties$datetime %||%
-        ft$properties$start_datetime %||%
-        NA_character_,
+      datetime = .item_datetime(ft) %||% NA_character_,
       cloud_cover = if (is.null(cc)) NA_real_ else as.numeric(cc),
       xmin = ft$bbox[[1L]],
       ymin = ft$bbox[[2L]],
@@ -398,7 +458,7 @@ stac_sources <- function(items, assets = NULL) {
   })
   out <- do.call(rbind, rows)
   if (is.null(out)) {
-    have <- unique(unlist(lapply(feats, function(f) names(f$assets))))
+    have <- .stac_asset_names(feats)
     cli::cli_abort(c(
       "no STAC item carries the requested asset{?s} {.val {assets}}.",
       "i" = "Assets in these items: {.val {have}}."
@@ -407,7 +467,8 @@ stac_sources <- function(items, assets = NULL) {
   undated <- is.na(out$datetime)
   if (any(undated)) {
     cli::cli_warn(
-      "dropping {length(unique(out$item_id[undated]))} item{?s} with no datetime or start_datetime."
+      "dropping {length(unique(out$item_id[undated]))} item{?s} with no datetime or start_datetime.",
+      class = c("garry_stac_warning", "garry_warning")
     )
     out <- out[!undated, , drop = FALSE]
   }
@@ -526,15 +587,7 @@ stac_filter_orbit <- function(
 stac_filter_assets <- function(sources, assets) {
   if (inherits(sources, "doc_items")) {
     .require_rstac()
-    present <- unique(unlist(lapply(sources$features, function(ft) {
-      names(ft$assets)
-    })))
-    miss <- setdiff(assets, present)
-    if (length(miss)) {
-      cli::cli_warn(
-        "asset{?s} not present in any item (ignored): {.val {miss}}"
-      )
-    }
+    .stac_warn_missing(assets, .stac_asset_names(sources$features))
     sources$features <- Filter(
       function(ft) length(ft$assets) > 0L,
       lapply(sources$features, function(ft) {
@@ -544,14 +597,29 @@ stac_filter_assets <- function(sources, assets) {
     )
     return(sources)
   }
+  .stac_warn_missing(assets, sources$asset)
   sources[sources$asset %in% assets, , drop = FALSE]
+}
+
+# Assets asked for that nothing holds: a typo drops a band here, and
+# fails much later as a missing band.
+.stac_warn_missing <- function(assets, held) {
+  miss <- setdiff(assets, held)
+  if (length(miss)) {
+    cli::cli_warn(
+      "asset{?s} not present in any item (ignored): {.val {miss}}",
+      class = c("garry_stac_warning", "garry_warning")
+    )
+  }
+  invisible(NULL)
 }
 
 #' Drop duplicate acquisitions (identical footprint and datetime).
 #'
 #' Duplicate items are a known Planetary Computer quirk; equality uses
 #' the footprint rounded to 4 decimal places plus the datetime, per
-#' asset.
+#' asset. A range-only item (no `datetime`) is dated by its
+#' `start_datetime`, as in [stac_sources()].
 #'
 #' @param sources A STAC `doc_items` or a `stac_sources()` data frame.
 #' @return The deduplicated `doc_items` / data frame.
@@ -565,7 +633,7 @@ stac_drop_duplicates <- function(sources) {
       function(x) {
         paste(
           x$properties$platform %||% "",
-          x$properties$datetime %||% "",
+          .item_datetime(x) %||% "",
           x$properties[["sat:orbit_state"]] %||% "",
           paste(round(x$bbox, 4L), collapse = ",")
         )
@@ -613,6 +681,9 @@ stac_time_slices <- function(
   lon = NULL
 ) {
   granularity <- rlang::arg_match(granularity)
+  if (!is.null(lon) && granularity != "solar_day") {
+    cli::cli_abort("{.arg lon} sets the solar day, so it needs {.code granularity = \"solar_day\"}.")
+  }
   sources$slice <- switch(
     granularity,
     day = substr(sources$datetime, 1L, 10L),
@@ -666,7 +737,8 @@ stac_rename_assets <- function(sources, mapping, drop_unmapped = TRUE) {
     m <- setdiff(names(mapping), present)
     if (length(m)) {
       cli::cli_warn(
-        "mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}"
+        "mapping name{?s} not present in {.arg sources} (ignored): {.val {m}}",
+        class = c("garry_stac_warning", "garry_warning")
       )
     }
   }

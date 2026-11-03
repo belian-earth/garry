@@ -5,6 +5,11 @@ Status: **implemented through PR4 on branch `placement-pass`
 benchmark validation.** Amended after the scheduling review
 (`scheduling-review-2026-07-29.md`). Self-contained.
 
+Later change (2026-10-31): `garry.fuse_tile_mb` merged into
+`garry.ram_budget_mb`, and `garry.fuse_reader_mb`, `garry.fuse_flops_max`
+and the `cost_*` options became constants in `R/placement.R` at the same
+values. This note keeps the old names.
+
 Landed: residency fixes (compute-output store bytes, cgroup-aware
 /dev/shm backstop, fused-region pricing, a dedicated escape hatch for
 store-bearing compute), the placement pass with rules and cost modes

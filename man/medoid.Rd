@@ -4,12 +4,10 @@
 \alias{medoid}
 \title{Medoid reducer over time (multivariate).}
 \usage{
-medoid(iters = 12L, eps = 1e-07)
+medoid(iters = 12L)
 }
 \arguments{
-\item{iters}{Weiszfeld iterations (fixed, unrolled).}
-
-\item{eps}{Distance regulariser (guards the weight at zero distance).}
+\item{iters}{Weiszfeld iterations.}
 }
 \value{
 A reducer \code{fn(x, dims)} for \code{\link[=reduce_over]{reduce_over()}}.

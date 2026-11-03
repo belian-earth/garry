@@ -3,12 +3,12 @@
 #
 # Every named operation a stage function may use lives here, and this is
 # the ONLY file allowed to touch anvl's `nv_*` API (grep-enforced by
-# test-backend-insulation.R). Phase 2 ships the pure-R reference
-# implementations; Phase 5 adds traced dispatch (AnvilArray -> nv_*).
+# test-backend-insulation.R). Each op dispatches on its input: traced
+# values go to nv_*, and plain R arrays take a pure-R reference path.
 #
 # The pure-R path is NOT a user execution path (one-compute-path rule):
 # it is the permanent test oracle, and it lets planner golden tests run
-# without anvl installed. Traced dispatch (Phase 5): every op checks
+# without anvl installed. Every op checks
 # .g_traced() and routes AnvlArray / tracer values to nv_*; plain R
 # arrays take the oracle path.
 #
@@ -25,8 +25,18 @@
   inherits(x, c("AnvlArray", "GraphBox", "AnvlBox"))
 }
 
-# Promote a plain R scalar to the traced operand's dtype.
+# Promote a plain R scalar to the traced operand's dtype. The cast would
+# truncate 0.5 to 0 in silence and refuse NaN in anvl's words.
 .g_scalar_like <- function(x, value) {
+  if (.g_is_integer(x) && (!is.finite(value) || value != trunc(value))) {
+    cli::cli_abort(
+      c(
+        "an integer array cannot hold the scalar {.val {value}}.",
+        "i" = "{.fn g_cast} the array to a float dtype first."
+      ),
+      class = c("garry_kernel_error", "garry_error")
+    )
+  }
   anvl::nv_scalar_like(x, value)
 }
 
@@ -53,7 +63,217 @@ g_jit <- function(f, device = NULL) {
 #' @return A function returning `list(value, grad$<wrt>)` (jit-compiled).
 #' @keywords internal
 g_value_and_gradient <- function(f, wrt) {
-  anvl::jit(anvl::value_and_gradient(f, wrt = wrt))
+  anvl::jit(.g_value_and_gradient_fn(f, wrt))
+}
+
+# The same before its jit, for .host_kernel(), which jits what it keeps.
+.g_value_and_gradient_fn <- function(f, wrt) {
+  anvl::value_and_gradient(f, wrt = wrt)
+}
+
+# The dtype a kernel holds `dtype` in: unsigned values upload through a
+# carrier, so arithmetic on them leaves the unsigned range (Byte 200 * 2L
+# is 400, 7 - 8L is -1) and returns this dtype, not the unsigned one.
+.carrier_dtype <- function(dtype) {
+  carrier <- unname(.anvl_upload_dtype[dtype])
+  if (is.na(carrier)) dtype else carrier
+}
+
+# The dtype a stored value reaches a kernel as.
+.input_dtype <- function(dtype) {
+  as.character(.to_anvl_dtype(.carrier_dtype(dtype)))
+}
+
+# One key for a kernel's inputs. `dtypes` are as they reach the kernel.
+.input_key <- function(dtypes, shapes) {
+  paste(
+    unlist(Map(
+      function(d, s) paste0(d, ":", paste(s, collapse = "x")),
+      dtypes,
+      shapes
+    )),
+    collapse = ","
+  )
+}
+
+# Content identity of an array a kernel captures: its handle is a pointer.
+.g_is_array <- function(x) inherits(x, "AnvlArray")
+.g_array_identity <- function(x) {
+  dtype <- as.character(anvl::dtype(x))
+  shape <- as.integer(anvl::shape(x))
+  # a constant made while tracing is plain R data, with no raw form yet
+  if (identical(x$backend, "plain")) {
+    x <- pjrt::pjrt_buffer(anvl::as_array(x), dtype = dtype, shape = shape)
+  }
+  list(v = anvl::as_raw(x, row_major = TRUE), dtype = dtype, shape = shape)
+}
+
+# Abstract kernel inputs: a dtype and a shape, no data.
+.input_avals <- function(dtypes, shapes) {
+  unname(Map(
+    function(d, s) anvl::nv_aval(.input_dtype(d), shape = as.integer(s)),
+    dtypes,
+    shapes
+  ))
+}
+
+# The dtype `fn` (list of inputs -> one array) returns at these dtypes
+# and shapes, in anvl's vocabulary. An abstract trace: nothing runs and
+# nothing compiles.
+.kernel_out_dtype <- function(fn, dtypes, shapes) {
+  graph <- anvl::trace_fn(
+    function(inputs) list(fn(inputs)),
+    list(inputs = .input_avals(dtypes, shapes))
+  )
+  as.character(graph$outputs[[1L]]$aval$dtype)
+}
+
+# A kernel output at the dtype its node declares: the convert a stage
+# export needs when the two differ, nothing when they agree. A carrier
+# holds more than its unsigned dtype, so a value past the dtype's ends
+# saturates there, as it does in a file.
+.g_as_declared <- function(x, dtype) {
+  if (!.g_traced(x)) {
+    return(x)
+  }
+  carrier <- .input_dtype(dtype)
+  if (!dtype %in% names(.anvl_upload_dtype)) {
+    return(.g_convert(x, carrier))
+  }
+  # Another integer would wrap through the carrier, and u32's end is no R
+  # integer, so they saturate at f64, exact over every dtype's range.
+  wide <- dtype == "u32" || (.g_is_integer(x) && !identical(.g_dtype(x), carrier))
+  via <- if (wide) "f64" else carrier
+  x <- .g_convert(x, via)
+  lo <- anvl::nv_scalar(0, dtype = via)
+  hi <- anvl::nv_scalar(2^.dtype_width(dtype) - 1, dtype = via)
+  .g_convert(anvl::nv_clamp(x, lo, hi), carrier)
+}
+
+.g_convert <- function(x, dtype) {
+  if (identical(as.character(anvl::dtype(x)), dtype)) x else anvl::nv_convert(x, dtype)
+}
+
+# Trace `fn` (list of inputs -> named list of exports) at these dtypes
+# and shapes and lower it. Closed-over arrays come back as constants,
+# leading inputs of the program, carried as R data.
+.program_build <- function(fn, dtypes, shapes) {
+  graph <- anvl::trace_fn(
+    function(inputs) unname(fn(inputs)),
+    list(inputs = .input_avals(dtypes, shapes)),
+    optimize = TRUE
+  )
+  low <- anvl::stablehlo(
+    graph,
+    donate_unaliased_outputs = TRUE,
+    platform = "cpu"
+  )
+  list(
+    src = stablehlo::repr(low[[1L]]),
+    constants = lapply(low[[2L]], function(k) .g_array_identity(k$aval$data)),
+    # Fresh output buffers per call, as jit() has: they are how R counts
+    # a CPU output's memory, so gc keeps pace with it.
+    phantoms = lapply(low[[3L]], function(spec) {
+      list(dtype = as.character(spec$dtype), shape = as.integer(spec$shape))
+    }),
+    # The outputs' nesting as plain R: an RTree is a native handle and
+    # does not cross a process. A reduce_partial export nests its parts.
+    out_shape = pjrt::unflatten(graph$out_tree, as.list(seq_along(graph$outputs))),
+    out_avals = lapply(graph$outputs, function(x) {
+      list(dtype = as.character(x$aval$dtype), shape = anvl::shape(x$aval))
+    })
+  )
+}
+
+# anvl's own dispatch path: the same executable cache, buffer wrapping and
+# output accounting a jitted function has, with the compile callback
+# reading the program instead of tracing a closure. A set's shapes share
+# one device buffer per constant, and a compiled shape's text and an
+# uploaded constant's bytes go, so a daemon keeps each once.
+.program_kernel <- function(set, device = NULL) {
+  pool <- attr(set, "constants")
+  attr(set, "constants") <- NULL
+  buffers <- vector("list", length(pool))
+  compiled <- vector("list", length(set))
+  keys <- names(set)
+  compile <- function(i) {
+    p <- set[[i]]
+    exec <- pjrt::pjrt_compile(
+      pjrt::pjrt_program(src = p$src, format = "mlir"),
+      device = device
+    )
+    dev <- pjrt::device(exec)
+    for (k in p$constants) {
+      if (is.null(buffers[[k]])) {
+        buffers[[k]] <<- pjrt::pjrt_buffer(
+          pool[[k]]$v,
+          dtype = pool[[k]]$dtype,
+          device = dev,
+          shape = pool[[k]]$shape,
+          row_major = TRUE
+        )
+        pool[k] <<- list(NULL)
+      }
+    }
+    e <- list(
+      exec = exec,
+      client = pjrt::pjrt_client(pjrt::platform(dev)),
+      device = dev,
+      out_tree = pjrt::build_tree(p$out_shape),
+      out_avals = p$out_avals,
+      const_arrays = buffers[p$constants],
+      phantom_specs = p$phantoms
+    )
+    compiled[[i]] <<- e
+    set[i] <<- list(NULL)
+    e
+  }
+  disp <- pjrt::dispatcher(
+    max(1L, length(keys)),
+    function(info) {
+      key <- .input_key(
+        vapply(info$avals, function(v) as.character(v$dtype), character(1)),
+        lapply(info$avals, `[[`, "shape")
+      )
+      i <- match(key, keys)
+      # Never run an executable on inputs it was not built for: PJRT
+      # checks size alone, so an f32 program would read i32 bytes. The
+      # host works out every input before it traces, so this is a defect.
+      if (is.na(i)) {
+        .program_miss(key, keys)
+      }
+      compiled[[i]] %||% compile(i)
+    },
+    backend = "pjrt",
+    default_device = function() anvl::default_device("pjrt")
+  )
+  dispatch <- pjrt::dispatch
+  run <- function(inputs) dispatch(disp, list(inputs))
+  # A warm-up compiles the set's first shape, its modal chunk (chunk_iter()
+  # lists that first), and others where a task first meets them. `every`
+  # compiles them all, for a set whose shapes are all sure to run.
+  attr(run, "warm") <- function(every = FALSE) {
+    for (i in if (every) seq_along(compiled) else 1L) {
+      if (is.null(compiled[[i]])) {
+        compile(i)
+      }
+    }
+    invisible(NULL)
+  }
+  run
+}
+
+.program_miss <- function(key, keys) {
+  built <- paste(keys, collapse = "; ")
+  cli::cli_abort(
+    c(
+      "a kernel met inputs its plan did not list. This is a garry bug: please report it.",
+      "x" = "inputs {.val {key}}, built for {.val {built}}.",
+      "i" = "{.code options(garry.kernel_wire = \"closure\")} runs the kernel without programs."
+    ),
+    class = c("garry_no_program_error", "garry_error"),
+    call = NULL
+  )
 }
 
 # Unsigned dtypes upload through a signed (or f64 for u64) carrier wide
@@ -73,23 +293,22 @@ g_value_and_gradient <- function(f, wrt) {
 #' @return An `AnvlArray`.
 #' @export
 g_upload <- function(x, dtype, device = NULL) {
-  carrier <- unname(.anvl_upload_dtype[dtype])
-  if (!is.na(carrier)) {
-    dtype <- carrier
+  carrier <- .carrier_dtype(dtype)
+  # An integer buffer cannot hold NaN, garry's nodata. Padding that reaches
+  # an integer buffer is 0 from the start (.sv_grow, .exec_read_padded), so
+  # a NaN here is a real missing cell: a read that failed, or one no tile
+  # reaches.
+  if (!startsWith(carrier, "f") && anyNA(x)) {
+    cli::cli_abort(
+      c(
+        "a {.val {dtype}} raster holds missing values, which an integer buffer cannot.",
+        "i" = "Declare {.arg nodata} on the source so it reads as a float dtype, where NaN is nodata."
+      ),
+      class = c("garry_nodata_error", "garry_error"),
+      call = NULL
+    )
   }
-  # An integer buffer cannot hold NaN, which garry uses for nodata and for the
-  # halo ring beyond the raster edge. pjrt used to convert it through an
-  # undefined C++ cast (0 in practice) and now refuses it. Make the 0 explicit:
-  # QA bits read it as clear, and a padded stage re-NaNs its margin after
-  # computing (.exec_mask_edge), so no downstream value depends on it.
-  if (!startsWith(dtype, "f") && anyNA(x)) {
-    x[is.na(x)] <- 0
-  }
-  if (is.null(device)) {
-    anvl::nv_array(x, dtype = dtype)
-  } else {
-    anvl::nv_array(x, dtype = dtype, device = device)
-  }
+  anvl::nv_array(x, dtype = carrier, device = device)
 }
 
 #' Download an AnvlArray (or a nested list of them) to R arrays.
@@ -100,7 +319,15 @@ g_upload <- function(x, dtype, device = NULL) {
 g_download <- function(x) {
   # Order matters: an AnvlArray is itself a list internally.
   if (.g_traced(x)) {
-    return(anvl::as_array(x))
+    v <- anvl::as_array(x)
+    # 64-bit integers arrive as bit64, whose doubles only hold their bits:
+    # every R array garry handles is a plain number
+    if (inherits(v, "integer64")) {
+      d <- dim(v)
+      v <- as.double(v)
+      dim(v) <- d
+    }
+    return(v)
   }
   if (is.list(x)) {
     return(lapply(x, g_download))
@@ -109,20 +336,6 @@ g_download <- function(x) {
 }
 
 # -- Raw f32 transport (phase 12c, D19/D20) -----------------------------------
-
-# anvl >= 0.5 accepts raw byte payloads in nv_array, so the raw path is
-# available wherever anvl is. Kept as a function: callers (daemons,
-# hutan's engine) gate on it.
-
-#' Can uploads take the raw byte path?
-#'
-#' Internal capability check (exported for daemon use via `::`).
-#' @return `TRUE` if anvl is installed.
-#' @keywords internal
-#' @export
-.g_has_raw_upload <- function() {
-  rlang::is_installed("anvl")
-}
 
 #' Upload a raw byte payload to an AnvlArray.
 #'
@@ -138,24 +351,14 @@ g_download <- function(x) {
 #' @keywords internal
 g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
   attributes(bytes) <- NULL
-  if (is.null(device)) {
-    anvl::nv_array(bytes, shape = dim, dtype = dtype, byrow = TRUE)
-  } else {
-    anvl::nv_array(
-      bytes,
-      shape = dim,
-      dtype = dtype,
-      byrow = TRUE,
-      device = device
-    )
-  }
+  anvl::nv_array(bytes, shape = dim, dtype = dtype, byrow = TRUE, device = device)
 }
 
 #' Construct a constant-filled AnvlArray on the device.
 #'
 #' The fill is represented in the program (no host buffer of `prod(dim)`
 #' elements is built or transferred), so it is the cheap way to make a
-#' large device array — e.g. warm-up dummies for kernel precompiles.
+#' large device array: e.g. warm-up dummies for kernel precompiles.
 #'
 #' @param value Scalar fill value.
 #' @param dim Integer dims, `[nr, nc]` or `[t, nr, nc]`.
@@ -164,11 +367,7 @@ g_upload_raw <- function(bytes, dtype, dim, device = NULL) {
 #' @return An `AnvlArray`.
 #' @export
 g_fill <- function(value, dim, dtype = "f32", device = NULL) {
-  if (is.null(device)) {
-    anvl::nv_fill(value, dim, .to_anvl_dtype(dtype))
-  } else {
-    anvl::nv_fill(value, dim, .to_anvl_dtype(dtype), device = device)
-  }
+  anvl::nv_fill(value, dim, .to_anvl_dtype(dtype), device = device)
 }
 
 #' Download an AnvlArray as a raw store payload.
@@ -183,10 +382,10 @@ g_fill <- function(value, dim, dtype = "f32", device = NULL) {
 g_download_raw <- function(x) {
   dt <- .g_dtype(x)
   # f32/f64 are the store's compute payloads (D19/f64-store); the
-  # integer dtypes are SINK-ONLY payloads from g_quantize() -- written
-  # bytes, never re-uploaded or sliced. u32 is excluded: R cannot
-  # readBin unsigned 4-byte values, and the writer must be able to
-  # recover a plain integer vector from the payload.
+  # integer dtypes are g_quantize() sinks, which are only ever written.
+  # u32 is excluded: R cannot readBin unsigned 4-byte values, and the
+  # writer must be able to recover a plain integer vector from the
+  # payload.
   if (!dt %in% c("f32", "f64", "u8", "i8", "i16", "u16", "i32")) {
     cli::cli_abort(
       "raw store payloads are f32/f64 or sink integers; got {.val {dt}}"
@@ -227,7 +426,7 @@ g_clamp <- function(x, lo, hi) {
 }
 
 # Integer output ranges for quantized sinks (mirrors GDAL's clamp at
-# the double -> integer band conversion the writer used to rely on).
+# the double -> integer band conversion).
 .g_int_range <- list(
   u8 = c(0, 255),
   i8 = c(-128, 127),
@@ -277,10 +476,9 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
   if (length(nodata) == 1L) {
     q <- g_ifelse(g_is_nodata(x), nodata, q)
   } else {
-    # No sentinel: legal for NaN-free data (the historical writer
-    # contract). NaN cannot survive the integer cast, so check on
-    # device and fail with the historical message. Eager-only branch
-    # (the check downloads a scalar); every current seam is eager.
+    # No sentinel: legal for NaN-free data. NaN cannot survive the
+    # integer cast, so check on device and fail. Eager-only branch (the
+    # check downloads a scalar); every current seam is eager.
     n_nan <- g_download(g_sum(g_cast(g_is_nodata(x), "f32")))
     if (n_nan > 0) {
       .garry_error(
@@ -298,22 +496,12 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
 }
 
 # One jitted g_quantize per quantization (anvl's jit cache keys each by
-# input shape), dropped wholesale past 64 like the daemon kernel cache.
-.g_quantize_cache <- new.env(parent = emptyenv())
+# input shape), a kernel of this process's cache like any other.
 .g_quantize_jit <- function(scale, offset, nodata, dtype) {
-  key <- rlang::hash(list(scale, offset, nodata, dtype))
-  jf <- .g_quantize_cache[[key]]
-  if (is.null(jf)) {
-    if (length(ls(.g_quantize_cache, all.names = TRUE)) >= 64L) {
-      rm(
-        list = ls(.g_quantize_cache, all.names = TRUE),
-        envir = .g_quantize_cache
-      )
-    }
-    jf <- g_jit(function(x) g_quantize(x, scale, offset, nodata, dtype))
-    assign(key, jf, envir = .g_quantize_cache)
-  }
-  jf
+  .daemon_kernel(
+    rlang::hash(list("quantize", scale, offset, nodata, dtype)),
+    function(x) g_quantize(x, scale, offset, nodata, dtype)
+  )
 }
 
 # Shape of an AnvlArray (bridge; the executor must not touch anvl).
@@ -321,9 +509,9 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
   anvl::shape(x)
 }
 
-# garry names unsigned integers u8..u64, anvl names them ui8..ui64; the
-# two vocabularies agree otherwise.
-.anvl_dtype_names <- c(u8 = "ui8", u16 = "ui16", u32 = "ui32", u64 = "ui64")
+# garry names unsigned integers u8..u64 and booleans pred, anvl names them
+# ui8..ui64 and bool; the two vocabularies agree otherwise.
+.anvl_dtype_names <- c(u8 = "ui8", u16 = "ui16", u32 = "ui32", u64 = "ui64", pred = "bool")
 .to_anvl_dtype <- function(dtype) {
   unname(.anvl_dtype_names[dtype]) %|NA|% dtype
 }
@@ -331,20 +519,24 @@ g_quantize <- function(x, scale, offset, nodata, dtype) {
 
 # Dtype of an AnvlArray in garry's vocabulary (bridge for the executor's
 # raw download dispatch).
-.g_dtype <- function(x) {
-  dt <- as.character(anvl::dtype(x))
+.g_dtype <- function(x) .from_anvl_dtype(as.character(anvl::dtype(x)))
+.from_anvl_dtype <- function(dt) {
   hit <- match(dt, .anvl_dtype_names)
   if (is.na(hit)) dt else names(.anvl_dtype_names)[[hit]]
 }
 
 #' Elementwise select: `yes` where `cond`, else `no`.
 #'
-#' @param cond Logical array.
+#' @param cond Logical array, or a stored 0/1 mask: nonzero is true.
 #' @param yes,no Arrays or scalars, broadcast against `cond`.
 #' @return Array shaped like `cond`.
 #' @export
 g_ifelse <- function(cond, yes, no) {
   if (.g_traced(cond)) {
+    # a logical is stored 0/1 at a numeric dtype
+    if (.g_dtype(cond) != "pred") {
+      cond <- cond != .g_scalar_like(cond, 0)
+    }
     if (
       is.numeric(yes) && length(yes) == 1L &&
         is.numeric(no) && length(no) == 1L
@@ -359,6 +551,10 @@ g_ifelse <- function(cond, yes, no) {
       no <- .g_scalar_like(yes, no)
     }
     return(anvl::nv_ifelse(cond, yes, no))
+  }
+  # A comparison with NaN is false in XLA and NA in R.
+  if (is.logical(cond)) {
+    cond <- !is.na(cond) & cond
   }
   ifelse(cond, yes, no)
 }
@@ -448,6 +644,29 @@ g_shift_slice <- function(xpad, dy, dx, out_nrow, out_ncol, h) {
   do.call(`[`, c(list(xpad), idx, list(drop = FALSE)))
 }
 
+# `x` with its cells past the raster back at nodata for `dtype`, as a stage
+# boundary leaves them (.exec_mask_edge()). `ring` counts those cells on each
+# side of a stage's padded input (.ring_cells()) and `d` is how far in from
+# that input `x` sits. Inside a kernel `ring` is a run-time array, as one
+# kernel serves every chunk of a stage, so a select picks the cells.
+.g_mask_ring <- function(x, ring, d, dtype) {
+  if (!.g_traced(x)) {
+    return(.mask_cells(x, pmax(ring - d, 0L), dtype))
+  }
+  g_ifelse(.g_on_raster(x, ring, d), x, .sv_fill(dtype))
+}
+
+# TRUE on the cells of traced `x` that lie on the raster.
+.g_on_raster <- function(x, ring, d) {
+  sh <- .g_shape(x)
+  inside <- function(axis, lo, hi) {
+    i <- anvl::nv_iota(axis, sh, "i32")
+    i > g_index_scalar(ring, lo) - d & i <= sh[[axis]] - g_index_scalar(ring, hi) + d
+  }
+  n <- length(sh)
+  inside(n - 1L, 1L, 3L) & inside(n, 2L, 4L)
+}
+
 #' Cast to a garry dtype.
 #'
 #' Integer targets truncate toward zero; `pred` maps nonzero to TRUE.
@@ -495,7 +714,7 @@ g_stack <- function(values) {
   if (is.null(d)) {
     return(unlist(values)) # scalars (or vectors) stack along one axis
   }
-  arr <- simplify2array(values) # (d..., k)
+  arr <- array(unlist(values), c(d, length(values))) # (d..., k)
   aperm(arr, c(length(d) + 1L, seq_along(d))) # -> (k, d...)
 }
 
@@ -522,12 +741,12 @@ g_index_scalar <- function(v, i) {
 
 # -- Scan (carried-state loop along dim 1) ------------------------------------
 
-# anvl >= 0.5 provides nv_scan, so scans trace wherever anvl is. Kept as
-# a function for the callers that gate on it.
+# anvl >= 0.5 provides nv_scan, so scans trace wherever anvl is. Kept for
+# hutan's engine, which gates on it.
 
 #' Can scans take the traced path?
 #'
-#' Internal capability check (exported for daemon use via `::`).
+#' Internal capability check.
 #' @return `TRUE` if anvl is installed.
 #' @keywords internal
 #' @export
@@ -584,7 +803,7 @@ g_index_scalar <- function(v, i) {
   is_scalar <- function(v) {
     if (.g_traced(v)) !length(.g_shape(v)) else is.null(dim(v)) && length(v) == 1L
   }
-  if (is.null(xs) || !.g_tree_any(init, is_scalar)) {
+  if (!.g_tree_any(init, is_scalar)) {
     return(init)
   }
   first <- .g_tree_map(xs, function(x) {
@@ -630,46 +849,30 @@ g_index_scalar <- function(v, i) {
 #' @param init Initial carry: array or (nested) named list of arrays.
 #' @param body Step function `function(carry, x) -> list(carry, out)`;
 #'   `out` may be an array, a (nested) list, or `NULL`.
-#' @param xs Per-step inputs sliced along dim 1 (array, nested list, or
-#'   NULL).
-#' @param length Static trip count; required when `xs` is NULL.
+#' @param xs Per-step inputs sliced along dim 1 (array or nested list).
 #' @param reverse Run steps in reverse order?
 #' @return `list(carry = final carry, out = stacked outputs)`.
 #' @export
-g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
-  traced <- .g_tree_any(init, .g_traced) ||
-    (!is.null(xs) && .g_tree_any(xs, .g_traced))
-  if (traced) {
+g_scan <- function(init, body, xs, reverse = FALSE) {
+  if (.g_tree_any(init, .g_traced) || .g_tree_any(xs, .g_traced)) {
     return(anvl::nv_scan(
       .g_scan_settle_init(init, body, xs),
       xs = xs,
       body = body,
-      steps = length,
       reverse = reverse
     ))
   }
   # -- pure-R oracle path ------------------------------------------------------
-  n <- if (!is.null(xs)) {
-    lens <- unlist(.g_tree_map(xs, function(x) (dim(x) %||% length(x))[[1L]]))
-    if (!all(lens == lens[[1L]])) {
-      cli::cli_abort("all leaves of {.arg xs} must agree on the size of dim 1")
-    }
-    if (!is.null(length) && as.integer(length) != lens[[1L]]) {
-      cli::cli_abort("{.arg length} disagrees with dim 1 of {.arg xs}")
-    }
-    as.integer(lens[[1L]])
-  } else {
-    if (is.null(length)) {
-      cli::cli_abort("{.arg length} is required when {.arg xs} is NULL")
-    }
-    as.integer(length)
+  lens <- unlist(.g_tree_map(xs, function(x) (dim(x) %||% length(x))[[1L]]))
+  if (!all(lens == lens[[1L]])) {
+    cli::cli_abort("all leaves of {.arg xs} must agree on the size of dim 1")
   }
+  n <- as.integer(lens[[1L]])
   carry <- init
   bufs <- NULL
   steps <- if (isTRUE(reverse)) rev(seq_len(n)) else seq_len(n)
   for (t in steps) {
-    x_t <- if (!is.null(xs)) .g_tree_map(xs, function(x) .g_scan_slice(x, t))
-    st <- body(carry, x_t)
+    st <- body(carry, .g_tree_map(xs, function(x) .g_scan_slice(x, t)))
     if (
       !is.list(st) ||
         is.null(names(st)) ||
@@ -694,6 +897,19 @@ g_scan <- function(init, body, xs = NULL, length = NULL, reverse = FALSE) {
     }
   }
   list(carry = carry, out = bufs)
+}
+
+# Apply `f` to `init` `n` times. Traced, that is one loop in the program, so the
+# program's size and compile time do not grow with `n`.
+.g_iterate <- function(init, f, n) {
+  if (.g_tree_any(init, .g_traced)) {
+    step <- function(carry, s) list(carry = list(v = f(carry$v)), out = NULL)
+    return(anvl::nv_scan(list(v = init), body = step, steps = n)$carry$v)
+  }
+  for (i in seq_len(n)) {
+    init <- f(init)
+  }
+  init
 }
 
 #' Static range slice along dim 1 (the scanned axis).
@@ -939,8 +1155,8 @@ g_expand <- function(x, axis, n) {
 
 #' Reductions over array margins.
 #'
-#' `g_sum` accumulates 8- and 16-bit integers in i32 (32-bit unsigned in
-#' i64), so a sum does not wrap at the input type's range. `g_mean` averages
+#' `g_sum` accumulates 8- and 16-bit integers in i32 and 32-bit integers in
+#' i64, so a sum does not wrap at the input type's range. `g_mean` averages
 #' integers in f32.
 #'
 #' With `nan_rm = TRUE`, a slice that is entirely NaN reduces to the
@@ -956,8 +1172,8 @@ g_expand <- function(x, axis, n) {
 NULL
 
 # Accumulator dtype for integer sums: 8- and 16-bit integers sum in i32,
-# 32-bit unsigned in i64.
-.g_sum_widen <- c(i8 = "i32", i16 = "i32", u8 = "i32", u16 = "i32", u32 = "i64")
+# 32-bit integers in i64.
+.g_sum_widen <- c(i8 = "i32", i16 = "i32", u8 = "i32", u16 = "i32", i32 = "i64", u32 = "i64")
 
 #' @rdname g-reductions
 #' @export
@@ -1010,6 +1226,18 @@ g_broadcast_arrays <- function(...) {
   })
 }
 
+# Is this a traced array of an integer dtype?
+.g_is_integer <- function(x) {
+  .g_traced(x) && isTRUE(.dtype_family(.g_dtype(x)) %in% c("int", "uint"))
+}
+
+# A chunk's sum, for a partial the host adds up: a chunk of Int16 cells
+# passes 2^31 at a mean of about 2,100, so integers accumulate in f64,
+# exact to 2^53, whatever the input's width.
+.g_partial_sum <- function(x, dims, nan_rm) {
+  g_sum(if (.g_is_integer(x)) g_cast(x, "f64") else x, dims, nan_rm)
+}
+
 #' @rdname g-reductions
 #' @export
 g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
@@ -1017,7 +1245,7 @@ g_mean <- function(x, dims = NULL, nan_rm = FALSE) {
     # anvl 0.5.1 sums an integer input in its own dtype before dividing, so
     # the mean wraps (two i8 codes of 100 and 120 average to -4.5). Average
     # at f32, the dtype .reduce_dtype() promises.
-    if (isTRUE(.dtype_family(.g_dtype(x)) %in% c("int", "uint"))) {
+    if (.g_is_integer(x)) {
       x <- anvl::nv_convert(x, "f32")
     }
     return(anvl::nv_mean(x, axes = dims, nan_rm = nan_rm))
@@ -1049,11 +1277,15 @@ g_max <- function(x, dims = NULL, nan_rm = FALSE) {
   })
 }
 
+# The longest axis a median sorts by network. 55 dates cost 568 ns/px in the
+# network against 1,926 in top_k, for about 1 s more compile per shape.
+.g_median_net_max <- 64L
+
 #' @rdname g-reductions
 #' @export
 g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   if (.g_traced(x)) {
-    if (length(dims) == 1L && .g_shape(x)[[dims]] %in% 2:32) {
+    if (length(dims) == 1L && .g_shape(x)[[dims]] %in% 2:.g_median_net_max) {
       return(.g_median_net(x, as.integer(dims), nan_rm))
     }
     return(anvl::nv_median(x, axes = dims, nan_rm = nan_rm))
@@ -1081,14 +1313,16 @@ g_median <- function(x, dims = NULL, nan_rm = FALSE) {
   }
   sh <- .g_shape(x)
   n <- sh[[axis]]
-  cnt <- g_count(x, dims = axis)
-  if (nan_rm) {
-    # NaN sorts last as +Inf, past every slot the valid count reads
-    x <- g_ifelse(g_is_nodata(x), .g_scalar_like(x, Inf), x)
-  }
   s <- lapply(seq_len(n), function(i) {
     .g_reshape_rm(.g_slice_axis(x, axis, i, i), sh[-axis])
   })
+  # The count adds planes: a reduce op would seed XLA's YNN fusion, which took
+  # twice the time on a Hampel filter.
+  cnt <- Reduce(`+`, lapply(s, function(v) g_cast(!g_is_nodata(v), "i32")))
+  if (nan_rm) {
+    # NaN sorts last as +Inf, past every slot the valid count reads
+    s <- lapply(s, function(v) g_ifelse(g_is_nodata(v), .g_scalar_like(v, Inf), v))
+  }
   for (cp in .sort_pairs(n)) {
     lo <- anvl::nv_pmin(s[[cp[[1L]]]], s[[cp[[2L]]]])
     s[[cp[[2L]]]] <- anvl::nv_pmax(s[[cp[[1L]]]], s[[cp[[2L]]]])

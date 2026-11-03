@@ -2,7 +2,7 @@
 % Please edit documentation in R/executor.R
 \name{.exec_jit_clear}
 \alias{.exec_jit_clear}
-\title{Drop every cached executable held by the single-process executor.}
+\title{Drop every kernel this process holds.}
 \usage{
 .exec_jit_clear()
 }
@@ -10,7 +10,7 @@
 \code{NULL}, invisibly.
 }
 \description{
-The cache is keyed on stage structure, so it is only ever a speed
+The cache is keyed on kernel content, so it is only ever a speed
 optimisation; clearing it costs a recompile and nothing else.
 }
 \keyword{internal}

@@ -66,6 +66,32 @@ test_that("preview() dispatches over array, path, and lazy objects", {
   expect_error(preview(out, bands = 1), NA)            # file path front door
 })
 
+test_that("a coarse re-plan keeps every property but the grid", {
+  g <- graph_new()
+  x <- lazy_source(fixture_gradient_f32(), graph = g)
+  f <- garry:::.with_role(focal_map(x, radius = 1L, fn = function(sh) sh[[1L]]), "mask")
+  m <- lazy_map(f, fn = function(v) v * 2, dtype = "f64")
+  cg <- .coarsen_grid(m@grid, 2)
+  ng <- graph_new()
+  ids <- integer(0)
+  for (i in .topo_order(g, .reachable(g, m@node_id))) {
+    n <- graph_get(g, i)
+    ps <- ids[as.character(n@parents)]
+    id <- .coarsen_node(ng, n, as.integer(ps), cg)
+    ids[as.character(i)] <- id
+    got <- S7::props(graph_get(ng, id))
+    want <- S7::props(n)
+    drop <- c("id", "parents", "grid", "open_options")
+    expect_equal(got[setdiff(names(got), drop)], want[setdiff(names(want), drop)])
+  }
+})
+
+test_that("a preview that must read at full resolution says so", {
+  x <- lazy_source(fixture_gradient_f32())
+  expect_message(got <- .pv_collect(x, 8L), "full resolution")
+  expect_identical(got$grid, x@grid)
+})
+
 test_that("preview() rejects unsupported input", {
   expect_error(preview(list(1, 2, 3)), "LazyRaster")
 })
@@ -163,11 +189,21 @@ test_that("preview() coarse-collects a grid-pinned lazy raster", {
 test_that("na_col paints nodata instead of leaving it transparent", {
   m <- matrix(runif(120), 10, 12)
   m[1:3, 1:4] <- NaN
+  drawn <- NULL
+  local_mocked_bindings(
+    rasterImage = function(image, ...) {
+      drawn <<- as.matrix(image)
+      invisible(NULL)
+    },
+    .package = "graphics"
+  )
   f <- tempfile(fileext = ".png")
   grDevices::png(f, 200, 200)
+  withr::defer(grDevices::dev.off())
   preview(m, na_col = "#eb4310", legend = FALSE, axes = FALSE)
-  grDevices::dev.off()
-  expect_true(file.exists(f) && file.size(f) > 0)
+  expect_identical(drawn == "#eb4310", is.nan(m))
+  preview(m, legend = FALSE, axes = FALSE)
+  expect_identical(is.na(drawn), is.nan(m))
 })
 
 test_that("preview(<file>, bands) plots the bands asked for, in that order", {

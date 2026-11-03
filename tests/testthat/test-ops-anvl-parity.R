@@ -88,48 +88,77 @@ test_that("reductions match under tracing (2D and 3D, nan_rm both ways)", {
   expect_true(is.nan(got$poison))
 })
 
+# Comparators (i, j) of .sort_pairs() run over the rows of `x`: wires are
+# columns, the lesser value stays at i.
+.run_net <- function(x, pairs) {
+  for (cp in pairs) {
+    lo <- pmin(x[, cp[[1L]]], x[, cp[[2L]]])
+    x[, cp[[2L]]] <- pmax(x[, cp[[1L]]], x[, cp[[2L]]])
+    x[, cp[[1L]]] <- lo
+  }
+  x
+}
+
+test_that("every sorting network sorts", {
+  # The 0-1 principle: a comparator network that sorts all 2^n binary inputs
+  # sorts every input, so this is a proof up to n = 16, with no XLA.
+  for (n in 2:16) {
+    bits <- as.matrix(do.call(expand.grid, rep(list(0:1), n)))
+    out <- .run_net(bits, garry:::.sort_pairs(n))
+    expect_false(any(out[, -n] > out[, -1L]), info = n)
+  }
+  # Past that 2^n inputs are too many: random permutations, at every size
+  # g_median runs a network for.
+  set.seed(37)
+  for (n in 17:32) {
+    perms <- t(replicate(500L, sample.int(n)))
+    expect_identical(
+      .run_net(perms, garry:::.sort_pairs(n)),
+      matrix(seq_len(n), 500L, n, byrow = TRUE),
+      info = n
+    )
+  }
+})
+
 test_that("g_median's sorting network matches anvl's median exactly", {
+  # Each row of a sweep is a cold compile, and the larger networks are the
+  # slow ones. A network depends only on n, so the sweep is over n: the other
+  # axes and the dtype each join once.
+  same <- function(a, dt = "f32", ax = 1L, rm = TRUE) {
+    jf <- g_jit(function(inputs) {
+      list(
+        net = g_median(inputs[[1L]], dims = ax, nan_rm = rm),
+        anvl = anvl::nv_median(inputs[[1L]], axes = ax, nan_rm = rm)
+      )
+    })
+    got <- g_download(jf(list(g_upload(a, dt))))
+    expect_identical(got$net, got$anvl, info = paste(dt, ax, rm, dim(a)[[1L]]))
+    got
+  }
   set.seed(36)
-  for (n in c(2L, 3L, 7L, 13L, 16L, 32L)) {
+  holed <- function(n) {
     a <- array(round(rnorm(n * 6 * 5), 1), c(n, 6L, 5L)) # ties included
     a[sample(length(a), length(a) %/% 4)] <- NaN
     a[, 1L, 1L] <- NaN # an all-NaN slice
-    for (dt in c("f32", "f64")) {
-      for (ax in 1:3) {
-        for (rm in c(TRUE, FALSE)) {
-          jf <- g_jit(function(inputs) {
-            list(
-              net = g_median(inputs[[1L]], dims = ax, nan_rm = rm),
-              anvl = anvl::nv_median(inputs[[1L]], axes = ax, nan_rm = rm)
-            )
-          })
-          got <- g_download(jf(list(g_upload(a, dt))))
-          expect_identical(got$net, got$anvl)
-        }
-      }
-    }
+    a
   }
+  for (n in c(2L, 3L, 7L, 13L, 16L, 32L)) {
+    a <- holed(n)
+    same(a)
+    same(a, rm = FALSE)
+  }
+  a <- holed(7L)
+  same(a, ax = 2L)
+  same(a, ax = 3L)
+  a <- holed(13L)
+  same(a, "f64")
+  same(a, "f64", rm = FALSE)
   # integer input: a median between two integers comes back as f32
   q <- array(sample(0:9, 7 * 4 * 3, TRUE), c(7L, 4L, 3L))
-  jf <- g_jit(function(inputs) {
-    list(
-      net = g_median(inputs[[1L]], dims = 1L),
-      anvl = anvl::nv_median(inputs[[1L]], axes = 1L)
-    )
-  })
-  got <- g_download(jf(list(g_upload(q, "i16"))))
-  expect_identical(got$net, got$anvl)
-  expect_identical(garry:::.sort_pairs(2L), list(c(1L, 2L)))
+  same(q, "i16", rm = FALSE)
   # two middle values near the f32 limit: the average stays finite
-  jf <- g_jit(function(inputs) {
-    list(
-      net = g_median(inputs[[1L]], dims = 1L),
-      anvl = anvl::nv_median(inputs[[1L]], axes = 1L)
-    )
-  })
-  got <- g_download(jf(list(g_upload(array(c(1, 3e38, 3.1e38, 3.2e38), c(4L, 1L, 1L)), "f32"))))
+  got <- same(array(c(1, 3e38, 3.1e38, 3.2e38), c(4L, 1L, 1L)), rm = FALSE)
   expect_true(is.finite(got$net))
-  expect_identical(got$net, got$anvl)
 })
 
 test_that("bitwise family matches under tracing", {
@@ -178,4 +207,12 @@ test_that("g_pad, g_stack and the pred cast agree with their oracles", {
     ignore_attr = TRUE
   )
   expect_identical(g_stack(list(1, 2, 3)), c(1, 2, 3))
+  # the new axis leads, traced or not
+  want <- array(c(rbind(as.vector(m), as.vector(m) * 2)), c(2L, 2L, 2L))
+  expect_equal(g_stack(list(m, m * 2)), want, ignore_attr = TRUE)
+  expect_equal(
+    traced(function(x) g_stack(list(x, x * 2)), m),
+    want,
+    ignore_attr = TRUE
+  )
 })

@@ -33,8 +33,9 @@ g_count(x, dims = NULL)
 Reduced array (margins in \code{dims} dropped) or scalar.
 }
 \description{
-\code{g_sum} accumulates 8- and 16-bit integers in i32 (32-bit unsigned in
-i64), so a sum does not wrap at the input type's range.
+\code{g_sum} accumulates 8- and 16-bit integers in i32 and 32-bit integers in
+i64, so a sum does not wrap at the input type's range. \code{g_mean} averages
+integers in f32.
 }
 \details{
 With \code{nan_rm = TRUE}, a slice that is entirely NaN reduces to the

@@ -18,7 +18,9 @@ NULL
 # mask through the pipeline (window fully valid for focals), and
 # reduces sum(out * mask) / sum(mask). Forward values agree with the
 # nan_rm forward semantics: an output cell is NaN exactly when its
-# window is not fully valid.
+# window is not fully valid. A cell past the raster is invalid at the
+# inputs: an integer read holds 0 there, which reads as data, so the
+# tape takes the chunk's .ring_cells() as a stage's kernel does.
 #
 # Hard boundaries (documented, structurally rejected):
 # - Warp on the tape: GDAL resampling is outside the tape (D15).
@@ -28,7 +30,8 @@ NULL
 
 # Grad-mode chunk loss: function(w, inputs) -> list(s, c).
 # `w` is the flattened kernel (length (2r+1)^2, row-major over (dy, dx));
-# `inputs` are RAW chunk arrays (NaN nodata), padded to the stage halo.
+# `inputs` are RAW chunk arrays (NaN nodata), padded to the stage halo,
+# then the chunk's .ring_cells().
 .grad_chunk_fn <- function(graph, stage, focal_id) {
   members <- stage@members
   input_nodes <- stage@input_nodes
@@ -40,11 +43,13 @@ NULL
     vals <- new.env(parent = emptyenv())
     masks <- new.env(parent = emptyenv())
     pads <- new.env(parent = emptyenv())
+    ring <- inputs[[length(input_nodes) + 1L]]
     for (i in seq_along(input_nodes)) {
       x <- inputs[[i]]
       k <- .key(input_nodes[[i]])
-      assign(k, g_ifelse(g_is_nodata(x), 0, x), envir = vals)
-      assign(k, g_cast(!g_is_nodata(x), "f32"), envir = masks)
+      nd <- g_is_nodata(x)
+      assign(k, g_ifelse(nd, 0, x), envir = vals)
+      assign(k, g_cast(!nd & .g_on_raster(x, ring, 0L), "f32"), envir = masks)
       assign(k, halo, envir = pads)
     }
 
@@ -118,14 +123,14 @@ NULL
   }
 }
 
-# Validate the plan shape for v1 differentiation; returns the pieces.
+# Validate the plan shape for differentiation; returns the pieces.
 .grad_validate <- function(plan, wrt) {
   kinds <- vapply(plan@stages, function(s) s@kind, character(1))
   if (any(kinds == "warp")) {
     .garry_error(
       paste0(
         "the loss pipeline contains a warp: GDAL resampling is outside ",
-        "the gradient tape (D15). align_to() inputs, materialise, then fit."
+        "the gradient tape. align_to() inputs, materialise, then fit."
       ),
       "garry_grad_unsupported_error"
     )
@@ -136,7 +141,7 @@ NULL
   ) {
     .garry_error(
       paste0(
-        "v1 differentiates pipelines of shape sources -> maps -> ",
+        "garry differentiates pipelines of shape sources -> maps -> ",
         "focal_kernel -> maps -> reduce(sum|mean over x, y) only"
       ),
       "garry_grad_unsupported_error"
@@ -171,7 +176,7 @@ NULL
     }
     if (S7::S7_inherits(node, ReduceNode)) {
       .garry_error(
-        "chunk-local reductions on the gradient tape are not supported in v1",
+        "chunk-local reductions on the gradient tape are not supported",
         "garry_grad_unsupported_error"
       )
     }
@@ -233,16 +238,23 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
   w <- if (is.null(weights)) parts$focal@weights else as.numeric(t(weights))
   stopifnot(length(w) == k * k)
 
-  vg <- g_value_and_gradient(
-    function(w, inputs) {
-      r <- .grad_chunk_fn(graph, compute, wrt@node_id)(w, inputs)
-      r$s
-    },
-    wrt = "w"
+  # The weights reach the kernels as an argument, so a loop that passes
+  # new ones runs the same program: keep it as a stage's kernel is kept,
+  # by content, or every step recompiles (0.31 s a step against 7 ms on
+  # an 80 x 60 raster).
+  chunk_fn <- .grad_chunk_fn(graph, compute, wrt@node_id)
+  sig <- .stage_kernel_sig(graph, compute)
+  ck <- .glue("{sig}@{compute@device}_wrt{match(wrt@node_id, compute@members)}")
+  vg <- .host_kernel(
+    .glue("value_grad_{ck}"),
+    .g_value_and_gradient_fn(function(w, inputs) chunk_fn(w, inputs)$s, wrt = "w"),
+    NULL
   )
-  cfn <- g_jit(function(w, inputs) {
-    .grad_chunk_fn(graph, compute, wrt@node_id)(w, inputs)$c
-  })
+  cfn <- .host_kernel(
+    .glue("valid_count_{ck}"),
+    function(w, inputs) chunk_fn(w, inputs)$c,
+    NULL
+  )
 
   # Source chunk reads mirror the executor's source_read stages.
   src_meta <- lapply(compute@input_nodes, function(nid) {
@@ -264,25 +276,9 @@ lazy_value_and_grad <- function(loss, wrt, weights = NULL) {
   w_up <- g_upload(w, "f32")
   for (j in seq_len(nrow(it))) {
     inputs <- lapply(src_meta, function(meta) {
-      g_upload(
-        do.call(.exec_read_padded, {
-          ra <- .source_read_args(meta$node)
-          list(
-            ra$path,
-            ra$band,
-            ra$nodata,
-            meta$chunks,
-            it[j, ],
-            open_options = ra$open_options,
-            scale = ra$scale,
-            offset = ra$offset,
-            decim = ra$decim,
-            resampling = ra$resampling
-          )
-        }),
-        meta$dtype
-      )
+      g_upload(.exec_read_padded(.source_read_args(meta$node), meta$chunks, it[j, ]), meta$dtype)
     })
+    inputs <- c(inputs, .ring_input(.ring_cells(it[j, ], compute@grid@dims, compute@halo)))
     r <- vg(w_up, inputs)
     S <- S + g_download(r$value)
     G <- G + g_download(r$grad$w)

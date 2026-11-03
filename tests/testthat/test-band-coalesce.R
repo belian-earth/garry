@@ -149,77 +149,6 @@ test_that("a stack requested as a sink collapses too, alone or beside a consumer
   expect_equal(res$cube, cube, tolerance = 0, ignore_attr = TRUE)
 })
 
-test_that("a coalesced sink stack writes and collects identically on every path", {
-  skip_on_cran()
-  fx <- fixture_multiband()
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 200)
-  on.exit(options(old), add = TRUE)
-  # permuted band order must survive the collapse
-  ord <- c(4L, 1L, 6L, 3L)
-  g <- graph_new()
-  st <- lazy_stack(lapply(ord, function(b)
-    lazy_source(fx$path, band = b, graph = g)), along = "band")
-  p <- plan_lazy(st)
-  expect_identical(length(p@stages), 1L)
-  expect_identical(graph_get(p@graph, p@stages[[1]]@members[[1]])@band, ord)
-  mem <- execute_plan(p)
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist, mem, tolerance = 0)
-  for (k in seq_along(ord)) {
-    expect_equal(mem[k, , ], unclass(fx$vals[[ord[k]]]), tolerance = 1e-6,
-                 ignore_attr = TRUE)
-  }
-  dir <- withr::local_tempdir("coalsink2")
-  out_d <- file.path(dir, "dist.tif")
-  out_s <- file.path(dir, "single.tif")
-  write_tif(st, out_d, distributed = TRUE)
-  write_tif(st, out_s, distributed = FALSE)
-  for (k in seq_along(ord)) {
-    d <- gdal_read_window(out_d, k, 0L, 0L, fx$nx, fx$ny)
-    s <- gdal_read_window(out_s, k, 0L, 0L, fx$nx, fx$ny)
-    expect_identical(d, s)
-    expect_equal(d, unclass(fx$vals[[ord[k]]]), tolerance = 1e-6,
-                 ignore_attr = TRUE)
-  }
-  # a multi-export with the stack as one sink streams both to disk
-  red <- reduce_over(st, "mean", "band", nan_rm = TRUE)
-  write_tif(list(cube = st, mean = red), dir, distributed = TRUE)
-  got <- gdal_read_window(file.path(dir, "cube.tif"), 2L, 0L, 0L, fx$nx, fx$ny)
-  expect_equal(got, unclass(fx$vals[[ord[2]]]), tolerance = 1e-6,
-               ignore_attr = TRUE)
-  m <- gdal_read_window(file.path(dir, "mean.tif"), 1L, 0L, 0L, fx$nx, fx$ny)
-  expect_equal(m, unclass(Reduce(`+`, fx$vals[ord]) / length(ord)),
-               tolerance = 1e-5, ignore_attr = TRUE)
-})
-
-test_that("distributed execution matches memory on a coalesced plan", {
-  skip_on_cran()
-  fx <- fixture_multiband()
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 200)
-  on.exit(options(old), add = TRUE)
-  lr <- .mb_graph(fx, function(st)
-    reduce_over(st, function(x, dims)
-      g_sum(x * 0.25, dims = dims, nan_rm = FALSE), over = "band") + 1)
-  p <- plan_lazy(lr)
-  kinds <- vapply(p@stages, function(s) s@kind, character(1))
-  expect_identical(sum(kinds == "source_read"), 1L)
-  mem <- execute_plan(p)
-  dist <- execute_plan_mirai(p)
-  expect_equal(dist, mem, tolerance = 1e-6)
-
-  # streamed write path
-  dir <- withr::local_tempdir("coalsink")
-  path <- file.path(dir, "out.tif")
-  execute_plan_mirai(p, path = path)
-  d <- methods::new(gdalraster::GDALRaster, path)
-  got <- matrix(d$read(1, 0, 0, fx$nx, fx$ny, fx$nx, fx$ny),
-                fx$ny, fx$nx, byrow = TRUE)
-  d$close()
-  expect_equal(got, unclass(mem), tolerance = 1e-6, ignore_attr = TRUE)
-})
-
 # A band stack of warps over one file (lazy_dataset() on a target grid)
 # collapses into one multi-band warp. Three target grids cover the three
 # read plans a warp can take: a pixel-aligned crop and a 2x decimation
@@ -283,25 +212,6 @@ test_that("warps that differ in grid or resampling stay per band", {
   p <- plan_lazy(lazy_stack(list(w1, w2), along = "band"))
   kinds <- vapply(p@stages, function(s) s@kind, character(1))
   expect_identical(sum(kinds == "warp"), 2L)
-})
-
-test_that("distributed execution matches memory on collapsed warps", {
-  skip_on_cran()
-  fx <- fixture_multiband()
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 200)
-  on.exit(options(old), add = TRUE)
-  for (nm in c("crop", "shift")) {
-    ds <- lazy_dataset(fx$path, .mb_targets(fx)[[nm]])
-    lr <- reduce_over(stack_bands(ds), function(x, dims)
-      g_sum(x * 0.25, dims = dims, nan_rm = FALSE), over = "band")
-    p <- plan_lazy(lr)
-    expect_equal(execute_plan_mirai(p), execute_plan(p), tolerance = 1e-6,
-                 label = nm)
-    expect_equal(collect(stack_bands(ds), distributed = TRUE),
-                 collect(stack_bands(ds), distributed = FALSE),
-                 tolerance = 0, ignore_attr = TRUE, label = nm)
-  }
 })
 
 test_that("a band-interleaved file keeps its per-band warps", {
@@ -383,4 +293,97 @@ test_that(".topo_order keeps ascending ids and puts late parents first", {
   d <- graph_add(g, MapNode, parents = a, grid = ga, fn = identity)
   graph_replace(g, b, MapNode(id = b, parents = d, grid = ga, fn = identity))
   expect_identical(.topo_order(g, c(a, b, c2, d)), c(a, d, b, c2))
+})
+
+# A skip here ends the file, so this block stays last.
+local({
+  skip_on_cran()
+  local_pools(2, 1, gdal_config = TRUE)
+
+  test_that("a coalesced sink stack writes and collects identically on every path", {
+    fx <- fixture_multiband()
+    withr::local_options(garry.chunk_target_px = 200)
+    # permuted band order must survive the collapse
+    ord <- c(4L, 1L, 6L, 3L)
+    g <- graph_new()
+    st <- lazy_stack(lapply(ord, function(b)
+      lazy_source(fx$path, band = b, graph = g)), along = "band")
+    p <- plan_lazy(st)
+    expect_identical(length(p@stages), 1L)
+    expect_identical(graph_get(p@graph, p@stages[[1]]@members[[1]])@band, ord)
+    dist <- execute_plan_mirai(p)
+    for (k in seq_along(ord)) {
+      expect_equal(dist[k, , ], .as_f32(fx$vals[[ord[k]]]), tolerance = 0,
+                   ignore_attr = TRUE)
+    }
+    dir <- withr::local_tempdir("coalsink2")
+    out_d <- file.path(dir, "dist.tif")
+    out_s <- file.path(dir, "single.tif")
+    write_tif(st, out_d, distributed = TRUE)
+    write_tif(st, out_s, distributed = FALSE)
+    for (k in seq_along(ord)) {
+      d <- gdal_read_window(out_d, k, 0L, 0L, fx$nx, fx$ny)
+      s <- gdal_read_window(out_s, k, 0L, 0L, fx$nx, fx$ny)
+      expect_identical(d, s)
+      expect_equal(d, unclass(fx$vals[[ord[k]]]), tolerance = 1e-6,
+                   ignore_attr = TRUE)
+    }
+    # a multi-export with the stack as one sink streams both to disk
+    red <- reduce_over(st, "mean", "band", nan_rm = TRUE)
+    write_tif(list(cube = st, mean = red), dir, distributed = TRUE)
+    got <- gdal_read_window(file.path(dir, "cube.tif"), 2L, 0L, 0L, fx$nx, fx$ny)
+    expect_equal(got, unclass(fx$vals[[ord[2]]]), tolerance = 1e-6,
+                 ignore_attr = TRUE)
+    m <- gdal_read_window(file.path(dir, "mean.tif"), 1L, 0L, 0L, fx$nx, fx$ny)
+    expect_equal(m, unclass(Reduce(`+`, fx$vals[ord]) / length(ord)),
+                 tolerance = 1e-5, ignore_attr = TRUE)
+  })
+
+  test_that("distributed execution matches plain R on a coalesced plan", {
+    fx <- fixture_multiband()
+    withr::local_options(garry.chunk_target_px = 200)
+    lr <- .mb_graph(fx, function(st)
+      reduce_over(st, function(x, dims)
+        g_sum(x * 0.25, dims = dims, nan_rm = FALSE), over = "band") + 1)
+    p <- plan_lazy(lr)
+    kinds <- vapply(p@stages, function(s) s@kind, character(1))
+    expect_identical(sum(kinds == "source_read"), 1L)
+    want <- Reduce(`+`, fx$vals) * 0.25 + 1
+    expect_equal(execute_plan_mirai(p), want, tolerance = 1e-5, ignore_attr = TRUE)
+
+    # streamed write path
+    dir <- withr::local_tempdir("coalsink")
+    path <- file.path(dir, "out.tif")
+    execute_plan_mirai(p, path = path)
+    d <- methods::new(gdalraster::GDALRaster, path)
+    got <- matrix(d$read(1, 0, 0, fx$nx, fx$ny, fx$nx, fx$ny),
+                  fx$ny, fx$nx, byrow = TRUE)
+    d$close()
+    expect_equal(got, want, tolerance = 1e-5, ignore_attr = TRUE)
+  })
+
+  test_that("distributed execution matches plain R on collapsed warps", {
+    fx <- fixture_multiband()
+    withr::local_options(garry.chunk_target_px = 200)
+    crs <- "EPSG:32632"
+    # An aligned crop reads directly. A quarter-pixel shift takes the warped
+    # VRT, and near lands on the cell under each target centre without a tie.
+    targets <- list(
+      crop = list(grid = .mb_targets(fx)$crop, cols = 11:45),
+      shift = list(grid = grid_spec(crs, c(500002.5, 4599702.5, 500452.5, 4599952.5), res = 10),
+                   cols = 1:45)
+    )
+    for (nm in names(targets)) {
+      tg <- targets[[nm]]
+      cells <- lapply(fx$vals, function(m) unclass(m)[6:30, tg$cols])
+      ds <- lazy_dataset(fx$path, tg$grid)
+      lr <- reduce_over(stack_bands(ds), function(x, dims)
+        g_sum(x * 0.25, dims = dims, nan_rm = FALSE), over = "band")
+      expect_equal(execute_plan_mirai(plan_lazy(lr)), Reduce(`+`, cells) * 0.25,
+                   tolerance = 1e-5, ignore_attr = TRUE, label = nm)
+      cube <- array(unlist(cells), c(25L, length(tg$cols), fx$nb))
+      expect_equal(collect(stack_bands(ds), distributed = TRUE), .as_f32(cube),
+                   tolerance = 0, ignore_attr = TRUE, label = nm)
+    }
+  })
 })

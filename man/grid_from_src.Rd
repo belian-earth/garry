@@ -8,9 +8,7 @@ grid_from_src(
   x,
   res,
   projection = c("laea", "aeqd", "utm", "pconic", "eqdc"),
-  ellps = "WGS84",
-  buffer = 0,
-  dtype = "f32"
+  buffer = 0
 )
 }
 \arguments{
@@ -19,9 +17,9 @@ grid_from_src(
 \item{res}{Target resolution. For a raster, in the source's native CRS units;
 for a vector, in the chosen projected CRS units (see \code{\link[=grid_from_bbox]{grid_from_bbox()}}).}
 
-\item{projection, ellps}{Vector sources only; ignored for rasters.}
+\item{projection}{Vector sources only; ignored for rasters.}
 
-\item{buffer, dtype}{As in \code{\link[=grid_from_bbox]{grid_from_bbox()}}.}
+\item{buffer}{As in \code{\link[=grid_from_bbox]{grid_from_bbox()}}.}
 }
 \value{
 A \code{GridSpec}.
@@ -35,12 +33,12 @@ kinds are treated differently, because they carry different information:
 \item \strong{Raster} (GeoTIFF, COG, ...): the source already has a projected CRS and
 footprint, so the grid keeps that native CRS and extent and is simply
 re-gridded to \code{res} (the extent is snapped out to whole multiples of \code{res}).
-\code{projection}/\code{ellps} are ignored: reprojecting a raster's own grid would
+\code{projection} is ignored: reprojecting a raster's own grid would
 distort it. Use this to coarsen a tile in place, e.g. read a 10 m embedding
 COG onto a 30 m grid while preserving its geometry.
 \item \strong{Vector} (GeoJSON, GeoPackage, shapefile, ...): only a footprint is known,
 so a projected CRS is chosen for it and the grid is built exactly as
-\code{\link[=grid_from_bbox]{grid_from_bbox()}} does, honouring \code{projection}/\code{ellps}.
+\code{\link[=grid_from_bbox]{grid_from_bbox()}} does, honouring \code{projection}.
 }
 
 Remote sources are read via HTTP range requests (header only), so this does

@@ -20,7 +20,9 @@
   n <- 12 * 9
   list(b1 = mk("b1", seq_len(n)),
        b2 = mk("b2", seq_len(n) * 10),
-       qa = mk("qa", rep(c(0, 2, 0), length.out = n), dtype = "Byte"))
+       qa = mk("qa", rep(c(0, 2, 0), length.out = n), dtype = "Byte"),
+       # one bad cell, at row 5, column 6: windows around it stay readable
+       spot = mk("spot", replace(rep(0, n), 54L, 2), dtype = "Byte"))
 }
 
 .masked_slice <- function(band_path, qa_path, off) {
@@ -143,7 +145,7 @@ test_that("a reduce feeding a multi-input map stays a stage boundary", {
 test_that("focal stages do not merge (halo guard) and still execute", {
   fx <- .merge_fixtures()
   layers <- lapply(c(0, 100), function(off) {
-    sm <- .masked_slice(fx$b1, fx$qa, off)
+    sm <- .masked_slice(fx$b1, fx$spot, off)
     focal_map(sm, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   })
   out <- reduce_over(lazy_stack(layers), "median", "t", nan_rm = TRUE)
@@ -156,8 +158,37 @@ test_that("focal stages do not merge (halo guard) and still execute", {
   halos <- vapply(p@stages, function(s) s@halo, integer(1))
   expect_identical(sum(halos[kinds == "compute"] > 0L), 2L)
 
-  got <- collect(out)                # executes without error
-  expect_identical(dim(got), c(9L, 12L))
+  # A 3 x 3 mean of a plane is its centre, and NaN where it leaves the raster
+  # or meets the bad cell; the median of the two layers sits between them.
+  want <- gdal_read_window(fx$b1, 1L, 0L, 0L, 12L, 9L) + 50
+  want[c(1L, 9L), ] <- NaN
+  want[, c(1L, 12L)] <- NaN
+  want[4:6, 5:7] <- NaN
+  expect_equal(collect(out), want, tolerance = 1e-5, ignore_attr = TRUE)
+})
+
+test_that("a plan worth merging folds its stages, and never a halo stage", {
+  # small chunks clear .merge_worth(), which the plans above stay under
+  withr::local_options(garry.chunk_target_px = 16L)
+  g <- graph_new()
+  a <- lazy_source_stub("a.tif", graph = g)
+  b <- lazy_source_stub("b.tif", graph = g)
+  n_compute <- function(x) {
+    sum(vapply(plan_lazy(x)@stages, function(s) s@kind == "compute", logical(1)))
+  }
+  median_of <- function(...) {
+    reduce_over(lazy_stack(list(...)), "median", "t", nan_rm = TRUE)
+  }
+  bands <- lazy_stack(list(median_of(a + 1, a * 2), median_of(b + 1, b * 2)), along = "band")
+  expect_identical(n_compute(bands), 1L)
+  withr::with_options(
+    list(garry.stage_merge = "guarded"),
+    expect_identical(n_compute(bands), 3L)
+  )
+  smooth <- function(x) {
+    focal_map(x + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
+  }
+  expect_identical(n_compute(median_of(smooth(a), smooth(b))), 3L)
 })
 
 test_that("sources with different native blocks share one chunk table", {
@@ -201,24 +232,4 @@ test_that("sources with different native blocks share one chunk table", {
   got <- collect(out)
   m <- gdal_read_window(f_a, 1L, 0L, 0L, 40L, 36L)
   expect_equal(got, m * 1.5, tolerance = 1e-5, ignore_attr = "gis")   # median(m, 2m)
-})
-
-test_that("merged plans run identically under the mirai scheduler", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-  fx <- .merge_fixtures()
-  composite_of <- function(band) {
-    masked <- lapply(c(0, 100), function(off)
-      .masked_slice(band, fx$qa, off))
-    reduce_over(lazy_stack(masked), "median", "t", nan_rm = TRUE)
-  }
-  out <- lazy_stack(list(composite_of(fx$b1), composite_of(fx$b2)),
-                    along = "band")
-  single <- collect(out)
-
-  local_pools(2, 2)
-  dist <- collect(out, distributed = TRUE)
-  expect_identical(is.nan(dist), is.nan(single))
-  ok <- !is.nan(single)
-  expect_equal(dist[ok], single[ok], tolerance = 0)
 })

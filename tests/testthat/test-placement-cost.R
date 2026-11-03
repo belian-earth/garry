@@ -79,10 +79,11 @@ test_that("with a thread cap the MLP chain fuses; narrow pools do not", {
 
   # a single capped reader cannot beat the machine-wide warm pool once
   # the kernel dominates the shm move: shrink modelled shm cost to nil
-  old <- options(garry.cost_shm_bw_mbs = 1e9)
-  on.exit(options(old), add = TRUE)
-  tab1 <- .plc(p, n_read = 1L, n_comp = 2L, reader_threads = 2,
-               avail_mb = 64000)$table
+  tab1 <- local({
+    testthat::local_mocked_bindings(.cost_shm_bw_mbs = 1e9)
+    .plc(p, n_read = 1L, n_comp = 2L, reader_threads = 2,
+         avail_mb = 64000)$table
+  })
   mlp1 <- tab1[tab1$bands > 1L, ]
   expect_identical(mlp1$decision, "comp")
 
@@ -96,14 +97,12 @@ test_that("with a thread cap the MLP chain fuses; narrow pools do not", {
   # fused window working set: kernels run at READ granularity, so a
   # window whose activation cubes exceed the per-reader budget must
   # materialise (the crop=2048 AEF OOM)
-  old_ws <- options(garry.fuse_reader_mb = 1e-4)
-  on.exit(options(old_ws), add = TRUE)
+  testthat::local_mocked_bindings(.fuse_reader_mb = 1e-4)
   tab3 <- .plc(p, n_read = 8L, n_comp = 2L, reader_threads = 2,
                avail_mb = 64000)$table
   mlp3 <- tab3[tab3$bands > 1L, ]
   expect_identical(mlp3$decision, "comp")
   expect_match(mlp3$reason, "working set")
-  options(old_ws)
 })
 
 test_that("mask cleanup fuses in both modes; scans never fuse in cost mode", {
@@ -157,21 +156,16 @@ test_that("cost mode caps read windows to the fused working set at plan time", {
     s <- Find(function(s) s@kind == "source_read", p@stages)
     prod(as.numeric(s@chunks@chunk_dim))
   }
-  act <- 4 * (fx$nb + 2 * 64)                # .stage_fuse_act_bytes_px
+  act <- 536                 # bytes a px: 4 on 6 inputs and 2 layers of 64
   old <- options(garry.chunk_target_px = 100)
   on.exit(options(old), add = TRUE)
 
-  old_r <- options(garry.placement = "rules")
-  big <- src_chunk(plan_lazy(build()))
-  options(old_r)
+  big <- withr::with_options(list(garry.placement = "rules"), src_chunk(plan_lazy(build())))
 
   # budget sized for a ~400 px window: reads come out capped, floored
   # at one compute chunk (coarse windows are integer multiples of it)
-  old_c <- options(garry.placement = "cost",
-                   garry.fuse_reader_mb = 400 * act / 2^20)
-  p_cost <- plan_lazy(build())
-  small <- src_chunk(p_cost)
-  options(old_c)
+  testthat::local_mocked_bindings(.fuse_reader_mb = 400 * act / 2^20)
+  small <- withr::with_options(list(garry.placement = "cost"), src_chunk(plan_lazy(build())))
 
   # floored at one full-width row band (strip source): 60 x 10 px
   expect_lt(small, big)

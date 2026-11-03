@@ -4,7 +4,7 @@
 \alias{stac_query}
 \title{Query a STAC API and return the item collection.}
 \usage{
-stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
+stac_query(bbox, stac_source, collection, start_date, end_date)
 }
 \arguments{
 \item{bbox}{Length-4 numeric, EPSG:4326 (xmin, ymin, xmax, ymax).}
@@ -18,8 +18,6 @@ stac_query(bbox, stac_source, collection, start_date, end_date, limit = 999)
 \code{"2023-06-01"} or \code{"2023-06-01 12:00:00"}). A date without a
 time covers that whole day, so \code{end_date = "2023-12-31"} includes
 acquisitions made on the 31st.}
-
-\item{limit}{Page size requested from the API.}
 }
 \value{
 An rstac \code{doc_items} object.

@@ -4,7 +4,7 @@
 
 test_that("handle cache stays within cap and evicted handles reopen", {
   .gdal_handle_reset()
-  cap <- garry_opt("handle_cache_max")
+  cap <- .gdal_cache$cap
 
   paths <- vapply(seq_len(cap + 3L), function(i) {
     fp <- file.path(tempdir(), sprintf("garry-hc-%d.tif", i))

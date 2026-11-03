@@ -1,3 +1,5 @@
+#define _FILE_OFFSET_BITS 64 /* ahead of every header: mingw-w64's off_t and fseeko */
+
 /* Raw store payload byte work (design/f64-store.md, D19-D21).
  *
  * A store value is a raw vector of row-major element bytes tagged with
@@ -25,7 +27,13 @@
 #include <R_ext/Rdynload.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#ifdef __linux__
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 SEXP garry_malloc_trim(void);
 SEXP garry_statvfs_mb(SEXP path);
@@ -316,6 +324,14 @@ SEXP garry_sv_pad(SEXP v, SEXP dims, SEXP es_, SEXP fill, SEXP ny2_, SEXP nx2_) 
   return out;
 }
 
+/* The host alone assembles a read-only collect, so a wide read pool
+ * waits on this copy. Four threads stay well ahead of what one socket
+ * delivers; a chunk under a quarter of a megapixel is not worth waking
+ * them for. Threads split by column, so each faults in its own pages:
+ * split by row, all of them race to clear the same huge pages. */
+#define COPY_THREADS 4
+#define COPY_THREADED_CELLS 262144
+
 /* Copy a row-major f32 store payload -- one [h, w] plane or a [nb, h, w]
  * stack -- into a column-major double array of dims (NY, NX, NK) at
  * (y0, x0, k0): out[(y0 + y) + (x0 + x) * NY + (k0 + b) * NY * NX] =
@@ -340,12 +356,16 @@ SEXP garry_f32_into_colmajor(SEXP out, SEXP raw, SEXP origin, SEXP dims) {
   const float *src = (const float *)RAW(raw);
   double *dst = REAL(out);
   const R_xlen_t B = 64;
+#ifdef _OPENMP
+#pragma omp parallel for collapse(3) schedule(static) num_threads(COPY_THREADS) \
+  if (nb * h * w >= COPY_THREADED_CELLS)
+#endif
   for (R_xlen_t b = 0; b < nb; b++) {
-    const float *plane = src + b * h * w;
-    double *slab = dst + (k0 + b) * NY * NX;
-    for (R_xlen_t yy = 0; yy < h; yy += B) {
-      R_xlen_t ye = yy + B < h ? yy + B : h;
-      for (R_xlen_t xx = 0; xx < w; xx += B) {
+    for (R_xlen_t xx = 0; xx < w; xx += B) {
+      for (R_xlen_t yy = 0; yy < h; yy += B) {
+        const float *plane = src + b * h * w;
+        double *slab = dst + (k0 + b) * NY * NX;
+        R_xlen_t ye = yy + B < h ? yy + B : h;
         R_xlen_t xe = xx + B < w ? xx + B : w;
         for (R_xlen_t x = xx; x < xe; x++) {
           double *col = slab + (x0 + x) * NY + y0;
@@ -359,10 +379,43 @@ SEXP garry_f32_into_colmajor(SEXP out, SEXP raw, SEXP origin, SEXP dims) {
   return R_NilValue;
 }
 
+/* The `width` bytes from `offset` of each `stride`-byte row of `raw`: a
+ * partial-width window of a full-width read, in place of an R index
+ * vector of 32 B a cell. */
+SEXP garry_raw_columns(SEXP raw, SEXP stride, SEXP offset, SEXP width) {
+  const R_xlen_t s = (R_xlen_t)asReal(stride);
+  const R_xlen_t o = (R_xlen_t)asReal(offset);
+  const R_xlen_t w = (R_xlen_t)asReal(width);
+  if (TYPEOF(raw) != RAWSXP || s <= 0 || o < 0 || w < 0 || o + w > s || XLENGTH(raw) % s != 0) {
+    error("garry_raw_columns: %lld bytes hold no rows of %lld with %lld from %lld",
+          (long long)XLENGTH(raw), (long long)s, (long long)w, (long long)o);
+  }
+  const R_xlen_t rows = XLENGTH(raw) / s;
+  SEXP out = PROTECT(Rf_allocVector(RAWSXP, rows * w));
+  for (R_xlen_t r = 0; r < rows; r++) {
+    memcpy(RAW(out) + r * w, RAW(raw) + r * s + o, (size_t)w);
+  }
+  UNPROTECT(1);
+  return out;
+}
+
 /* An uninitialised double vector of length n, for a result the caller
  * fills completely (the read-only collect writes every cell). */
 SEXP garry_alloc_double(SEXP n) {
-  return Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
+  SEXP out = Rf_allocVector(REALSXP, (R_xlen_t)REAL(n)[0]);
+#ifdef MADV_HUGEPAGE
+  /* First touch of 4 KB pages takes more of a large read than the copy.
+   * A vector this size has a mapping of its own, and the kernel may
+   * decline the hint, which changes only the speed. */
+  const size_t bytes = (size_t)XLENGTH(out) * sizeof(double);
+  if (bytes >= (size_t)32 << 20) {
+    const uintptr_t page = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t lo = ((uintptr_t)REAL(out) + page - 1) & ~(page - 1);
+    uintptr_t hi = ((uintptr_t)REAL(out) + bytes) & ~(page - 1);
+    madvise((void *)lo, hi - lo, MADV_HUGEPAGE);
+  }
+#endif
+  return out;
 }
 
 /* Copy an integer band read into `dst` from element `off` on, folding
@@ -626,7 +679,171 @@ SEXP garry_coarsen_into(SEXP dst, SEXP off, SEXP src, SEXP geo, SEXP table) {
   return dst;
 }
 
+/* The same run of bytes from each file, end to end in one raw vector. A cube
+ * read this way is built once, where joining per-file reads holds it twice. */
+SEXP garry_read_rows(SEXP paths, SEXP offset, SEXP bytes) {
+  R_xlen_t n = XLENGTH(paths);
+  double off = Rf_asReal(offset), len = Rf_asReal(bytes);
+  SEXP out = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t) (n * len)));
+  unsigned char *p = RAW(out);
+  for (R_xlen_t i = 0; i < n; i++) {
+    const char *path = R_ExpandFileName(CHAR(STRING_ELT(paths, i)));
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+      Rf_error("cannot open %s", path);
+    }
+    size_t got = 0;
+    if (fseeko(f, (off_t) off, SEEK_SET) == 0) {
+      got = fread(p + (size_t) (i * len), 1, (size_t) len, f);
+    }
+    fclose(f);
+    if (got != (size_t) len) {
+      Rf_error("short read of %s: %.0f of %.0f bytes", path, (double) got, len);
+    }
+  }
+  UNPROTECT(1);
+  return out;
+}
+
+/* A raw cube cut into equal parts, one file each. */
+SEXP garry_write_parts(SEXP raw, SEXP paths) {
+  R_xlen_t n = XLENGTH(paths);
+  size_t each = (size_t) (XLENGTH(raw) / n);
+  const unsigned char *p = RAW(raw);
+  for (R_xlen_t i = 0; i < n; i++) {
+    const char *path = R_ExpandFileName(CHAR(STRING_ELT(paths, i)));
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+      Rf_error("cannot write %s", path);
+    }
+    size_t put = fwrite(p + i * each, 1, each, f);
+    int closed = fclose(f);
+    if (put != each || closed != 0) {
+      Rf_error("short write of %s", path);
+    }
+  }
+  return R_NilValue;
+}
+
+/* Band `i` of `nb` from each strip's band-sequential bytes, joined in strip order,
+ * less the first `drop` bytes of the last strip's band. */
+SEXP garry_join_bands(SEXP strips, SEXP i_, SEXP nb_, SEXP drop_) {
+  R_xlen_t n = XLENGTH(strips);
+  R_xlen_t band = asInteger(i_) - 1, nb = asInteger(nb_);
+  R_xlen_t drop = (R_xlen_t) asReal(drop_), total = -drop;
+  for (R_xlen_t s = 0; s < n; s++) {
+    total += XLENGTH(VECTOR_ELT(strips, s)) / nb;
+  }
+  SEXP out = PROTECT(allocVector(RAWSXP, total));
+  Rbyte *p = RAW(out);
+  for (R_xlen_t s = 0; s < n; s++) {
+    SEXP x = VECTOR_ELT(strips, s);
+    R_xlen_t each = XLENGTH(x) / nb, skip = s == n - 1 ? drop : 0;
+    memcpy(p, RAW(x) + band * each + skip, (size_t) (each - skip));
+    p += each - skip;
+  }
+  UNPROTECT(1);
+  return out;
+}
+
+/* A fetch's f32 plane, outside R's heap. A raw vector this size has survived a
+ * collection by the time it is dead, so a full gc() would be the only way to
+ * free it, on every fetch. This one goes when it is written. */
+static void plane_free(SEXP p) {
+  free(R_ExternalPtrAddr(p));
+  R_ClearExternalPtr(p);
+}
+
+/* `n` f32 cells of NaN, the value of a cell no source reaches. */
+SEXP garry_plane_new(SEXP n_) {
+  R_xlen_t n = (R_xlen_t) asReal(n_);
+  float *d = malloc((size_t) n * sizeof(float));
+  if (d == NULL) {
+    error("no memory for a plane of %.0f cells", (double) n);
+  }
+  float nan = (float) R_NaN;
+  for (R_xlen_t i = 0; i < n; i++) {
+    d[i] = nan;
+  }
+  SEXP size = PROTECT(ScalarReal((double) n));
+  SEXP p = PROTECT(R_MakeExternalPtr(d, R_NilValue, size));
+  R_RegisterCFinalizerEx(p, plane_free, TRUE);
+  UNPROTECT(2);
+  return p;
+}
+
+/* The plane's address, as a GDAL MEM dataset's DATAPOINTER takes it. */
+SEXP garry_plane_addr(SEXP p) {
+  char s[32];
+  snprintf(s, sizeof s, "0x%llx", (unsigned long long) (uintptr_t) R_ExternalPtrAddr(p));
+  return mkString(s);
+}
+
+/* Write the plane to `path` and free it. */
+SEXP garry_plane_write(SEXP p, SEXP path) {
+  float *d = R_ExternalPtrAddr(p);
+  if (d == NULL) {
+    error("this plane has been written already");
+  }
+  size_t n = (size_t) asReal(R_ExternalPtrProtected(p));
+  const char *fn = translateChar(STRING_ELT(path, 0));
+  FILE *f = fopen(fn, "wb");
+  if (f == NULL) {
+    plane_free(p);
+    error("cannot open %s", fn);
+  }
+  size_t wrote = fwrite(d, sizeof(float), n, f);
+  int closed = fclose(f);
+  plane_free(p);
+  if (wrote != n || closed != 0) {
+    error("short write to %s", fn);
+  }
+  return R_NilValue;
+}
+
+/* Rewrite the `sentinel` cells of a raw f32 file as NaN, in place: a
+ * translate keeps a source's nodata as values, and every plane on the
+ * direct route marks it NaN. */
+SEXP garry_bin_nan(SEXP path, SEXP sentinel) {
+  const char *fn = translateChar(STRING_ELT(path, 0));
+  const float s = (float)asReal(sentinel);
+  FILE *f = fopen(fn, "r+b");
+  if (f == NULL) {
+    error("cannot open %s", fn);
+  }
+  static float buf[1 << 16];
+  const size_t cap = sizeof(buf) / sizeof(buf[0]);
+  size_t n;
+  int failed = 0;
+  while (!failed && (n = fread(buf, sizeof(float), cap, f)) > 0) {
+    int hit = 0;
+    for (size_t i = 0; i < n; i++) {
+      if (buf[i] == s) {
+        buf[i] = NAN;
+        hit = 1;
+      }
+    }
+    if (hit) {
+      failed = fseek(f, -(long)(n * sizeof(float)), SEEK_CUR) != 0 ||
+               fwrite(buf, sizeof(float), n, f) != n ||
+               fseek(f, 0, SEEK_CUR) != 0;
+    }
+  }
+  failed = ferror(f) != 0 || failed;
+  if (fclose(f) != 0 || failed) {
+    error("could not rewrite the nodata of %s", fn);
+  }
+  return R_NilValue;
+}
+
 static const R_CallMethodDef CallEntries[] = {
+  {"garry_join_bands", (DL_FUNC) &garry_join_bands, 4},
+  {"garry_plane_new", (DL_FUNC) &garry_plane_new, 1},
+  {"garry_plane_addr", (DL_FUNC) &garry_plane_addr, 1},
+  {"garry_plane_write", (DL_FUNC) &garry_plane_write, 2},
+  {"garry_bin_nan", (DL_FUNC) &garry_bin_nan, 2},
+  {"garry_read_rows", (DL_FUNC) &garry_read_rows, 3},
+  {"garry_write_parts", (DL_FUNC) &garry_write_parts, 2},
   {"garry_coarsen_into", (DL_FUNC) &garry_coarsen_into, 5},
   {"garry_decode_into", (DL_FUNC) &garry_decode_into, 5},
   {"garry_flip_rows", (DL_FUNC) &garry_flip_rows, 3},
@@ -639,6 +856,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"garry_sv_window", (DL_FUNC) &garry_sv_window, 7},
   {"garry_sv_pad", (DL_FUNC) &garry_sv_pad, 6},
   {"garry_f32_into_colmajor", (DL_FUNC) &garry_f32_into_colmajor, 4},
+  {"garry_raw_columns", (DL_FUNC) &garry_raw_columns, 4},
   {"garry_alloc_double", (DL_FUNC) &garry_alloc_double, 1},
   {"garry_finish_matrix", (DL_FUNC) &garry_finish_matrix, 6},
   {"garry_statvfs_mb", (DL_FUNC) &garry_statvfs_mb, 1},

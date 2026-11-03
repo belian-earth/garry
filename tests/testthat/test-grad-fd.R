@@ -1,17 +1,21 @@
 # Pipeline gradients vs finite differences of collect()'d losses.
 
 
-.fd_kernel_grad <- function(build_loss, k0, eps = 1e-2) {
-  g <- matrix(0, nrow(k0), ncol(k0))
-  for (i in seq_len(nrow(k0))) {
-    for (j in seq_len(ncol(k0))) {
-      kp <- k0; kp[i, j] <- kp[i, j] + eps
-      km <- k0; km[i, j] <- km[i, j] - eps
-      g[i, j] <- (collect(build_loss(kp)) - collect(build_loss(km))) /
-        (2 * eps)
-    }
-  }
-  g
+# Each cell of a sweep is two collects at new weights, so two cold kernels.
+.fd_all <- as.matrix(expand.grid(1:3, 1:3))
+# The (dy, dx) layout is proved over every cell once. Elsewhere these three
+# are enough: they see a swap of the axes, and the masks and maps around the
+# focal do not depend on which weight moved.
+.fd_some <- rbind(c(1L, 2L), c(2L, 1L), c(3L, 3L))
+
+# Central differences of the loss at `cells`, a [row, column] index of k0.
+.fd_kernel_grad <- function(build_loss, k0, cells = .fd_some, eps = 1e-2) {
+  vapply(seq_len(nrow(cells)), function(n) {
+    at <- cells[n, , drop = FALSE]
+    kp <- k0; kp[at] <- kp[at] + eps
+    km <- k0; km[at] <- km[at] - eps
+    (collect(build_loss(kp)) - collect(build_loss(km))) / (2 * eps)
+  }, numeric(1))
 }
 
 test_that("kernel gradient of mean(focal_kernel(x, k)) matches FD", {
@@ -25,17 +29,15 @@ test_that("kernel gradient of mean(focal_kernel(x, k)) matches FD", {
     a <- lazy_source(f)
     reduce_over(focal_kernel(a / 1000, k), "mean", c("x", "y"))
   }
-  loss <- build(k0)
-  wrt <- NULL
-  # Rebuild to grab the focal handle from the same graph.
+  # The focal handle has to come from the loss's own graph.
   a <- lazy_source(f)
   fk <- focal_kernel(a / 1000, k0)
   loss <- reduce_over(fk, "mean", c("x", "y"))
 
   got <- lazy_value_and_grad(loss, fk)
-  fd <- .fd_kernel_grad(build, k0)
+  fd <- .fd_kernel_grad(build, k0, .fd_all)
 
-  expect_equal(got$grad, fd, tolerance = 5e-3)
+  expect_equal(got$grad[.fd_all], fd, tolerance = 5e-3)
   expect_equal(got$value, collect(build(k0)), tolerance = 1e-5)
 })
 
@@ -57,7 +59,7 @@ test_that("gradient with maps before and after the focal matches FD", {
   got <- lazy_value_and_grad(loss, fk)
   fd <- .fd_kernel_grad(build, k0, eps = 1e-3)
 
-  expect_equal(got$grad / abs(fd + (fd == 0)),
+  expect_equal(got$grad[.fd_some] / abs(fd + (fd == 0)),
                fd / abs(fd + (fd == 0)), tolerance = 5e-3)
   expect_equal(got$value, collect(build(k0)), tolerance = 1e-2)
 })
@@ -77,8 +79,7 @@ test_that("gradients on nodata rasters are poison-free and match FD", {
 
   got <- lazy_value_and_grad(loss, fk)
   expect_false(anyNA(got$grad))
-  fd <- .fd_kernel_grad(build, k0)
-  expect_equal(got$grad, fd, tolerance = 5e-3)
+  expect_equal(got$grad[.fd_some], .fd_kernel_grad(build, k0), tolerance = 5e-3)
 })
 
 test_that("NaN produced inside the pipeline is skipped, as collect() skips it", {
@@ -100,7 +101,7 @@ test_that("NaN produced inside the pipeline is skipped, as collect() skips it", 
   got <- lazy_value_and_grad(loss, fk)
   expect_false(is.nan(got$value))
   expect_equal(got$value, collect(build(k0)), tolerance = 1e-5)
-  expect_equal(got$grad, .fd_kernel_grad(build, k0), tolerance = 5e-3)
+  expect_equal(got$grad[.fd_some], .fd_kernel_grad(build, k0), tolerance = 5e-3)
 })
 
 test_that("the gradient path reads a source as collect() does (resampling)", {

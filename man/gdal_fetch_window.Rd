@@ -4,7 +4,7 @@
 \alias{gdal_fetch_window}
 \title{Copy one source's target-window bytes to a local file.}
 \usage{
-gdal_fetch_window(location, out_file, ext, crs, margin = 8L, out_res = NULL)
+gdal_fetch_window(location, out_file, ext, crs, out_res = NULL)
 }
 \arguments{
 \item{location}{Source path/URL.}
@@ -12,17 +12,16 @@ gdal_fetch_window(location, out_file, ext, crs, margin = 8L, out_res = NULL)
 \item{out_file}{Local destination GTiff.}
 
 \item{ext, crs}{Target extent and CRS defining the window.}
-
-\item{margin}{Source-pixel margin around the window.}
 }
 \value{
-\code{TRUE}, invisibly. Errors if the window is empty or the
-source unreadable.
+\code{TRUE}, invisibly. Errors if the source is unreadable. A source
+clear of the window yields its corner pixel: a tile for the local
+index that warps to nothing.
 }
 \description{
 The fetch half of the fetch/assemble split: a plain
-\code{gdal_translate -srcwin} of the window intersecting \code{ext} (plus a
-warp-kernel \code{margin} in source pixels), native dtype and blocks;
+\code{gdal_translate -srcwin} of the window intersecting \code{ext} (plus
+\code{.fetch_margin}, for the warp kernel), native dtype and blocks;
 no warp, no mosaic on the remote path.
 }
 \keyword{internal}

@@ -429,11 +429,6 @@ ocm_load_weights <- function(dir, models = c("regnety", "edgenext")) {
   })
   out <- list(weights = weights, kernel_id = hash, paths = paths)
   dir.create(dirname(cache), recursive = TRUE, showWarnings = FALSE)
-  # write then rename, so a concurrent session never reads a partial file
-  tmp <- tempfile("ocm-", tmpdir = dirname(cache), fileext = ".rds")
-  saveRDS(out, tmp)
-  if (!file.rename(tmp, cache)) {
-    unlink(tmp)
-  }
+  .cache_save(out, cache, "the OmniCloudMask weights")
   out
 }

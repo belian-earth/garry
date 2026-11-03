@@ -145,3 +145,11 @@ test_that("a materialised band cube extracts one column per band", {
   invisible(collect(cube, distributed = FALSE))
   expect_equal(unname(extract_points(cube, pts)), unname(want), tolerance = 1e-6)
 })
+
+test_that("a source opened with options is refused, not read unfiltered", {
+  gti <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(1000)))
+  x <- .gg_slice(gti, "s1", graph_new())
+  expect_error(extract_points(x, cbind(5, 395)), "Materialise")
+  ds <- as_dataset(list(a = x))
+  expect_error(extract_points(ds, cbind(5, 395)), "Materialise")
+})

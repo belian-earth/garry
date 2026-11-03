@@ -35,8 +35,8 @@ Samples a raster at points via \code{\link[gdalraster:pixel_extract]{gdalraster:
 only the blocks containing points. Accepts anything that function accepts
 (a path or a \code{GDALRaster}, passed through untouched) plus a garry
 \code{LazyRaster}/\code{LazyDataset} that is already \strong{materialised} -- i.e. one
-whose graph is a bare source over local files, as \code{\link[=materialise]{materialise()}}
-returns.
+whose graph is a bare source over local files, opened without open
+options, as \code{\link[=materialise]{materialise()}} returns.
 }
 \details{
 An unmaterialised pipeline is an error, not a silent cube write. Getting

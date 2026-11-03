@@ -16,3 +16,33 @@ local_pools <- function(read, compute, ..., gdal_config = FALSE,
   on.exit(options(old))
   force(code)
 }
+
+# An empty kernel cache for one test, restored after it.
+.local_kernel_cache <- function(env = parent.frame()) {
+  e <- garry:::.daemon_cache
+  held <- as.list(e, all.names = TRUE)
+  rm(list = ls(e, all.names = TRUE), envir = e)
+  withr::defer(
+    {
+      rm(list = ls(e, all.names = TRUE), envir = e)
+      list2env(held, envir = e)
+    },
+    envir = env
+  )
+  e
+}
+
+# The most tasks of `pool` a task log shows in flight at once: what a gate
+# holding a run back leaves to see.
+.max_in_flight <- function(tlog, pool = "read") {
+  d <- utils::read.csv(tlog)
+  keys <- d$key[d$event == "launch" & d$pool == pool]
+  d <- d[d$event %in% c("launch", "done") & d$key %in% keys, ]
+  max(cumsum(ifelse(d$event == "launch", 1L, -1L)))
+}
+
+# A retry's backoff is the jitter times a delay, so at zero jitter retries
+# run back to back.
+.local_no_backoff <- function(env = parent.frame()) {
+  testthat::local_mocked_bindings(runif = function(n, ...) numeric(n), .package = "stats", .env = env)
+}

@@ -36,9 +36,7 @@ GPU).
   is never quietly moved half a cell.
 - **Fast.** `collect()` plans the graph into chunks, streams reads
   through a GDAL daemon pool, and runs the fused kernels through
-  [anvl](https://github.com/r-xla/anvl) (XLA). On a three-band annual
-  HLS composite it matches Python’s ODC + dask on the same machine, in
-  idiomatic R.
+  [anvl](https://github.com/r-xla/anvl) (XLA).
 - **GDAL-faithful.** IO is
   [gdalraster](https://cran.r-project.org/package=gdalraster).
 
@@ -51,7 +49,7 @@ iteration is planned) over grid-pinned labelled cubes. Expressions are
 written in [anvl](https://github.com/r-xla/anvl)’s vocabulary, planned
 as one graph, and executed distributed and memory-bounded. This closed
 world is what makes whole-graph fusion, cost placement and
-byte-identical distributed execution possible.
+reproducible distributed execution possible.
 
 On those primitives garry ships a growing catalogue of statistical
 verbs: `geomedian()` and `medoid()` for multivariate compositing,
@@ -240,4 +238,4 @@ The same verbs work on a single raster. `lazy_source()` opens one COG or
 a GDAL mosaic; `lazy_map()` / `focal_map()` / `reduce_over()` build
 map-algebra graphs; `align_to()` reprojects onto a target grid; `collect()`
 brings the result into R and `write_tif()` streams it to disk. See
-`benchmarks/compare.sh` for the back-to-back garry-vs-ODC benchmark.
+`benchmarks/README.md` for the garry-vs-ODC benchmark suite.

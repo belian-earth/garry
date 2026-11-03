@@ -3,7 +3,7 @@
 NULL
 
 # ---------------------------------------------------------------------------
-# Single-threaded anvl-native executor (Phase 5; decision D14).
+# Single-threaded anvl-native executor (decision D14).
 #
 # Topo-walk over stages. Per chunk:
 #   read (halo-padded GDAL window) -> upload once -> run the jit()'d
@@ -20,58 +20,54 @@ NULL
 # against.
 # ---------------------------------------------------------------------------
 
-# Host-side jit cache for execute_plan(). The dispatcher cache anvl hangs
-# off a JitFunction is keyed on input SHAPES only, never on the function
-# (see .gd_cached_jit()), so a fresh g_jit() per run hands XLA a kernel it
-# has never seen and recompiles it every time -- measured at ~0.29 s per
-# collect on a 4-band index pipeline, half the executor's compute time.
-# The daemon path already caches under the host's structural signature;
-# this is the single-process twin, keyed the same way so a rebuilt but
-# structurally identical plan reuses the executable.
-.exec_jit_cache <- new.env(parent = emptyenv())
-
-#' Drop every cached executable held by the single-process executor.
+#' Drop every kernel this process holds.
 #'
-#' The cache is keyed on stage structure, so it is only ever a speed
+#' The cache is keyed on kernel content, so it is only ever a speed
 #' optimisation; clearing it costs a recompile and nothing else.
 #'
 #' @return `NULL`, invisibly.
 #' @keywords internal
 .exec_jit_clear <- function() {
-  rm(list = ls(.exec_jit_cache, all.names = TRUE), envir = .exec_jit_cache)
+  rm(list = ls(.daemon_cache, all.names = TRUE), envir = .daemon_cache)
   invisible(NULL)
 }
 
-.exec_cached_jit <- function(graph, s, dev) {
-  # macOS: reusing a cached JitFunction across collects dispatches
-  # SLOWER than a fresh compile there (test-kernel-cache's recompile
-  # tripwire: second collect 3.8s vs a 2s gate, run 33505350958), and
-  # the compounded slowdown pushed the CI suite past its elapsed-time
-  # kill. Same needs-mac-hardware family as the fused-on-reader hang
-  # (see test-compute-on-read.R). Until debugged on real hardware the
-  # host cache is not used on Darwin; inline g_jit is exactly the
-  # pre-cache behavior, which is green there.
-  if (Sys.info()[["sysname"]] == "Darwin") {
-    return(g_jit(s@fn, device = dev))
+# Can a kernel be reused across runs? Not on macOS, where reuse dispatches
+# slower than a fresh compile or stalls (see .host_kernel() and
+# .daemon_jit_reset()).
+.kernels_outlive_runs <- function() {
+  !identical(Sys.info()[["sysname"]], "Darwin")
+}
+
+# A kernel the host runs itself. A fresh g_jit() per run hands XLA a
+# kernel it has never seen and recompiles it every time (see
+# .daemon_kernel()), measured at ~0.29 s per collect on a 4-band index
+# pipeline, half the executor's compute time, so a rebuilt but
+# structurally identical plan reuses the executable as a daemon does.
+#
+# macOS: reusing a cached JitFunction across collects dispatches SLOWER
+# than a fresh compile there (test-kernel-cache's recompile tripwire:
+# second collect 3.8s vs a 2s gate, run 33505350958), and the compounded
+# slowdown pushed the CI suite past its elapsed-time kill. Same
+# needs-mac-hardware family as the fused-on-reader hang (see
+# test-compute-on-read.R). Until debugged on real hardware the host
+# cache is not used on Darwin; inline g_jit is exactly the pre-cache
+# behavior, which is green there.
+.host_kernel <- function(ck, fn, dev) {
+  if (!.kernels_outlive_runs()) {
+    return(g_jit(fn, device = dev))
   }
-  # A stage whose signature cannot be taken (an exotic member the sig
-  # does not model) simply compiles inline, as before.
-  ck <- tryCatch(
-    paste0(.stage_kernel_sig(graph, s), "@", s@device),
-    error = function(e) NULL
-  )
-  if (is.null(ck)) {
-    return(g_jit(s@fn, device = dev))
-  }
-  if (length(ls(.exec_jit_cache, all.names = TRUE)) > 64L) {
-    .exec_jit_clear()
-  }
-  jf <- .exec_jit_cache[[ck]]
-  if (is.null(jf)) {
-    jf <- g_jit(s@fn, device = dev)
-    .exec_jit_cache[[ck]] <- jf
-  }
-  jf
+  .daemon_kernel(paste0(ck, "#", .default_dtype_tag()), fn, dev)
+}
+
+# The stage holding node `nid`: the last, as a spatially reduced root is
+# a member of both its partial and combine stages.
+.stage_of_node <- function(plan, nid) {
+  plan@stages[[max(which(vapply(
+    plan@stages,
+    function(s) nid %in% s@members,
+    logical(1)
+  )))]]
 }
 
 # Resolve a "warp" stage to the read that actually serves it. An aligned
@@ -82,8 +78,9 @@ NULL
 # store, or other sources together, warp straight into each window
 # (gdal_warp_window()); anything else builds the warped VRT. Shared by
 # execute_plan() and the mirai scheduler so the two cannot disagree
-# about which read they do.
-.warp_read_plan <- function(wnode, snode) {
+# about which read they do. `build = FALSE` asks only which: a warped VRT,
+# the last resort, comes back as an empty plan, unbuilt.
+.warp_read_plan <- function(wnode, snode, build = TRUE) {
   # a collapsed band stack of warps reads its own bands of the source
   band <- if (length(wnode@bands)) wnode@bands else snode@band
   # a coarsened warp, or a decoded mosaic or Zarr array read by nearest
@@ -131,20 +128,30 @@ NULL
       open_options = character(0),
       scale = snode@scale,
       offset = snode@offset,
-      decim = if (wnode@resampling %in% c("near", "nearest")) {
+      decim = if (.reads_tile_by_tile(wnode@resampling, wnode@grid@dtype)) {
         .mosaic_read_spec(snode@path, wnode@target_grid, band, snode@nodata)
       },
       resampling = wnode@resampling
     ))
   }
-  spec <- .rio_direct_spec(
-    snode@path,
-    wnode@target_grid,
-    wnode@resampling,
-    snode@open_options,
-    band = band,
-    nodata = snode@nodata
-  )
+  # A file of the same product as one that had to warp warps too: no need to
+  # open it. The grid hides what the VRT holds of the file, its type and row
+  # order, so a source that never opened its file builds its own.
+  alike <- if (length(snode@stored)) {
+    list(snode@grid, snode@stored, snode@scale, snode@offset)
+  }
+  key <- .warp_vrt_key(alike, band, wnode@target_grid, wnode@resampling, snode@nodata, snode@open_options)
+  spec <- if (is.null(key) || is.null(.gdal_cache$warp_vrt[[key]])) {
+    .rio_direct_spec(
+      snode@path,
+      wnode@target_grid,
+      wnode@resampling,
+      snode@open_options,
+      band = band,
+      nodata = snode@nodata,
+      src_grid = snode@grid
+    )
+  }
   if (!is.null(spec)) {
     return(list(
       path = snode@path,
@@ -165,27 +172,33 @@ NULL
       path = snode@path,
       band = band,
       nodata = snode@nodata,
-      open_options = character(0),
+      open_options = snode@open_options,
       scale = snode@scale,
       offset = snode@offset,
       decim = list(warp = TRUE),
       resampling = wnode@resampling
     ))
   }
+  if (!build) {
+    return(list())
+  }
   list(
     path = gdal_warp_vrt(
-      snode@path,
+      .gti_resampled_path(snode@path, snode@resampling),
       band,
       wnode@target_grid,
       wnode@resampling,
-      src_nodata = snode@nodata
+      src_nodata = snode@nodata,
+      open_options = snode@open_options,
+      alike = alike
     ),
     band = seq_along(band),
     nodata = snode@nodata,
     open_options = character(0),
     scale = snode@scale,
     offset = snode@offset,
-    decim = NULL
+    decim = NULL,
+    warped = TRUE
   )
 }
 
@@ -241,17 +254,14 @@ NULL
     return(FALSE)
   }
   wnode <- graph_get(graph, s$members[[1L]])
-  rp <- tryCatch(
-    .warp_read_plan(wnode, graph_get(graph, wnode@parents[[1L]])),
-    error = function(e) NULL
-  )
+  rp <- .warp_read_plan(wnode, graph_get(graph, wnode@parents[[1L]]), build = FALSE)
   !is.null(rp$decim$fx) || !is.null(rp$decim$coarsen)
 }
 
 # A read-only chunk bound for an integer output, read straight into the
 # integer planes it writes (gdal_read_int_planes()), or NULL for the f32
 # route: a float output, a warp, several sources, a band affine or a
-# halo keep it, and so does a failed read, which retries there.
+# halo keep it.
 .read_int_planes <- function(ra, cg, core, dtype, nodata) {
   if (
     .dtype_family(dtype) == "float" ||
@@ -265,28 +275,29 @@ NULL
   ) {
     return(NULL)
   }
-  tryCatch(
-    gdal_read_int_planes(
-      ra$path,
-      ra$band,
-      core$x_off,
-      core$y_off,
-      core$x_size,
-      core$y_size,
-      nodata = ra$nodata,
-      out_nodata = nodata,
-      open_options = ra$open_options,
-      decim = ra$decim
-    ),
-    error = function(e) NULL
+  .gdal_with_retry(
+    function() {
+      .gdal_read_warped(
+        ra,
+        gdal_read_int_planes(
+          ra$path,
+          ra$band,
+          core$x_off,
+          core$y_off,
+          core$x_size,
+          core$y_size,
+          nodata = ra$nodata,
+          out_nodata = nodata,
+          open_options = ra$open_options,
+          decim = ra$decim
+        )
+      )
+    },
+    what = "read",
+    src = ra$path
   )
 }
 
-# Read one halo-padded chunk from a GDAL source into a NaN-initialised
-# buffer of exactly (y + 2H) x (x + 2H): cells beyond the raster edge
-# stay NaN (nodata boundary, D8). A multi-band source (vector `band`,
-# coalesced band stack) reads as a (band, y, x) cube; the halo pads
-# the spatial dims only.
 # The read behind a source_read or warp stage: a source's own read
 # arguments, or what serves its warp (a direct decimating read or a
 # warped VRT, see .warp_read_plan()). One place, so every executor reads
@@ -340,29 +351,29 @@ NULL
     # several sources on their own planning grid: source by source, as a
     # nearest warp of them is (.warp_read_plan())
     decim = if (
-      length(node@path) > 1L && node@resampling %in% c("near", "nearest")
+      length(node@path) > 1L &&
+        .reads_tile_by_tile(node@resampling, node@grid@dtype)
     ) {
       .mosaic_read_spec(node@path, node@grid, node@band, node@nodata)
     }
   )
 }
 
-.exec_read_padded <- function(
-  path,
-  band,
-  nodata,
-  cg,
-  core,
-  open_options = character(0),
-  out = c("matrix", "raw_f32"),
-  scale = numeric(0),
-  offset = numeric(0),
-  decim = NULL,
-  resampling = "near"
-) {
+# Do several sources take the tile-by-tile mosaic rather than one warp of
+# them all? It serves nearest reads, through f32 tile payloads.
+.reads_tile_by_tile <- function(resampling, dtype) {
+  resampling %in% c("near", "nearest") && dtype %in% .f32_exact_dtypes
+}
+
+# Read one halo-padded chunk of `ra` (.stage_read_args()) into a buffer of
+# exactly (y + 2H) x (x + 2H): cells beyond the raster edge stay NaN
+# (nodata boundary, D8), or 0 for an integer source (.sv_fill). A
+# multi-band source (vector `band`, coalesced band stack) reads as a
+# (band, y, x) cube; the halo pads the spatial dims only.
+.exec_read_padded <- function(ra, cg, core, out = c("matrix", "raw_f32")) {
   out <- rlang::arg_match(out)
   H <- cg@halo
-  nb <- length(band)
+  nb <- length(ra$band)
   # Raw store payloads (D19) only take the halo-free path: padding
   # embeds into a matrix buffer below.
   stopifnot(out == "matrix" || H == 0L)
@@ -374,107 +385,84 @@ NULL
     core$y_size
   )
   read_one <- function() {
-    if (!is.null(decim$coarsen)) {
+    if (!is.null(ra$decim$coarsen)) {
       return(gdal_read_window_coarsen(
-        path,
-        band,
+        ra$path,
+        ra$band,
         w$x_off,
         w$y_off,
         w$x_size,
         w$y_size,
-        decim = decim,
-        nodata = nodata,
+        decim = ra$decim,
+        nodata = ra$nodata,
         out = out,
-        scale = scale,
-        offset = offset
+        scale = ra$scale,
+        offset = ra$offset
       ))
     }
-    if (length(decim$parts)) {
+    if (length(ra$decim$parts)) {
       return(gdal_read_window_multi(
-        path,
-        band,
+        ra$path,
+        ra$band,
         w$x_off,
         w$y_off,
         w$x_size,
         w$y_size,
-        decim = decim,
-        nodata = nodata,
+        decim = ra$decim,
+        nodata = ra$nodata,
         out = out,
-        scale = scale,
-        offset = offset
+        scale = ra$scale,
+        offset = ra$offset
       ))
     }
-    if (length(path) > 1L || isTRUE(decim$warp)) {
+    if (length(ra$path) > 1L || isTRUE(ra$decim$warp)) {
       return(gdal_warp_window(
-        path,
-        band,
+        ra$path,
+        ra$band,
         cg@grid,
         w$x_off,
         w$y_off,
         w$x_size,
         w$y_size,
-        resampling = resampling,
-        nodata = nodata,
+        resampling = ra$resampling,
+        nodata = ra$nodata,
         out = out,
-        scale = scale,
-        offset = offset
+        scale = ra$scale,
+        offset = ra$offset,
+        open_options = ra$open_options
       ))
     }
-    gdal_read_window(
-      path,
-      band,
-      w$x_off,
-      w$y_off,
-      w$x_size,
-      w$y_size,
-      nodata = nodata,
-      open_options = open_options,
-      out = out,
-      scale = scale,
-      offset = offset,
-      decim = decim
+    .gdal_read_warped(
+      ra,
+      gdal_read_window(
+        ra$path,
+        ra$band,
+        w$x_off,
+        w$y_off,
+        w$x_size,
+        w$y_size,
+        nodata = ra$nodata,
+        open_options = ra$open_options,
+        out = out,
+        scale = ra$scale,
+        offset = ra$offset,
+        decim = ra$decim
+      )
     )
   }
-  sub <- tryCatch(
-    .gdal_with_retry(read_one, what = "read"),
-    error = function(e) {
-      if (!identical(garry_opt("read_fail"), "nodata")) {
-        stop(e)
-      }
-      cli::cli_warn(
-        "read failed, filling with nodata: {.path {path}} ({conditionMessage(e)})"
-      )
-      if (out == "raw_f32") {
-        v <- rep(NaN, nb * w$y_size * w$x_size)
-        if (nb > 1L) {
-          structure(
-            writeBin(v, raw(), size = 4L),
-            gdim = c(nb, w$y_size, w$x_size),
-            gdt = "f32"
-          )
-        } else {
-          .sv_from_vec(v, w$y_size, w$x_size)
-        }
-      } else if (nb > 1L) {
-        array(NaN, c(nb, w$y_size, w$x_size))
-      } else {
-        matrix(NaN, w$y_size, w$x_size)
-      }
-    }
-  )
+  sub <- .gdal_with_retry(read_one, what = "read", src = ra$path)
   if (H == 0L) {
     return(sub)
   }
+  fill <- .sv_fill(cg@grid@dtype)
+  r0 <- H - w$pad_top
+  c0 <- H - w$pad_left
   if (nb > 1L) {
-    buf <- array(NaN, c(nb, core$y_size + 2L * H, core$x_size + 2L * H))
-    r0 <- H - w$pad_top
-    c0 <- H - w$pad_left
+    buf <- array(fill, c(nb, core$y_size + 2L * H, core$x_size + 2L * H))
     buf[, (r0 + 1L):(r0 + w$y_size), (c0 + 1L):(c0 + w$x_size)] <- sub
     return(buf)
   }
-  buf <- matrix(NaN, core$y_size + 2L * H, core$x_size + 2L * H)
-  r0 <- H - w$pad_top
-  c0 <- H - w$pad_left
+  buf <- matrix(fill, core$y_size + 2L * H, core$x_size + 2L * H)
   buf[(r0 + 1L):(r0 + w$y_size), (c0 + 1L):(c0 + w$x_size)] <- sub
   buf
 }
@@ -495,8 +483,22 @@ NULL
   if (length(d) == 2L) {
     return(x[(k + 1L):(d[[1L]] - k), (k + 1L):(d[[2L]] - k), drop = FALSE])
   }
-  stopifnot(length(d) == 3L)
+  .exec_rank_check(length(d) - 2L)
   x[, (k + 1L):(d[[2L]] - k), (k + 1L):(d[[3L]] - k), drop = FALSE]
+}
+
+# Values past (outer, y, x) stay whole: a chunked read, trim or assembly
+# handles one outer dim, so a result with more must lose one first.
+.exec_rank_check <- function(n_outer) {
+  if (n_outer > 1L) {
+    .garry_error(
+      paste0(
+        "this result has ", n_outer, " outer dims, and chunks assemble over one: ",
+        "reduce one with reduce_over(), or collapse them with stack_bands()."
+      ),
+      "garry_plan_error"
+    )
+  }
 }
 
 # -- Raw f32 store values (phase 12c, decisions D19/D20) ----------------------
@@ -513,19 +515,22 @@ NULL
 
 .sv_dim <- function(v) attr(v, "gdim")
 
-# Wrap a ROW-major numeric vector (GDAL read order) as an f32 payload.
 # Element size of a payload (or dtype string): the store carries f32
 # and f64 (design/f64-store.md); everything below keys its byte
 # arithmetic on this instead of a hard-coded 4.
 .sv_es <- function(v) {
   gdt <- if (is.character(v)) v else attr(v, "gdt")
-  switch(gdt, f64 = 8L, f32 = , i32 = 4L, i16 = , u16 = 2L, i8 = , u8 = 1L, 4L)
-}
-
-# Is a payload a sink-only integer (g_quantize output)? These are
-# written bytes: never re-uploaded, never part-sliced.
-.sv_is_int <- function(v) {
-  .sv_is(v) && attr(v, "gdt") %in% c("u8", "i8", "i16", "u16", "i32")
+  switch(
+    gdt,
+    f64 = 8L,
+    f32 = ,
+    i32 = 4L,
+    i16 = ,
+    u16 = 2L,
+    i8 = ,
+    u8 = 1L,
+    .garry_error(.glue("unknown store payload type: {gdt}"), "garry_store_error")
+  )
 }
 
 # One plane of a payload as the vector GDAL writes: plane `b` of a
@@ -548,14 +553,6 @@ NULL
     as.numeric(nodata),
     as_int,
     PACKAGE = "garry"
-  )
-}
-
-.sv_from_vec <- function(v, nr, nc, gdt = "f32") {
-  structure(
-    writeBin(as.numeric(v), raw(), size = .sv_es(gdt)),
-    gdim = c(nr, nc),
-    gdt = gdt
   )
 }
 
@@ -644,19 +641,10 @@ NULL
   aperm(array(x, dim = rev(d)), rev(seq_along(d)))
 }
 
-# Raw payload -> ROW-major numeric vector (GDAL write order).
-.sv_to_vec <- function(v) {
-  n <- prod(as.numeric(.sv_dim(v)))
-  .Call(
-    "garry_sv_plane",
-    v,
-    0,
-    n,
-    attr(v, "gdt"),
-    numeric(0),
-    FALSE,
-    PACKAGE = "garry"
-  )
+# What pads a value of this dtype beyond the raster: nodata, which an
+# integer buffer holds as 0. QA bits read it as clear.
+.sv_fill <- function(dtype) {
+  if (.dtype_family(dtype) == "float") NaN else 0
 }
 
 # Upload a store value (raw or matrix) after trimming `k`.
@@ -669,7 +657,7 @@ NULL
   stopifnot(k >= 0L)
   v <- .exec_trim(v, k)
   if (!is.null(grow)) {
-    v <- .sv_grow(v, grow)
+    v <- .sv_grow(v, grow, dtype)
   }
   if (.sv_is(v)) {
     g_upload_raw(v, attr(v, "gdt"), .sv_dim(v), device = dev)
@@ -686,28 +674,40 @@ NULL
 .stage_grows_edges <- function(graph, s) {
   isTRUE(garry_opt("pad_edge_chunks")) &&
     s@kind == "compute" &&
-    !any(vapply(
-      s@members,
-      function(id) S7::S7_inherits(graph_get(graph, id), PatchNode),
-      logical(1)
-    ))
+    !.has_member(graph, s@members, PatchNode)
+}
+
+# The chunk shape a grid's kernels run at: the chunk, clipped to the grid.
+.modal_chunk <- function(cg) {
+  pmin(cg@chunk_dim, cg@grid@dims[c("x", "y")])
 }
 
 # The rows and columns chunk `core` (a chunk_iter() row of `cg`) lacks
 # of its grid's modal chunk, or NULL for a modal chunk.
 .chunk_grow <- function(cg, core) {
-  cd <- pmin(cg@chunk_dim, cg@grid@dims[c("x", "y")])
+  cd <- .modal_chunk(cg)
   g <- as.integer(c(cd[[2L]] - core$y_size, cd[[1L]] - core$x_size))
   if (any(g > 0L)) g
+}
+
+# The rank of a value with planes: only a kernel that lost its (y, x)
+# plane has none, and its value cannot grow to a chunk.
+.sv_rank <- function(d) {
+  if (length(d) < 2L) {
+    .garry_error(
+      "a kernel returned a value with no (y, x) plane: a lazy_map() fn must keep its input's plane.",
+      "garry_kernel_error"
+    )
+  }
+  length(d)
 }
 
 # Pad a value's planes by `grow` = c(rows, cols) at the bottom and right:
 # an edge chunk grown to its stage's modal chunk shape runs the kernel
 # already compiled for that shape (.daemon_run_compute_shm). The new
-# cells are nodata, as the halo beyond a raster's edge already is: NaN
-# for floats, NA for R values, which g_upload makes 0 in an integer
-# buffer.
-.sv_grow <- function(v, grow) {
+# cells are nodata, as the halo beyond a raster's edge already is
+# (.sv_fill), at the dtype `v` uploads as.
+.sv_grow <- function(v, grow, dtype) {
   if (.sv_is(v)) {
     d <- as.integer(.sv_dim(v))
     n <- length(d)
@@ -731,12 +731,8 @@ NULL
     return(structure(out, gdim = d, gdt = attr(v, "gdt")))
   }
   d <- dim(v)
-  n <- length(d)
-  if (n < 2L) {
-    # not a plane (a reduced value broadcast into the stage)
-    return(v)
-  }
-  out <- array(v[NA_integer_][[1L]], c(d[seq_len(n - 2L)], d[n - 1:0] + grow))
+  n <- .sv_rank(d)
+  out <- array(.sv_fill(dtype), c(d[seq_len(n - 2L)], d[n - 1:0] + grow))
   idx <- c(
     rep(list(quote(expr = )), n - 2L),
     list(seq_len(d[[n - 1L]]), seq_len(d[[n]]))
@@ -769,10 +765,7 @@ NULL
     return(structure(out, gdim = d, gdt = attr(v, "gdt")))
   }
   d <- dim(v)
-  n <- length(d)
-  if (n < 2L) {
-    return(v)
-  }
+  n <- .sv_rank(d)
   idx <- c(
     rep(list(quote(expr = )), n - 2L),
     list(seq_len(d[[n - 1L]] - grow[[1L]]), seq_len(d[[n]] - grow[[2L]]))
@@ -785,10 +778,7 @@ NULL
 # bit-identical to the doubles path); scalars and non-float exports
 # stay R arrays. Recurses into nested exports (reduce_partial wraps
 # its pieces in a list).
-.sv_download_exports <- function(res, store_raw) {
-  if (!store_raw) {
-    return(g_download(res))
-  }
+.sv_download_exports <- function(res) {
   conv <- function(o) {
     if (.g_traced(o)) {
       if (.g_dtype(o) %in% c("f32", "f64") && length(.g_shape(o)) >= 2L) {
@@ -805,20 +795,12 @@ NULL
   lapply(res, conv)
 }
 
-# Should this run's store hold raw f32 payloads? Resolved once on the
-# host and shipped inside task payloads (daemon processes do not
-# inherit host options, and the daemons' anvl is assumed to match the
-# host's lib path).
-# The distributed store uses raw f32 payloads (4 B/px, memcpy transport, no
-# R-double conversion). (The single-threaded executor always uses doubles:
-# it is the correctness oracle.)
-.exec_use_raw_store <- function() TRUE
-
-# Output padding a stage's chunks carry: source/warp emit halo-padded
-# windows; compute stages emit their `out_pad` ring (D22, 0 when no
-# consumer needs a halo on them).
-.exec_out_pad <- function(stage) {
-  if (stage@kind %in% c("source_read", "warp")) stage@halo else stage@out_pad
+# A stage's export dtypes by node key.
+.export_dtypes <- function(graph, s) {
+  stats::setNames(
+    vapply(s@exports, function(e) graph_get(graph, e)@grid@dtype, character(1)),
+    vapply(s@exports, .key, character(1))
+  )
 }
 
 # Padding a SPECIFIC export of a stage carries: source/warp exports the
@@ -835,55 +817,88 @@ NULL
   if (is.na(i)) 0L else stage@export_pads[[i]]
 }
 
+# The cells of chunk `core`, padded by `pad`, that lie past the raster on
+# each side: c(top, left, bottom, right). A side can hold fewer than `pad`,
+# as a chunk smaller than the pad, one in from the edge, reaches past it by
+# less. A chunk grown by `grow` (.sv_grow) holds its new cells past it too.
+.ring_cells <- function(core, gdims, pad, grow = NULL) {
+  grow <- grow %||% c(0L, 0L)
+  as.integer(c(
+    max(0L, pad - core$y_off),
+    max(0L, pad - core$x_off),
+    max(0L, core$y_off + core$y_size + pad - gdims[["y"]]) + grow[[1L]],
+    max(0L, core$x_off + core$x_size + pad - gdims[["x"]]) + grow[[2L]]
+  ))
+}
+
+# How a kernel takes .ring_cells() (see .ring_windows()): the input it adds
+# to its stage's, or nothing for a kernel that takes none.
+.ring_dtype <- "i32"
+.ring_shape <- 4L
+.ring_input <- function(ring, dev = NULL) {
+  if (!is.null(ring)) list(g_upload(ring, .ring_dtype, device = dev))
+}
+
+# Nodata for `dtype` (.sv_fill) in the outer `ring` cells of a value's planes.
+.mask_cells <- function(v, ring, dtype) {
+  d <- dim(v)
+  nr <- d[[length(d) - 1L]]
+  nc <- d[[length(d)]]
+  top <- ring[[1L]]
+  left <- ring[[2L]]
+  bot <- ring[[3L]]
+  right <- ring[[4L]]
+  # i64 and u32 arrive as doubles; an R integer stays one
+  fill <- if (is.double(v)) .sv_fill(dtype) else 0L
+  if (length(d) == 2L) {
+    if (top > 0L) {
+      v[seq_len(top), ] <- fill
+    }
+    if (bot > 0L) {
+      v[(nr - bot + 1L):nr, ] <- fill
+    }
+    if (left > 0L) {
+      v[, seq_len(left)] <- fill
+    }
+    if (right > 0L) v[, (nc - right + 1L):nc] <- fill
+  } else {
+    if (top > 0L) {
+      v[, seq_len(top), ] <- fill
+    }
+    if (bot > 0L) {
+      v[, (nr - bot + 1L):nr, ] <- fill
+    }
+    if (left > 0L) {
+      v[,, seq_len(left)] <- fill
+    }
+    if (right > 0L) v[,, (nc - right + 1L):nc] <- fill
+  }
+  v
+}
+
 # NaN out the beyond-raster margin of a padded chunk value (D22 + D8):
 # the ring a padded stage computes past the raster edge starts as NaN
 # at the read, but a member fn need not map NaN to NaN (integer casts
 # do not), so every stage boundary re-presents beyond-edge cells as
-# NaN. Interior chunks return untouched; raw payloads materialise
-# (edge chunks only, and only under a nonzero pad).
-.exec_mask_edge <- function(v, pad, core, gdims) {
+# nodata for `dtype` (.sv_fill), and so does a window reading a member
+# inside a stage (.g_mask_ring). Interior chunks return untouched; raw
+# payloads materialise (edge chunks only, and only under a nonzero pad).
+.exec_mask_edge <- function(v, pad, core, gdims, dtype) {
   pad <- as.integer(pad)
   if (pad == 0L) {
     return(v)
   }
-  top <- max(0L, pad - core$y_off)
-  left <- max(0L, pad - core$x_off)
-  bot <- max(0L, core$y_off + core$y_size + pad - gdims[["y"]])
-  right <- max(0L, core$x_off + core$x_size + pad - gdims[["x"]])
-  if (top + left + bot + right == 0L) {
+  ring <- .ring_cells(core, gdims, pad)
+  if (sum(ring) == 0L) {
     return(v)
   }
   was_raw <- .sv_is(v)
-  gdt0 <- if (was_raw) attr(v, "gdt") %||% "f32"
+  gdt0 <- if (was_raw) attr(v, "gdt")
   if (was_raw) {
     v <- .sv_materialise(v)
   }
   d <- dim(v)
-  nr <- d[[length(d) - 1L]]
-  nc <- d[[length(d)]]
-  if (length(d) == 2L) {
-    if (top > 0L) {
-      v[seq_len(top), ] <- NaN
-    }
-    if (bot > 0L) {
-      v[(nr - bot + 1L):nr, ] <- NaN
-    }
-    if (left > 0L) {
-      v[, seq_len(left)] <- NaN
-    }
-    if (right > 0L) v[, (nc - right + 1L):nc] <- NaN
-  } else {
-    if (top > 0L) {
-      v[, seq_len(top), ] <- NaN
-    }
-    if (bot > 0L) {
-      v[, (nr - bot + 1L):nr, ] <- NaN
-    }
-    if (left > 0L) {
-      v[,, seq_len(left)] <- NaN
-    }
-    if (right > 0L) v[,, (nc - right + 1L):nc] <- NaN
-  }
+  v <- .mask_cells(v, ring, dtype)
   # Re-wrap raw payloads (row-major, original element size): leaving the
   # masked edge chunk as R doubles stored 8 B/px while the budget booked
   # the raw element size under-accounts boundary chunks 2x (defect
@@ -915,7 +930,7 @@ NULL
 .exec_in_meta <- function(graph, s, plan_stages, node_stage = NULL) {
   # `node_stage` (optional): node id -> producing stage id, first-wins
   # as the Find below. The linear Find is O(stages x members) per input
-  # node — the distributed task build passes the precomputed index.
+  # node: the distributed task build passes the precomputed index.
   producer_of <- function(nid) {
     if (!is.null(node_stage)) {
       return(plan_stages[[node_stage[[nid]]]])
@@ -943,7 +958,7 @@ NULL
 # chunks.
 .exec_split_cg <- function(plan, s, consumer_ids = NULL) {
   # `consumer_ids` (optional): stage ids consuming s, precomputed by
-  # the caller — the Filter below is O(stages) per call, O(stages^2)
+  # the caller: the Filter below is O(stages) per call, O(stages^2)
   # over a task build.
   cons <- if (is.null(consumer_ids)) {
     Filter(
@@ -1004,8 +1019,7 @@ NULL
 # contiguously, sibling subtrees in input-id order, never interleaved.
 # For a multi-band plan (per-band reductions joined by a band stack)
 # band k's reads all launch before band k+1's, so each band's fused
-# tail overlaps the next band's read drain. This was previously an
-# accident of graph-build order; it is now an invariant (dask.order
+# tail overlaps the next band's read drain. An invariant (dask.order
 # solves the same problem with static priorities), gated by
 # test-launch-order.R.
 .stage_launch_order <- function(plan) {
@@ -1051,7 +1065,7 @@ NULL
     } else {
       # Row-major (band, y, x) payload: each band's plane is one
       # contiguous byte range the write takes by offset.
-      stopifnot(length(d) == 3L)
+      .exec_rank_check(length(d) - 2L)
       for (b in seq_len(d[[1L]])) {
         gdal_write_window(
           ds,
@@ -1126,14 +1140,10 @@ NULL
 
 # Quantize one sink chunk value on device (g_quantize: the ONE write
 # quantizer, so every route yields byte-identical digital numbers).
-# Already-quantized payloads pass through -- distributed producers
-# quantize sink store values at the source, and the host tail must
-# not double-apply.
+# Only a sink no producer quantized reaches this: a cleared sink streams
+# straight to the file (.wq_stream_ok()).
 .exec_quantize_value <- function(v, wq) {
-  if (is.null(wq) || .sv_is_int(v)) {
-    return(v)
-  }
-  if (is.integer(v)) {
+  if (is.null(wq)) {
     return(v)
   }
   dev <- if (.sv_is(v)) {
@@ -1145,49 +1155,51 @@ NULL
   if (.sv_is(v)) g_download_raw(q) else g_download(q)
 }
 
+# Create a sink's output as its write spec says.
+.sink_output <- function(path, grid, nodata, band_names, wspec) {
+  gdal_create_output(
+    path,
+    grid,
+    nodata = nodata,
+    band_names = band_names,
+    dtype = wspec$dtype,
+    options = wspec$options,
+    scale = wspec$scale,
+    offset = wspec$offset
+  )
+}
+
 # Write sink chunks to a GTiff (single-threaded executor; the
 # distributed scheduler streams chunks through .exec_write_chunk as
 # they land instead).
 .exec_write_sink <- function(
   chunks,
   it,
-  sink,
+  grid,
   path,
   nodata,
-  band_names = NULL,
-  sink_pad = NULL,
+  band_names,
+  sink_pad,
   wspec = NULL
 ) {
   .exec_check_writable(chunks[[1L]], nrow(it))
-  if (is.null(sink_pad)) {
-    sink_pad <- .exec_out_pad(sink)
-  }
-  nodata <- if (is.null(nodata)) numeric(0) else as.numeric(nodata)
-  ds <- gdal_create_output(
-    path,
-    sink@grid,
-    nodata = nodata,
-    band_names = band_names,
-    dtype = wspec$dtype,
-    options = wspec$options,
-    scale = wspec$scale %||% numeric(0),
-    offset = wspec$offset %||% numeric(0)
-  )
-  on.exit(ds$close(), add = TRUE)
-  wdt <- wspec$dtype %||% sink@grid@dtype
+  nodata <- as.numeric(nodata)
+  ds <- .sink_output(path, grid, nodata, band_names, wspec)
+  on.exit(try(ds$close(), silent = TRUE), add = TRUE)
+  wdt <- wspec$dtype %||% grid@dtype
   wq <- .exec_wq(wspec, nodata)
   for (j in seq_len(nrow(it))) {
     ch <- .exec_quantize_value(chunks[[j]], wq)
     .exec_write_chunk(ds, it$x_off[j], it$y_off[j], ch, sink_pad, wdt, nodata)
   }
-  invisible(path)
+  gdal_close_output(ds, path)
 }
 
 # Assemble sink chunks into the full raster; stacks assemble to
 # (t, y, x) arrays (D17), 2D sinks to [y, x] matrices.
 .exec_assemble <- function(chunks, it, grid, sink_pad) {
   dims <- grid@dims
-  outer_dims <- dims[!names(dims) %in% c("x", "y")]
+  outer_dims <- .grid_outer(grid)
   if (length(outer_dims) == 0L) {
     full <- matrix(NA_real_, dims[["y"]], dims[["x"]])
     # raw f32 chunks (the distributed store) copy into place in one C
@@ -1218,7 +1230,7 @@ NULL
     }
     return(full)
   }
-  stopifnot(length(outer_dims) == 1L)
+  .exec_rank_check(length(outer_dims))
   chunks <- lapply(chunks, .sv_materialise)
   full <- array(NA_real_, c(outer_dims[[1L]], dims[["y"]], dims[["x"]]))
   for (j in seq_len(nrow(it))) {
@@ -1232,10 +1244,6 @@ NULL
 }
 
 
-# Shared host-side sink tail: multi-export and single-sink assembly /
-# write, used by BOTH executors (the single-threaded oracle and the
-# scheduler's post-drain host phase). Two near-verbatim copies had
-# begun to diverge silently — and this is the seam the H1 defect
 # Resolve the band descriptions for one sink of a multi-export plan:
 # a NAMED LIST keyed by sink name (per-sink descriptions, e.g. ragged
 # time groups), a plain vector (every sink), else the sink grid's own
@@ -1257,13 +1265,13 @@ NULL
   stats::setNames(as.character(path[sinks]), sinks)
 }
 
-
-# (silently lost raw sink) lived in — one implementation means one
-# place to guard it. `chunks_of(stage)` returns the stage's list of
-# per-chunk EXPORT lists (reduce_combine: a one-element list holding
-# the combined exports). `streamed_path(nm)`, when given, returns the
-# on-disk path for a sink that already streamed chunk-by-chunk
-# (closing any open handle as a side effect), else NULL.
+# Shared host-side sink tail: multi-export and single-sink assembly /
+# write, used by BOTH executors (the single-threaded oracle and the
+# scheduler's post-drain host phase). `chunks_of(stage)` returns the
+# stage's list of per-chunk EXPORT lists (reduce_combine: a one-element
+# list holding the combined exports). `streamed_path(nm)`, when given,
+# returns the on-disk path for a sink that already streamed chunk by
+# chunk, else NULL.
 .exec_sink_tail <- function(
   plan,
   graph,
@@ -1274,76 +1282,42 @@ NULL
   streamed_path = NULL,
   wspec = NULL
 ) {
-  if (length(plan@sinks) > 1L) {
-    res <- lapply(seq_along(plan@sinks), function(k) {
-      nid <- plan@sinks[[k]]
-      nm <- names(plan@sinks)[[k]]
-      if (!is.null(path) && !is.null(streamed_path)) {
-        sp <- streamed_path(nm)
-        if (!is.null(sp)) return(sp)
-      }
-      st <- plan@stages[[max(which(vapply(
-        plan@stages,
-        function(s) {
-          nid %in% s@members
-        },
-        logical(1)
-      )))]]
-      chunks <- lapply(chunks_of(st), `[[`, .key(nid))
-      it <- chunk_iter(.stage_out_chunks(plan, st))
-      pad <- .exec_export_pad(st, nid)
-      # the exported node's grid, not the stage tail's
-      ngrid <- graph_get(graph, nid)@grid
-      if (!is.null(path)) {
-        p <- .sink_paths(path, nm)[[nm]]
-        sk <- st
-        S7::prop(sk, "grid") <- ngrid
-        return(.exec_write_sink(
-          chunks,
-          it,
-          sk,
-          p,
-          nodata,
-          .sink_band_names(band_names, nm, ngrid),
-          sink_pad = pad,
-          wspec = wspec
-        ))
-      }
-      if (nrow(it) == 1L) {
-        v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
-        if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
-      } else {
-        .exec_assemble(chunks, it, ngrid, pad)
-      }
-    })
-    names(res) <- names(plan@sinks)
-    return(if (is.null(path)) res else invisible(.sink_paths(path, names(plan@sinks))))
-  }
-  sink <- plan@stages[[plan@sink]]
-  key <- .key(sink@members[[length(sink@members)]])
-  chunks <- lapply(chunks_of(sink), `[[`, key)
-  it <- chunk_iter(.stage_out_chunks(plan, sink))
-  sink_pad <- .exec_export_pad(sink, sink@members[[length(sink@members)]])
-  if (!is.null(path)) {
-    return(.exec_write_sink(
-      chunks,
-      it,
-      sink,
-      path,
-      nodata,
-      band_names,
-      sink_pad = sink_pad,
-      wspec = wspec
-    ))
-  }
-  if (nrow(it) == 1L) {
-    v <- .exec_trim(.sv_materialise(chunks[[1L]]), sink_pad)
-    if (is.matrix(v) && all(dim(v) == c(1L, 1L))) {
-      return(v[1L, 1L])
+  one_sink <- function(st, nid, grid, p, bands) {
+    chunks <- lapply(chunks_of(st), `[[`, .key(nid))
+    it <- chunk_iter(.stage_out_chunks(plan, st))
+    pad <- .exec_export_pad(st, nid)
+    if (!is.null(p)) {
+      return(.exec_write_sink(chunks, it, grid, p, nodata, bands, pad, wspec))
     }
-    return(v)
+    if (nrow(it) > 1L) {
+      return(.exec_assemble(chunks, it, grid, pad))
+    }
+    v <- .exec_trim(.sv_materialise(chunks[[1L]]), pad)
+    if (is.matrix(v) && all(dim(v) == c(1L, 1L))) v[1L, 1L] else v
   }
-  .exec_assemble(chunks, it, sink@grid, sink_pad)
+  if (length(plan@sinks) <= 1L) {
+    sink <- plan@stages[[plan@sink]]
+    return(one_sink(sink, sink@members[[length(sink@members)]], sink@grid, path, band_names))
+  }
+  res <- lapply(seq_along(plan@sinks), function(k) {
+    nid <- plan@sinks[[k]]
+    nm <- names(plan@sinks)[[k]]
+    streamed <- if (!is.null(path) && !is.null(streamed_path)) streamed_path(nm)
+    if (!is.null(streamed)) {
+      return(streamed)
+    }
+    # the exported node's grid, not the stage tail's
+    ngrid <- graph_get(graph, nid)@grid
+    one_sink(
+      .stage_of_node(plan, nid),
+      nid,
+      ngrid,
+      if (!is.null(path)) .sink_paths(path, nm)[[nm]],
+      .sink_band_names(band_names, nm, ngrid)
+    )
+  })
+  names(res) <- names(plan@sinks)
+  if (is.null(path)) res else invisible(.sink_paths(path, names(plan@sinks)))
 }
 
 #' Execute a Plan on the anvl backend (single process).
@@ -1364,10 +1338,7 @@ NULL
 #'   affine applied per chunk at the sink boundary) and `options`
 #'   (creation options).
 #' @return The sink stage's value (matrix for raster sinks, scalar for
-#'   global reductions), or `path` invisibly when writing. When
-#'   `options(garry.exec_stats = TRUE)`, in-memory results carry a
-#'   `garry_exec_stats` attribute recording the distinct input shapes
-#'   submitted per stage.
+#'   global reductions), or `path` invisibly when writing.
 #' @seealso [collect()], [execute_plan_mirai()], [plan_lazy()]
 #' @export
 execute_plan <- function(
@@ -1380,12 +1351,9 @@ execute_plan <- function(
   .garry_opt_check()
   graph <- plan@graph
   out <- vector("list", length(plan@stages))
-  stats <- lapply(plan@stages, function(s) character(0))
 
   # A source stage consumed only by warp stages never needs reading:
   # the warper pulls pixels from the file itself.
-  # One-pass consumer index (the scheduler's replacement for the old
-  # O(stages^2) Filter scan), shared via .placement_scan.
   warp_only <- .placement_scan(plan)$warp_only
 
   for (s in plan@stages[.stage_launch_order(plan)]) {
@@ -1396,31 +1364,12 @@ execute_plan <- function(
         next
       }
       ra <- .stage_read_args(graph, s)
-      rpath <- ra$path
-      rband <- ra$band
-      rresamp <- ra$resampling
-      rnodata <- ra$nodata
-      roo <- ra$open_options
-      rsc <- ra$scale
-      rof <- ra$offset
-      rdecim <- ra$decim
       key <- .key(s@members[[1L]])
       split_cg <- .exec_split_cg(plan, s)
       if (is.null(split_cg)) {
         out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
           stats::setNames(
-            list(.exec_read_padded(
-              rpath,
-              rband,
-              rnodata,
-              s@chunks,
-              it[j, ],
-              open_options = roo,
-              scale = rsc,
-              offset = rof,
-              decim = rdecim,
-              resampling = rresamp
-            )),
+            list(.exec_read_padded(ra, s@chunks, it[j, ])),
             key
           )
         })
@@ -1433,18 +1382,7 @@ execute_plan <- function(
         H2 <- 2L * split_cg@halo
         out[[s@id]] <- vector("list", nrow(its))
         for (r in seq_len(nrow(it))) {
-          buf <- .exec_read_padded(
-            rpath,
-            rband,
-            rnodata,
-            s@chunks,
-            it[r, ],
-            open_options = roo,
-            scale = rsc,
-            offset = rof,
-            decim = rdecim,
-            resampling = rresamp
-          )
+          buf <- .exec_read_padded(ra, s@chunks, it[r, ])
           rank3 <- length(dim(buf)) == 3L
           for (j in .exec_split_members(its, it[r, ])) {
             r0 <- its$y_off[[j]] - it$y_off[[r]]
@@ -1468,7 +1406,11 @@ execute_plan <- function(
       }
     } else if (s@kind %in% c("compute", "reduce_partial")) {
       dev <- .exec_device(s@device)
-      jf <- .exec_cached_jit(graph, s, dev)
+      jf <- .host_kernel(
+        paste0(.stage_kernel_sig(graph, s), "@", s@device),
+        s@fn,
+        dev
+      )
       in_meta <- .exec_in_meta(graph, s, plan@stages)
       okeys <- vapply(s@exports, .key, character(1))
       epads <- if (length(s@export_pads)) {
@@ -1476,9 +1418,10 @@ execute_plan <- function(
       } else {
         integer(0)
       }
+      edtypes <- .export_dtypes(graph, s)
       gdims <- s@grid@dims
-      shapes <- character(0)
       grows <- .stage_grows_edges(graph, s)
+      takes_ring <- .takes_ring(graph, s)
       out[[s@id]] <- lapply(seq_len(nrow(it)), function(j) {
         # an edge chunk runs the modal chunk's kernel (.sv_grow)
         grow <- if (grows) .chunk_grow(s@chunks, it[j, ])
@@ -1489,21 +1432,14 @@ execute_plan <- function(
           stopifnot(extra >= 0L)
           v <- .exec_trim(v, extra)
           if (!is.null(grow)) {
-            v <- .sv_grow(v, grow)
+            v <- .sv_grow(v, grow, meta$dtype)
           }
           g_upload(v, meta$dtype, device = dev)
         })
-        shapes <<- unique(c(
-          shapes,
-          paste(
-            vapply(
-              inputs,
-              function(a) paste(dim(a), collapse = "x"),
-              character(1)
-            ),
-            collapse = "|"
-          )
-        ))
+        if (takes_ring) {
+          ring <- .ring_cells(it[j, ], gdims, s@halo + s@out_pad, grow)
+          inputs <- c(inputs, .ring_input(ring, dev))
+        }
         res <- g_download(jf(inputs))
         if (!is.null(grow)) {
           res <- .sv_crop(res, grow)
@@ -1518,15 +1454,15 @@ execute_plan <- function(
           for (k2 in names(res)) {
             res[[k2]] <- .exec_mask_edge(
               res[[k2]],
-              epads[[k2]] %||% 0L,
+              epads[[k2]],
               it[j, ],
-              gdims
+              gdims,
+              edtypes[[k2]]
             )
           }
         }
         res
       })
-      stats[[s@id]] <- shapes
     } else if (s@kind == "reduce_combine") {
       key <- .key(s@members[[1L]])
       partials <- lapply(out[[s@inputs[[1L]]]], `[[`, key)
@@ -1539,7 +1475,7 @@ execute_plan <- function(
     }
   }
 
-  result <- .exec_sink_tail(
+  .exec_sink_tail(
     plan,
     graph,
     chunks_of = function(st) out[[st@id]],
@@ -1548,13 +1484,4 @@ execute_plan <- function(
     band_names = band_names,
     wspec = wspec
   )
-
-  if (
-    is.null(path) &&
-      length(plan@sinks) <= 1L &&
-      isTRUE(getOption("garry.exec_stats", FALSE))
-  ) {
-    attr(result, "garry_exec_stats") <- stats
-  }
-  result
 }

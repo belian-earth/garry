@@ -20,16 +20,22 @@ lazy_source(
 )
 }
 \arguments{
-\item{path}{Path or VSI URL readable by GDAL.}
+\item{path}{Path or VSI URL readable by GDAL. A relative path is taken
+against the working directory here, so a later \code{\link[=setwd]{setwd()}} or a pool
+started elsewhere reads the same file.}
 
 \item{band}{1-based band index.}
 
 \item{graph}{\code{Graph} to add the source to; defaults to a fresh graph.}
 
-\item{nodata}{Optional nodata sentinel overriding the file metadata.}
+\item{nodata}{Optional nodata sentinel replacing the file's: cells
+holding the file's own sentinel then read as data. A tile index, a
+source opened with \code{open_options} or a source given \code{grid} masks its
+own sentinel as well.}
 
 \item{open_options}{GDAL open options ("KEY=VALUE"), e.g. a GTI
-\code{FILTER} selecting one time slice of a tile index.}
+\code{FILTER} selecting one time slice of a tile index. They apply to one
+source, and not to a decoded one.}
 
 \item{grid}{Optional \code{GridSpec} declaring the source's grid and
 dtype, skipping metadata discovery (see Details).}
@@ -47,7 +53,7 @@ metadata (the GDAL scale/offset QGIS applies) and every read returns
 \code{v * scale + offset}, applied after the nodata sentinel becomes NaN.
 A length-1 numeric supplies the scale explicitly (with \code{offset}),
 skipping discovery. Discovery only consults the file: STAC-side
-metadata is never read.}
+metadata is never read. A band that reports none warns and reads raw.}
 
 \item{offset}{Explicit additive offset used when \code{scale} is numeric;
 defaults to 0. Ignored when \code{scale} is logical.}
@@ -67,9 +73,15 @@ A \code{LazyRaster}.
 \description{
 Grid, dtype, native block size, and file nodata come from GDAL via
 the adapter (\code{gdal_grid_spec()}). A user-supplied \code{nodata} overrides
-the file's. An integer source with nodata is promoted to f32 so NaN
-can carry nodata downstream; the sentinel-to-NaN rewrite happens at
-read time in the adapter.
+the file's. An integer source with nodata is promoted to the float
+that holds it (f32 up to 16 bits, else f64) so NaN can carry nodata
+downstream; the sentinel-to-NaN rewrite happens at read time in the
+adapter. An integer source without nodata has nowhere to put a missing
+cell, so a compute stage that meets one (a failed read, a cell no tile
+reaches, a cell a warp leaves past the source's footprint) fails: declare
+\code{nodata} where cells can be missing. An Int32 cell holding \code{-2147483648}
+reads as missing, \code{nodata} or not: gdalraster returns R integers, and that
+value is R's \code{NA_integer_}.
 }
 \details{
 Passing \code{grid} skips the GDAL open entirely: no metadata is read
@@ -79,8 +91,12 @@ construction, e.g. GTI mosaics pinned to a target grid via
 rediscover the grid costs a serial remote COG header fetch per
 slice. \code{grid} must describe the dataset exactly as \code{path} +
 \code{open_options} open it, including the source dtype; it is trusted,
-not checked. With \code{grid} given, file nodata is NOT consulted (pass
-\code{nodata} explicitly if the source has a sentinel).
+not checked. With \code{grid} given, the file's nodata is not read, so pass
+\code{nodata} if the source has a sentinel, and pass that sentinel: a plain
+read masks the file's own sentinel whatever the node says, and a warp
+sees only the value given. A warp also opens the file: only a source that
+has been opened can show that it stores the same type and row order as
+the file whose warped VRT it would take.
 }
 \examples{
 f <- system.file("extdata", "garry-example.tif", package = "garry")

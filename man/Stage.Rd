@@ -31,12 +31,13 @@ Stage(
 
 \item{fn}{The composed stage closure. For "compute" stages it is
 called as \code{fn(inputs)} with a list of chunk arrays in
-\code{input_nodes} order, each padded to the stage halo, and returns
-the chunk-core array; a "reduce_partial" stage returns a named
-list of per-chunk partials and "reduce_combine" combines those
-lists into the final value; for "source_read" and "warp" stages
-\code{fn} is the identity (the executor and the GDAL warper supply the
-values).}
+\code{input_nodes} order, each padded to the stage halo, followed by
+the chunk's cells past the raster when a window reads a member,
+and returns the chunk-core array; a "reduce_partial" stage returns
+a named list of per-chunk partials and "reduce_combine" combines
+those lists into the final value; for "source_read" and "warp"
+stages \code{fn} is the identity (the executor and the GDAL warper
+supply the values).}
 
 \item{halo}{Halo radius in pixels the stage requires on its inputs.}
 
@@ -63,7 +64,7 @@ each export value carries (post-focal exports carry less than
 pre-focal ones). Empty means all zero.}
 
 \item{strip_rows}{Rows per strip when \code{fn} runs a compute stage's
-members over row strips of each chunk (see \code{garry.scan_strip_px});
+members over row strips of each chunk (\code{.scan_strip_px} cells each);
 0 runs the whole chunk at once.}
 }
 \value{

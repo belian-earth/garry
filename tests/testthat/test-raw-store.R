@@ -1,9 +1,15 @@
 # Phase 12c: raw f32 store payloads (D19-D21). Gates: the sv helper
-# algebra matches the matrix path exactly; distributed execution (raw f32
-# mori store) is identical to the single-threaded executor (which always
-# uses R matrices, the correctness oracle) across map / focal / median /
-# global-reduce / multiband-sink pipelines; non-f32 sources stay on the
-# matrix path.
+# algebra matches the matrix path exactly; non-f32 sources stay on the
+# matrix path. test-route-dtype.R holds what travels through the store
+# to plain R values, by plan shape and dtype.
+
+.sv_from_vec <- function(v, nr, nc, gdt = "f32") {
+  structure(
+    writeBin(as.numeric(v), raw(), size = garry:::.sv_es(gdt)),
+    gdim = c(nr, nc),
+    gdt = gdt
+  )
+}
 
 test_that("sv helpers mirror matrix slicing exactly", {
   set.seed(3)
@@ -14,7 +20,7 @@ test_that("sv helpers mirror matrix slicing exactly", {
                    numeric(), length(x), size = 4L),
            nrow(x), byrow = TRUE)
   }
-  sv <- garry:::.sv_from_vec(as.numeric(t(m)), 35L, 52L)
+  sv <- .sv_from_vec(as.numeric(t(m)), 35L, 52L)
   expect_true(garry:::.sv_is(sv))
   expect_identical(garry:::.sv_dim(sv), c(35L, 52L))
   expect_identical(garry:::.sv_to_matrix(sv), f32(m))
@@ -32,69 +38,11 @@ test_that("sv helpers mirror matrix slicing exactly", {
   expect_identical(garry:::.exec_trim(sv, 0L), sv)
 })
 
-test_that("distributed raw f32 store == single-threaded oracle", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)   # force many chunks
-  on.exit(options(old), add = TRUE)
-
-  f <- fixture_gradient_f32()
-  fi <- fixture_i16_nodata()
-  pipelines <- list(
-    map    = local({ a <- lazy_source(f); a * 2 + 1 }),
-    focal  = local({
-      a <- lazy_source(f)
-      focal_map(a, radius = 1L, fn = function(sh) Reduce(`+`, sh))
-    }),
-    median = local({
-      a <- lazy_source(f); b <- lazy_source(f)
-      reduce_over(lazy_stack(list(a + 1, b * 2)), "median", "t",
-                  nan_rm = TRUE)
-    }),
-    global = local({
-      a <- lazy_source(f)
-      reduce_over(a * 2, "mean", c("x", "y"), nan_rm = TRUE)
-    }),
-    i16    = local({ a <- lazy_source(fi); a + 0.5 })
-  )
-  for (nm in names(pipelines)) {
-    p <- plan_lazy(pipelines[[nm]])
-    single <- execute_plan(p)
-    dist <- execute_plan_mirai(p)
-    expect_equal(dist, single, tolerance = 1e-12, label = paste("dist", nm))
-  }
-})
-
-test_that("distributed multiband sink streams to GTiff like the oracle", {
-  skip_if(!requireNamespace("garry", quietly = TRUE),
-          "garry not installed for daemons")
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  f <- fixture_gradient_f32()
-  bands <- lazy_stack(list(
-    local({ a <- lazy_source(f); a * 2 }),
-    local({ a <- lazy_source(f); a + 10 })
-  ), along = "band")
-
-  out_d <- tempfile(fileext = ".tif")
-  write_tif(bands, out_d, distributed = TRUE)
-  dist <- lapply(1:2, function(b) gdal_read_window(out_d, b, 0L, 0L, 60L, 40L))
-  out_s <- tempfile(fileext = ".tif")
-  write_tif(bands, out_s)
-  single <- lapply(1:2, function(b) gdal_read_window(out_s, b, 0L, 0L, 60L, 40L))
-  expect_equal(dist, single, tolerance = 1e-5)
-})
-
 # --- f64 store payloads (design/f64-store.md) -------------------------
 
 test_that("f64 payloads round-trip the sv layer bit-exactly", {
   m <- matrix(c(1.5, -2.25, pi, exp(1), 1e-300, -0.125), 2, 3)
-  v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 3L, gdt = "f64")
+  v <- .sv_from_vec(as.numeric(t(m)), 2L, 3L, gdt = "f64")
   expect_identical(garry:::.sv_es(v), 8L)
   expect_identical(attr(v, "gdt"), "f64")
   expect_identical(garry:::.sv_to_matrix(v), m)
@@ -102,7 +50,7 @@ test_that("f64 payloads round-trip the sv layer bit-exactly", {
 
   # trim preserves dtype and bits
   mp <- matrix(rnorm(36), 6, 6)
-  vp <- garry:::.sv_from_vec(as.numeric(t(mp)), 6L, 6L, gdt = "f64")
+  vp <- .sv_from_vec(as.numeric(t(mp)), 6L, 6L, gdt = "f64")
   tr <- garry:::.sv_trim(vp, 1L)
   expect_identical(attr(tr, "gdt"), "f64")
   expect_identical(garry:::.sv_to_matrix(tr), mp[2:5, 2:5])
@@ -116,40 +64,11 @@ test_that("f64 payloads round-trip the sv layer bit-exactly", {
 
 test_that("f64 raw upload/download round-trips through anvl bit-exactly", {
   m <- matrix(c(1.5, -2.25, pi, 1e-300), 2, 2)
-  v <- garry:::.sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
+  v <- .sv_from_vec(as.numeric(t(m)), 2L, 2L, gdt = "f64")
   up <- g_upload_raw(unclass(v), "f64", garry:::.sv_dim(v))
   down <- g_download_raw(up)
   expect_identical(attr(down, "gdt"), "f64")
   expect_identical(garry:::.sv_to_matrix(down), m)
-})
-
-test_that("an f64 chain runs distributed bit-identically to the oracle", {
-  f <- fixture_gradient_f32()
-  # an f64 map chain feeding an f64 sink: with the f64 raw store the
-  # distributed result must be BIT-identical to the all-doubles oracle
-  a <- lazy_source(f)
-  y <- lazy_map(a, dtype = "f64", fn = function(x) x * (1 / 3) + 1e-7)
-  z <- reduce_over(lazy_stack(list(y, y * 2), along = "t"), "mean", "t",
-                   nan_rm = TRUE)
-  p <- plan_lazy(list(y = y, z = z))
-  single <- execute_plan(p)
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-  for (m in c("rules", "cost")) {
-    old_m <- options(garry.placement = m)
-    dist <- execute_plan_mirai(p)
-    expect_identical(dist$y, single$y, label = paste("y", m))
-    expect_identical(dist$z, single$z, label = paste("z", m))
-
-    d <- withr::local_tempdir()
-    execute_plan_mirai(p, path = d)
-    got <- gdal_read_window(file.path(d, "y.tif"), 1L, 0, 0,
-                            ncol(single$y), nrow(single$y))
-    expect_equal(got, single$y, tolerance = 0, label = paste("file", m))
-    options(old_m)
-  }
 })
 
 # --- C payload helpers (issue #25: writer tail, read tail) ------------
@@ -196,11 +115,6 @@ test_that("plane extraction matches the byte-slice reference for every gdt", {
       expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
       expect_identical(garry:::.sv_plane_vec(v, b, -9999), ref(v, b, -9999))
     }
-    expect_identical(
-      garry:::.sv_to_vec(v),
-      ref(v, 1L)[rep(1, 0)] |>
-        c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
-    )
   }
   ints <- list(
     i8 = sample(-128:127, nb * n, TRUE),
@@ -214,10 +128,6 @@ test_that("plane extraction matches the byte-slice reference for every gdt", {
     for (b in 1:3) {
       expect_identical(garry:::.sv_plane_vec(v, b), ref(v, b))
     }
-    expect_identical(
-      garry:::.sv_to_vec(v),
-      c(ref(v, 1L), ref(v, 2L), ref(v, 3L))
-    )
   }
   # rank-2 payloads are their own single plane
   v2 <- structure(
@@ -309,52 +219,6 @@ test_that("the C read tail packs f32 exactly like the R reference", {
     ),
     "fit"
   )
-})
-
-test_that("distributed int8 multiband sink with nodata matches the oracle", {
-  skip_if(
-    !requireNamespace("garry", quietly = TRUE),
-    "garry not installed for daemons"
-  )
-
-  local_pools(2, 1, gdal_config = TRUE)
-  old <- options(garry.chunk_target_px = 400)
-  on.exit(options(old), add = TRUE)
-
-  f <- fixture_i16_nodata()
-  nd <- gdal_grid_spec(f)$nodata
-  bands <- lazy_stack(
-    list(
-      local({
-        a <- lazy_source(f)
-        a / 100
-      }),
-      local({
-        a <- lazy_source(f)
-        a * (-1 / 200)
-      }),
-      local({
-        a <- lazy_source(f)
-        a * 0 + 7
-      })
-    ),
-    along = "band"
-  )
-
-  out_d <- tempfile(fileext = ".tif")
-  write_tif(bands, out_d, dtype = "i8", nodata = -128, distributed = TRUE)
-  out_s <- tempfile(fileext = ".tif")
-  write_tif(bands, out_s, dtype = "i8", nodata = -128)
-  rd <- function(p) {
-    lapply(1:3, function(b) gdal_read_window(p, b, 0L, 0L, 70L, 50L))
-  }
-  dist <- rd(out_d)
-  single <- rd(out_s)
-  expect_identical(dist, single)
-  expect_true(all(
-    is.na(single[[1]][10:14, 20:24]) |
-      single[[1]][10:14, 20:24] == -128
-  ))
 })
 
 test_that("float planes of whole numbers come back as integers for an integer output", {
@@ -457,7 +321,6 @@ test_that("integer bands read straight into integer planes match the f32 route",
     10L,
     10L
   ))
-  skip_if_not_installed("jsonlite")
   # several Int8 bands of a Zarr store, through the fast path's window
   fx <- fixture_zarr_nd()
   g <- grid_spec("EPSG:32632", c(500050, 4599850, 500250, 4599950), res = 10)
@@ -511,4 +374,22 @@ test_that("read-only chunks keep the f32 route for floats, warps and affines", {
     "i16",
     -32768
   ))
+  # a failed read is a failed read, not a turn onto the f32 route
+  withr::local_options(garry.read_retry = 0L)
+  err <- expect_error(
+    suppressMessages(.read_int_planes(
+      modifyList(ra, list(path = "/nonexistent/ghost.tif")),
+      cg,
+      core,
+      "i16",
+      -32768
+    )),
+    class = "garry_read_error"
+  )
+  expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
+})
+
+test_that("an unknown payload tag fails loudly", {
+  expect_identical(garry:::.sv_es("f64"), 8L)
+  expect_error(garry:::.sv_es("c64"), class = "garry_error")
 })

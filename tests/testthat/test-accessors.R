@@ -20,7 +20,7 @@ test_that("names(), length() and $ / $<- work on a dataset", {
   expect_identical(collect(ds$b), collect(ds[["b"]]))
   ds$c <- ds$a + ds$b
   expect_identical(names(ds), c("a", "b", "c"))
-  expect_equal(collect(ds$c), 3 * collect(r))
+  expect_equal(collect(ds$c), 3 * .fixture_values(60, 40), ignore_attr = TRUE)
 })
 
 test_that("time_labels() reads the t axis of rasters and datasets", {
@@ -38,4 +38,18 @@ test_that("time_labels() reads the t axis of rasters and datasets", {
   expect_identical(time_labels(ds$V1), c("s1", "s2"))
   expect_null(time_labels(lazy_source(f)))
   expect_null(time_labels(as_dataset(list(a = lazy_source(f)))))
+})
+
+test_that("the code usage scan R CMD check runs finds no undefined global", {
+  # A `$` bound in the namespace turns every `x$name` in the package into an
+  # undefined global here, which hides the real ones.
+  skip_on_covr()
+  found <- character(0)
+  codetools::checkUsageEnv(
+    asNamespace("garry"),
+    report = function(m) found <<- c(found, m),
+    skipWith = TRUE,
+    suppressLocalUnused = TRUE
+  )
+  expect_identical(grep("no visible", found, value = TRUE), character(0))
 })

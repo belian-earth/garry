@@ -5,16 +5,7 @@
 \title{Daemon task body: fetch one item-asset's target-window bytes to a
 local file.}
 \usage{
-.daemon_fetch_window(
-  location,
-  out_file,
-  ext,
-  crs,
-  nodata = numeric(0),
-  margin = 8L,
-  target_res = NULL,
-  nbands = 1L
-)
+.daemon_fetch_window(location, out_file, ext, crs, target_res = NULL)
 }
 \arguments{
 \item{location}{Source path/URL.}
@@ -23,11 +14,8 @@ local file.}
 
 \item{ext, crs}{Target extent and CRS defining the window.}
 
-\item{nodata}{Optional sentinel for the failure placeholder.}
-
-\item{margin}{Source-pixel margin around the window.}
-
-\item{nbands}{Source band count, for the failure placeholder.}
+\item{target_res}{Target x resolution: a coarser grid decimates the
+fetch.}
 }
 \value{
 \code{TRUE}.
@@ -35,12 +23,8 @@ local file.}
 \description{
 The fetch half of the fetch/assemble split: a plain
 \code{gdal_translate -srcwin} of the window intersecting the target
-extent (plus a warp-kernel margin), remote COG to local tmpfs,
+extent (plus a warp-kernel margin, \code{.fetch_margin}), remote COG to local tmpfs,
 native dtype and blocks; no warp, no mosaic on the remote path.
-On failure with \code{garry.read_fail = "nodata"}, writes a small
-all-nodata placeholder covering the window so the local mosaic
-reads a hole instead of erroring (Int16 when a nodata sentinel is
-declared, Byte 255 otherwise, the HLS QA convention).
 }
 \details{
 Internal; daemons reach it through \code{asNamespace("garry")}.

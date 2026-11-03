@@ -1,5 +1,6 @@
-# Decision D11 lock: focal only in stages fed directly by source/warp.
-# Decision D12 lock: algebraic-only distributed spatial reductions.
+# Plan-time refusals. A focal may follow compute stages (D22, which replaced
+# D11's refusal: test-halo-propagation.R), but nothing computes on a spatial
+# reduction. Decision D12 lock: algebraic-only distributed spatial reductions.
 
 test_that("focal after a reduce barrier raises the structured error", {
   a <- lazy_source_stub("x.tif")
@@ -7,6 +8,15 @@ test_that("focal after a reduce barrier raises the structured error", {
   f <- focal_map(r, fn = function(sh) Reduce(`+`, sh), radius = 1L)
   expect_error(collect(f, plan_only = TRUE),
                class = "garry_focal_placement_error")
+})
+
+test_that("computing on a spatial reduction fails at plan time", {
+  a <- lazy_source_stub("x.tif")
+  r <- reduce_over(a, "mean", c("x", "y"))
+  err <- expect_error(collect(r + 1, plan_only = TRUE),
+                      class = "garry_reduce_unsupported_error")
+  expect_match(conditionMessage(err), "spatial reduction")
+  expect_no_error(collect(r, plan_only = TRUE))
 })
 
 test_that("focal directly on a source or warp is allowed", {
@@ -26,6 +36,8 @@ test_that("median over x,y is rejected; over t is planned", {
   m <- reduce_over(a, "median", c("x", "y"))
   expect_error(collect(m, plan_only = TRUE),
                class = "garry_reduce_unsupported_error")
+  overt <- reduce_over(lazy_stack(list(a, a)), "median", "t")
+  expect_no_error(collect(overt, plan_only = TRUE))
 })
 
 test_that("single-axis spatial reduction is rejected in v1", {

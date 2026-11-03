@@ -1,0 +1,199 @@
+#' @include options.R
+#' @keywords internal
+NULL
+
+# ---------------------------------------------------------------------------
+# Kernels as programs (design/stablehlo-kernels.md). Every garry
+# kernel is anvl, so it lowers to StableHLO: the host traces a kernel once
+# per input shape and a daemon compiles the text. Nothing about the
+# closure, the graph or the caller's frames crosses a process, and the
+# trace is paid once rather than once per daemon.
+#
+# A program SET is one kernel over the input shapes its tasks will meet:
+# a named list (shape key -> list(src, constants)) of class
+# garry_programs, whose `constants` attribute holds each constant once;
+# a program's `constants` index it. A daemon compiles a shape the first
+# time it meets it.
+# ---------------------------------------------------------------------------
+
+.kernel_wire_program <- function() {
+  identical(garry_opt("kernel_wire"), "program") &&
+    identical(garry_opt("device"), "cpu")
+}
+
+# The set for `fn` over `shape_sets` (a list of per-input shape lists),
+# built once per host session: tiles of one shape share it. A host-side
+# cache, so a run only traces what no earlier run has. Oldest sets go
+# first past .program_memo_mb: constants live here as R data.
+.program_memo_mb <- 1024
+
+.program_set <- function(key, fn, dtypes, shape_sets) {
+  memo <- .garry_state$programs
+  if (is.null(memo)) {
+    memo <- new.env(parent = emptyenv())
+    .garry_state$programs <- memo
+    .garry_state$program_order <- character(0)
+  }
+  hit <- memo[[key]]
+  if (!is.null(hit)) {
+    return(hit)
+  }
+  wire <- vapply(dtypes, .input_dtype, character(1))
+  set <- .program_pool(stats::setNames(
+    lapply(shape_sets, function(sh) .program_build(fn, dtypes, sh)),
+    vapply(shape_sets, function(sh) .input_key(wire, sh), character(1))
+  ))
+  memo[[key]] <- set
+  .garry_state$program_order <- c(.garry_state$program_order, key)
+  held <- function(k) attr(memo[[k]], "mb")
+  while (
+    length(.garry_state$program_order) > 1L &&
+      sum(vapply(.garry_state$program_order, held, numeric(1))) >
+        .program_memo_mb
+  ) {
+    rm(list = .garry_state$program_order[[1L]], envir = memo)
+    .garry_state$program_order <- .garry_state$program_order[-1L]
+  }
+  set
+}
+
+# A set from its programs: a constant the shapes share is held once, as a
+# weight-carrying kernel keeps its weights at every shape.
+.program_pool <- function(programs) {
+  pool <- list()
+  seen <- character(0)
+  for (i in seq_along(programs)) {
+    programs[[i]]$constants <- vapply(
+      programs[[i]]$constants,
+      function(k) {
+        h <- rlang::hash(k)
+        at <- match(h, seen)
+        if (is.na(at)) {
+          pool[[length(pool) + 1L]] <<- k
+          seen[[length(seen) + 1L]] <<- h
+          at <- length(pool)
+        }
+        at
+      },
+      integer(1)
+    )
+  }
+  structure(
+    programs,
+    class = "garry_programs",
+    constants = pool,
+    mb = as.numeric(utils::object.size(programs) + utils::object.size(pool)) / 2^20
+  )
+}
+
+# What a set's inputs and anvl's default dtypes pin down: both decide the
+# program, and neither is in a stage's kernel signature. A hash, so a wide
+# stage's key stays short: a key names an R environment entry.
+.program_tag <- function(dtypes, shape_sets) {
+  wire <- vapply(dtypes, .input_dtype, character(1))
+  rlang::hash(list(
+    lapply(shape_sets, function(sh) .input_key(wire, sh)),
+    .default_dtype_tag()
+  ))
+}
+
+# anvl's default dtypes: part of what a kernel traces to, and no part of
+# its signature.
+.default_dtype_tag <- function() {
+  paste(unlist(getOption("anvl.default_dtypes")), collapse = ",")
+}
+
+# The window shapes of a chunk grid's tasks: the modal chunk when edges
+# grow to it, else every distinct chunk shape, modal first.
+.window_shapes <- function(cg, grows) {
+  if (grows) {
+    cd <- .modal_chunk(cg)
+    return(data.frame(y_size = cd[[2L]], x_size = cd[[1L]]))
+  }
+  unique(chunk_iter(cg)[, c("y_size", "x_size"), drop = FALSE])
+}
+
+# The input shapes a stage's tasks meet. Outer dims are the input's grid
+# dims, size-one axes included, except that a read drops them when they
+# multiply to one.
+.stage_shape_sets <- function(graph, s, need, grows) {
+  outers <- lapply(s@input_nodes, function(nid) {
+    n <- graph_get(graph, nid)
+    d <- .node_grid(n)@dims
+    ob <- as.integer(d[!names(d) %in% c("x", "y")])
+    read <- S7::S7_inherits(n, SourceNode) || S7::S7_inherits(n, WarpNode)
+    if (prod(ob) > 1L || !read) ob else integer(0)
+  })
+  it <- .window_shapes(s@chunks, grows)
+  lapply(seq_len(nrow(it)), function(i) {
+    nr <- it$y_size[[i]] + 2L * need
+    nc <- it$x_size[[i]] + 2L * need
+    lapply(outers, function(ob) c(ob, nr, nc))
+  })
+}
+
+# Trace a kernel on the host. Its failure is the task's failure, as it
+# would have been on a daemon.
+.trace_kernel <- function(key, fn, dtypes, sets, stage) {
+  tryCatch(
+    .program_set(key, fn, dtypes, sets),
+    error = function(e) {
+      why <- conditionMessage(e)
+      cli::cli_abort(
+        "kernel of stage {stage} failed: {why}",
+        class = c("garry_task_error", "garry_error"),
+        task = paste0("s", stage),
+        stage = stage,
+        call = NULL
+      )
+    }
+  )
+}
+
+# A compute stage's program set under `sig` (its kernel signature), and
+# the key that names it.
+.stage_as_program <- function(graph, s, sig, in_meta, need, grows) {
+  sets <- .stage_shape_sets(graph, s, need, grows)
+  dtypes <- vapply(in_meta, function(m) m$dtype, character(1))
+  if (.takes_ring(graph, s)) {
+    sets <- lapply(sets, c, list(.ring_shape))
+    dtypes <- c(dtypes, .ring_dtype)
+  }
+  key <- paste0(sig, "#", .program_tag(dtypes, sets))
+  list(set = .trace_kernel(key, s@fn, dtypes, sets, s@id), key = key)
+}
+
+# A fused read's spec with its kernel as a program set: one shape per read
+# window, and per row-tile height where the kernel runs in tiles.
+.fuse_as_program <- function(fspec, graph, src, grows) {
+  halo <- src@chunks@halo
+  nb <- .node_outer_nb(graph, src@members[[1L]])
+  wins <- .window_shapes(src@chunks, grows)
+  tiles <- as.integer(fspec$tiles)
+  sets <- list()
+  for (i in seq_len(nrow(wins))) {
+    ny <- wins$y_size[[i]] + 2L * halo
+    nx <- wins$x_size[[i]] + 2L * halo
+    t2 <- max(1L, min(tiles, ny))
+    for (h in unique(c(ny %/% t2, ny %/% t2 + (ny %% t2 > 0L)))) {
+      sets[[length(sets) + 1L]] <- list(
+        if (nb > 1L) c(as.integer(nb), h, nx) else c(h, nx)
+      )
+    }
+  }
+  dtypes <- fspec$dtype
+  if (fspec$takes_ring) {
+    sets <- lapply(sets, c, list(.ring_shape))
+    dtypes <- c(dtypes, .ring_dtype)
+  }
+  key <- paste0(fspec$ck, "#", .program_tag(dtypes, sets))
+  fspec$fn <- .trace_kernel(key, fspec$fn, dtypes, sets, src@id)
+  fspec$ck <- key
+  fspec
+}
+
+# What a daemon runs: a jitted closure, or a program set compiled from
+# its text. Either way a function of a list of arrays, returning a list.
+.kernel_of <- function(fn, device = NULL) {
+  if (inherits(fn, "garry_programs")) .program_kernel(fn, device) else g_jit(fn, device = device)
+}

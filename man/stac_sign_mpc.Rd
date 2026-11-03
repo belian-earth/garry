@@ -4,13 +4,10 @@
 \alias{stac_sign_mpc}
 \title{Sign Planetary Computer STAC items, caching the token per collection.}
 \usage{
-stac_sign_mpc(items, subscription_key = Sys.getenv("MPC_TOKEN", unset = NA))
+stac_sign_mpc(items)
 }
 \arguments{
 \item{items}{An rstac \code{doc_items} from \code{\link[=stac_query]{stac_query()}}.}
-
-\item{subscription_key}{Optional MPC subscription key (defaults to the
-\code{MPC_TOKEN} environment variable). Not required for public data.}
 }
 \value{
 \code{items} with every asset href signed.
@@ -23,6 +20,11 @@ signing many items, \code{stac_sign_mpc()} caches the \strong{collection-level} 
 memory AND on disk (under \code{\link[tools:R_user_dir]{tools::R_user_dir()}}) and reuses it until it
 expires (\code{msft:expiry}) -- one request per collection instead of one per item.
 Use it in place of \code{rstac::items_sign()} after \code{\link[=stac_query]{stac_query()}}.
+}
+\details{
+An MPC subscription key, not required for public data, is read from
+the \code{MPC_TOKEN} environment variable, here and whenever a long run
+re-signs an expiring href.
 }
 \seealso{
 Other stac helpers:

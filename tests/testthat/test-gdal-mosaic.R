@@ -1,5 +1,10 @@
+# The paths a dataset's first band reads.
+.src_paths <- function(ds) {
+  x <- ds[[1L]]
+  graph_get(x@graph, x@node_id)@path
+}
+
 test_that("gdal_mosaic_vrt refuses a mosaic that lost a source instead of leaving a hole", {
-  skip_if_not_installed("gdalraster")
   dir <- withr::local_tempdir()
   srs <- gdalraster::epsg_to_wkt(32722)
   south_up <- function(path, x0, value) {
@@ -17,7 +22,6 @@ test_that("gdal_mosaic_vrt refuses a mosaic that lost a source instead of leavin
 })
 
 test_that("tiles the mosaic cannot hold stay a multi-path node the warper reads together", {
-  skip_if_not_installed("gdalraster")
   dir <- withr::local_tempdir()
   srs <- gdalraster::epsg_to_wkt(32722)
   south_up <- function(path, x0, values) {   # 3 bands, 4 x 4, one value per band
@@ -87,4 +91,66 @@ test_that("a multi-band mosaic that skipped a tile is an error, not a hole", {
     suppressWarnings(gdal_mosaic_vrt(withr::local_tempfile(fileext = ".vrt"), files)),
     "took 2 of 3"
   )
+})
+
+test_that("tiles off one lattice need a grid, and then warp onto it", {
+  a <- fixture_tile(1)
+  coarse <- fixture_tile(2, gt = c(40, 20, 0, 40, 0, -20), nx = 2L, ny = 2L)
+  shifted <- fixture_tile(3, gt = c(45, 10, 0, 40, 0, -10))
+  expect_error(lazy_dataset(c(a, coarse)), class = "garry_source_error")
+  expect_error(lazy_dataset(c(a, shifted)), class = "garry_source_error")
+  g <- grid_spec("EPSG:3857", extent = c(0, 0, 80, 40), dims = c(8L, 4L), dtype = "f32")
+  m <- collect(lazy_dataset(c(a, coarse), g), distributed = FALSE)
+  expect_true(all(m[, 1:4] == 1) && all(m[, 5:8] == 2))
+  # one lattice: still a mosaic, and the next tile along joins it
+  b <- fixture_tile(4, gt = c(40, 10, 0, 40, 0, -10))
+  x <- lazy_dataset(c(a, b))[[1L]]
+  expect_length(graph_get(x@graph, x@node_id)@path, 1L)
+  expect_identical(x@grid@dims, c(x = 8L, y = 4L))
+})
+
+test_that("sources kept as one node must agree on the metadata it takes from them", {
+  south <- c(40, 10, 0, 0, 0, 10) # no mosaic holds a south-up tile
+  a <- fixture_tile(1, nodata = -9999)
+  b <- fixture_tile(2, nodata = -32768, gt = south)
+  expect_error(lazy_dataset(c(a, b)), class = "garry_source_error")
+  # a given nodata settles it for every source
+  expect_length(.src_paths(lazy_dataset(c(a, b), nodata = -1)), 2L)
+  expect_error(lazy_dataset(c(a, fixture_tile(2, "Int16", nodata = -9999, gt = south))),
+               class = "garry_source_error")
+  scaled <- fixture_tile(2, nodata = -9999, gt = south, scale = 0.5)
+  expect_error(lazy_dataset(c(a, scaled), scale = TRUE), class = "garry_source_error")
+  expect_length(.src_paths(lazy_dataset(c(a, scaled))), 2L)
+})
+
+test_that("several sources on their planning grid read by the given resampling", {
+  a <- fixture_tile(c(1, 9))
+  # a tile in another projection, just east of the first
+  b <- fixture_tile(c(1, 9), gt = c(0.00036, 0.00009, 0, 0.00036, 0, -0.00009),
+                    crs = "EPSG:4326")
+  for (resampling in c("bilinear", "near")) {
+    d <- lazy_dataset(c(a, b), resampling = resampling)
+    expect_equal(collect(d, distributed = FALSE), .geo_oracle(c(a, b), d[[1L]]@grid, resampling),
+                 tolerance = 1e-6, ignore_attr = TRUE, info = resampling)
+  }
+})
+
+test_that("a gap between tiles with no sentinel is missing, not 0", {
+  far <- c(80, 10, 0, 40, 0, -10)
+  m <- collect(lazy_dataset(c(fixture_tile(1), fixture_tile(2, gt = far))),
+               distributed = FALSE)
+  expect_true(all(is.nan(m[, 5:8])))
+  expect_true(all(m[, 1:4] == 1) && all(m[, 9:12] == 2))
+  ints <- lazy_dataset(c(fixture_tile(1, "Int16"), fixture_tile(2, "Int16", gt = far)))
+  expect_error(collect(ints[[1L]] + 1L, distributed = FALSE), class = "garry_nodata_error")
+  # a sentinel marks a gap, so those tiles keep the mosaic
+  held <- lazy_dataset(c(fixture_tile(1, nodata = -9), fixture_tile(2, nodata = -9, gt = far)))
+  expect_length(.src_paths(held), 1L)
+  expect_true(all(is.nan(collect(held, distributed = FALSE)[, 5:8])))
+  # as do tiles that fill their box, in any arrangement
+  tiles <- c(fixture_tile(1), fixture_tile(2, gt = c(40, 10, 0, 40, 0, -10)),
+             fixture_tile(3, gt = c(0, 20, 0, 0, 0, -20), nx = 4L, ny = 1L))
+  expect_error(lazy_dataset(tiles), class = "garry_source_error") # off the lattice
+  tiles[[3L]] <- fixture_tile(3, gt = c(0, 10, 0, 0, 0, -10), nx = 8L, ny = 2L)
+  expect_length(.src_paths(lazy_dataset(tiles)), 1L)
 })

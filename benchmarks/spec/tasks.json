@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "reference_arm": "garry",
+  "primary_arm": "odc-dask",
+  "arms": {
+    "garry": {"cmd": ["Rscript", "engines/garry.R"], "route_check": true},
+    "odc-dask": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-dask"], "chunk": {"small": 2048, "medium": 2048}, "env": {"GDAL_CACHEMAX": "256"}},
+    "odc-threads": {"cmd": ["{python}", "engines/odc.py", "--arm", "odc-threads"], "read_pool": 4, "env": {"GDAL_CACHEMAX": "256"}},
+    "cubed": {"cmd": ["{python}", "engines/cubed.py"], "track": "memory", "dataset": "hls-zarr", "only_variant": "aligned"},
+    "terra": {"cmd": ["Rscript", "engines/terra.R"]}
+  },
+  "output": {
+    "driver": "GTiff",
+    "dtype": "float32",
+    "nodata": "nan",
+    "units": "digital numbers, no scale applied",
+    "compress": "deflate",
+    "blocksize": 256,
+    "interleave": "band",
+    "bigtiff": "if_safer",
+    "overviews": false
+  },
+  "hls_read": {
+    "resampling": {"*": "bilinear", "Fmask": "nearest"},
+    "garry_granularity": "day",
+    "odc_groupby": "solar_day"
+  },
+  "hls_mask": {"band": "Fmask", "bits": [0, 1, 2, 3], "open": 2, "dilate": 3},
+  "tasks": [
+    {
+      "id": "median",
+      "summary": "masked 3-band median over t",
+      "data": "hls",
+      "variants": ["aligned", "warp"],
+      "params": {"bands": ["B04", "B03", "B02"]},
+      "route": "composite_direct",
+      "arms": ["garry", "odc-dask", "odc-threads", "cubed", "terra"],
+      "notes": [
+        "mask_cleanup takes about five times what binary morphology with the same disks takes, 0.14 against 0.03 s on one Fmask slice with the same cells (probe). It stays, as what a skilled ODC user writes: about 1 s of warm wall on masked aligned rows is this choice (estimate).",
+        "warp: a 5 x 4 LocalCluster's best runs were 6.6 s warm against 7.3 s on threads, and 24 s on its first run against 15 s (probe). The arm stays on Dask threads."
+      ],
+      "check": {
+        "aligned": {"max_abs": 1.0, "p99_abs": 0.5, "nan_mismatch_frac": 0.0, "cor_min": 0.9999},
+        "warp": {"p99_abs": 60.0, "nan_mismatch_frac": 0.01, "cor_min": 0.99}
+      }
+    },
+    {
+      "id": "ndvi",
+      "summary": "band math on masked medians",
+      "data": "hls",
+      "variants": ["aligned", "warp"],
+      "params": {"red": "B04", "nir": "B08"},
+      "route": "gd_reduce",
+      "arms": ["garry", "odc-dask", "odc-threads", "cubed", "terra"],
+      "notes": ["warp: a 5 x 4 LocalCluster's best runs were 4.5 s warm against 5.8 s on threads, and 23 s on its first run against 14 s (probe). The arm stays on Dask threads."],
+      "check": {
+        "aligned": {"max_abs": 0.001, "p99_abs": 0.0005, "nan_mismatch_frac": 0.0, "cor_min": 0.9999},
+        "warp": {"p99_abs": 0.05, "nan_mismatch_frac": 0.01, "cor_min": 0.99}
+      }
+    },
+    {
+      "id": "geomedian",
+      "summary": "6-band geometric median",
+      "data": "hls",
+      "variants": ["aligned", "warp"],
+      "params": {
+        "bands": ["B02", "B03", "B04", "B08", "B11", "B12"],
+        "garry_iters": 12,
+        "reference": {"eps": 1e-7, "maxiters": 1000},
+        "objective_stride": 8
+      },
+      "notes": ["No terra arm: terra has no geometric median, and a terra user would read the cube into matrices, rotate them and call another library."],
+      "gap": {
+        "max_ratio": 2.0,
+        "not_comparable": {
+          "warp": {
+            "garry": "odc reads int16 and the reference is float32, so its gap floors at 5.3e-6 at any eps, and garry's gap would carry the two engines' warp differences"
+          }
+        }
+      },
+      "route": "composite_direct",
+      "arms": ["garry", "odc-dask", "odc-threads", "cubed"],
+      "check": {
+        "aligned": {"p99_abs": 20.0, "nan_mismatch_frac": 0.0, "cor_min": 0.999},
+        "warp": {"p99_abs": 80.0, "nan_mismatch_frac": 0.01, "cor_min": 0.99}
+      }
+    },
+    {
+      "id": "ts_hampel",
+      "summary": "Hampel filter over t, gaps kept",
+      "data": "annual",
+      "variants": ["default"],
+      "params": {"k": 3, "t0": 3},
+      "route": "scheduler",
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
+      "notes": ["The Python arms use a 20-line numba gufunc: no package has a Hampel filter for this shape, and numbagg allocates a buffer per lane. The suite takes a stock function where one exists, otherwise what a skilled user writes."],
+      "check": {"default": {"max_abs": 0.001, "p99_abs": 0.0001, "nan_mismatch_frac": 0.0, "cor_min": 0.99999}}
+    },
+    {
+      "id": "ts_kalman",
+      "summary": "local linear trend smoother with gaps",
+      "data": "annual",
+      "variants": ["default"],
+      "params": {"sigma_lvl": 1.0, "sigma_slp": 0.1, "sigma_obs": 2.0, "output": "mean"},
+      "route": "scheduler",
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
+      "check": {"default": {"max_abs": 0.05, "p99_abs": 0.001, "nan_mismatch_frac": 0.0, "cor_min": 0.9999}}
+    },
+    {
+      "id": "focal",
+      "summary": "one window statistic, radius 2: the mean of a pixel's valid neighbours",
+      "data": "hls",
+      "variants": ["aligned"],
+      "params": {"radius": 2, "stat": "nanmean", "band": "B08", "t": 27},
+      "route": "scheduler",
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
+      "check": {"aligned": {"max_abs": 0.01, "p99_abs": 0.001, "nan_mismatch_frac": 0.0, "cor_min": 0.99999}}
+    },
+    {
+      "id": "wide_write",
+      "summary": "read 64 bands, write one GeoTIFF",
+      "data": "embed",
+      "variants": ["default"],
+      "params": {},
+      "output": {"dtype": "int8", "nodata": -128},
+      "route": "read_only",
+      "arms": ["garry", "odc-dask", "odc-threads", "terra"],
+      "check": {"default": {"max_abs": 0.0, "p99_abs": 0.0, "nan_mismatch_frac": 0.0}}
+    }
+  ]
+}

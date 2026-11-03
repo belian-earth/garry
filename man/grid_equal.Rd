@@ -4,12 +4,10 @@
 \alias{grid_equal}
 \title{Structural equality of two grids (geometry only, not dtype).}
 \usage{
-grid_equal(a, b, tol = 1e-09)
+grid_equal(a, b)
 }
 \arguments{
 \item{a, b}{\code{GridSpec} objects.}
-
-\item{tol}{Numeric tolerance for transform/extent comparison.}
 }
 \value{
 \code{TRUE} or \code{FALSE}.

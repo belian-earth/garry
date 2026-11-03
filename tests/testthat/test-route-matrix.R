@@ -1,88 +1,133 @@
 # Route matrix: canonical plans swept through every offline execution
-# route, in memory and written to path, all asserted equal AND asserted
-# to have run the route they were forced onto (garry_last_route()).
-# Catches silent route flips: collect() picks cd_spec -> gd_decompose ->
-# scheduler silently, and a plan changing route is exactly the
-# regression class an equivalence suite must observe to catch.
+# route, in memory and written to path, each held to a value from plain R
+# and to the route it was forced onto (garry_last_route()). collect() picks
+# cd_spec -> gd_decompose -> scheduler silently, and a plan changing route
+# is exactly the regression class an equivalence suite must observe.
+#
+# This file owns "this plan is equal across routes". Other files assert what
+# it cannot: route predicates, plan shape, kernel reuse.
 
-skip_if(!requireNamespace("garry", quietly = TRUE),
-        "garry not installed for daemons")
-
-# The four collect()-reachable cases; the fast path resolves to
-# composite_direct / gd_reduce / scheduler depending on plan shape, so
-# the caller names the expected route.
-.rm_cases <- function(fast_route) list(
-  single = list(opts = list(), distributed = FALSE, route = "single"),
-  scheduler_rules = list(
-    opts = list(garry.placement = "rules", garry.composite_direct = FALSE),
-    distributed = TRUE, route = "scheduler"),
-  scheduler_cost = list(
-    opts = list(garry.placement = "cost", garry.composite_direct = FALSE),
-    distributed = TRUE, route = "scheduler"),
-  fast = list(opts = list(), distributed = TRUE, route = fast_route)
-)
-
-.rm_read_back <- function(path, nb) {
-  cube <- gdal_read_window(path, seq_len(nb), 0L, 0L, 60L, 40L,
-                           nodata = -9999)
-  if (length(dim(cube)) == 3L) aperm(cube, c(2L, 3L, 1L)) else cube
+# The scheduler, with the fast routes off.
+.rm_sched <- function(mode, ...) {
+  .leg(opts = list(garry.placement = mode, garry.composite_direct = FALSE, ...))
 }
 
-# Sweep one plan through every case x {in-memory, written}; every cell
-# must match the single-threaded in-memory result.
-.rm_sweep <- function(x, fast_route, tol = 1e-6) {
-  base <- NULL
-  for (nm in names(.rm_cases(fast_route))) {
-    cs <- .rm_cases(fast_route)[[nm]]
-    old <- if (length(cs$opts)) do.call(options, cs$opts)
-    mem <- collect(x, distributed = cs$distributed)
-    expect_identical(garry_last_route(), cs$route)
-    path <- tempfile(fileext = ".tif")
-    write_tif(x, path, nodata = -9999, distributed = cs$distributed)
-    expect_identical(garry_last_route(), cs$route)
-    nb <- if (is.null(dim(mem))) 1L
-          else if (length(dim(mem)) == 3L) dim(mem)[[3L]] else 1L
-    fil <- .rm_read_back(path, nb)
-    unlink(path)
-    if (!is.null(old)) options(old)
-    if (is.null(base)) base <- mem else .gg_close(mem, base, tol)
-    .gg_close(fil, base, tol)
-  }
+# Every way collect() can run a plan. The default placement is cost, so a plan
+# whose own route is the scheduler has no cost row to add.
+.rm_legs <- function(route) {
+  c(
+    list(.host, .rm_sched("rules")),
+    if (route != "scheduler") list(.rm_sched("cost")),
+    list(.leg(route))
+  )
 }
 
-test_that("a masked composite is identical on every route", {
-  local_pools(2, 2)
-  .rm_sweep(.gg_masked_composite(), fast_route = "composite_direct")
-})
+# A kernel shipped as a closure rather than a program, the way out the
+# error at a failed program names (.program_miss()). Compute daemons on a
+# GPU take this wire, so no CPU run reaches it but this leg.
+.rm_closure <- .rm_sched("rules", garry.kernel_wire = "closure", garry.stage_merge = "guarded")
 
-test_that("a derived band (map over reduces) is identical on every route", {
-  local_pools(2, 2)
-  gA <- .gg_gti(list(s1 = .gg_val(0),   s2 = .gg_val(10)))
-  gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
-  g <- graph_new()
-  A <- reduce_over(lazy_stack(list(.gg_slice(gA, "s1", g),
-                                   .gg_slice(gA, "s2", g))), "median", "t")
-  B <- reduce_over(lazy_stack(list(.gg_slice(gB, "s1", g),
-                                   .gg_slice(gB, "s2", g))), "median", "t")
-  .rm_sweep((A - B) / (A + B), fast_route = "gd_reduce", tol = 1e-5)
-})
+# Enough to split the scheduler's rows into chunks. The fast routes tile their
+# own jobs.
+.rm_px <- 600
 
-test_that("a scan plan is identical on every route (fast path = scheduler)", {
+# The band stack collect() and write_tif() take a masked composite as.
+.rm_composite <- function(...) stack_bands(.gg_masked_composite(...))
+
+# Medians of the two slices of a composite pair, on one shared graph.
+.rm_median <- function(g, gti) {
+  reduce_over(lazy_stack(list(.gg_slice(gti, "s1", g), .gg_slice(gti, "s2", g))), "median", "t")
+}
+
+local({
+  # Two compute daemons: the fast routes fan their jobs out over the profiles,
+  # and no other file runs them on more than one.
   local_pools(2, 2)
-  gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
-  g <- graph_new()
-  body <- function(xs, margin) {
-    g_scan(
-      init = 0,
-      body = function(carry, v) {
-        s <- carry + v
-        list(carry = s, out = s)
-      },
-      xs = xs[[1L]]
-    )$out
-  }
-  sc <- scan_over(lazy_stack(list(.gg_slice(gA, "s1", g) + 1,
-                                  .gg_slice(gA, "s2", g) * 2)),
-                  body, over = "t")
-  .rm_sweep(sc, fast_route = "scheduler")
+
+  test_that("a masked composite holds its value on every route", {
+    expect_plan(.rm_composite(), .gg_masked_want(), "f32",
+                legs = .rm_legs("composite_direct"), px = .rm_px)
+  })
+
+  test_that("a UInt16 masked composite holds its value on every route", {
+    expect_plan(.rm_composite(type = "UInt16", dtype = "u16"), .gg_masked_want(), "f32",
+                legs = c(.rm_legs("composite_direct"), list(.rm_closure)), px = .rm_px)
+  })
+
+  test_that("a single band composite runs the whole-grid kernel", {
+    x <- .rm_composite(single = TRUE)
+    expect_identical(.cd_spec(collect(x, plan_only = TRUE))$n_bands, 1L)
+    expect_plan(x, .gg_masked_want(single = TRUE), "f32", legs = list(.leg("composite_direct")))
+  })
+
+  test_that("bands with different per-slice fns leave the composite route", {
+    gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+    gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+    g <- graph_new()
+    a <- list(.gg_slice(gA, "s1", g), .gg_slice(gA, "s2", g))
+    b <- list(.gg_slice(gB, "s1", g), .gg_slice(gB, "s2", g))
+    x <- lazy_stack(
+      list(
+        d = reduce_over(lazy_stack(Map(`-`, a, b)), "mean", "t"),
+        p = reduce_over(lazy_stack(Map(`*`, a, b)), "mean", "t")
+      ),
+      along = "band"
+    )
+    expect_null(.cd_spec(collect(x, plan_only = TRUE)))
+    products <- (.gg_val(0) * .gg_val(100) + .gg_val(10) * .gg_val(50)) / 2
+    want <- array(c(matrix(-70, 40L, 60L), products), c(40L, 60L, 2L))
+    expect_plan(x, want, "f32", legs = list(.leg("gd_reduce")))
+  })
+
+  test_that("a quantized write leaves the fast routes and stores what they hold", {
+    expect_written(.rm_composite(), .gg_masked_want() * 2, "i16",
+                   legs = list(.host, .leg("scheduler")), scale = 0.5)
+  })
+
+  # Each fast route has its own writer, and only cells no slice holds put a
+  # sentinel in it.
+  test_that("a cell no slice holds reaches the file as the sentinel", {
+    want <- .gg_masked_want(overlap = TRUE)
+    expect_true(anyNA(want))
+    expect_written(.rm_composite(overlap = TRUE), want, "f32",
+                   legs = list(.leg("composite_direct")), nodata = -9999)
+    bands <- .gg_masked_composite(overlap = TRUE)
+    a <- want[, , 1L]
+    b <- want[, , 2L]
+    expect_written((bands$V1 - bands$V2) / (bands$V1 + bands$V2), .as_f32((a - b) / (a + b)), "f32",
+                   legs = list(.leg("gd_reduce")), nodata = -9999)
+  })
+
+  test_that("a derived band (map over reduces) holds its value on every route", {
+    gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+    gB <- .gg_gti(list(s1 = .gg_val(100), s2 = .gg_val(50)))
+    g <- graph_new()
+    A <- .rm_median(g, gA)
+    B <- .rm_median(g, gB)
+    a <- .gg_val(5)
+    b <- .gg_val(75)
+    expect_plan((A - B) / (A + B), .as_f32((a - b) / (a + b)), "f32",
+                legs = .rm_legs("gd_reduce"), px = .rm_px)
+  })
+
+  test_that("a scan plan holds its value on every route (no fast route)", {
+    gA <- .gg_gti(list(s1 = .gg_val(0), s2 = .gg_val(10)))
+    g <- graph_new()
+    body <- function(xs, margin) {
+      g_scan(
+        init = 0,
+        body = function(carry, v) {
+          s <- carry + v
+          list(carry = s, out = s)
+        },
+        xs = xs[[1L]]
+      )$out
+    }
+    sc <- scan_over(lazy_stack(list(.gg_slice(gA, "s1", g) + 1,
+                                    .gg_slice(gA, "s2", g) * 2)),
+                    body, over = "t")
+    first <- .gg_val(0) + 1
+    want <- array(c(first, first + .gg_val(10) * 2), c(40L, 60L, 2L))
+    expect_plan(sc, want, "f32", legs = .rm_legs("scheduler"), px = .rm_px)
+  })
 })
