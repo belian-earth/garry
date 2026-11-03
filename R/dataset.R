@@ -181,6 +181,23 @@ LazyDataset <- S7::new_class(
 #'   (else `b<index>`) and slices take the time coordinate's (e.g. years);
 #'   pick slices with [time_sel()], or build only some with `time`.
 #'
+#'   A Zarr store's root (a `.zarr` path or URL, or `ZARR:"<root>"`) reads
+#'   the store's arrays that overlap `grid`, so a store of one array per
+#'   UTM zone needs no connection string per zone. GDAL lists the arrays,
+#'   from the store's consolidated metadata (over HTTP GDAL needs it, or
+#'   directory listings), and gives each one's CRS and extent; garry keeps
+#'   those whose extent overlaps `grid`, says which, and reads them as it
+#'   reads a vector of them. They go in the order of their paths in the
+#'   store (`/utm09/embeddings` before `/utm10/embeddings`), and where two
+#'   hold data for a cell, the later one's value is read. An array's extent
+#'   can reach well past the data it holds: each OlmoEarth zone's spans
+#'   983 km east to west, so a grid at Jasper (53 degrees north, inside
+#'   zone 11) also overlaps zones 10 and 12, and zone 12 wins wherever it
+#'   holds data. Give the arrays as connection strings to read fewer.
+#'   `array` names the array to read in each group when the georeferenced
+#'   arrays carry more than one name. Without `grid` the store must hold
+#'   one georeferenced array.
+#'
 #' All bands share one intermediate representation (IR) graph, so a mask
 #' defined once (see [apply_mask()]) is computed once and dedup'd across bands, and
 #' [collect()] plans the whole dataset in one pass.
@@ -189,7 +206,9 @@ LazyDataset <- S7::new_class(
 #'   filtered), a `stac_sources()` table, or a character path / vector of
 #'   paths to (multi-band) raster files (local, `/vsicurl/`, or bare
 #'   `http(s)://`, prefixed automatically), or `ZARR:"<store>":/<array>`
-#'   strings, whose bare `https://` store is prefixed the same way.
+#'   strings, whose bare `https://` store is prefixed the same way. Or the
+#'   root of a Zarr store, whose arrays that overlap `grid` are read (see
+#'   the description).
 #' @param grid Target [GridSpec()] for every band. Required for the table
 #'   form; `NULL` (the default) keeps the file form on its native grid.
 #' @param assets Character vector of value assets to load (table form), or of
@@ -263,6 +282,10 @@ LazyDataset <- S7::new_class(
 #'   asset) used when `scale` is numeric; defaults to 0. A band with an
 #'   offset and no scale of its own takes scale 1. Ignored when `scale` is
 #'   logical.
+#' @param array Zarr store root: the name of the array to read in each
+#'   group, the last part of its path, such as `"embeddings"`. Needed only
+#'   when the store's georeferenced arrays carry more than one name; `NULL`
+#'   (the default) takes the one name they share.
 #' @return A `LazyDataset`.
 #' @seealso [group_by_time()], [collect()]
 #' @examples
@@ -283,7 +306,8 @@ lazy_dataset <- function(
   offset = NULL,
   bands = NULL,
   decode = NULL,
-  time = NULL
+  time = NULL,
+  array = NULL
 ) {
   if (!isFALSE(scale) && !isTRUE(scale) && !is.numeric(scale)) {
     cli::cli_abort(
@@ -297,6 +321,18 @@ lazy_dataset <- function(
     scale = scale,
     offset = offset
   ))
+  if (
+    !is.null(array) &&
+      (!is.character(array) ||
+        length(array) != 1L ||
+        is.na(array) ||
+        !nzchar(array))
+  ) {
+    cli::cli_abort(
+      "{.arg array} must be one array name, such as {.val embeddings}.",
+      class = c("garry_source_error", "garry_error")
+    )
+  }
   if (is.character(sources)) {
     if (!missing(granularity)) {
       cli::cli_abort(c(
@@ -305,7 +341,7 @@ lazy_dataset <- function(
       ))
     }
     return(.ds_from_files(
-      sources,
+      .ds_store_sources(sources, grid, array),
       grid,
       assets,
       mask_asset,
@@ -319,6 +355,12 @@ lazy_dataset <- function(
     ))
   }
   .assert_class(grid, GridSpec, "GridSpec")
+  if (!is.null(array)) {
+    cli::cli_abort(
+      "{.arg array} picks the arrays of a Zarr store; STAC items have none.",
+      class = c("garry_source_error", "garry_error")
+    )
+  }
   if (!is.null(decode)) {
     cli::cli_abort(c(
       "{.arg decode} decodes a coded raster file.",
@@ -594,6 +636,136 @@ lazy_dataset <- function(
     )
   }
   stats::setNames(idx, nms)
+}
+
+# The sources lazy_dataset() reads for `sources`. A Zarr store's root
+# becomes the arrays GDAL lists in it (gdal_zarr_arrays()) that are named
+# `array`, or share the one name of the georeferenced arrays, and overlap
+# `grid`, in the order of their paths; several read together as an
+# explicit list of them does, a later one winning where both hold data.
+# Anything else passes through.
+.ds_store_sources <- function(
+  sources,
+  grid,
+  array,
+  call = rlang::caller_env()
+) {
+  root <- .zarr_store_root(sources)
+  err <- c("garry_source_error", "garry_error")
+  if (is.null(root)) {
+    if (!is.null(array)) {
+      where <- .url_scrub(sources[[1L]])
+      cli::cli_abort(
+        c(
+          "{.arg array} picks arrays of a Zarr store, and {.path {where}} is not a store's root.",
+          "i" = "Give the root as a {.file .zarr} path or URL or as {.code ZARR:\"<root>\"}, or drop {.arg array}."
+        ),
+        class = err,
+        call = call
+      )
+    }
+    return(sources)
+  }
+  if (!is.null(grid)) {
+    .assert_class(grid, GridSpec, "GridSpec")
+  }
+  where <- .url_scrub(sources)
+  found <- gdal_zarr_arrays(root, array, call = call)
+  if (is.null(found)) {
+    if (!is.null(array)) {
+      cli::cli_abort(
+        c(
+          "GDAL opens {.path {where}} as a single array, so {.arg array} has none to pick.",
+          "i" = "Drop {.arg array}."
+        ),
+        class = err,
+        call = call
+      )
+    }
+    return(root)
+  }
+  if (!length(found$names)) {
+    cli::cli_abort(
+      "GDAL lists no arrays of two or more dimensions in {.path {where}}.",
+      class = err,
+      call = call
+    )
+  }
+  arrays <- found$arrays
+  if (!nrow(arrays)) {
+    cli::cli_abort(
+      c(
+        "{.path {where}} holds no array named {.val {array}}.",
+        "i" = "Its arrays are named {.val {found$names}}."
+      ),
+      class = err,
+      call = call
+    )
+  }
+  spatial <- arrays[nzchar(arrays$crs), , drop = FALSE]
+  if (!nrow(spatial)) {
+    cli::cli_abort(
+      c(
+        "GDAL places none of the arrays of {.path {where}} on a map: {.val {arrays$array}} carry no CRS or geotransform.",
+        "i" = "{.fn lazy_dataset} reads arrays GDAL georeferences."
+      ),
+      class = err,
+      call = call
+    )
+  }
+  nms <- unique(spatial$name)
+  if (length(nms) > 1L) {
+    cli::cli_abort(
+      c(
+        "{.path {where}} holds georeferenced arrays of {length(nms)} names: {.val {nms}}.",
+        "i" = "Name the one to read with {.arg array}, e.g. {.code array = \"{nms[[1L]]}\"}."
+      ),
+      class = err,
+      call = call
+    )
+  }
+  if (is.null(grid)) {
+    if (nrow(spatial) > 1L) {
+      cli::cli_abort(
+        c(
+          "{.path {where}} holds {nrow(spatial)} {.val {nms}} arrays, in {length(unique(spatial$crs))} CRS{?s}.",
+          "i" = "Give {.arg grid}: the arrays that overlap it are read onto it."
+        ),
+        class = err,
+        call = call
+      )
+    }
+    return(spatial$path)
+  }
+  meets <- vapply(
+    seq_len(nrow(spatial)),
+    function(i) {
+      e <- unlist(spatial[i, c("xmin", "ymin", "xmax", "ymax")])
+      .gdal_grid_meets(grid, e, spatial$crs[[i]])
+    },
+    logical(1)
+  )
+  if (!any(meets)) {
+    crs <- .crs_label(grid@crs)
+    bb <- paste(
+      format(grid@extent, scientific = FALSE, trim = TRUE),
+      collapse = ", "
+    )
+    cli::cli_abort(
+      c(
+        "None of the {nrow(spatial)} {.val {nms}} {cli::qty(nrow(spatial))}array{?s} of {.path {where}} overlaps the grid.",
+        "i" = "The grid covers {bb} (xmin, ymin, xmax, ymax) in {crs}.",
+        "i" = "Check the grid's CRS and extent, or read another store."
+      ),
+      class = err,
+      call = call
+    )
+  }
+  keep <- spatial[meets, , drop = FALSE]
+  cli::cli_inform(
+    "Reading {nrow(keep)} of the {nrow(spatial)} {.val {nms}} {cli::qty(nrow(spatial))}array{?s} of {.path {where}}: {.val {keep$array}}."
+  )
+  keep$path
 }
 
 # File form of lazy_dataset(): one band per (selected) file band, one time

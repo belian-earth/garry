@@ -211,3 +211,202 @@ fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
   )
   .fixture_env[[key]]
 }
+
+# A Zarr store written by GDAL (gdalmdimtranslate of a multidimensional
+# VRT): (time, band, y, x) Int8 arrays named `emb`, one per group as
+# OlmoEarth lays its UTM zones out, 2 years x 3 bands of 20 x 30 px at 10 m,
+# fill value -128 at the top-left pixel of every plane, georeferenced by x
+# and y coordinate arrays and a CRS attribute:
+#   /utm32/emb      EPSG:32632, where fixture_zarr_nd() lies
+#   /utm33/emb      EPSG:32633, against /utm32/emb's east edge
+#   /eqn/emb        EPSG:32632, just north of the equator
+#   /eqs/emb        EPSG:32732, just south of it
+#   /nest/far/emb   EPSG:32632, far from the others, in a nested group
+#   /ova/emb        EPSG:32631, elsewhere
+#   /ovb/emb        EPSG:32631, 100 m east of /ova/emb, overlapping it
+#   /other/lut      a 3 x 2 Float32 table, not georeferenced
+# `format` is "ZARR_V3" or "ZARR_V2"; `consolidated`, whether GDAL writes
+# consolidated metadata. Returns the store, each array's name as GDAL lists
+# it (`paths`, by group) and its values as an R array [t, b, y, x] (`vals`).
+fixture_zarr_store <- function(format = "ZARR_V3", consolidated = TRUE) {
+  key <- paste("zarr-store", format, consolidated)
+  if (!is.null(.fixture_env[[key]])) {
+    return(.fixture_env[[key]])
+  }
+  nt <- 2L
+  nb <- 3L
+  ny <- 20L
+  nx <- 30L
+  res <- 10
+  xy33 <- gdalraster::transform_xy(
+    cbind(500300, 4600000),
+    "EPSG:32632",
+    "EPSG:32633"
+  )
+  at <- list(
+    utm32 = list(epsg = 32632L, x0 = 500000, y1 = 4600000, shift = 0L),
+    utm33 = list(
+      epsg = 32633L,
+      x0 = round(xy33[1, 1], -1),
+      y1 = round(xy33[1, 2], -1),
+      shift = 7L
+    ),
+    eqn = list(epsg = 32632L, x0 = 500000, y1 = 200, shift = 3L),
+    eqs = list(epsg = 32732L, x0 = 500000, y1 = 10000000, shift = 5L),
+    `nest/far` = list(epsg = 32632L, x0 = 200000, y1 = 5000000, shift = 9L),
+    ova = list(epsg = 32631L, x0 = 400000, y1 = 3000000, shift = 11L),
+    ovb = list(epsg = 32631L, x0 = 400100, y1 = 3000000, shift = 13L)
+  )
+  num <- function(x) format(x, scientific = FALSE, trim = TRUE)
+  vals <- list()
+  group <- function(g) {
+    a <- at[[g]]
+    v <- array(0L, c(nt, nb, ny, nx))
+    for (t in seq_len(nt)) {
+      for (b in seq_len(nb)) {
+        v[t, b, , ] <- outer(seq_len(ny), seq_len(nx), function(y, x) {
+          (t * 40L + b * 10L + y + x + a$shift) %% 250L - 125L
+        })
+      }
+    }
+    v[,, 1, 1] <- -128L
+    vals[[g]] <<- v
+    inner <- paste0(
+      '<Dimension name="time" size="',
+      nt,
+      '" indexingVariable="time"/>',
+      '<Dimension name="band" size="',
+      nb,
+      '"/>',
+      '<Dimension name="y" size="',
+      ny,
+      '" type="HORIZONTAL_Y" indexingVariable="y"/>',
+      '<Dimension name="x" size="',
+      nx,
+      '" type="HORIZONTAL_X" indexingVariable="x"/>',
+      '<Array name="time"><DataType>Int32</DataType><DimensionRef ref="time"/>',
+      '<NoDataValue>0</NoDataValue><RegularlySpacedValues start="2021" increment="1"/></Array>',
+      '<Array name="y"><DataType>Float64</DataType><DimensionRef ref="y"/><NoDataValue>NaN</NoDataValue>',
+      '<RegularlySpacedValues start="',
+      num(a$y1 - res / 2),
+      '" increment="',
+      -res,
+      '"/></Array>',
+      '<Array name="x"><DataType>Float64</DataType><DimensionRef ref="x"/><NoDataValue>NaN</NoDataValue>',
+      '<RegularlySpacedValues start="',
+      num(a$x0 + res / 2),
+      '" increment="',
+      res,
+      '"/></Array>',
+      '<Array name="emb"><DataType>Int8</DataType>',
+      '<DimensionRef ref="time"/><DimensionRef ref="band"/><DimensionRef ref="y"/><DimensionRef ref="x"/>',
+      '<SRS dataAxisToSRSAxisMapping="2,1">EPSG:',
+      a$epsg,
+      '</SRS><NoDataValue>-128</NoDataValue>',
+      # C order: the last dimension varies fastest
+      '<InlineValues>',
+      paste(as.vector(aperm(v, 4:1)), collapse = " "),
+      '</InlineValues></Array>'
+    )
+    parts <- strsplit(g, "/", fixed = TRUE)[[1L]]
+    paste0(
+      paste0('<Group name="', parts, '">', collapse = ""),
+      inner,
+      strrep("</Group>", length(parts))
+    )
+  }
+  vrt <- paste0(
+    '<VRTDataset><Group name="/">',
+    paste(vapply(names(at), group, ""), collapse = ""),
+    '<Group name="other"><Dimension name="r" size="3"/><Dimension name="c" size="2"/>',
+    '<Array name="lut"><DataType>Float32</DataType><DimensionRef ref="r"/><DimensionRef ref="c"/>',
+    '<NoDataValue>-1</NoDataValue><InlineValues>1 2 3 4 5 6</InlineValues></Array></Group>',
+    "</Group></VRTDataset>"
+  )
+  dir <- file.path(tempdir(), "garry-fixture-store")
+  dir.create(dir, showWarnings = FALSE)
+  src <- file.path(dir, sprintf("%s-%s.vrt", format, consolidated))
+  writeLines(vrt, src)
+  store <- file.path(dir, sprintf("%s-%s.zarr", format, consolidated))
+  unlink(store, recursive = TRUE)
+  gdalraster::mdim_translate(
+    src,
+    store,
+    output_format = "Zarr",
+    creation_options = c(
+      paste0("FORMAT=", format),
+      paste0("CREATE_CONSOLIDATED_METADATA=", if (consolidated) "YES" else "NO")
+    ),
+    quiet = TRUE
+  )
+  .fixture_env[[key]] <- list(
+    store = store,
+    paths = vapply(
+      names(at),
+      function(g) sprintf('ZARR:"%s":/%s/emb', store, g),
+      ""
+    ),
+    vals = vals
+  )
+  .fixture_env[[key]]
+}
+
+# A Zarr store GDAL writes with each of `arrays` at its root: a 20 x 30
+# Int8 array in EPSG:32632 at 10 m from (500000, 4600000), the i-th one's
+# values i * 10 plus the column modulo 7 and the row modulo 3. Returns the
+# store.
+fixture_zarr_root <- function(arrays = "a", format = "ZARR_V3") {
+  key <- paste(c("zarr-root", arrays, format), collapse = " ")
+  if (!is.null(.fixture_env[[key]])) {
+    return(.fixture_env[[key]])
+  }
+  ny <- 20L
+  nx <- 30L
+  arr <- vapply(
+    seq_along(arrays),
+    function(i) {
+      v <- outer(seq_len(ny), seq_len(nx), function(y, x) {
+        i * 10L + x %% 7L + y %% 3L
+      })
+      paste0(
+        '<Array name="',
+        arrays[[i]],
+        '"><DataType>Int8</DataType>',
+        '<DimensionRef ref="y"/><DimensionRef ref="x"/>',
+        '<SRS dataAxisToSRSAxisMapping="2,1">EPSG:32632</SRS><NoDataValue>-128</NoDataValue>',
+        # C order: the last dimension varies fastest
+        "<InlineValues>",
+        paste(as.vector(t(v)), collapse = " "),
+        "</InlineValues></Array>"
+      )
+    },
+    ""
+  )
+  vrt <- paste0(
+    '<VRTDataset><Group name="/">',
+    '<Dimension name="y" size="',
+    ny,
+    '" type="HORIZONTAL_Y" indexingVariable="y"/>',
+    '<Dimension name="x" size="',
+    nx,
+    '" type="HORIZONTAL_X" indexingVariable="x"/>',
+    '<Array name="y"><DataType>Float64</DataType><DimensionRef ref="y"/><NoDataValue>NaN</NoDataValue>',
+    '<RegularlySpacedValues start="4599995" increment="-10"/></Array>',
+    '<Array name="x"><DataType>Float64</DataType><DimensionRef ref="x"/><NoDataValue>NaN</NoDataValue>',
+    '<RegularlySpacedValues start="500005" increment="10"/></Array>',
+    paste(arr, collapse = ""),
+    "</Group></VRTDataset>"
+  )
+  src <- tempfile("garry-fixture-root-", fileext = ".vrt")
+  writeLines(vrt, src)
+  store <- sub("vrt$", "zarr", src)
+  gdalraster::mdim_translate(
+    src,
+    store,
+    output_format = "Zarr",
+    creation_options = paste0("FORMAT=", format),
+    quiet = TRUE
+  )
+  .fixture_env[[key]] <- store
+  store
+}

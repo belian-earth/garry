@@ -143,6 +143,19 @@
   warps every zone and every band of a slice in one pass, the later source
   winning where zones overlap. The arrays must agree on their bands and
   dimension coordinates.
+* `lazy_dataset()` reads a Zarr store from its root: given the store (a
+  `.zarr` path or URL, or `ZARR:"<root>"`) and a grid, it reads the store's
+  arrays whose extents overlap the grid, as it reads a list of them, and
+  says which. GDAL lists the arrays and places each one; they go in the
+  order of their paths, a later one winning where two hold data. `array`
+  names the array to read in each group when the georeferenced arrays carry
+  more than one name. Listing OlmoEarth's 60 zones takes 246 requests,
+  about 100 s where source.coop answers a request in 0.3 s, and a remote
+  store's list is kept for the session; building the dataset from two zones
+  named by hand takes 12 requests and 9 s. Each array is opened from its
+  own group: GDAL 3.13 opens an array through the store's root by looking
+  for coordinate arrays of every array in the store, 2.3 s an open for
+  OlmoEarth. Explicit connection strings read as before.
 * `band_sel()`, `time_sel()` and per-slice operations work on a stack after
   it has been collected (the planner rewrites collected stacks in place).
 * `time_sel()` takes a dataset and keeps the matching slices of every band.

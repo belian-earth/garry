@@ -161,6 +161,192 @@ NULL
   grepl('^ZARR:|\\.zarr/?$', path, ignore.case = TRUE)
 }
 
+# The root of a Zarr store as GDAL opens it, when `path` names a store
+# rather than an array in one: ZARR:"<root>" with no array path, or a path
+# or URL ending in .zarr. GDAL recognises a store over HTTP only by the
+# ZARR: prefix (without it the open fails with a 404), and reads a URL
+# through /vsicurl/, so both are added. NULL for anything else, an
+# explicit array (ZARR:"<store>":/<array>) included.
+.zarr_store_root <- function(path) {
+  if (!is.character(path) || length(path) != 1L || is.na(path)) {
+    return(NULL)
+  }
+  if (grepl('^ZARR:"[^"]+"$', path, ignore.case = TRUE)) {
+    inner <- sub('^ZARR:"(.*)"$', "\\1", path, ignore.case = TRUE)
+  } else if (
+    grepl("\\.zarr/*$", path, ignore.case = TRUE) &&
+      # no other driver's prefix (GTI:, NETCDF:"...") or URL scheme
+      (!grepl("^[A-Za-z0-9_]{2,}:", path) || grepl("^https?://", path))
+  ) {
+    inner <- path
+  } else {
+    return(NULL)
+  }
+  paste0('ZARR:"', .gdal_href(sub("(.)/+$", "\\1", inner)), '"')
+}
+
+# An array GDAL names from its store's root, ZARR:"<store>":/<group>/<a>,
+# named from its own group instead: ZARR:"<store>/<group>":/<a>. Opened
+# from the root, GDAL 3.13 takes every array of the store from the
+# consolidated metadata and looks for each one's coordinate arrays, so one
+# open costs what the whole store holds: 2.3 s for OlmoEarth's 60 arrays,
+# against 0.05 s from the array's group. An array at the root keeps its
+# name.
+.zarr_group_path <- function(name) {
+  m <- regmatches(name, regexec('^ZARR:"(.*)":(/.*)$', name))[[1L]]
+  group <- dirname(m[[3L]])
+  if (group == "/") {
+    return(name)
+  }
+  paste0('ZARR:"', m[[2L]], group, '":/', basename(m[[3L]]))
+}
+
+.gdal_cache$zarr_stores <- new.env(parent = emptyenv()) # see gdal_zarr_arrays()
+
+# The arrays GDAL lists in the Zarr store at `root` (.zarr_store_root()):
+# `names`, the distinct array names (the last part of each path), and
+# `arrays`, one row per array opened, in the order of their paths in the
+# store: `path`, the connection string garry reads (.zarr_group_path());
+# `array`, its path in the store; `name`; `crs`, "" for an array GDAL does
+# not georeference; and `xmin`, `ymin`, `xmax`, `ymax`, its extent in
+# `crs`. Given `array`, only the arrays of that name are opened. NULL when
+# GDAL opens the root as one array. A root GDAL cannot open fails as a
+# read with a hint, an array that fails to open as a read naming it. A
+# remote store's answer is kept for the session, since a second listing
+# would repeat the opens and, once reads have pushed the store's metadata
+# out of GDAL's cache, its requests.
+gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
+  key <- paste(c(root, array), collapse = "\x1f")
+  remote <- .gdal_is_remote(root)
+  hit <- .gdal_cache$zarr_stores[[key]]
+  if (remote && !is.null(hit)) {
+    return(hit$value)
+  }
+  ds <- tryCatch(
+    .gdal_with_retry(
+      function() .gdal_open(root),
+      what = "opening a Zarr store",
+      src = root
+    ),
+    garry_read_error = function(e) {
+      where <- .url_scrub(root)
+      cli::cli_abort(
+        c(
+          "GDAL could not open {.path {where}} as a Zarr store.",
+          "i" = "Over HTTP, GDAL finds a store's arrays from its consolidated metadata, or from directory listings the server must give."
+        ),
+        class = c("garry_read_error", "garry_error"),
+        call = call,
+        parent = e
+      )
+    }
+  )
+  nb <- ds$getRasterCount()
+  sds <- ds$getMetadata(0L, "SUBDATASETS")
+  ds$close()
+  out <- NULL
+  if (nb == 0L) {
+    sds <- grep("^SUBDATASET_[0-9]+_NAME=", sds, value = TRUE)
+    listed <- sub("^SUBDATASET_[0-9]+_NAME=", "", sds)
+    paths <- sub('^ZARR:".*":(/[^"]*)$', "\\1", listed)
+    # sorted, so a directory listing's order never decides which array wins
+    ord <- order(paths, method = "radix")
+    listed <- listed[ord]
+    paths <- paths[ord]
+    nms <- basename(paths)
+    pick <- if (is.null(array)) rep(TRUE, length(nms)) else nms == array
+    grp <- vapply(listed[pick], .zarr_group_path, "", USE.NAMES = FALSE)
+    geo <- lapply(grp, .gdal_georef)
+    ext <- vapply(geo, function(g) g$extent, numeric(4))
+    arrays <- data.frame(
+      path = grp,
+      array = paths[pick],
+      name = nms[pick],
+      crs = vapply(geo, function(g) g$crs, ""),
+      xmin = ext[1L, ],
+      ymin = ext[2L, ],
+      xmax = ext[3L, ],
+      ymax = ext[4L, ],
+      stringsAsFactors = FALSE
+    )
+    out <- list(names = unique(nms), arrays = arrays)
+  }
+  if (remote) {
+    .gdal_cache$zarr_stores[[key]] <- list(value = out)
+  }
+  out
+}
+
+# Where GDAL places the dataset at `path`: `crs`, "" when it has none, and
+# `extent` (xmin, ymin, xmax, ymax in `crs`), NA without a CRS and a
+# geotransform. gdalraster notes a missing CRS or geotransform in a message
+# and a warning; here they only mean the array is not a map.
+.gdal_georef <- function(path) {
+  ds <- .gdal_with_retry(
+    function() .gdal_open(path),
+    what = "opening a Zarr array",
+    src = path
+  )
+  on.exit(ds$close(), add = TRUE)
+  absent <- c(
+    "failed to get projection ref",
+    "failed to get geotransform, default returned"
+  )
+  quiet <- function(cnd) {
+    said <- trimws(cli::ansi_strip(conditionMessage(cnd)))
+    # a cli alert leads with its bullet
+    if (said %in% absent || sub("^\\S+\\s+", "", said) %in% absent) {
+      restart <- if (inherits(cnd, "warning")) {
+        "muffleWarning"
+      } else {
+        "muffleMessage"
+      }
+      invokeRestart(restart)
+    }
+  }
+  gt <- withCallingHandlers(
+    ds$getGeoTransform(),
+    warning = quiet,
+    message = quiet
+  )
+  crs <- withCallingHandlers(
+    ds$getProjection(),
+    warning = quiet,
+    message = quiet
+  )
+  if (!nzchar(crs) || identical(as.numeric(gt), c(0, 1, 0, 0, 0, 1))) {
+    return(list(crs = "", extent = rep(NA_real_, 4L)))
+  }
+  xs <- gt[[1L]] + c(0, ds$getRasterXSize()) * gt[[2L]]
+  ys <- gt[[4L]] + c(0, ds$getRasterYSize()) * gt[[6L]]
+  list(crs = crs, extent = c(min(xs), min(ys), max(xs), max(ys)))
+}
+
+# Does `grid` overlap the extent `e` (xmin, ymin, xmax, ymax in `crs`)? The
+# grid's bounds go into `crs`, not the other way: the arrays of a UTM-zone
+# store span pole to pole, and the bounds of such an extent in the grid's
+# CRS cover nearly all of it (a grid at Jasper met 30 of OlmoEarth's 60
+# zones that way, against the 3 whose extents hold it). Bounds across the
+# antimeridian (xmax < xmin in a geographic `crs`) wrap. A grid with no
+# finite image in `crs`, such as the far side of a projection's globe,
+# meets nothing there.
+.gdal_grid_meets <- function(grid, e, crs) {
+  b <- tryCatch(
+    gdalraster::transform_bounds(grid@extent, grid@crs, crs, densify_pts = 21L),
+    error = function(err) NULL
+  )
+  if (!length(b) || !all(is.finite(b))) {
+    return(FALSE)
+  }
+  ys <- b[[2L]] < e[[4L]] && e[[2L]] < b[[4L]]
+  xs <- if (b[[3L]] >= b[[1L]]) {
+    b[[1L]] < e[[3L]] && e[[1L]] < b[[3L]]
+  } else {
+    e[[3L]] > b[[1L]] || e[[1L]] < b[[3L]]
+  }
+  xs && ys
+}
+
 # Does opening `path` reach the network? A GTI index is a local file, but
 # opening it opens its first tile to infer band count, type and nodata,
 # so it is remote when its tiles are (read from the index sidecar; an
@@ -445,6 +631,20 @@ NULL
     .gdal_cache$handles[[key]] <- h
     return(h)
   }
+  h <- .gdal_open(path, open_options)
+  .gdal_note_header(h, path)
+  while (length(.gdal_cache$handles) >= .gdal_cache$cap) {
+    .gdal_handle_forget(names(.gdal_cache$handles)[[1L]])
+  }
+  .gdal_cache$handles[[key]] <- h
+  .gdal_cache$stamps[[key]] <- stamp
+  h
+}
+
+# Open `path` read-only as .gdal_handle() does, uncached: the caller closes
+# it. A question asked once of each of many datasets (the arrays of a Zarr
+# store) would otherwise push the read handles out of the cache.
+.gdal_open <- function(path, open_options = character(0)) {
   # Not shared: GDAL would hand back any dataset already open on the path, a
   # user's included, which still reads a file replaced since it opened.
   open_raw <- function() {
@@ -480,7 +680,7 @@ NULL
   # benign notice so it does not spam once per asset. Nor does gdalraster's
   # Int64 note on a VRT garry widened (.gdal_int64_noted()). Every other
   # warning surfaces.
-  h <- withCallingHandlers(
+  withCallingHandlers(
     open_ds(),
     warning = function(w) {
       if (
@@ -500,13 +700,6 @@ NULL
       }
     }
   )
-  .gdal_note_header(h, path)
-  while (length(.gdal_cache$handles) >= .gdal_cache$cap) {
-    .gdal_handle_forget(names(.gdal_cache$handles)[[1L]])
-  }
-  .gdal_cache$handles[[key]] <- h
-  .gdal_cache$stamps[[key]] <- stamp
-  h
 }
 
 # Path-specific GDAL config (VSISetPathSpecificOption): options that

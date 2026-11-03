@@ -16,7 +16,8 @@ lazy_dataset(
   offset = NULL,
   bands = NULL,
   decode = NULL,
-  time = NULL
+  time = NULL,
+  array = NULL
 )
 }
 \arguments{
@@ -24,7 +25,9 @@ lazy_dataset(
 filtered), a \code{stac_sources()} table, or a character path / vector of
 paths to (multi-band) raster files (local, \verb{/vsicurl/}, or bare
 \verb{http(s)://}, prefixed automatically), or \verb{ZARR:"<store>":/<array>}
-strings, whose bare \verb{https://} store is prefixed the same way.}
+strings, whose bare \verb{https://} store is prefixed the same way. Or the
+root of a Zarr store, whose arrays that overlap \code{grid} are read (see
+the description).}
 
 \item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band. Required for the table
 form; \code{NULL} (the default) keeps the file form on its native grid.}
@@ -109,6 +112,11 @@ by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or 
 \code{time_sel(lazy_dataset(src, grid), "2024")} without building the
 other slices' bands first, which matters for long time series of
 many bands. \code{NULL} (the default) builds every slice.}
+
+\item{array}{Zarr store root: the name of the array to read in each
+group, the last part of its path, such as \code{"embeddings"}. Needed only
+when the store's georeferenced arrays carry more than one name; \code{NULL}
+(the default) takes the one name they share.}
 }
 \value{
 A \code{LazyDataset}.
@@ -153,6 +161,23 @@ garry reads the dimension tags GDAL puts on each band to rebuild the
 axes. Bands take the band dimension's coordinate values as names
 (else \verb{b<index>}) and slices take the time coordinate's (e.g. years);
 pick slices with \code{\link[=time_sel]{time_sel()}}, or build only some with \code{time}.
+
+A Zarr store's root (a \code{.zarr} path or URL, or \code{ZARR:"<root>"}) reads
+the store's arrays that overlap \code{grid}, so a store of one array per
+UTM zone needs no connection string per zone. GDAL lists the arrays,
+from the store's consolidated metadata (over HTTP GDAL needs it, or
+directory listings), and gives each one's CRS and extent; garry keeps
+those whose extent overlaps \code{grid}, says which, and reads them as it
+reads a vector of them. They go in the order of their paths in the
+store (\verb{/utm09/embeddings} before \verb{/utm10/embeddings}), and where two
+hold data for a cell, the later one's value is read. An array's extent
+can reach well past the data it holds: each OlmoEarth zone's spans
+983 km east to west, so a grid at Jasper (53 degrees north, inside
+zone 11) also overlaps zones 10 and 12, and zone 12 wins wherever it
+holds data. Give the arrays as connection strings to read fewer.
+\code{array} names the array to read in each group when the georeferenced
+arrays carry more than one name. Without \code{grid} the store must hold
+one georeferenced array.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask
