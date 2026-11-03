@@ -54,10 +54,10 @@
 
 # A file's bands as the (y, x) or (y, x, band) array collect() returns.
 .read_cube <- function(path) {
-  ds <- suppressWarnings(methods::new(gdalraster::GDALRaster, path, read_only = TRUE))
+  ds <- .int64_hushed(methods::new(gdalraster::GDALRaster, path, read_only = TRUE))
   withr::defer(ds$close())
   nb <- ds$getRasterCount()
-  cube <- suppressWarnings(
+  cube <- .int64_hushed(
     gdal_read_window(path, seq_len(nb), 0L, 0L, ds$getRasterXSize(), ds$getRasterYSize())
   )
   if (nb > 1L) aperm(cube, c(2L, 3L, 1L)) else cube
@@ -83,7 +83,7 @@
   tlog <- withr::local_tempfile(fileext = ".csv")
   withr::local_options(leg$opts)
   withr::local_options(garry.task_log = if (!is.null(leg$decision)) tlog)
-  out <- suppressWarnings(code)
+  out <- .int64_hushed(code)
   expect_identical(garry_last_route(), leg$route, info = info)
   if (!is.null(leg$decision)) {
     tbl <- garry_explain_placement(x)
@@ -160,7 +160,7 @@ expect_plan <- function(x, want, dtype, legs = list(.host), px = NULL, file = TR
   .on_leg(leg, x, write_tif(x, target, ..., distributed = leg$distributed), info)
   nodata <- list(...)$nodata
   for (i in seq_along(wants)) {
-    expect_identical(gdal_grid_spec(paths[[i]])$grid@dtype, held[[i]], info = info)
+    expect_identical(.int64_hushed(gdal_grid_spec(paths[[i]]))$grid@dtype, held[[i]], info = info)
     .expect_cells(.read_cube(paths[[i]]), wants[[i]], info)
     if (length(nodata)) {
       .expect_sentinel(paths[[i]], wants[[i]], nodata, info)

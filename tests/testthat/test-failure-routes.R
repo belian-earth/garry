@@ -15,11 +15,14 @@
 
 # `code` must fail with `class`, naming `cause`. Neither the error nor
 # anything said on the way holds a token, and `out`, if given, is not there.
-.fr_fails <- function(code, class, cause, out = NULL) {
+# GDAL's reports matching `what`, the failure the caller provokes, are heard,
+# then muffled (.gdal_hushed()); NULL muffles none.
+.fr_fails <- function(code, class, cause, out = NULL, what = NULL) {
   said <- character(0)
   hear <- function(cnd) said <<- c(said, conditionMessage(cnd))
+  run <- function() withCallingHandlers(code, message = hear, warning = hear)
   err <- expect_error(
-    withCallingHandlers(code, message = hear, warning = hear),
+    if (is.null(what)) run() else .gdal_hushed(run(), what),
     class = class[[1L]]
   )
   for (cl in class) {
@@ -56,9 +59,11 @@
 # GDAL 3.13 names the refused connection; 3.11 says only that the path does not exist.
 .fr_refused <- "connect|does not exist"
 
+# `report` matches GDAL's own report of the failure, which a read in process hears.
 .fr_sources <- list(
-  missing = list(path = .fr_gone(), cause = "No such file or directory"),
-  signed = list(path = .fr_url, cause = .fr_refused)
+  missing = list(path = .fr_gone(), cause = "No such file or directory",
+                 report = .gdal_missing(.fr_gone())),
+  signed = list(path = .fr_url, cause = .fr_refused, report = "127\\.0\\.0\\.1(:| port )9")
 )
 
 # Two integer tiles with a gap: a read shows it, a kernel cannot hold it.
@@ -126,9 +131,9 @@ test_that("a source that cannot open says why when it is planned", {
   withr::local_options(garry.read_retry = 0L)
   for (src in .fr_sources) {
     read <- c("garry_read_error", "garry_error")
-    .fr_fails(lazy_source(src$path), read, src$cause)
-    .fr_fails(lazy_dataset(src$path), read, src$cause)
-    .fr_fails(extract_points(src$path, cbind(5, 35)), read, src$cause)
+    .fr_fails(lazy_source(src$path), read, src$cause, what = src$report)
+    .fr_fails(lazy_dataset(src$path), read, src$cause, what = src$report)
+    .fr_fails(extract_points(src$path, cbind(5, 35)), read, src$cause, what = src$report)
   }
 })
 
@@ -137,12 +142,12 @@ test_that("a failed read fails the same way in process", {
   for (src in .fr_sources) {
     x <- .fr_src(src$path)
     read <- c("garry_read_error", "garry_error")
-    .fr_fails(collect(x, distributed = FALSE), read, src$cause)
+    .fr_fails(collect(x, distributed = FALSE), read, src$cause, what = src$report)
     expect_identical(garry_last_route(), "read_only")
-    .fr_fails(collect(x + 1, distributed = FALSE), read, src$cause)
+    .fr_fails(collect(x + 1, distributed = FALSE), read, src$cause, what = src$report)
     expect_identical(garry_last_route(), "single")
     out <- tempfile(fileext = ".tif")
-    .fr_fails(write_tif(x + 1, out, distributed = FALSE), read, src$cause, out)
+    .fr_fails(write_tif(x + 1, out, distributed = FALSE), read, src$cause, out, src$report)
   }
 })
 
@@ -250,7 +255,8 @@ test_that("a materialise whose read fails on the host keeps the checkpoint", {
       materialise(fine[[form]], dir, name = "m", distributed = FALSE)
       held <- .fr_held(dir)
       .fr_fails(materialise(forms[[form]], dir, name = "m", overwrite = TRUE, distributed = FALSE),
-                c("garry_read_error", "garry_error"), .fr_sources$missing$cause)
+                c("garry_read_error", "garry_error"), .fr_sources$missing$cause,
+                what = .fr_sources$missing$report)
       expect_identical(.fr_held(dir), held, info = paste(dtype, form))
     }
   }

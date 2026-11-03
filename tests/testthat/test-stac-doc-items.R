@@ -152,7 +152,10 @@ test_that("stac_sources: start_datetime dates range items; clear errors otherwis
   ))
   expect_warning(out <- stac_sources(items), "dropping 1 item", class = "garry_stac_warning")
   expect_identical(out$item_id, c("a", "b"))
-  expect_error(stac_sources(items, assets = "B9"), "no STAC item carries")
+  expect_warning(
+    expect_error(stac_sources(items, assets = "B9"), "no STAC item carries"),
+    "not present in any item", class = "garry_stac_warning"
+  )
   am <- list(features = list(item("d", list(datetime = "2023-01-01T00:00:00Z"),
                                   bbox = list(179, 0, -179, 1))))
   expect_error(stac_sources(am), "antimeridian")

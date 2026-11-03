@@ -17,7 +17,10 @@ test_that("gdal_mosaic_vrt refuses a mosaic that lost a source instead of leavin
   }
   a <- south_up(file.path(dir, "a.tif"), 100000, 1L)
   b <- south_up(file.path(dir, "b.tif"), 100040, 2L)
-  expect_error(gdal_mosaic_vrt(file.path(dir, "m.vrt"), c(a, b)), "skipped|failed")
+  expect_error(
+    .gdal_hushed(gdal_mosaic_vrt(file.path(dir, "m.vrt"), c(a, b)), "positive NS resolution"),
+    "skipped|failed"
+  )
   expect_false(file.exists(file.path(dir, "m.vrt")))
 })
 

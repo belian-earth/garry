@@ -245,11 +245,12 @@ test_that("an integer warp marks the cells past its footprint as missing", {
                  Int32 = c(-2147483647, 2147483647))
   for (type in names(ranges)) {
     x <- align_to(lazy_source(fixture_tile(ranges[[type]], type)), big)
-    m <- collect(x, distributed = FALSE)
+    # a 32-bit band warps widened to Int64, which gdalraster notes on each open
+    m <- .int64_hushed(collect(x, distributed = FALSE))
     expect_identical(sum(is.nan(m)), 48L)
     # the ends of the band's range stay data
     expect_equal(sort(unique(as.numeric(m[3:6, 3:6]))), ranges[[type]])
-    expect_error(collect(x + 1L, distributed = FALSE), class = "garry_nodata_error")
+    expect_error(.int64_hushed(collect(x + 1L, distributed = FALSE)), class = "garry_nodata_error")
   }
   # an interpolated read still rounds to the band's type
   fine <- grid_spec("EPSG:3857", extent = c(0, 0, 40, 40), dims = c(8L, 8L))
@@ -349,7 +350,8 @@ test_that("a file on a warped file's grid takes its VRT with the source renamed"
 
   # no open comes with a rename, and any other `alike` opens to build
   expect_no_error(warp(gone, alike))
-  expect_error(warp(gone, list("another grid")))
+  # this report names no file
+  expect_error(.gdal_hushed(warp(gone, list("another grid")), "No such file or directory"))
 
   # an exact warp is a VRT of its own
   expect_true(any(grepl("MaxError", readLines(first), fixed = TRUE)))
@@ -488,6 +490,8 @@ test_that("a grid that cannot align declines a direct read before any open", {
   integers@dtype <- "i16"
   expect_null(garry:::.rio_direct_spec(gone, decimated, "bilinear", src_grid = integers))
   # on its own pixels an interpolating read of integers may go direct, so it opens
-  expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers))
-  expect_error(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = g))
+  missing <- .gdal_missing(gone)
+  expect_error(.gdal_hushed(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = integers),
+                            missing))
+  expect_error(.gdal_hushed(garry:::.rio_direct_spec(gone, g, "bilinear", src_grid = g), missing))
 })

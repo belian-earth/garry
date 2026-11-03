@@ -108,6 +108,9 @@ test_that("a close that fails or dies on the writer fails the write, and only a 
 .we_grid <- grid_spec("EPSG:3857", extent = c(0, 0, 160, 160),
                       dims = c(16L, 16L), dtype = "f32")
 
+# What GDAL and gdalraster report of a write to /dev/full.
+.we_full <- "IO error writing|No space left|GDALFlushCache"
+
 test_that("a full disk fails a host write", {
   p <- .we_full_target()
   x <- lazy_source(fixture_gradient_f32()) + 1
@@ -117,7 +120,7 @@ test_that("a full disk fails a host write", {
     .package = "garry"
   )
   err <- expect_error(
-    suppressMessages(write_tif(x, tempfile(fileext = ".tif"), distributed = FALSE)),
+    .gdal_hushed(write_tif(x, tempfile(fileext = ".tif"), distributed = FALSE), .we_full),
     class = "garry_write_error"
   )
   expect_match(conditionMessage(err), basename(p), fixed = TRUE)
@@ -127,7 +130,7 @@ test_that("a full disk fails a host write", {
 test_that("a close that never reached the disk is reported by the writer", {
   p <- .we_full_target()
   assign(p, gdal_create_output(p, .we_grid), envir = .daemon_ds)
-  failed <- suppressMessages(.daemon_write_close())
+  failed <- .gdal_hushed(.daemon_write_close(), .we_full)
   expect_named(failed, p)
   expect_match(failed[[p]], "TIFF", fixed = TRUE)
 })
@@ -135,9 +138,9 @@ test_that("a close that never reached the disk is reported by the writer", {
 test_that("a write GDAL reports failed stops the write, naming the file", {
   p <- .we_full_target()
   ds <- gdal_create_output(p, .we_grid)
-  withr::defer(try(ds$close(), silent = TRUE))
+  withr::defer(.gdal_hushed(try(ds$close(), silent = TRUE), .we_full))
   err <- expect_error(
-    suppressMessages(gdal_write_window(ds, 0L, 0L, matrix(runif(256), 16L, 16L), "f32")),
+    .gdal_hushed(gdal_write_window(ds, 0L, 0L, matrix(runif(256), 16L, 16L), "f32"), .we_full),
     class = "garry_write_error"
   )
   expect_match(conditionMessage(err), basename(p), fixed = TRUE)

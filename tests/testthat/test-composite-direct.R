@@ -52,7 +52,8 @@ test_that("a failed slice warp names its source and leaves no slice", {
   bin <- withr::local_tempfile(fileext = ".bin")
   j <- list(locs = "/nonexistent/ghost.tif", dt = 1, nodata = numeric(0), resampling = "near", bin = bin)
   k <- list(nx = 4L, ny = 4L, gtstr = "0/10/0/40/0/-10", wkt = gdalraster::srs_to_wkt("EPSG:3857"))
-  err <- expect_error(suppressMessages(.cd_fetch_warp(j, k)), class = "garry_read_error")
+  err <- expect_error(.gdal_hushed(.cd_fetch_warp(j, k), .gdal_missing(j$locs)),
+                      class = "garry_read_error")
   expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
   expect_false(file.exists(bin))
 })
@@ -138,7 +139,8 @@ test_that("an aligned slice translates to the plane a warp leaves", {
   withr::local_options(garry.read_retry = 0L)
   ghost <- "/nonexistent/ghost.tif"
   job <- list(locs = ghost, dt = 1, band = 1L, nodata = -9999, resampling = "near", bin = bin)
-  err <- expect_error(suppressMessages(.cd_fetch_warp(job, k)), class = "garry_read_error")
+  err <- expect_error(.gdal_hushed(.cd_fetch_warp(job, k), .gdal_missing(ghost)),
+                      class = "garry_read_error")
   expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
   expect_false(file.exists(bin))
   # a translate that stops part way leaves no plane and no sidecars

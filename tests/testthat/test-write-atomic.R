@@ -18,23 +18,33 @@
   p
 }
 
+# GDAL's report of a read of the file .wa_gone() names, which is not there.
+.wa_missing <- .gdal_missing("garry-no-such-file.tif")
+
 # With a declared grid nothing opens the source until a read does.
 .wa_gone <- function() {
   lazy_source(file.path(tempdir(), "garry-no-such-file.tif"), grid = .wa_grid,
               block_dim = c(6L, 4L))
 }
 
-# Everything under `dir`, hidden or not, by content. A temporary directory left
-# behind shows here, as does a target that changed.
+# Everything under `dir`, hidden or not, by content, a directory as NA: md5sum()
+# warns on one. A temporary directory left behind shows here, as does a target
+# that changed.
 .wa_held <- function(dir) {
-  tools::md5sum(list.files(dir, recursive = TRUE, all.files = TRUE, include.dirs = TRUE,
-                           no.. = TRUE, full.names = TRUE))
+  paths <- list.files(dir, recursive = TRUE, all.files = TRUE, include.dirs = TRUE,
+                      no.. = TRUE, full.names = TRUE)
+  held <- stats::setNames(rep(NA_character_, length(paths)), paths)
+  files <- !dir.exists(paths)
+  held[files] <- tools::md5sum(paths[files])
+  held
 }
 
-# `code` must fail, as `...` says, and leave `dir` as it was.
-.wa_keeps <- function(dir, code, ..., info = NULL) {
+# `code` must fail, as `...` says, and leave `dir` as it was. GDAL's reports
+# matching `what`, the failure the caller provokes, are muffled; NULL muffles
+# none.
+.wa_keeps <- function(dir, code, ..., what = NULL, info = NULL) {
   held <- .wa_held(dir)
-  expect_error(code, ...)
+  expect_error(if (is.null(what)) code else .gdal_hushed(code, what), ...)
   expect_identical(.wa_held(dir), held, info = info)
 }
 
@@ -232,12 +242,14 @@ local({
     for (nm in names(runs)) {
       for (d in c(FALSE, TRUE)) {
         dir <- withr::local_tempdir()
-        .wa_keeps(dir, runs[[nm]](dir, d), class = "garry_read_error", info = paste(nm, d))
+        .wa_keeps(dir, runs[[nm]](dir, d), class = "garry_read_error", what = .wa_missing,
+                  info = paste(nm, d))
         expect_length(list.files(dir, all.files = TRUE, no.. = TRUE), 0L)
         .wa_tif(file.path(dir, "a.tif"))
         .wa_tif(file.path(dir, "b.tif"))
         for (dt in .wa_dates) .wa_tif(file.path(dir, paste0("a-", dt, ".tif")))
-        .wa_keeps(dir, runs[[nm]](dir, d), class = "garry_read_error", info = paste(nm, d))
+        .wa_keeps(dir, runs[[nm]](dir, d), class = "garry_read_error", what = .wa_missing,
+                  info = paste(nm, d))
       }
     }
   })
@@ -257,11 +269,11 @@ local({
           info <- paste(type, form, d)
           dir <- withr::local_tempdir()
           .wa_keeps(dir, materialise(fails[[form]]$x, dir, name = "m", distributed = d),
-                    class = "garry_read_error", info = info)
+                    class = "garry_read_error", what = .wa_missing, info = info)
           materialise(fine[[form]]$x, dir, name = "m", distributed = FALSE)
           .wa_keeps(dir,
                     materialise(fails[[form]]$x, dir, name = "m", overwrite = TRUE, distributed = d),
-                    class = "garry_read_error", info = info)
+                    class = "garry_read_error", what = .wa_missing, info = info)
         }
       }
     }
@@ -394,14 +406,17 @@ local({
     # a failed run leaves it, and a missing one stays missing
     withr::local_options(garry.read_retry = 0L)
     for (d in c(FALSE, TRUE)) {
-      expect_error(write_tif(.wa_gone() + 1, p, distributed = d), class = "garry_read_error")
+      expect_error(.gdal_hushed(write_tif(.wa_gone() + 1, p, distributed = d), .wa_missing),
+                   class = "garry_read_error")
       .expect_cells(read(p), .wa_m + 1, info = d)
       gone <- file.path(vsi, "y.tif")
-      expect_error(write_tif(.wa_gone() + 1, gone, distributed = d), class = "garry_read_error")
+      expect_error(.gdal_hushed(write_tif(.wa_gone() + 1, gone, distributed = d), .wa_missing),
+                   class = "garry_read_error")
       expect_false(gdalraster::vsi_stat(gone))
     }
     # a copy that fails is a failed write
-    expect_error(write_tif(x, "/vsicurl/http://127.0.0.1:9/a.tif", distributed = FALSE),
+    url <- "/vsicurl/http://127.0.0.1:9/a.tif"
+    expect_error(.gdal_hushed(write_tif(x, url, distributed = FALSE), "127\\.0\\.0\\.1:9"),
                  class = "garry_write_error")
   })
 

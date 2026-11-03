@@ -377,13 +377,13 @@ test_that("read-only chunks keep the f32 route for floats, warps and affines", {
   # a failed read is a failed read, not a turn onto the f32 route
   withr::local_options(garry.read_retry = 0L)
   err <- expect_error(
-    suppressMessages(.read_int_planes(
+    .gdal_hushed(.read_int_planes(
       modifyList(ra, list(path = "/nonexistent/ghost.tif")),
       cg,
       core,
       "i16",
       -32768
-    )),
+    ), .gdal_missing("ghost.tif")),
     class = "garry_read_error"
   )
   expect_match(conditionMessage(err), "ghost.tif", fixed = TRUE)
