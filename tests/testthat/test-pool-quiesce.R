@@ -209,10 +209,11 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
     unlink(got)
     length(got)
   }
-  # Each route's first read fails at once; every other read sleeps, then
-  # leaves a mark. Four are in flight when the first fails: the one on the
-  # other reader and the one its own reader takes next run to their end,
-  # and the one queued behind them never starts.
+  # Each route's first read fails at once; every other read sleeps 3 s, the
+  # time the host has to cancel, then leaves a mark. Four are in flight when
+  # the first fails: the one on the other reader and the one its own reader
+  # takes next run to their end, and the one queued behind them never
+  # starts.
   sent <- .local_sent()
   .daemon_mock(
     "garry_read",
@@ -221,7 +222,7 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
       if (grepl("_[cr]1$", reg_key)) {
         stop("read bomb on a daemon")
       }
-      Sys.sleep(1)
+      Sys.sleep(3)
       file.create(paste0(mark, "_", reg_key))
       NULL
     },
@@ -244,7 +245,7 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
       if (core$y_off == 0 && core$x_off == 0) {
         stop("read bomb on a daemon")
       }
-      Sys.sleep(1)
+      Sys.sleep(3)
       file.create(paste0(mark, "_", core$y_off, "_", core$x_off))
       NULL
     },
@@ -262,7 +263,7 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
       if (grepl("-fmask", j$bin, fixed = TRUE)) {
         stop("mask bomb on a daemon")
       }
-      Sys.sleep(1)
+      Sys.sleep(3)
       file.create(paste0(mark, "_", basename(j$bin)))
       NULL
     },
@@ -798,7 +799,7 @@ test_that("a task that landed uncollected after its region was freed stops no fa
 
 test_that("a run waits for no warm-up on a compute daemon it gave no task", {
   local_pools(1, 3)
-  .local_wait_limit()
+  .local_wait_limit(180)
   testthat::local_mocked_bindings(
     .pools_close_s = function() c(say = 0.3, kill = 60),
     .package = "garry"
@@ -809,11 +810,16 @@ test_that("a run waits for no warm-up on a compute daemon it gave no task", {
     garry.read_target_px = 1e6
   )
   x <- lazy_source(fixture_gradient_f32())
-  # warm every daemon's XLA client, then hold the next kernel's warm-up on
-  # the profiles that will get no task (the one task goes to the first)
+  # warm every daemon's XLA client, time a run of a new kernel with nothing
+  # held, then hold the next kernel's warm-up on the profiles that will get
+  # no task (the one task goes to the first). The hold is at least three
+  # times that run, so a run that waited on it would take the hold, past
+  # the bound, on a runner of any speed.
   invisible(collect(x * 2 + 1, distributed = TRUE))
+  base <- .elapsed(collect(x * 4 + 3, distributed = TRUE))
+  hold <- max(6, 3 * base)
   comps <- garry:::.comp_profiles()
-  .daemon_hold(comps[-1L], ".daemon_warm_jit", 4)
+  .daemon_hold(comps[-1L], ".daemon_warm_jit", hold)
   tlog <- withr::local_tempfile(fileext = ".csv")
   withr::local_options(garry.task_log = tlog)
   took <- .elapsed(got <- collect(x * 3 + 2, distributed = TRUE))
@@ -828,7 +834,7 @@ test_that("a run waits for no warm-up on a compute daemon it gave no task", {
     d$event == "launch" & d$pool == "comp" & !startsWith(d$key, "warm")
   ])
   expect_identical(slots, comps[[1L]])
-  expect_lt(took, 2.5)
+  expect_lt(took, base + hold / 2)
   # the close waits for the warm-ups the run left compiling
   expect_message(
     garry_daemons(1, 4, gdal_config = FALSE),
@@ -839,11 +845,13 @@ test_that("a run waits for no warm-up on a compute daemon it gave no task", {
   # for the mask and two bands, so the fourth daemon gets none
   withr::local_options(garry.gd_strips = 1L, garry.task_log = NULL)
   invisible(collect(.gg_masked_composite(), distributed = TRUE))
+  base <- .elapsed(collect(.gg_masked_composite(), distributed = TRUE))
+  hold <- max(6, 3 * base)
   comps <- garry:::.comp_profiles()
-  .daemon_hold(comps[[4L]], ".gd_warm_pipeline", 4)
+  .daemon_hold(comps[[4L]], ".gd_warm_pipeline", hold)
   took <- .elapsed(collect(.gg_masked_composite(), distributed = TRUE))
   expect_identical(garry_last_route(), "composite_direct")
-  expect_lt(took, 2.5)
+  expect_lt(took, base + hold / 2)
   expect_message(
     garry_daemons(0, 0, gdal_config = FALSE),
     paste0("\"", comps[[4L]], "\"\\s+\\(pid "),
