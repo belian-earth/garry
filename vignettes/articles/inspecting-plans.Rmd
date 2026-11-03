@@ -10,7 +10,10 @@ Every garry pipeline is a plan before it is a computation: verbs add
 nodes to a compute graph, the planner fuses those nodes into
 schedulable stages, and nothing reads or computes until `collect()`.
 `plan_view()` renders that plan as an interactive DAG, so you can see
-exactly what an execution will do, and check it, before paying for it.
+how the planner will stage an execution, and check it, before paying
+for it. These stages run in a single process and on the scheduler; with
+daemons up, a temporal composite can take a direct route instead, and
+`garry_last_route()` names the route a `collect()` took.
 It accepts anything `plan_lazy()` accepts: a `LazyRaster`, a
 `LazyDataset`, a named list of rasters, or a ready-made `Plan`.
 
@@ -129,7 +132,7 @@ The stage label lists everything that fused into it, and every member
 keeps its meaning: the masks `apply_mask()` created are named as masks, the
 reducers carry their op, the derivation its band. This is the diagram
 earning its keep: the structure you reason about (bands, masks, a
-derived index) and the structure the machine executes (one kernel) are
+derived index) and the structure the scheduler executes (one kernel) are
 both real, and `plan_view()` shows which one you will pay for.
 
 One thing keeps the collapse in check: focal work. Morphological mask
@@ -190,8 +193,9 @@ plan_view(composite, level_separation = 1000, node_spacing = 60)
 
 ## Related tools
 
-`plan_draw()` renders the same pipeline as glyphs in the terminal, and
-`print()` summarises a dataset's steps. `plan_dot()` emits the plan as
+`plan_draw()` renders the same pipeline as glyphs in the terminal, step
+by step for a dataset, and `print()` summarises a dataset's bands, time
+slices and grid. `plan_dot()` emits the plan as
 Graphviz DOT text for documents. `plan_lazy()` returns the `Plan`
 object itself, and `collect(x, plan_only = TRUE)` is its
 execution-facing twin. All of them now accept a `LazyDataset` directly.

@@ -73,26 +73,35 @@ format conversion belong to GDAL at that boundary, not to the engine.
 ## Installation
 
 You can install the development version of garry from
-[GitHub](https://github.com/). Its XLA stack (anvl, pjrt, stablehlo,
-xlamisc) is published on the [r-xla r-universe](https://r-xla.r-universe.dev),
-which pak must be told about:
+[GitHub](https://github.com/belian-earth/garry). anvl, stablehlo and
+xlamisc come from the [r-xla r-universe](https://r-xla.r-universe.dev),
+which pak must be told about. pjrt comes from the `buffer-handover`
+branch of [belian-earth/pjrt](https://github.com/belian-earth/pjrt),
+named in garry’s `Remotes`, so pak builds it from source. That needs a
+C++20 compiler, the protobuf library and its compiler `protoc` (Debian
+and Ubuntu: `sudo apt install libprotobuf-dev protobuf-compiler`;
+Fedora: `sudo dnf install protobuf-devel protobuf-compiler`; macOS:
+`brew install protobuf`). The example below also uses rstac, httr2 and
+visNetwork, which garry suggests:
 
 ``` r
 # install.packages("pak")
 options(repos = c(rxla = "https://r-xla.r-universe.dev", getOption("repos")))
-pak::pak("belian-earth/garry")
+pak::pak(c("belian-earth/garry", "rstac", "httr2", "visNetwork"))
 ```
 
-The same setting is needed for `devtools::install()` from a clone. To
-keep it, put the `options()` line in your `~/.Rprofile`.
+The same setting is needed for `devtools::install()` from a clone, which
+builds pjrt the same way. To keep it, put the `options()` line in your
+`~/.Rprofile`.
 
 garry computes through [anvl](https://github.com/r-xla/anvl)/XLA, whose
 PJRT runtime plugin downloads on first use. Fetch it once up front (it
 prompts interactively otherwise, which fails in scripts and on servers):
 
 ``` r
-pjrt::install_pjrt()               # CPU plugin (~250 MB unpacked, cached per user)
-# pjrt::install_pjrt(cuda = TRUE)  # instead, for a CUDA-capable GPU
+pjrt::install_pjrt()               # CPU plugin (~250 MB unpacked, cached per user),
+                                   # plus the CUDA plugin on a machine with an NVIDIA GPU
+# pjrt::install_pjrt(cuda = TRUE)  # also the CUDA plugin, when detection misses the GPU
 ```
 
 garry also needs GDAL \>= 3.9 on the system (the GTI mosaic driver
@@ -101,26 +110,27 @@ behind `lazy_dataset()`); `gdalraster` reports yours with
 
 ## Example
 
-A cloud-masked annual median composite of HLS Sentinel-2 imagery,
-straight from the Microsoft Planetary Computer. The whole pipeline is
-lazy: it reads and computes only at the final `collect()`.
+A cloud-masked median composite of three months of HLS Sentinel-2
+imagery (January to March 2023), straight from the Microsoft Planetary
+Computer. The whole pipeline is lazy: it reads and computes only at the
+final `collect()`.
 
 ``` r
 library(garry)
 #> garry: GDAL 3.13.0 "Iowa City", released 2026/05/04
 
-# 1. Discover: HLS S30 over an AOI, Jan-March of 2023, pre-signed for the PC.
+# 1. Discover: HLS S30 over an AOI, Jan-March of 2023, signed for the PC.
 aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
 src <- stac_query(
   bbox        = aoi,
   stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
   collection  = "hls2-s30",
-  start_date  = "2023-01-01", 
+  start_date  = "2023-01-01",
   end_date = "2023-03-31"
 ) |>
-  stac_sign_mpc() |> 
-  stac_filter_cloud(30) |> 
-  stac_filter_assets(c("B04", "B03", "B02", "B08", "Fmask"))
+  stac_filter_assets(c("B04", "B03", "B02", "B08", "Fmask")) |>
+  stac_filter_cloud(30) |>
+  stac_sign_mpc()
 
 
 # 2. The analysis grid, straight from the AOI: an equal-area (LAEA) grid at 30 m
@@ -195,7 +205,7 @@ preview(composite[["ndvi"]])   # single band -> colour ramp + colourbar
 #    a `gis` attribute (extent/CRS), so the result is self-describing.
 a <- collect(composite)
 
-# preview() on a materialised array reads that `gis` attribute for real-world axes.
+# preview() on a collected array reads that `gis` attribute for real-world axes.
 preview(a)     # multi-band  -> RGB (first three bands)
 ```
 
@@ -205,11 +215,15 @@ The plan itself is worth looking at. `plan_view()` renders it as an
 interactive DAG (static here; live when interactive and on the pkgdown
 site): stages typed by what they compute, provenance on hover (assets,
 acquisition dates, reducers), and dashed edges where bands pass through
-into the output. It shows the schedule you cannot see from the code:
-each QA slice’s mask predicate and morphological cleanup run as their
-own focal stages (halo work, kept narrow); each band’s masking, time
-stack, and median fuse into a single stage; and NDVI derives in its own
-stage before the write.
+into the output. It shows how the planner stages the graph, which you
+cannot see from the code: each QA slice’s mask predicate and
+morphological cleanup run as their own focal stages (halo work, kept
+narrow); each band’s masking, time stack and median fuse into a single
+stage; and NDVI derives in its own stage. These stages run in a single
+process and in the quantised `write_tif()` below. With daemons up,
+`collect(composite)` takes a direct reduce route instead
+(`garry_last_route()` returns `"gd_reduce"`): it computes each band’s
+masked median directly, then NDVI from those, without these stages.
 
 ``` r
 plan_view(composite)

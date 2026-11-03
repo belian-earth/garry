@@ -21,7 +21,6 @@ suppressPackageStartupMessages({
   library(glue)
 })
 
-`%||%` <- function(x, y) if (length(x) == 0 || is.na(x[1])) y else x
 script_path <- sub("--file=", "", grep("--file=",
   commandArgs(trailingOnly = FALSE), value = TRUE)[1])
 pkg_root <- if (is.na(script_path)) normalizePath(".") else
@@ -33,16 +32,17 @@ out_dir <- file.path(pkg_root, "package-graph")
 # ---------------------------------------------------------------------------
 modules <- list(
   "IR & graph"       = c("node.R", "ops.R", "generics.R", "graph.R", "passes.R",
-                         "plan.R", "gradient.R", "dot.R"),
+                         "plan.R", "gradient.R", "dot.R", "accessors.R"),
   "Grid & geometry"  = c("grid.R", "chunk_grid.R", "grid_from.R"),
   "Execution"        = c("collect.R", "executor.R", "scheduler.R", "placement.R",
-                         "daemon.R", "pools.R", "composite_direct.R"),
+                         "daemon.R", "pools.R", "composite_direct.R", "program.R"),
   "IO & GDAL"        = c("gdal_adapter.R", "lazy_raster.R", "materialise.R",
-                         "write_tif.R", "stac.R", "dataset.R", "extract_points.R"),
+                         "write_tif.R", "stac.R", "dataset.R", "extract_points.R",
+                         "http_auth.R"),
   "Models & kernels" = c("ocm.R", "ocm_blocks.R", "ocm_edgenext.R", "ocm_weights.R",
                          "band_mlp.R", "safetensors.R", "scan_hampel.R",
                          "scan_kalman.R", "reduce_multiband.R", "dequantize.R"),
-  "Viz & UX"         = c("draw.R", "preview.R", "task_report.R"),
+  "Viz & UX"         = c("draw.R", "preview.R", "task_report.R", "plan_view.R"),
   "Infra"            = c("options.R", "zzz.R")
 )
 file_module <- setNames(
@@ -54,7 +54,8 @@ file_module <- setNames(
 # per-package (context only). Everything else (cli, glue, rlang, S7, base
 # helpers...) is dropped from the graph as noise.
 ext_per_fun <- c("anvl", "gdalraster")
-ext_per_pkg <- c("mirai", "wk", "mori", "rstac", "httr2", "terra")
+ext_per_pkg <- c("mirai", "wk", "mori", "rstac", "httr2", "terra", "pjrt",
+                 "stablehlo")
 
 # ---------------------------------------------------------------------------
 # Pass 1: parse files, harvest top-level definitions
@@ -191,7 +192,7 @@ int_nodes <- data.frame(
   lines  = vapply(defs, function(d) as.integer(d$lines), 1L),
   stringsAsFactors = FALSE
 )
-int_nodes$module <- file_module[int_nodes$file] %||% "Infra"
+int_nodes$module <- unname(file_module[int_nodes$file])
 int_nodes$module[is.na(int_nodes$module)] <- "Infra"
 int_nodes$api <- vapply(int_nodes$id, api_of, "")
 
