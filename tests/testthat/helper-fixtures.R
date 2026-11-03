@@ -211,3 +211,344 @@ fixture_zarr_nd <- function(epsg = 32632L, x0 = 500000, y1 = 4600000,
   )
   .fixture_env[[key]]
 }
+
+# A Zarr store written by GDAL (gdalmdimtranslate of a multidimensional
+# VRT): (time, band, y, x) Int8 arrays named `emb`, one per group as
+# OlmoEarth lays its UTM zones out, 2 years x 3 bands of 20 x 30 px at 10 m,
+# fill value -128 at the top-left pixel of every plane, georeferenced by x
+# and y coordinate arrays and a CRS attribute:
+#   /utm32/emb      EPSG:32632, where fixture_zarr_nd() lies
+#   /utm33/emb      EPSG:32633, against /utm32/emb's east edge
+#   /eqn/emb        EPSG:32632, just north of the equator
+#   /eqs/emb        EPSG:32732, just south of it
+#   /nest/far/emb   EPSG:32632, far from the others, in a nested group
+#   /ova/emb        EPSG:32631, elsewhere
+#   /ovb/emb        EPSG:32631, 100 m east of /ova/emb, overlapping it
+#   /other/lut      a 3 x 2 Float32 table, not georeferenced
+# `format` is "ZARR_V3" or "ZARR_V2"; `consolidated`, whether GDAL writes
+# consolidated metadata. Returns the store, each array's name as GDAL lists
+# it (`paths`, by group) and its values as an R array [t, b, y, x] (`vals`).
+fixture_zarr_store <- function(format = "ZARR_V3", consolidated = TRUE) {
+  key <- paste("zarr-store", format, consolidated)
+  if (!is.null(.fixture_env[[key]])) {
+    return(.fixture_env[[key]])
+  }
+  nt <- 2L
+  nb <- 3L
+  ny <- 20L
+  nx <- 30L
+  res <- 10
+  xy33 <- gdalraster::transform_xy(
+    cbind(500300, 4600000),
+    "EPSG:32632",
+    "EPSG:32633"
+  )
+  at <- list(
+    utm32 = list(epsg = 32632L, x0 = 500000, y1 = 4600000, shift = 0L),
+    utm33 = list(
+      epsg = 32633L,
+      x0 = round(xy33[1, 1], -1),
+      y1 = round(xy33[1, 2], -1),
+      shift = 7L
+    ),
+    eqn = list(epsg = 32632L, x0 = 500000, y1 = 200, shift = 3L),
+    eqs = list(epsg = 32732L, x0 = 500000, y1 = 10000000, shift = 5L),
+    `nest/far` = list(epsg = 32632L, x0 = 200000, y1 = 5000000, shift = 9L),
+    ova = list(epsg = 32631L, x0 = 400000, y1 = 3000000, shift = 11L),
+    ovb = list(epsg = 32631L, x0 = 400100, y1 = 3000000, shift = 13L)
+  )
+  num <- function(x) format(x, scientific = FALSE, trim = TRUE)
+  vals <- list()
+  group <- function(g) {
+    a <- at[[g]]
+    v <- array(0L, c(nt, nb, ny, nx))
+    for (t in seq_len(nt)) {
+      for (b in seq_len(nb)) {
+        v[t, b, , ] <- outer(seq_len(ny), seq_len(nx), function(y, x) {
+          (t * 40L + b * 10L + y + x + a$shift) %% 250L - 125L
+        })
+      }
+    }
+    v[,, 1, 1] <- -128L
+    vals[[g]] <<- v
+    inner <- paste0(
+      '<Dimension name="time" size="',
+      nt,
+      '" indexingVariable="time"/>',
+      '<Dimension name="band" size="',
+      nb,
+      '"/>',
+      '<Dimension name="y" size="',
+      ny,
+      '" type="HORIZONTAL_Y" indexingVariable="y"/>',
+      '<Dimension name="x" size="',
+      nx,
+      '" type="HORIZONTAL_X" indexingVariable="x"/>',
+      '<Array name="time"><DataType>Int32</DataType><DimensionRef ref="time"/>',
+      '<NoDataValue>0</NoDataValue><RegularlySpacedValues start="2021" increment="1"/></Array>',
+      '<Array name="y"><DataType>Float64</DataType><DimensionRef ref="y"/><NoDataValue>NaN</NoDataValue>',
+      '<RegularlySpacedValues start="',
+      num(a$y1 - res / 2),
+      '" increment="',
+      -res,
+      '"/></Array>',
+      '<Array name="x"><DataType>Float64</DataType><DimensionRef ref="x"/><NoDataValue>NaN</NoDataValue>',
+      '<RegularlySpacedValues start="',
+      num(a$x0 + res / 2),
+      '" increment="',
+      res,
+      '"/></Array>',
+      '<Array name="emb"><DataType>Int8</DataType>',
+      '<DimensionRef ref="time"/><DimensionRef ref="band"/><DimensionRef ref="y"/><DimensionRef ref="x"/>',
+      '<SRS dataAxisToSRSAxisMapping="2,1">EPSG:',
+      a$epsg,
+      '</SRS><NoDataValue>-128</NoDataValue>',
+      # C order: the last dimension varies fastest
+      '<InlineValues>',
+      paste(as.vector(aperm(v, 4:1)), collapse = " "),
+      '</InlineValues></Array>'
+    )
+    parts <- strsplit(g, "/", fixed = TRUE)[[1L]]
+    paste0(
+      paste0('<Group name="', parts, '">', collapse = ""),
+      inner,
+      strrep("</Group>", length(parts))
+    )
+  }
+  vrt <- paste0(
+    '<VRTDataset><Group name="/">',
+    paste(vapply(names(at), group, ""), collapse = ""),
+    '<Group name="other"><Dimension name="r" size="3"/><Dimension name="c" size="2"/>',
+    '<Array name="lut"><DataType>Float32</DataType><DimensionRef ref="r"/><DimensionRef ref="c"/>',
+    '<NoDataValue>-1</NoDataValue><InlineValues>1 2 3 4 5 6</InlineValues></Array></Group>',
+    "</Group></VRTDataset>"
+  )
+  dir <- file.path(tempdir(), "garry-fixture-store")
+  dir.create(dir, showWarnings = FALSE)
+  src <- file.path(dir, sprintf("%s-%s.vrt", format, consolidated))
+  writeLines(vrt, src)
+  store <- file.path(dir, sprintf("%s-%s.zarr", format, consolidated))
+  unlink(store, recursive = TRUE)
+  gdalraster::mdim_translate(
+    src,
+    store,
+    output_format = "Zarr",
+    creation_options = c(
+      paste0("FORMAT=", format),
+      paste0("CREATE_CONSOLIDATED_METADATA=", if (consolidated) "YES" else "NO")
+    ),
+    quiet = TRUE
+  )
+  .fixture_env[[key]] <- list(
+    store = store,
+    paths = vapply(
+      names(at),
+      function(g) sprintf('ZARR:"%s":/%s/emb', store, g),
+      ""
+    ),
+    vals = vals
+  )
+  .fixture_env[[key]]
+}
+
+# A Zarr store GDAL writes with each of `arrays` at its root: a 20 x 30
+# Int8 array in EPSG:32632 at 10 m from (500000, 4600000), the i-th one's
+# values i * 10 plus the column modulo 7 and the row modulo 3, with or
+# without consolidated metadata. Returns the store.
+fixture_zarr_root <- function(
+  arrays = "a",
+  format = "ZARR_V3",
+  consolidated = TRUE
+) {
+  key <- paste(c("zarr-root", arrays, format, consolidated), collapse = " ")
+  if (!is.null(.fixture_env[[key]])) {
+    return(.fixture_env[[key]])
+  }
+  ny <- 20L
+  nx <- 30L
+  arr <- vapply(
+    seq_along(arrays),
+    function(i) {
+      v <- outer(seq_len(ny), seq_len(nx), function(y, x) {
+        i * 10L + x %% 7L + y %% 3L
+      })
+      paste0(
+        '<Array name="',
+        arrays[[i]],
+        '"><DataType>Int8</DataType>',
+        '<DimensionRef ref="y"/><DimensionRef ref="x"/>',
+        '<SRS dataAxisToSRSAxisMapping="2,1">EPSG:32632</SRS><NoDataValue>-128</NoDataValue>',
+        # C order: the last dimension varies fastest
+        "<InlineValues>",
+        paste(as.vector(t(v)), collapse = " "),
+        "</InlineValues></Array>"
+      )
+    },
+    ""
+  )
+  vrt <- paste0(
+    '<VRTDataset><Group name="/">',
+    '<Dimension name="y" size="',
+    ny,
+    '" type="HORIZONTAL_Y" indexingVariable="y"/>',
+    '<Dimension name="x" size="',
+    nx,
+    '" type="HORIZONTAL_X" indexingVariable="x"/>',
+    '<Array name="y"><DataType>Float64</DataType><DimensionRef ref="y"/><NoDataValue>NaN</NoDataValue>',
+    '<RegularlySpacedValues start="4599995" increment="-10"/></Array>',
+    '<Array name="x"><DataType>Float64</DataType><DimensionRef ref="x"/><NoDataValue>NaN</NoDataValue>',
+    '<RegularlySpacedValues start="500005" increment="10"/></Array>',
+    paste(arr, collapse = ""),
+    "</Group></VRTDataset>"
+  )
+  src <- tempfile("garry-fixture-root-", fileext = ".vrt")
+  writeLines(vrt, src)
+  store <- sub("vrt$", "zarr", src)
+  gdalraster::mdim_translate(
+    src,
+    store,
+    output_format = "Zarr",
+    creation_options = c(
+      paste0("FORMAT=", format),
+      paste0("CREATE_CONSOLIDATED_METADATA=", if (consolidated) "YES" else "NO")
+    ),
+    quiet = TRUE
+  )
+  .fixture_env[[key]] <- store
+  store
+}
+
+# A Zarr store written by hand as zarr-python lays one out: GDAL's own
+# georeferencing is absent, and each array is placed only by the
+# zarr-conventions attributes proj:code, spatial:dimensions and
+# spatial:transform, registered in zarr_conventions (spatial:shape is
+# written too, as OlmoEarth writes it, and GDAL ignores it). One
+# Int16 array `v` (dimensions y, x) of 20 x 30 px at 10 m, uncompressed,
+# sits in a group per element of `at`: name = list(crs, x0, y1), plus
+# `attrs` to add to those attributes or, as NULL, drop one, and
+# `group_attrs` and `array_attrs` to add to the group's and the array's.
+# The i-th holds i * 100 plus its row and column, and its fill value -1 at
+# the top-left pixel. The attributes sit on the group, on the array
+# (`on = "array"`), or only the first element's on the store's root
+# (`on = "root"`). `consolidated` is "all" (the root and each v3 group, as
+# OlmoEarth's are), "root" (zarr-python's default: the root alone) or
+# "none"; as both write it, the root's entry for a v3 group carries empty
+# consolidated metadata. Returns the store.
+fixture_zarr_declared <- function(
+  at,
+  on = "group",
+  consolidated = "all",
+  format = 3L
+) {
+  root <- tempfile("garry-declared-", fileext = ".zarr")
+  js <- function(x, ...) {
+    path <- file.path(root, ...)
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    writeLines(yyjsonr::write_json_str(x, auto_unbox = TRUE), path)
+  }
+  obj <- function(x = NULL) {
+    if (length(x)) x else structure(list(), names = character(0))
+  }
+  inline <- function(md = NULL) {
+    list(kind = "inline", must_understand = FALSE, metadata = obj(md))
+  }
+  conv <- list(
+    list(uuid = .zarr_proj, name = "proj"),
+    list(uuid = .zarr_spatial, name = "spatial")
+  )
+  meta <- list()
+  top <- NULL
+  for (i in seq_along(at)) {
+    g <- names(at)[[i]]
+    a <- at[[g]]
+    decl <- utils::modifyList(
+      list(
+        zarr_conventions = conv,
+        `proj:code` = a$crs,
+        `spatial:dimensions` = c("y", "x"),
+        `spatial:transform` = c(10, 0, a$x0, 0, -10, a$y1),
+        `spatial:shape` = c(20L, 30L)
+      ),
+      a$attrs %||% list()
+    )
+    top <- if (i == 1L && on == "root") decl else top
+    ga <- obj(c(if (on == "group") decl, a$group_attrs))
+    aa <- obj(c(if (on == "array") decl, a$array_attrs))
+    v <- outer(1:20, 1:30, function(y, x) i * 100L + y + x)
+    v[1L, 1L] <- -1L
+    if (format == 3L) {
+      arr <- list(
+        zarr_format = 3L,
+        node_type = "array",
+        shape = c(20L, 30L),
+        data_type = "int16",
+        chunk_grid = list(
+          name = "regular",
+          configuration = list(chunk_shape = c(20L, 30L))
+        ),
+        chunk_key_encoding = list(
+          name = "default",
+          configuration = list(separator = "/")
+        ),
+        fill_value = -1L,
+        codecs = list(list(
+          name = "bytes",
+          configuration = list(endian = "little")
+        )),
+        attributes = aa,
+        dimension_names = c("y", "x")
+      )
+      grp <- list(zarr_format = 3L, node_type = "group", attributes = ga)
+      meta[[g]] <- c(grp, list(consolidated_metadata = inline()))
+      if (consolidated == "all") {
+        grp$consolidated_metadata <- inline(list(v = arr))
+      }
+      js(grp, g, "zarr.json")
+      meta[[paste0(g, "/v")]] <- arr
+      js(arr, g, "v", "zarr.json")
+      chunk <- file.path(root, g, "v", "c", "0", "0")
+    } else {
+      arr <- list(
+        zarr_format = 2L,
+        shape = c(20L, 30L),
+        chunks = c(20L, 30L),
+        dtype = "<i2",
+        compressor = NULL,
+        fill_value = -1L,
+        order = "C",
+        filters = NULL
+      )
+      aa[["_ARRAY_DIMENSIONS"]] <- c("y", "x")
+      meta[[paste0(g, "/.zgroup")]] <- list(zarr_format = 2L)
+      meta[[paste0(g, "/.zattrs")]] <- ga
+      meta[[paste0(g, "/v/.zarray")]] <- arr
+      meta[[paste0(g, "/v/.zattrs")]] <- aa
+      js(list(zarr_format = 2L), g, ".zgroup")
+      js(ga, g, ".zattrs")
+      js(arr, g, "v", ".zarray")
+      js(aa, g, "v", ".zattrs")
+      chunk <- file.path(root, g, "v", "0.0")
+    }
+    dir.create(dirname(chunk), recursive = TRUE, showWarnings = FALSE)
+    con <- file(chunk, "wb")
+    writeBin(as.integer(t(v)), con, size = 2L, endian = "little")
+    close(con)
+  }
+  cons <- consolidated != "none"
+  if (format == 3L) {
+    doc <- list(zarr_format = 3L, node_type = "group", attributes = obj(top))
+    js(
+      if (cons) c(doc, list(consolidated_metadata = inline(meta))) else doc,
+      "zarr.json"
+    )
+  } else {
+    js(list(zarr_format = 2L), ".zgroup")
+    js(obj(top), ".zattrs")
+    meta[[".zgroup"]] <- list(zarr_format = 2L)
+    meta[[".zattrs"]] <- obj(top)
+    if (cons) {
+      js(list(metadata = meta, zarr_consolidated_format = 1L), ".zmetadata")
+    }
+  }
+  root
+}

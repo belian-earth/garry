@@ -16,7 +16,8 @@ lazy_dataset(
   offset = NULL,
   bands = NULL,
   decode = NULL,
-  time = NULL
+  time = NULL,
+  array = NULL
 )
 }
 \arguments{
@@ -24,7 +25,9 @@ lazy_dataset(
 filtered), a \code{stac_sources()} table, or a character path / vector of
 paths to (multi-band) raster files (local, \verb{/vsicurl/}, or bare
 \verb{http(s)://}, prefixed automatically), or \verb{ZARR:"<store>":/<array>}
-strings, whose bare \verb{https://} store is prefixed the same way.}
+strings, whose bare \verb{https://} store is prefixed the same way. Or the
+root of a Zarr store, whose arrays that overlap \code{grid} are read (see
+the description).}
 
 \item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band. Required for the table
 form; \code{NULL} (the default) keeps the file form on its native grid.}
@@ -109,6 +112,12 @@ by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or 
 \code{time_sel(lazy_dataset(src, grid), "2024")} without building the
 other slices' bands first, which matters for long time series of
 many bands. \code{NULL} (the default) builds every slice.}
+
+\item{array}{With a Zarr store's root as \code{sources} (see the
+description): the name of the array to read in each group, the last
+part of its path, such as \code{"embeddings"}. Needed only when the
+store's arrays with a CRS and extent carry more than one name; \code{NULL}
+(the default) takes the one name they share.}
 }
 \value{
 A \code{LazyDataset}.
@@ -153,6 +162,34 @@ garry reads the dimension tags GDAL puts on each band to rebuild the
 axes. Bands take the band dimension's coordinate values as names
 (else \verb{b<index>}) and slices take the time coordinate's (e.g. years);
 pick slices with \code{\link[=time_sel]{time_sel()}}, or build only some with \code{time}.
+
+A Zarr store's root (a \code{.zarr} path or URL, or \code{ZARR:"<root>"}),
+given alone, reads the store's arrays that overlap \code{grid}, so a store
+of one array per UTM zone needs no connection string per zone. In a
+Zarr v3 store with consolidated metadata, one document, garry reads
+each array's CRS and extent where GDAL 3.13 does: the zarr-conventions
+\code{proj:code}, \code{proj:wkt2} or \code{proj:projjson}, and an affine, north-up
+\code{spatial:transform} over the array's own shape along
+\code{spatial:dimensions}, on the array or its parent group, registered by
+uuid in the \code{zarr_conventions} of the first of the two that has one
+(GDAL places arrays by them from 3.13 on). GDAL places the other
+arrays, and lists the arrays of a Zarr v2 store from its \code{.zmetadata}.
+A store without consolidated metadata reads as any other source: GDAL
+opens its root as one dataset. An array whose
+declared extent misses \code{grid} is not opened, so GDAL is not asked
+where it lies. garry reads the arrays that overlap \code{grid} as it reads
+a vector of them, and says which; GDAL must place each one where the
+store declares it, or the call aborts. In a vector of sources, a store
+of one array reads as that array, and a store of several must be given
+alone. Where two arrays hold data for a cell, the later one's value is
+read: arrays in the grid's CRS go last, so their own pixels win, and
+the others go first, in the order of their paths in the store. An
+array's extent can reach well past its data: each OlmoEarth zone's
+spans 983 km, so a grid at Jasper in zone 11 also reads zones 10 and
+12. Give the arrays as connection strings to read fewer. \code{array} names
+the array to read in each group when the arrays with a CRS and extent
+carry more than one name. Without \code{grid} the store must hold one such
+array.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask
