@@ -34,10 +34,12 @@ jobs:
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      # Off, unlike the r-lib template. Kept source hangs the whole package's text
-      # off every closure and S7 object, 4.2 MB on each crossing to or from a
-      # daemon: the suite peaks at 15 GB against 3.8 and outlasts the elapsed limit.
-      # No install in production keeps source, and covr still does.
+      # Off, unlike the r-lib template: kept source stores each srcfile's lines as an
+      # unforced lazy-load promise, and serialize() writes its environment. Every garry
+      # closure, S7 object or condition raised inside garry holds such a srcref, so each
+      # one sent to a daemon or to testthat's parent carries garry's live state (GDAL
+      # handles, S7 methods, kernel cache): the suite peaked at 15 GB against 3.8 and
+      # outlasted the elapsed limit. covr still keeps it.
       R_KEEP_PKG_SOURCE: no
       PJRT_INSTALL: "1"          # let pjrt fetch the CPU plugin non-interactively
       # Kill a hung test run instead of stalling: R kills the process and
