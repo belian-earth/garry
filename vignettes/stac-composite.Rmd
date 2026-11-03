@@ -137,12 +137,12 @@ plan_draw(ds[["B04"]])
 #> ⬚ stack  along t
 #> └─ ƒ map  ×65
 #>    └─ ƒ map
-#>       └─ ✕ node
+#>       └─ ✕ mask  (2 inputs)
 #>          ├─ ◈ source  888×667 f32
 #>          └─ ◫ focal  r=3
 #>             └─ ◫ focal  r=2
 #>                └─ ◫ focal  r=2
-#>                   └─ ✕ node
+#>                   └─ ✕ mask
 #>                      └─ ◈ source  888×667 f32
 ```
 

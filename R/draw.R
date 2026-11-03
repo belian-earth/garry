@@ -110,10 +110,11 @@ NULL
     k,
     source = paste0("source  ", cli::col_grey(.dims_str(node@grid))),
     focal = glue::glue("focal  r={node@radius}"),
-    map = if (length(node@parents) > 1L) {
-      glue::glue("map  ({length(node@parents)} inputs)")
+    map = ,
+    mask = if (length(node@parents) > 1L) {
+      glue::glue("{k}  ({length(node@parents)} inputs)")
     } else {
-      "map"
+      k
     },
     reduce = glue::glue(
       "{if (length(node@fn)) 'custom reduce' else node@op}",

@@ -47,6 +47,14 @@ test_that("plan_draw(LazyRaster) collapses identical sibling branches to xN", {
   expect_match(out, "source")
 })
 
+test_that("plan_draw(LazyRaster) labels apply_mask()'s nodes", {
+  ds <- apply_mask(mk_ds(), from = "Fmask", where = qa_bits(0:3))
+  lines <- strsplit(.strip(plan_draw(ds[["B04"]])), "\n")[[1L]]
+  expect_true(any(grepl("mask  \\(2 inputs\\)", lines))) # NaN where flagged
+  expect_true(any(grepl("mask$", lines))) # the QA predicate
+  expect_false(any(grepl("node", lines)))
+})
+
 test_that("a value-set mask renders a compact range", {
   f <- fixture_gradient_f32()
   g <- graph_new(); s <- function() lazy_source(f, graph = g)

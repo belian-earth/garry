@@ -652,6 +652,7 @@
   planning grid now read by `resampling`, which `grid = NULL` ignored,
   and `coarsen()` refuses a source read by anything but nearest neighbour.
 * `print(ocm_model())` prints the model's one-line summary, not the raw list.
+* `plan_draw()` labels `apply_mask()`'s nodes `mask`, not `node`.
 
 ## Observability
 
