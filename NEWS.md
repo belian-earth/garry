@@ -651,6 +651,7 @@
   also dropped the source's own resampling. Several sources on their
   planning grid now read by `resampling`, which `grid = NULL` ignored,
   and `coarsen()` refuses a source read by anything but nearest neighbour.
+* `print(ocm_model())` prints the model's one-line summary, not the raw list.
 
 ## Observability
 

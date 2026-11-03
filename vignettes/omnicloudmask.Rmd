@@ -106,29 +106,7 @@ kernel.
 ``` r
 m <- ocm_model()
 m
-#> $fn
-#> function (x) 
-#> .ocm_infer(x, weights)
-#> <bytecode: 0x5824aca43350>
-#> <environment: 0x5824aca46cb0>
-#> 
-#> $kernel_id
-#> [1] "ocm-8fd7f55dafbca78706d9d329f398a318-regnety+edgenext"
-#> 
-#> $halo
-#> [1] 128
-#> 
-#> $bytes_px
-#> [1] 700
-#> 
-#> $flops_px
-#> [1] 80000
-#> 
-#> $models
-#> [1] "regnety"  "edgenext"
-#> 
-#> attr(,"class")
-#> [1] "garry_ocm_model"
+#> <ocm_model> regnety+edgenext  halo=128  kernel=ocm-8fd7f55dafbca78706d9d329f398a318-regnety+edgenext
 ```
 
 Pick one properly cloudy date and put the scene, its SCL band, and the

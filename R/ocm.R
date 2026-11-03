@@ -225,7 +225,10 @@ ocm_mask <- function(
   apply_mask(x, from = "ocm", where = where, open = open, dilate = dilate)
 }
 
-#' @export
+# Registered on base's print by name: S7::method(print, ...) <- binds a
+# `print` in garry's namespace, and a plain S3method(print, ...) then
+# registers on that local copy, which a user's print() never consults.
+#' @exportS3Method base::print
 print.garry_ocm_model <- function(x, ...) {
   cat(
     .glue(
