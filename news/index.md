@@ -450,6 +450,13 @@
 
 ### Bug fixes
 
+- An in-process
+  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+  of a warped 32-bit integer band no longer prints gdalraster’s Int64
+  alert and warning. A warp widens such a band to Int64 so its empty
+  cells have a value, and a double holds every value the band can, so
+  the note was untrue. Opening any other Int64 file still gives it.
+
 - A tile across the antimeridian no longer reads as empty. A nearest
   read of several sources onto a longitude-latitude grid took the tile’s
   bounds as an inverted box, so its cells stayed NaN with no error. Such

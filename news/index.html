@@ -140,7 +140,8 @@
 </ul></div>
 <div class="section level3">
 <h3 id="bug-fixes-development-version">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-development-version"></a></h3>
-<ul><li><p>A tile across the antimeridian no longer reads as empty. A nearest read of several sources onto a longitude-latitude grid took the tile’s bounds as an inverted box, so its cells stayed NaN with no error. Such sources now warp together.</p></li>
+<ul><li><p>An in-process <code><a href="../reference/collect.html">collect()</a></code> of a warped 32-bit integer band no longer prints gdalraster’s Int64 alert and warning. A warp widens such a band to Int64 so its empty cells have a value, and a double holds every value the band can, so the note was untrue. Opening any other Int64 file still gives it.</p></li>
+<li><p>A tile across the antimeridian no longer reads as empty. A nearest read of several sources onto a longitude-latitude grid took the tile’s bounds as an inverted box, so its cells stayed NaN with no error. Such sources now warp together.</p></li>
 <li><p>A south-up tile fetched through the tile index gets the rows of its window. A window 9 to 15 rows tall fetched too few and came back partly NaN.</p></li>
 <li><p>A decoded Zarr read counts against its handle’s budget. A long decoded read kept every chunk it decoded: 16 windows of 1024 x 1024 x 64 grew a reader by 1.4 GB, and now by 350 MB, as a plain read does.</p></li>
 <li><p>A read daemon’s remote open takes what the run’s files need in its first request, 32 KB unless the host has opened a many-band header, not 4 MB. The pool read 1,576 MB of a 525 MB fixture, and read 2.5 times slower over a 1 Gbit link and 4.9 times slower over a poor one with a plain reader set the same way. On files small enough for 4 MB to hold them whole, a far link loses that whole-file read: 2.5 s to 2.9 s on 1.6 MB files at 100 ms.</p></li>
