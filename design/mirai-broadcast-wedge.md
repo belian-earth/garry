@@ -28,19 +28,81 @@ daemons(0, .compute = "w")
 
 ## Why garry meets it
 
-A run's region drops are fire-and-forget broadcasts on the read pool. A reader
-killed for memory at that moment left the pool alive by every check garry had,
-so each later wait spun forever: the two survivors kept `.assert_pools_alive()`
-satisfied.
+A run's region drops are broadcasts on the read pool, sent while readers are
+busy. A reader killed for memory at that moment left the pool alive by the check
+garry had then, which asked only for one connected daemon, so each later wait
+spun forever.
 
-`.assert_pools_moving()` in `R/pools.R` ends the wait. A queue with nothing
-running and nothing finished across two checks a second apart is this state,
-because a task waits on an idle daemon for milliseconds at most. It resets the
-profile and raises a `garry_pool_error`, and `garry_daemons()` restores the pool.
+## How garry ends the wait
 
-## When mirai fixes it
+Two checks run at a run's start and once a second in every wait
+(`.idle_step()` in `R/pools.R`). Neither closes a pool from inside the wait;
+`garry_daemons()` restarts it.
 
-Two tests in `tests/testthat/test-pool-liveness.R` rest on today's behaviour and
-will fail together: "a reader lost with a broadcast task queued for it ends the
-wait" and "a broadcast nobody waits for cannot strand the next wait". That
-failure is the signal that the reset can go.
+- `.assert_pools_alive()` holds every pool to the width `garry_daemons()`
+  started it with. A pool with fewer connections fails the run with a
+  `garry_pool_error` naming it and its count.
+- `.assert_pools_moving()` fails a dispatcher with tasks queued, none running
+  and none finished across two checks a second or more apart, at full width.
+  It marks the pool stuck, so every later run fails at its start.
+
+When a queue stops with no daemon running, from `dispatcher.c` (identical in
+nanonext 1.10.2 and 1.10.4):
+
+- `status()$connections` is the dispatcher's `outq_count`. It counts daemons
+  past their init message and falls only in `dispatch_remove_daemon()`, on a
+  disconnect or a daemon's last reply. garry's daemons never send a last reply
+  (no `maxtasks`, `idletime` or `walltime`), and `garry_daemons()` returns only
+  once all of them have connected.
+- `everywhere()` sends one task per connection it reads then: N-1 sync tasks
+  and an unsynced final one. While a generation lasts,
+  `dispatch_find_idle_daemon()` skips every daemon that took a sync task of it,
+  for any task. Only the assignment of an unsynced task ends the generation.
+- The queue drains in order, under the same lock as every event that frees a
+  daemon (`dispatch_init_cb()`, a reply in `dispatch_handle_daemon_recv()`). A
+  queued task with an eligible idle daemon is never visible to `status()`.
+- `awaiting > 0, executing == 0` therefore means every connected daemon took a
+  sync task of the current generation, and no unsynced task came to end it.
+
+That happens two ways [I from `dispatcher.c`, M for each below]:
+
+1. **A daemon is lost.** One broadcast puts N-1 daemons in its generation, and
+   its final task waits for the one that took none. If that daemon dies first,
+   every survivor is in the generation and the final task can never go. The pool
+   is below its width, which the width check reads.
+2. **A generation is left open with no daemon lost.** Its final task never
+   reaches a daemon: it is cancelled with `stop_mirai()` while queued, or
+   `everywhere()` is cut by an interrupt or a time limit after its sync tasks
+   went out. The next broadcast's sync tasks join that generation, and once
+   every daemon has taken one, its own tasks queue for good. The pool stays at
+   its width, so the width check misses it.
+
+garry prevents the second at its source and catches it if it happens anyway:
+
+- `.pool_send()` runs each `everywhere()` under `suspendInterrupts()`, so a
+  broadcast is sent whole. It cannot block: garry's pools set no memory limit
+  for mirai's gate.
+- garry cancels only ordinary tasks: a run's own (`.store_broadcasts()`) and
+  those `.task_mirai()` noted (`.tasks_cancel()`), never a broadcast's.
+- The progress check catches a generation left open by anything else, such as
+  a user's own `everywhere()` on garry's profile.
+
+Measured with mirai 2.7.2 and nanonext 1.10.2 (2026-11-03):
+
+- Loss: in the strand window at 2, 3 and 4 daemons, sampled every 5 ms for
+  2.5 s after the kill, all 1,418 stalled samples were at a pool below its
+  width, which it fell to within 5 ms of the kill. Healthy pools of 2 to 4
+  daemons under overlapping broadcasts and plain tasks showed no stalled sample
+  in 12,111.
+- Open generation: three readers, one busy, a broadcast whose final task
+  queued for it, that task cancelled, then garry's broadcast. The progress check
+  raised in about 2 s, with the pool at 3 of 3; with the width check alone the
+  wait ran until a 20 s time limit ended it.
+
+## When nanonext fixes it
+
+"a reader killed mid-broadcast strands the dispatcher, and the width check ends
+the wait" in `tests/testthat/test-pool-liveness.R` asserts the strand itself
+(a queued task, none running, a daemon short). A nanonext that fails the
+stranded task, or hands it on, fails that assertion; garry's error stays the
+same `garry_pool_error`.

@@ -337,36 +337,80 @@ NULL
   .glue("{Sys.getpid()}x{n}")
 }
 
-# Abort if any of `profiles` has no connected daemon. A width-1 profile
-# whose daemon died (an OOM kill, a crash) stays registered, and a task
-# sent to it never resolves: without this check the next run blocks
-# forever on its first broadcast.
-.assert_pools_alive <- function(profiles, call = rlang::caller_env()) {
-  dead <- profiles[vapply(profiles, .gd_n_compute, integer(1)) == 0L]
-  if (length(dead)) {
-    cli::cli_abort(
-      c(
-        "{length(dead)} garry daemon pool{?s} {?has/have} no running daemon: {.val {dead}}.",
-        "i" = "A daemon was probably killed (out of memory?).",
-        "i" = "Call {.fn garry_daemons} to restart the pools."
-      ),
-      class = "garry_pool_error",
-      call = call
-    )
-  }
-  invisible(profiles)
+# The daemons garry_daemons() started on each of `profiles`: the read
+# pool's width, 1 on a compute profile and on the writer, 0 on a profile
+# it did not start.
+.pool_width <- function(profiles) {
+  want <- unname((.garry_state$pool_width %||% integer(0))[profiles])
+  want[is.na(want)] <- 0L
+  want
 }
 
-# Abort if a dispatcher has stopped handing out tasks. A broadcast sends
-# one task per daemon. Lose a daemon before it takes its task and that
-# task stays queued: the survivors stay connected and idle, every later
-# task queues behind it, and cancelling it frees nothing (mirai 2.7.2,
-# 3 readers, one busy when the broadcast came). A queue with nothing
-# running, and nothing finished since the check before, is that state: a
-# task waits on an idle daemon for milliseconds at most. Resetting the
-# profile lets every later check read it as a pool with no daemon.
-# `before` is this function's value at the last check; a width-1 profile
-# has no dispatcher and no queue.
+# Which of `profiles` can take no task: fewer daemons connected than
+# garry_daemons() started there (none at all for a profile it did not
+# start), or a dispatcher found stuck (.assert_pools_moving()).
+.pools_down <- function(profiles) {
+  have <- vapply(profiles, .gd_n_compute, integer(1), USE.NAMES = FALSE)
+  want <- .pool_width(profiles)
+  stuck <- profiles %in% .garry_state$pool_stuck
+  list(
+    down = have < pmax(want, 1L) | stuck,
+    have = have,
+    want = want,
+    stuck = stuck
+  )
+}
+
+# Abort if a pool in `profiles` is short of the daemons it started with,
+# or stuck. A lost daemon (an OOM kill, a crash) leaves its profile
+# registered, and a wait on it can then last forever: a width-1 profile
+# has no dispatcher to fail the task it lost, and a dispatcher strands a
+# broadcast's last task when the one daemon that took no other task of it
+# dies before taking that one, with every later task queued behind it.
+# The check runs at a run's start and once a second in every wait. A pool
+# stays down until garry_daemons() restarts it.
+.assert_pools_alive <- function(profiles, call = rlang::caller_env()) {
+  s <- .pools_down(profiles)
+  if (!any(s$down)) {
+    return(invisible(profiles))
+  }
+  p <- profiles[s$down]
+  have <- s$have[s$down]
+  want <- s$want[s$down]
+  stuck <- s$stuck[s$down]
+  lines <- ifelse(
+    stuck,
+    .glue("\"{p}\" takes no more tasks"),
+    ifelse(
+      want > 0L,
+      .glue("\"{p}\" has {have} of its {want}"),
+      .glue("\"{p}\" has none")
+    )
+  )
+  cli::cli_abort(
+    c(
+      "{length(p)} garry daemon pool{?s} cannot run tasks: {lines}.",
+      "i" = if (!all(stuck)) "A daemon was probably killed (out of memory?).",
+      "i" = if (any(stuck)) "A broadcast left a task no daemon may take.",
+      "i" = "Call {.fn garry_daemons} to restart the pools."
+    ),
+    class = c("garry_pool_error", "garry_error"),
+    call = call
+  )
+}
+
+# Abort if a dispatcher of `profiles` hands out no task with all its
+# daemons connected: tasks queued, none running, and none finished since
+# `before` (this function's value at the last check, a second or more
+# ago). A task waits on an idle daemon for milliseconds at most, unless a
+# broadcast left its sync generation open: its last task cancelled while
+# queued, or its send cut partway. The next broadcast then puts every
+# daemon in that generation, and its own last tasks can never go out
+# (design/mirai-broadcast-wedge.md). garry does neither, so this is a
+# defect, and no daemon of the pool takes a task again. The pool is
+# marked stuck, so every later run fails at its start, until
+# garry_daemons() restarts it; it is not closed from inside the wait. A
+# width-1 profile has no dispatcher and no queue.
 .assert_pools_moving <- function(profiles, before = list(), call = rlang::caller_env()) {
   now <- lapply(
     stats::setNames(nm = profiles),
@@ -383,27 +427,17 @@ NULL
     },
     profiles
   )
-  for (p in stuck) {
-    mirai::daemons(0L, .compute = p)
-  }
   if (length(stuck)) {
-    cli::cli_abort(
-      c(
-        "{length(stuck)} garry daemon pool{?s} will take no more tasks: {.val {stuck}}.",
-        "i" = "A daemon was probably killed (out of memory?) with a broadcast task queued for it.",
-        "i" = "Call {.fn garry_daemons} to restart the pools."
-      ),
-      class = c("garry_pool_error", "garry_error"),
-      call = call
-    )
+    .garry_state$pool_stuck <- union(.garry_state$pool_stuck, stuck)
+    .assert_pools_alive(profiles, call = call)
   }
   now
 }
 
 # One idle step of a wait on `profiles`: a short sleep, and once a
-# second the checks that a daemon is left to wait for and that the
-# queue moves. A width-1 profile has no dispatcher to hand a dead
-# daemon's task back, so the task stays unresolved forever and only this
+# second the checks that every pool still has the daemons it started
+# with and that its queue moves. A task a lost daemon leaves, or one a
+# stuck dispatcher holds, can stay unresolved forever, and only this
 # ends the wait.
 .idle_step <- function(profiles, call = rlang::caller_env()) {
   last_check <- Sys.time()
@@ -477,14 +511,97 @@ NULL
   )
 }
 
+# Send one QUOTED expression to every daemon of each of `profiles`,
+# shipping `...` as task args, and return the handles by profile without
+# waiting: .pool_await() waits. do.call defeats everywhere()'s NSE so one
+# language object serves the whole loop (probed 2026-08-02).
+.pool_send <- function(expr, profiles, ...) {
+  args <- c(list(expr), list(...))
+  stats::setNames(
+    lapply(profiles, function(p) {
+      # A broadcast cut partway, by an interrupt or a time limit, leaves its
+      # dispatcher's sync generation open, and the next one wedges the pool
+      # (.assert_pools_moving()): a send runs to its end. It never blocks, as
+      # garry's pools set no memory limit for mirai to gate on.
+      suspendInterrupts(
+        unclass(do.call(mirai::everywhere, c(args, list(.compute = p))))
+      )
+    }),
+    profiles
+  )
+}
+
+# Wait for broadcast handles `sent` (by profile, as .pool_send() returns
+# them) on every profile before judging any, so a failure on one leaves no
+# reply in flight on another, then abort on the first failure, naming its
+# pool. A task that raised says why, classed `class`. A daemon lost under
+# the broadcast (error value 19, the connection reset), or a wait that
+# found its pool down (.idle_step()), is a garry_pool_error as well, which
+# `live_only` lets pass. Returns every value, in order.
+.pool_await <- function(
+  sent,
+  live_only = FALSE,
+  what = "a pool broadcast",
+  class = "garry_pool_error",
+  call = rlang::caller_env()
+) {
+  out <- list()
+  raised <- NULL
+  lost <- NULL
+  for (p in names(sent)) {
+    got <- tryCatch(
+      lapply(sent[[p]], .await_task, p, lost = "return", call = call),
+      garry_pool_error = function(e) e
+    )
+    if (inherits(got, "condition")) {
+      lost <- lost %||% list(p = p, why = conditionMessage(got))
+      next
+    }
+    out <- c(out, got)
+    bad <- Filter(function(r) inherits(r, "miraiError"), got)
+    if (length(bad) && is.null(raised)) {
+      raised <- list(p = p, n = length(bad), why = .task_failure(bad[[1L]]))
+    }
+    gone <- Filter(
+      function(r) inherits(r, "errorValue") && !inherits(r, "miraiError"),
+      got
+    )
+    if (length(gone) && is.null(lost)) {
+      lost <- list(p = p, why = .task_failure(gone[[1L]]))
+    }
+  }
+  if (!is.null(raised)) {
+    p <- raised$p
+    why <- raised$why
+    cli::cli_abort(
+      c("{what} failed on {raised$n} daemon{?s} of {.val {p}}.", "x" = "{why}"),
+      class = c(class, "garry_error"),
+      call = call
+    )
+  }
+  if (!is.null(lost) && !live_only) {
+    p <- lost$p
+    why <- lost$why
+    cli::cli_abort(
+      c(
+        "{what} failed on {.val {p}}: its pool can no longer run it.",
+        "x" = "{why}"
+      ),
+      class = unique(c(class, "garry_pool_error", "garry_error")),
+      call = call
+    )
+  }
+  invisible(out)
+}
+
 # Broadcast one QUOTED expression to every daemon of `profiles`,
-# shipping `...` as task args and awaiting completion. do.call defeats
-# everywhere()'s NSE so one language object serves the whole loop
-# (probed 2026-08-02). A task that fails aborts, classed `class` and
-# saying `what` failed: a daemon that misses a broadcast keeps stale
-# state. `live_only` is for work a dead daemon has no need of (hygiene,
-# credentials, teardown): it skips profiles with no daemon, and a daemon
-# lost under the broadcast ends that wait; otherwise both abort.
+# shipping `...` as task args and awaiting completion. A task that fails
+# aborts, classed `class` and saying `what` failed: a daemon that misses
+# a broadcast keeps stale state. `live_only` is for work a dead daemon has
+# no need of (hygiene, credentials, teardown): it skips a pool that is
+# down (.pools_down()), which every run refuses until garry_daemons()
+# restarts it, and a daemon lost under the broadcast ends that wait;
+# otherwise both abort.
 .pool_broadcast <- function(
   expr,
   profiles = .comp_profiles(),
@@ -494,48 +611,21 @@ NULL
   class = "garry_pool_error",
   call = rlang::caller_env()
 ) {
-  args <- c(list(expr), list(...))
-  out <- list()
   if (live_only) {
-    profiles <- profiles[vapply(profiles, .gd_n_compute, integer(1)) > 0L]
+    profiles <- profiles[!.pools_down(profiles)$down]
   } else {
     .assert_pools_alive(profiles, call = call)
-  }
-  lost <- function(why) {
-    cli::cli_abort(
-      c("{what} failed: a daemon was lost.", "x" = "{why}"),
-      class = unique(c(class, "garry_pool_error", "garry_error")),
-      call = call
-    )
   }
   # Send to every profile, then wait. A fresh daemon's first task loads
   # garry, about a second, so a wait per profile before the next send is
   # that second per profile. The same reason as .garry_abi_check().
-  sent <- lapply(profiles, function(p) {
-    do.call(mirai::everywhere, c(args, list(.compute = p)))
-  })
-  for (i in seq_along(profiles)) {
-    out <- c(out, tryCatch(
-      lapply(sent[[i]], .await_task, profiles[[i]], lost = "return"),
-      garry_pool_error = function(e) {
-        if (!live_only) lost(conditionMessage(e))
-      }
-    ))
-  }
-  failed <- Filter(function(r) inherits(r, "miraiError"), out)
-  if (length(failed)) {
-    why <- .task_failure(failed[[1L]])
-    cli::cli_abort(
-      c("{what} failed on {length(failed)} daemon{?s}.", "x" = "{why}"),
-      class = c(class, "garry_error"),
-      call = call
-    )
-  }
-  gone <- Filter(function(r) inherits(r, "errorValue"), out)
-  if (length(gone) && !live_only) {
-    lost(.task_failure(gone[[1L]]))
-  }
-  invisible(out)
+  .pool_await(
+    .pool_send(expr, profiles, ...),
+    live_only = live_only,
+    what = what,
+    class = class,
+    call = call
+  )
 }
 
 # Close the outputs the writer daemon holds. A writer that dies under
@@ -908,6 +998,8 @@ garry_daemons <- function(
   # to tune host-side discovery.
   .garry_env_defaults()
   .garry_state$pools_set <- FALSE
+  .garry_state$pool_width <- NULL
+  .garry_state$pool_stuck <- NULL
   # Under covr, daemons must not load the INSTRUMENTED garry: covr
   # bakes a trace-file finalizer into the instrumented package, and a
   # daemon hitting the (benign) XLA teardown segfault leaves a
@@ -947,6 +1039,13 @@ garry_daemons <- function(
   mirai::daemons(
     if (read > 0L || compute > 0L) 1L else 0L,
     .compute = "garry_write"
+  )
+  # mirai::daemons() returns once every daemon has connected, so these are
+  # the widths .assert_pools_alive() holds each pool to.
+  .garry_state$pool_width <- c(
+    if (read > 0L) c(garry_read = read),
+    if (compute > 0L) stats::setNames(rep(1L, compute), .comp_profiles()),
+    if (read > 0L || compute > 0L) c(garry_write = 1L)
   )
   pools <- c(
     if (read > 0L) "garry_read",
@@ -1070,7 +1169,7 @@ garry_pool_hygiene <- function(deep = FALSE) {
 #' of [collect()], so `collect(x)` uses the pools when they are set and
 #' runs single-threaded otherwise. Mirrors `mirai::daemons_set()`: it
 #' says the pools were set, not that every daemon is alive, so a pool that
-#' lost its daemons stays `TRUE` and the next run fails with a
+#' lost a daemon stays `TRUE` and the next run fails with a
 #' `garry_pool_error`, rather than moving onto the process the pools
 #' protect. [garry_daemons()] restarts them.
 #'

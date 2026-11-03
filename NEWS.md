@@ -443,11 +443,16 @@
   stopped at "open raster failed".
 * An integer file refused for NaN with no sentinel is a
   `garry_write_error` on every route.
-* A reader lost with a broadcast task queued for it, such as a store drop
-  mid-run, fails the wait with a `garry_pool_error`, where the wait hung.
-  mirai's dispatcher then hands out no task at all, so the surviving
-  readers cannot be used: the pool is reset and the next run asks for
-  `garry_daemons()`.
+* A pool short of any daemon it started with fails every run, at its start
+  or within a second of a wait, with a `garry_pool_error` naming the pool and
+  how many daemons it has left, until `garry_daemons()` restarts it. One
+  surviving reader used to pass the check. A reader lost with a broadcast task
+  queued for it, such as a store drop mid-run, then stopped mirai's dispatcher
+  handing out any task, and the wait hung. A dispatcher that stops handing out
+  tasks with every daemon connected fails the same way, in about two seconds,
+  as a pool that "takes no more tasks". garry sends each broadcast whole and
+  never cancels a broadcast's task, the two ways a dispatcher gets there. No
+  pool is closed from inside a wait.
 * An in-process read-only collect no longer needs `withr`, which garry
   only suggests, and a token refresh during a run says so when `httr2` is
   missing.
