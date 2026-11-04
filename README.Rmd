@@ -22,18 +22,6 @@ knitr::opts_chunk$set(
 <!-- badges: end -->
 
 
-```{=gfm}
-> [!WARNING]
-> garry is experimental and under active development. The API changes
-> without deprecation: function signatures and behaviour may differ
-> between commits, and nothing here should be treated as stable yet.
-> Development and benchmarking happen on Linux; macOS is CI-tested but
-> less exercised, and there is a known issue with the fused execution
-> path on Apple Silicon. Performance and behaviour there are not yet
-> fully characterised.
-```
-
-
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
 raster computation as a graph and it runs it fast: chunked, distributed across
 processes, with the numeric kernels JIT-compiled to XLA (CPU or GPU).
