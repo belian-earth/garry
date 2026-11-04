@@ -534,3 +534,53 @@ test_that("garry_daemons validates its pool sizes", {
   expect_error(garry_daemons(1, 1.5), "whole number")
   expect_error(garry_daemons(1, 1, read_handles = 0), ">= 1")
 })
+
+test_that("a task carries its expression and no source text", {
+  # Wherever source is kept (R CMD check, covr, load_all()) a function
+  # literal in a task's wrapper would carry garry's source text, about
+  # 4 MB, into every task.
+  testthat::local_mocked_bindings(
+    mirai = function(.expr, ...) .expr,
+    .package = "mirai"
+  )
+  for (timed in c(FALSE, TRUE)) {
+    e <- garry:::.task_mirai(
+      quote(1 + 1),
+      .compute = "garry_read",
+      .timed = timed
+    )
+    expect_lt(length(serialize(e, NULL)), 1e4)
+  }
+})
+
+test_that("a cancel lets a running task run to its end", {
+  local_pools(1, 0)
+  .local_wait_limit()
+  f <- tempfile()
+  h <- garry:::.task_mirai(
+    quote({
+      t0 <- Sys.time()
+      while (difftime(Sys.time(), t0, units = "secs") < 1) {
+        for (i in 1:100) {
+          NULL
+        }
+      }
+      file.create(f)
+    }),
+    f = f,
+    .compute = "garry_read"
+  )
+  while (mirai::status(.compute = "garry_read")$mirai[["executing"]] < 1L) {
+    Sys.sleep(0.01)
+  }
+  expect_true(mirai::stop_mirai(h))
+  repeat {
+    q <- mirai::status(.compute = "garry_read")$mirai
+    if (q[["executing"]] == 0L && q[["awaiting"]] == 0L) {
+      break
+    }
+    Sys.sleep(0.05)
+  }
+  expect_true(file.exists(f))
+  expect_identical(mirai::mirai(3, .compute = "garry_read")[], 3)
+})

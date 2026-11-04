@@ -144,8 +144,6 @@ skip_on_os("windows") # tools::pskill semantics
 }
 
 test_that("a run returns with nothing of its own in flight, on every route", {
-  # five routes under a 60 s limit: covr's instrumented host runs past it on CI
-  skip_on_covr()
   local_pools(2, 2)
   .local_wait_limit()
   # small chunks, and a read budget so small that every drop flushes as
@@ -196,8 +194,6 @@ test_that("a run returns with nothing of its own in flight, on every route", {
 })
 
 test_that("a failed run keeps its error and drops the reads it left queued, on every route", {
-  # the host must cancel within a read's 3 s sleep: covr's instrumented host may not
-  skip_on_covr()
   local_pools(2, 1)
   .local_wait_limit()
   withr::local_options(
@@ -403,8 +399,6 @@ test_that("closing the pools waits for what runs, and names the daemons it waits
 })
 
 test_that("a close waits for its probes, not only for a dispatcher's count", {
-  # the close must finish inside its 3 s notice: covr's instrumented host may not
-  skip_on_covr()
   local_pools(1, 1)
   .local_wait_limit()
   h <- garry:::.task_mirai(
@@ -711,9 +705,6 @@ test_that("a failed run's clear spares a compute task queued for another compute
 })
 
 test_that("a failed run cancels its own tasks and never a broadcast's", {
-  # the drop must still queue when the read fails: under covr's slower host it has
-  # already run, so no broadcast is in flight to spare
-  skip_on_covr()
   local_pools(2, 1)
   .local_wait_limit()
   withr::local_options(

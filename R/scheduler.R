@@ -153,13 +153,11 @@ NULL
   # cli's formatting leaves the daemon's cli unable to format any later
   # message (5 of 30 cancels, cli 3.6.6), so a task resumes through an
   # interrupt and runs to its end: a cancel drops a queued task, and the
-  # host stops waiting for a running one's reply.
-  .expr <- bquote(withCallingHandlers(
-    .(.expr),
-    interrupt = function(cnd) {
-      if (!is.null(findRestart("resume"))) invokeRestart("resume")
-    }
-  ))
+  # host stops waiting for a running one's reply. The handler lives on the
+  # daemon: a function literal here would carry its srcref, and with it
+  # garry's source text, about 4 MB in every task wherever source is kept
+  # (covr, R CMD check, load_all()).
+  .expr <- bquote(asNamespace("garry")$.daemon_resumable(.(.expr)))
   if (.timed) {
     .expr <- bquote({
       .garry_t0 <- Sys.time()
@@ -176,6 +174,17 @@ NULL
     })
   }
   mirai::mirai(.expr, ..., .compute = .compute)
+}
+
+# Daemon side of .task_mirai(): evaluate a task's expression, resuming
+# through any interrupt. `expr` is a promise, forced inside the handler.
+.daemon_resumable <- function(expr) {
+  withCallingHandlers(
+    expr,
+    interrupt = function(cnd) {
+      if (!is.null(findRestart("resume"))) invokeRestart("resume")
+    }
+  )
 }
 
 # A timed task's rows, from the daemon's own clock: when it started and
