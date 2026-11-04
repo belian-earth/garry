@@ -32,7 +32,7 @@
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -299,7 +299,7 @@
       </dl></div><div class="section level2">
       <h2 id="geo-embeddings-model-weights">Geo-embeddings &amp; model weights<a class="anchor" aria-label="anchor" href="#geo-embeddings-model-weights"></a></h2>
 
-      <div class="section-desc"><p>Special operations for published geo-embedding products: the quantiser decodes (fused onto multi-band reads via lazy_map) and safetensors weight IO.</p></div>
+      <div class="section-desc"><p>Decoders for published geo-embedding products, applied at the read with <code>lazy_dataset(decode = )</code> (before any resampling) or after it with <code><a href="../reference/lazy_map.html">lazy_map()</a></code>, and safetensors weight IO.</p></div>
 
       <dl></dl></div><div class="section level2">
 
@@ -997,7 +997,7 @@
           <code><a href="MapNode.html">MapNode()</a></code>
 
         </dt>
-        <dd>Elementwise map. <code>fn</code> is an R function over scalars/arrays; it will be composed with neighbouring fusable nodes and wrapped in <code><a href="https://r-xla.github.io/anvl/reference/jit.html" class="external-link">anvl::jit()</a></code> at plan time. Created by <code><a href="../reference/lazy_map.html">lazy_map()</a></code>.</dd>
+        <dd>Elementwise map. <code>fn</code> is an R function over arrays; the planner composes it with neighbouring fusable nodes into one stage kernel, which compiles where it first runs (<code><a href="https://r-xla.github.io/anvl/reference/jit.html" class="external-link">anvl::jit()</a></code> in this process, the stage's StableHLO program on a daemon). Created by <code><a href="../reference/lazy_map.html">lazy_map()</a></code>.</dd>
 
         <dt>
 

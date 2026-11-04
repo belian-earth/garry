@@ -15,10 +15,10 @@ the path and it builds one band per file band, named from the file’s
 band descriptions (`A00` .. `A63` here). Each band is its own source, so
 at
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
-the reads fan out band-by-band across the reader pool – many connections
-issuing range requests concurrently, which is what makes a 64-band
-remote read fast. This vignette reads one tile, resamples to 30 m,
-dequantises on the read, and renders three arbitrary bands as a
+the reads fan out band-by-band across the reader pool, with many
+connections issuing range requests concurrently, which is what makes a
+64-band remote read fast. This vignette reads one tile, decodes it and
+resamples it to 30 m on the read, and renders three arbitrary bands as a
 false-colour composite.
 
 ## Read and dequantise
@@ -34,8 +34,8 @@ tile <- paste0("https://data.source.coop/tge-labs/aef/v1/annual/2021/36S/",
 # the analysis grid: the tile's own footprint at 30 m
 grid <- grid_from_src(tile, 30)
 
-embeddings <- lazy_dataset(tile, grid, resampling = "average") |>
-  lazy_map(fn = dequantize_aef, dtype = "f32")
+embeddings <- lazy_dataset(tile, grid, resampling = "average",
+                           decode = dequantize_aef)
 
 embeddings
 #> ── <LazyDataset> ────────────────────────────────
@@ -50,15 +50,19 @@ embeddings
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 records a lazy 64-band dataset; nothing is fetched yet (the construction
 costs one metadata probe, however many bands the file carries).
-[`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)
-is applied as a map, which garry fuses onto the read so the nonlinear
-decode runs on-device, not as a separate pass.
+`decode = dequantize_aef` decodes every 10 m code through a lookup table
+before the average, so each 30 m value is the mean of the decoded
+embeddings, the order a nonlinear decode needs.
 
 ## Collect three bands and plot
 
-Pick three arbitrary embedding dimensions and collect just those: the
-band-axis subset means only those three are ever read or computed or
-preview a coarser overview of the tile to take a quick look.
+Pick three arbitrary embedding dimensions: the band-axis subset means
+only those three are ever read or computed.
+[`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
+reads them on the full 30 m grid and decimates them for the plot. A file
+source is not pinned to a grid, so it cannot use the tile’s overviews;
+[`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
+says so in a message.
 
 ``` r
 
@@ -82,7 +86,7 @@ sixty-four dimensions. The clustering below uses all of them.
 
 An unsupervised k-means over the 64-dimensional embedding vectors
 segments the landscape without a single training label. The pattern is
-fit-small, predict-lazily – and neither half needs the raster on disk:
+fit-small, predict-lazily, with both halves reading one local cube:
 
 **Materialise once.** Both halves below read all 64 bands, so decode the
 tile a single time into a local cube and work from that. This is the one
@@ -94,12 +98,12 @@ happen once, and everything after reads local pixels.
 cube <- materialise(embeddings)   # pass dir= to keep it beyond the session
 ```
 
-**Fit.** k-means needs pixels in R, but not all 7.5 million of them –
+**Fit.** k-means needs pixels in R, but not all 7.5 million of them:
 100k scattered ones place five centroids perfectly well.
 [`extract_points()`](https://belian-earth.github.io/garry/reference/extract_points.md)
-reads just those, straight out of the cube: GDAL touches only the blocks
-holding points, so this costs a fraction of a second rather than another
-pass over the raster.
+reads just those, straight out of the local cube: GDAL reads only the
+rows holding points, here nearly all of them, but from local disk rather
+than the network.
 
 Points are a [wk](https://paleolimbot.github.io/wk/) `xy` vector
 carrying their own CRS, so they are placed on the grid explicitly rather
@@ -111,9 +115,10 @@ converts points from sf, terra or a data frame).
 
 set.seed(42)
 n   <- 1e5
+bb  <- grid_bbox(grid)
 pts <- wk::xy(
-  stats::runif(n, xmin(grid), xmax(grid)),
-  stats::runif(n, ymin(grid), ymax(grid)),
+  stats::runif(n, bb[["xmin"]], bb[["xmax"]]),
+  stats::runif(n, bb[["ymin"]], bb[["ymax"]]),
   crs = grid_crs(grid)
 )
 
@@ -134,12 +139,12 @@ surrounding cell centres for continuous data measured off-grid, and
 
 **Assign.** Every 30 m pixel goes to its nearest centroid:
 `argmax_k (x . c_k - |c_k|^2 / 2)`, and `x . c_k` is a linear
-combination of bands – the
+combination of bands: the
 [`band_project()`](https://belian-earth.github.io/garry/reference/band_project.md)
 reducer from the [PCA
 article](https://belian-earth.github.io/garry/articles/hls-harmonized-pca.md).
 The argmax is expressible in the same public vocabulary, so the WHOLE
-assignment runs inside the graph: a custom band reducer composes six
+assignment runs inside the graph: a custom band reducer composes five
 projections with a comparison chain, and
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 returns the finished cluster map. This is ordinary user code – garry’s
@@ -178,7 +183,7 @@ and the argmax per pixel, and only the finished single-band cluster map
 ever reaches R. (Want the raw scores instead? Stack plain
 [`band_project()`](https://belian-earth.github.io/garry/reference/band_project.md)
 reducers with `lazy_stack(along = "band")` and take
-[`max.col()`](https://rdrr.io/r/base/maxCol.html) host-side – same
+[`max.col()`](https://rdrr.io/r/base/maxCol.html) host-side: same
 digital numbers.)
 
 The k-means prediction can also stream straight to disk. Note the
@@ -216,5 +221,5 @@ Five clusters, no labels, and the landscape decomposes into its
 structure: the dendritic drainage network, the river corridor and
 settlement strip, and the textured forest mosaic each claim their own
 class. The same dequantised dataset feeds any downstream verb the same
-way – a band-axis PCA, a similarity search, or a classifier fit on the
+way: a band-axis PCA, a similarity search, or a classifier fit on the
 collected array.

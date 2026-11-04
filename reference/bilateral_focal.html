@@ -42,7 +42,7 @@ as focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)."><meta property="og
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -74,7 +74,8 @@ as <code>focal_map(x, fn = bilateral_focal(sigma_r), radius = 1L)</code>.</p>
 
 
 <dl><dt id="arg-sigma-r">sigma_r<a class="anchor" aria-label="anchor" href="#arg-sigma-r"></a></dt>
-<dd><p>Range Gaussian standard deviation (data units).</p></dd>
+<dd><p>Range Gaussian standard deviation (data units): one value, or
+one per channel for a <code>(channel, y, x)</code> input.</p></dd>
 
 
 <dt id="arg-sigma-d">sigma_d<a class="anchor" aria-label="anchor" href="#arg-sigma-d"></a></dt>

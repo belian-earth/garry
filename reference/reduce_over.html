@@ -5,13 +5,17 @@ identity for algebraic decomposition and dtype rules. nan_rm = TRUE
 NaN nodata sentinel. A pixel that is nodata in every input stays
 nodata (NaN) for &quot;mean&quot;, &quot;median&quot;, &quot;min&quot; and &quot;max&quot;; &quot;sum&quot;
 gives 0 and &quot;count&quot; gives 0. (The g_min() / g_max() primitives
-return their identity, Inf / -Inf, instead.)"><meta property="og:description" content="op is a reduction name, not a function: the planner needs op
+return their identity, Inf / -Inf, instead.) A spatial reduction (over
+x and y) is combined on the host after every chunk has run, so computing
+on it fails when planned, with a garry_reduce_unsupported_error."><meta property="og:description" content="op is a reduction name, not a function: the planner needs op
 identity for algebraic decomposition and dtype rules. nan_rm = TRUE
 (the default) skips nodata, matching R's na.rm = TRUE under the
 NaN nodata sentinel. A pixel that is nodata in every input stays
 nodata (NaN) for &quot;mean&quot;, &quot;median&quot;, &quot;min&quot; and &quot;max&quot;; &quot;sum&quot;
 gives 0 and &quot;count&quot; gives 0. (The g_min() / g_max() primitives
-return their identity, Inf / -Inf, instead.)"><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
+return their identity, Inf / -Inf, instead.) A spatial reduction (over
+x and y) is combined on the host after every chunk has run, so computing
+on it fails when planned, with a garry_reduce_unsupported_error."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
 
@@ -44,7 +48,7 @@ return their identity, Inf / -Inf, instead.)"><meta property="og:image" content=
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -64,7 +68,9 @@ identity for algebraic decomposition and dtype rules. <code>nan_rm = TRUE</code>
 NaN nodata sentinel. A pixel that is nodata in every input stays
 nodata (NaN) for <code>"mean"</code>, <code>"median"</code>, <code>"min"</code> and <code>"max"</code>; <code>"sum"</code>
 gives 0 and <code>"count"</code> gives 0. (The <code><a href="g-reductions.html">g_min()</a></code> / <code><a href="g-reductions.html">g_max()</a></code> primitives
-return their identity, <code>Inf</code> / <code>-Inf</code>, instead.)</p>
+return their identity, <code>Inf</code> / <code>-Inf</code>, instead.) A spatial reduction (over
+<code>x</code> and <code>y</code>) is combined on the host after every chunk has run, so computing
+on it fails when planned, with a <code>garry_reduce_unsupported_error</code>.</p>
     </div>
 
     <div class="section level2">

@@ -94,8 +94,8 @@ Stage(
 - strip_rows:
 
   Rows per strip when `fn` runs a compute stage's members over row
-  strips of each chunk (`.scan_strip_px` cells each); 0 runs the whole
-  chunk at once.
+  strips of each chunk (about 4,096 cells each); 0 runs the whole chunk
+  at once.
 
 ## Value
 

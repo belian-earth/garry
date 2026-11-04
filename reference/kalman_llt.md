@@ -68,7 +68,7 @@ A scan body `fn(xs, margin)` for
 Hyperparameters are fixed scalars, fitted outside the raster pipeline
 (for example by marginal-likelihood MLE on sampled pixel series). Pixels
 with fewer than 3 valid observations return all-NaN. Initialisation is
-the large-variance diffuse approximation `P1 = kappa * I`.
+the large-variance diffuse approximation `P1 = 1e7 * I`.
 
 ## Regime boundaries
 

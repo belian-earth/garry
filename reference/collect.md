@@ -34,9 +34,9 @@ collect(x, plan_only = FALSE, distributed = garry_daemons_set())
   [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
   pools? Defaults to
   [`garry_daemons_set()`](https://belian-earth.github.io/garry/reference/garry_daemons_set.md),
-  so `collect(x)` uses the pools when they are running and runs
-  single-threaded otherwise. Pass `TRUE`/`FALSE` to override. One plan
-  gives the same cells either way; a reprojected STAC band warps by a
+  so `collect(x)` uses the pools when they are running and runs in this
+  R process otherwise. Pass `TRUE`/`FALSE` to override. One plan gives
+  the same cells either way; a reprojected STAC band warps by a
   different route on each, so its cells can differ within GDAL's
   tolerance.
 

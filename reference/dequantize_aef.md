@@ -7,7 +7,10 @@ Written in the `g_*` vocabulary, so applying it with
 after
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 fuses the decode onto the read, on the device rather than as a separate
-decode pass. This is
+decode pass. A read that resamples (`resampling = "average"`, or
+[`coarsen()`](https://belian-earth.github.io/garry/reference/coarsen.md))
+must decode first: pass the function as `lazy_dataset(decode = )`, which
+decodes each code before any resampling. This is
 [`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
 with its defaults.
 

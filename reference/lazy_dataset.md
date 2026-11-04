@@ -17,7 +17,8 @@ lazy_dataset(
   offset = NULL,
   bands = NULL,
   decode = NULL,
-  time = NULL
+  time = NULL,
+  array = NULL
 )
 ```
 
@@ -30,8 +31,11 @@ lazy_dataset(
   optionally filtered), a
   [`stac_sources()`](https://belian-earth.github.io/garry/reference/stac_sources.md)
   table, or a character path / vector of paths to (multi-band) raster
-  file(s) – local, `/vsicurl/`, or bare `http(s)://` (prefixed
-  automatically).
+  files (local, `/vsicurl/`, or bare `http(s)://`, prefixed
+  automatically), or `ZARR:"<store>":/<array>` strings, whose bare
+  `https://` store is prefixed the same way. Or the root of a Zarr
+  store, whose arrays that overlap `grid` are read (see the
+  description).
 
 - grid:
 
@@ -47,14 +51,17 @@ lazy_dataset(
 
 - mask_asset:
 
-  Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`); loaded alongside the
-  value assets and used as the default `from` in
+  Optional QA/mask asset (e.g. `"Fmask"`, `"SCL"`), or in the file form
+  the name of one selected band; loaded alongside the value assets and
+  used as the default `from` in
   [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md).
 
 - granularity:
 
-  Time-slice granularity (see
+  Table form: time-slice granularity (see
   [`stac_time_slices()`](https://belian-earth.github.io/garry/reference/stac_time_slices.md)).
+  The file form refuses it: a file's slices come from the file; select
+  them with `time`.
 
 - nodata:
 
@@ -124,11 +131,12 @@ lazy_dataset(
   `resampling = "average"` onto a grid 3x coarser, each target cell is
   the mean of the valid decoded values of its 3 x 3 source cells, the
   order a nonlinear code needs, and a cell whose source cells are all
-  nodata stays NaN. Values are Float32. Reads go through a lookup-table
-  VRT; the source's own grid, a window of its pixels, or an aligned
-  coarser grid read with `"near"` or `"average"` read the codes and
-  decode them directly, 2-3x faster. `NULL` (the default) reads the
-  codes as they are.
+  nodata stays NaN. Values are Float32. A `mask_asset` band is read as
+  stored, not decoded, and every band and source must declare one nodata
+  code. Reads go through a lookup-table VRT; the source's own grid, a
+  window of its pixels, or an aligned coarser grid read with `"near"` or
+  `"average"` read the codes and decode them directly, about five times
+  faster. `NULL` (the default) reads the codes as they are.
 
 - time:
 
@@ -139,6 +147,14 @@ lazy_dataset(
   `time_sel(lazy_dataset(src, grid), "2024")` without building the other
   slices' bands first, which matters for long time series of many bands.
   `NULL` (the default) builds every slice.
+
+- array:
+
+  With a Zarr store's root as `sources` (see the description): the name
+  of the array to read in each group, the last part of its path, such as
+  `"embeddings"`. Needed only when the store's arrays with a CRS and
+  extent carry more than one name; `NULL` (the default) takes the one
+  name they share.
 
 ## Value
 
@@ -159,27 +175,28 @@ A `LazyDataset`.
 - a character path, or a vector of tile paths (mosaicked where they
   share a CRS and one pixel lattice, kept apart and warped together
   otherwise; tiles off that lattice need `grid`, and tiles kept apart
-  must agree on dtype and on any nodata they declare): one band per file
-  band, one time slice. This is the multi-band raster entry –
-  geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
-  GDAL driver, any multi-band file GDAL reads. Each band is its own
-  source, so reads of a band-interleaved file fan out band-by-band
-  across the reader pool (per-band tasks through per-daemon handles: the
-  measured fastest remote shape, design/gdal-multiband-fanout.md). When
-  the bands share storage (a pixel-interleaved file, a Zarr chunk
-  spanning bands),
+  must agree on dtype, on any nodata they declare and, with
+  `scale = TRUE`, on their scale and offset): one band per file band,
+  one time slice. This is the multi-band raster entry – geo-embedding
+  stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the GDAL driver,
+  any multi-band file GDAL reads. Each band is its own source, so reads
+  of a band-interleaved file fan out band-by-band across the reader pool
+  (per-band tasks through per-daemon handles: the measured fastest
+  remote shape, design/gdal-multiband-fanout.md). When the bands share
+  storage (a pixel-interleaved file, a Zarr chunk spanning bands),
   [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
   reads a window's bands in one task instead, so the shared bytes are
   fetched once. Bands are named by their file band descriptions when
   present, else `b<index>`; `grid = NULL` stays on the file's native
   grid, and a supplied `grid` inserts an
   [`align_to()`](https://belian-earth.github.io/garry/reference/align_to.md)
-  warp per band. Value transforms (e.g.
-  [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md))
-  go downstream as
+  warp per band. Value transforms go downstream as
   [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md)s,
   which fuse onto the read at
-  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md).
+  [`collect()`](https://belian-earth.github.io/garry/reference/collect.md);
+  8-bit codes that must be decoded before resampling, such as
+  [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)'s,
+  go through `decode`.
 
   An N-D array with a time dimension, such as a `(time, band, y, x)`
   Zarr array (`ZARR:"<store>":/<array>`), becomes bands x time slices:
@@ -190,6 +207,33 @@ A `LazyDataset`.
   slices with
   [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md),
   or build only some with `time`.
+
+  A Zarr store's root (a `.zarr` path or URL, or `ZARR:"<root>"`), given
+  alone, reads the store's arrays that overlap `grid`, so a store of one
+  array per UTM zone needs no connection string per zone. In a Zarr v3
+  store with consolidated metadata, one document, garry reads each
+  array's CRS and extent where GDAL 3.13 does: the zarr-conventions
+  `proj:code`, `proj:wkt2` or `proj:projjson`, and an affine, north-up
+  `spatial:transform` over the array's own shape along
+  `spatial:dimensions`, on the array or its parent group, registered by
+  uuid in the `zarr_conventions` of the first of the two that has one
+  (GDAL places arrays by them from 3.13 on). GDAL places the other
+  arrays, and lists the arrays of a Zarr v2 store from its `.zmetadata`.
+  A store without consolidated metadata reads as any other source: GDAL
+  opens its root as one dataset. An array whose declared extent misses
+  `grid` is not opened, so GDAL is not asked where it lies. garry reads
+  the arrays that overlap `grid` as it reads a vector of them, and says
+  which; GDAL must place each one where the store declares it, or the
+  call aborts. In a vector of sources, a store of one array reads as
+  that array, and a store of several must be given alone. Where two
+  arrays hold data for a cell, the later one's value is read: arrays in
+  the grid's CRS go last, so their own pixels win, and the others go
+  first, in the order of their paths in the store. An array's extent can
+  reach well past its data: each OlmoEarth zone's spans 983 km, so a
+  grid at Jasper in zone 11 also reads zones 10 and 12. Give the arrays
+  as connection strings to read fewer. `array` names the array to read
+  in each group when the arrays with a CRS and extent carry more than
+  one name. Without `grid` the store must hold one such array.
 
 All bands share one intermediate representation (IR) graph, so a mask
 defined once (see

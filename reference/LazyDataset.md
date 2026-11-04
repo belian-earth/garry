@@ -4,7 +4,7 @@ The dataset holds one entry per band; each entry is a list of
 per-time-slice `LazyRaster`s on a shared grid and intermediate
 representation (IR) graph. Construct one with
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
-(from a STAC source table) or
+(from a STAC source table or raster files) or
 [`as_dataset()`](https://belian-earth.github.io/garry/reference/as_dataset.md)
 (from `LazyRaster`s you already have) rather than calling this class
 constructor directly. Apply

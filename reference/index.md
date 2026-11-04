@@ -106,9 +106,10 @@ composites, gap filling, and per-pixel smoothers.
 
 ## Geo-embeddings & model weights
 
-Special operations for published geo-embedding products: the quantiser
-decodes (fused onto multi-band reads via lazy_map) and safetensors
-weight IO.
+Decoders for published geo-embedding products, applied at the read with
+`lazy_dataset(decode = )` (before any resampling) or after it with
+[`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md),
+and safetensors weight IO.
 
 - [`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
   : Dequantize signed-power embedding codes.
@@ -432,10 +433,11 @@ IR directly (custom nodes, alternate executors) – not for normal use.
 - [`MapNode()`](https://belian-earth.github.io/garry/reference/MapNode.md)
   :
 
-  Elementwise map. `fn` is an R function over scalars/arrays; it will be
-  composed with neighbouring fusable nodes and wrapped in
-  [`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) at
-  plan time. Created by
+  Elementwise map. `fn` is an R function over arrays; the planner
+  composes it with neighbouring fusable nodes into one stage kernel,
+  which compiles where it first runs
+  ([`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) in
+  this process, the stage's StableHLO program on a daemon). Created by
   [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).
 
 - [`FocalNode()`](https://belian-earth.github.io/garry/reference/FocalNode.md)

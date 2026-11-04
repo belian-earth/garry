@@ -17,7 +17,8 @@ bilateral_focal(sigma_r, sigma_d = 1, radius = 1L)
 
 - sigma_r:
 
-  Range Gaussian standard deviation (data units).
+  Range Gaussian standard deviation (data units): one value, or one per
+  channel for a `(channel, y, x)` input.
 
 - sigma_d:
 

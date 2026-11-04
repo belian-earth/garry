@@ -46,7 +46,7 @@ per-year relative observation-variance stack (Var(v_t) = sigma_obs^2 * r_t; r mu
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -127,7 +127,7 @@ innovation exceeds <code>robust_threshold</code> MADs by <code>robust_inflation<
 pipeline (for example by marginal-likelihood MLE on sampled pixel
 series). Pixels with fewer than 3 valid observations return
 all-NaN. Initialisation is the large-variance diffuse approximation
-<code>P1 = kappa * I</code>.</p>
+<code>P1 = 1e7 * I</code>.</p>
     </div>
     <div class="section level2">
     <h2 id="regime-boundaries">Regime boundaries<a class="anchor" aria-label="anchor" href="#regime-boundaries"></a></h2>

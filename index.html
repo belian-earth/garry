@@ -59,7 +59,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul>
 </div>
 
@@ -100,38 +100,39 @@
 <div class="section level2">
 <h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
-<p>You can install the development version of garry from <a href="https://github.com/" class="external-link">GitHub</a>. Its XLA stack (anvl, pjrt, stablehlo, xlamisc) is published on the <a href="https://r-xla.r-universe.dev" class="external-link">r-xla r-universe</a>, which pak must be told about:</p>
+<p>You can install the development version of garry from <a href="https://github.com/belian-earth/garry" class="external-link">GitHub</a>. anvl, stablehlo and xlamisc come from the <a href="https://r-xla.r-universe.dev" class="external-link">r-xla r-universe</a>, which pak must be told about. pjrt comes from the <code>buffer-handover</code> branch of <a href="https://github.com/belian-earth/pjrt" class="external-link">belian-earth/pjrt</a>, named in garry’s <code>Remotes</code>, so pak builds it from source. That needs a C++20 compiler, the protobuf library and its compiler <code>protoc</code> (Debian and Ubuntu: <code>sudo apt install libprotobuf-dev protobuf-compiler</code>; Fedora: <code>sudo dnf install protobuf-devel protobuf-compiler</code>; macOS: <code>brew install protobuf</code>). The example below also uses rstac, httr2 and visNetwork, which garry suggests:</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="co"># install.packages("pak")</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/options.html" class="external-link">options</a></span><span class="op">(</span>repos <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>rxla <span class="op">=</span> <span class="st">"https://r-xla.r-universe.dev"</span>, <span class="fu"><a href="https://rdrr.io/r/base/options.html" class="external-link">getOption</a></span><span class="op">(</span><span class="st">"repos"</span><span class="op">)</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="fu">pak</span><span class="fu">::</span><span class="fu"><a href="https://pak.r-lib.org/reference/pak.html" class="external-link">pak</a></span><span class="op">(</span><span class="st">"belian-earth/garry"</span><span class="op">)</span></span></code></pre></div>
-<p>The same setting is needed for <code>devtools::install()</code> from a clone. To keep it, put the <code><a href="https://rdrr.io/r/base/options.html" class="external-link">options()</a></code> line in your <code>~/.Rprofile</code>.</p>
+<span><span class="fu">pak</span><span class="fu">::</span><span class="fu"><a href="https://pak.r-lib.org/reference/pak.html" class="external-link">pak</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"belian-earth/garry"</span>, <span class="st">"rstac"</span>, <span class="st">"httr2"</span>, <span class="st">"visNetwork"</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
+<p>The same setting is needed for <code>devtools::install()</code> from a clone, which builds pjrt the same way. To keep it, put the <code><a href="https://rdrr.io/r/base/options.html" class="external-link">options()</a></code> line in your <code>~/.Rprofile</code>.</p>
 <p>garry computes through <a href="https://github.com/r-xla/anvl" class="external-link">anvl</a>/XLA, whose PJRT runtime plugin downloads on first use. Fetch it once up front (it prompts interactively otherwise, which fails in scripts and on servers):</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu">pjrt</span><span class="fu">::</span><span class="fu"><a href="https://r-xla.github.io/pjrt/reference/install_pjrt.html" class="external-link">install_pjrt</a></span><span class="op">(</span><span class="op">)</span>               <span class="co"># CPU plugin (~250 MB unpacked, cached per user)</span></span>
-<span><span class="co"># pjrt::install_pjrt(cuda = TRUE)  # instead, for a CUDA-capable GPU</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="fu">pjrt</span><span class="fu">::</span><span class="fu"><a href="https://r-xla.github.io/pjrt/reference/install_pjrt.html" class="external-link">install_pjrt</a></span><span class="op">(</span><span class="op">)</span>               <span class="co"># CPU plugin (~250 MB unpacked, cached per user),</span></span>
+<span>                                   <span class="co"># plus the CUDA plugin on a Linux machine with an NVIDIA GPU</span></span>
+<span><span class="co"># pjrt::install_pjrt(cuda = TRUE)  # also the CUDA plugin, when detection misses the GPU</span></span></code></pre></div>
 <p>garry also needs GDAL &gt;= 3.9 on the system (the GTI mosaic driver behind <code><a href="reference/lazy_dataset.html">lazy_dataset()</a></code>); <code>gdalraster</code> reports yours with <code><a href="https://firelab.github.io/gdalraster/reference/gdal_version.html" class="external-link">gdalraster::gdal_version()</a></code>.</p>
 </div>
 <div class="section level2">
 <h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
 </h2>
-<p>A cloud-masked annual median composite of HLS Sentinel-2 imagery, straight from the Microsoft Planetary Computer. The whole pipeline is lazy: it reads and computes only at the final <code><a href="reference/collect.html">collect()</a></code>.</p>
+<p>A cloud-masked median composite of three months of HLS Sentinel-2 imagery (January to March 2023), straight from the Microsoft Planetary Computer. The whole pipeline is lazy: it reads and computes only at the final <code><a href="reference/collect.html">collect()</a></code>.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://belian-earth.github.io/garry/">garry</a></span><span class="op">)</span></span>
 <span><span class="co">#&gt; garry: GDAL 3.13.0 "Iowa City", released 2026/05/04</span></span>
 <span></span>
-<span><span class="co"># 1. Discover: HLS S30 over an AOI, Jan-March of 2023, pre-signed for the PC.</span></span>
+<span><span class="co"># 1. Discover: HLS S30 over an AOI, Jan-March of 2023, signed for the PC.</span></span>
 <span><span class="va">aoi</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">78.4</span>, <span class="fl">24.4</span>, <span class="op">-</span><span class="fl">77.65</span>, <span class="fl">24.8</span><span class="op">)</span>   <span class="co"># lon/lat bounding box</span></span>
 <span><span class="va">src</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/stac_query.html">stac_query</a></span><span class="op">(</span></span>
 <span>  bbox        <span class="op">=</span> <span class="va">aoi</span>,</span>
 <span>  stac_source <span class="op">=</span> <span class="st">"https://planetarycomputer.microsoft.com/api/stac/v1/"</span>,</span>
 <span>  collection  <span class="op">=</span> <span class="st">"hls2-s30"</span>,</span>
-<span>  start_date  <span class="op">=</span> <span class="st">"2023-01-01"</span>, </span>
+<span>  start_date  <span class="op">=</span> <span class="st">"2023-01-01"</span>,</span>
 <span>  end_date <span class="op">=</span> <span class="st">"2023-03-31"</span></span>
 <span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="reference/stac_sign_mpc.html">stac_sign_mpc</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span> </span>
-<span>  <span class="fu"><a href="reference/stac_filter_cloud.html">stac_filter_cloud</a></span><span class="op">(</span><span class="fl">30</span><span class="op">)</span> <span class="op">|&gt;</span> </span>
-<span>  <span class="fu"><a href="reference/stac_filter_assets.html">stac_filter_assets</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"B04"</span>, <span class="st">"B03"</span>, <span class="st">"B02"</span>, <span class="st">"B08"</span>, <span class="st">"Fmask"</span><span class="op">)</span><span class="op">)</span></span>
+<span>  <span class="fu"><a href="reference/stac_filter_assets.html">stac_filter_assets</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"B04"</span>, <span class="st">"B03"</span>, <span class="st">"B02"</span>, <span class="st">"B08"</span>, <span class="st">"Fmask"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="reference/stac_filter_cloud.html">stac_filter_cloud</a></span><span class="op">(</span><span class="fl">30</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="reference/stac_sign_mpc.html">stac_sign_mpc</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span></span>
 <span><span class="co"># 2. The analysis grid, straight from the AOI: an equal-area (LAEA) grid at 30 m</span></span>
@@ -184,17 +185,17 @@
 <span><span class="co">#&gt; └─ ƒ map  (2 inputs)  ×2</span></span>
 <span><span class="co">#&gt;    └─ ▸ median  over t  ×2</span></span>
 <span><span class="co">#&gt;       └─ ⬚ stack  along t</span></span>
-<span><span class="co">#&gt;          └─ ✕ node  ×15</span></span>
+<span><span class="co">#&gt;          └─ ✕ mask  (2 inputs)  ×15</span></span>
 <span><span class="co">#&gt;             ├─ ◈ source  2536×1480 f32</span></span>
 <span><span class="co">#&gt;             └─ ◫ focal  r=3</span></span>
 <span><span class="co">#&gt;                └─ ◫ focal  r=2</span></span>
 <span><span class="co">#&gt;                   └─ ◫ focal  r=2</span></span>
-<span><span class="co">#&gt;                      └─ ✕ node</span></span>
+<span><span class="co">#&gt;                      └─ ✕ mask</span></span>
 <span><span class="co">#&gt;                         └─ ◈ source  2536×1480 f32</span></span>
 <span></span>
 <span><span class="co"># preview() estimates a coarse grid from the graph and device, runs the pipeline</span></span>
 <span><span class="co"># at that reduced resolution (reading only overviews / the windows it needs), and</span></span>
-<span><span class="co"># plots the result -- a cheap look before committing to the full collect().</span></span>
+<span><span class="co"># plots the result, a cheap look before committing to the full collect().</span></span>
 <span><span class="fu"><a href="reference/preview.html">preview</a></span><span class="op">(</span><span class="va">composite</span><span class="op">[[</span><span class="st">"ndvi"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span>   <span class="co"># single band -&gt; colour ramp + colourbar</span></span></code></pre></div>
 <p><img src="reference/figures/README-example-1.png" alt="" width="100%"></p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
@@ -203,10 +204,10 @@
 <span><span class="co">#    a `gis` attribute (extent/CRS), so the result is self-describing.</span></span>
 <span><span class="va">a</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/collect.html">collect</a></span><span class="op">(</span><span class="va">composite</span><span class="op">)</span></span>
 <span></span>
-<span><span class="co"># preview() on a materialised array reads that `gis` attribute for real-world axes.</span></span>
+<span><span class="co"># preview() on a collected array reads that `gis` attribute for real-world axes.</span></span>
 <span><span class="fu"><a href="reference/preview.html">preview</a></span><span class="op">(</span><span class="va">a</span><span class="op">)</span>     <span class="co"># multi-band  -&gt; RGB (first three bands)</span></span></code></pre></div>
 <p><img src="reference/figures/README-example-2.png" alt="" width="100%"></p>
-<p>The plan itself is worth looking at. <code><a href="reference/plan_view.html">plan_view()</a></code> renders it as an interactive DAG (static here; live when interactive and on the pkgdown site): stages typed by what they compute, provenance on hover (assets, acquisition dates, reducers), and dashed edges where bands pass through into the output. It shows the schedule you cannot see from the code: each QA slice’s mask predicate and morphological cleanup run as their own focal stages (halo work, kept narrow); each band’s masking, time stack, and median fuse into a single stage; and NDVI derives in its own stage before the write.</p>
+<p>The plan itself is worth looking at. <code><a href="reference/plan_view.html">plan_view()</a></code> renders it as an interactive DAG (static here; live when interactive and on the pkgdown site): stages typed by what they compute, provenance on hover (assets, acquisition dates, reducers), and dashed edges where bands pass through into the output. It shows how the planner stages the graph, which you cannot see from the code: each QA slice’s mask predicate and morphological cleanup run as their own focal stages (halo work, kept narrow); each band’s masking, time stack and median fuse into a single stage; and NDVI derives in its own stage. These stages run in a single process and in the quantised <code><a href="reference/write_tif.html">write_tif()</a></code> below. With daemons up, <code>collect(composite)</code> takes a direct reduce route instead (<code><a href="reference/garry_last_route.html">garry_last_route()</a></code> returns <code>"gd_reduce"</code>): it computes each band’s masked median directly, then NDVI from those, without these stages.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="reference/plan_view.html">plan_view</a></span><span class="op">(</span><span class="va">composite</span><span class="op">)</span></span></code></pre></div>
 <p><img src="reference/figures/README-plan-view-1.png" alt="" width="100%"></p>

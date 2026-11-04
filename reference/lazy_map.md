@@ -30,9 +30,9 @@ lazy_map(..., fn, dtype = NULL, bands = NULL)
 
   Optional output dtype. Given, `fn` is not traced when the raster is
   built, so a kernel that only traces at chunk time can use it. Left
-  out, it is what `fn` returns. Unsigned inputs compute in a wider
-  signed dtype (`u8` in `i16`, `u16` in `i32`), so `fn` over them
-  returns that unless told otherwise.
+  out, it is what `fn` returns. Unsigned inputs compute in a wider dtype
+  (`u8` in `i16`, `u16` in `i32`, `u32` in `i64`, `u64` in `f64`), so
+  `fn` over them returns that unless told otherwise.
 
 - bands:
 

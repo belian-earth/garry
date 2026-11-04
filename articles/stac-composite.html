@@ -56,7 +56,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul>
 </div>
 
@@ -158,11 +158,11 @@ because interpolating class codes would corrupt them.</p>
 <p>Sentinel-2’s scene classification (SCL) is categorical, so the mask
 is a value set: shadow (3), cloud medium and high probability (8, 9),
 cirrus (10). Raw QA rasters are speckled, and cloud edges leak:
-<code>open = 2</code> removes mask speckle smaller than 2 px
-(morphological opening), and <code>dilate = 3</code> grows the mask 3 px
-outward so translucent cloud edges go with the cloud. Masked pixels
-become NaN, garry’s nodata, on every value band, and the QA band is
-consumed.</p>
+<code>open = 2</code> is a morphological opening at radius 2 (erosion,
+then dilation), which removes flagged specks too small to hold a disk of
+radius 2 px, and <code>dilate = 3</code> grows the mask 3 px outward so
+translucent cloud edges go with the cloud. Masked pixels become NaN,
+garry’s nodata, on every value band, and the QA band is consumed.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">ds</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/apply_mask.html">apply_mask</a></span><span class="op">(</span><span class="va">ds</span>, where <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">3</span>, <span class="fl">8</span>, <span class="fl">9</span>, <span class="fl">10</span><span class="op">)</span>, open <span class="op">=</span> <span class="fl">2</span>, dilate <span class="op">=</span> <span class="fl">3</span><span class="op">)</span></span>
 <span><span class="va">ds</span> <span class="op">&lt;-</span> <span class="op">(</span><span class="va">ds</span> <span class="op">*</span> <span class="fl">0.0001</span><span class="op">)</span> <span class="op">-</span> <span class="fl">0.1</span>     <span class="co"># STAC raster metadata: scale, then offset</span></span>
@@ -192,12 +192,12 @@ the pipeline behind any one band:</p>
 <span><span class="co">#&gt; ⬚ stack  along t</span></span>
 <span><span class="co">#&gt; └─ ƒ map  ×65</span></span>
 <span><span class="co">#&gt;    └─ ƒ map</span></span>
-<span><span class="co">#&gt;       └─ ƒ map  (2 inputs)</span></span>
+<span><span class="co">#&gt;       └─ ✕ mask  (2 inputs)</span></span>
 <span><span class="co">#&gt;          ├─ ◈ source  888×667 f32</span></span>
 <span><span class="co">#&gt;          └─ ◫ focal  r=3</span></span>
 <span><span class="co">#&gt;             └─ ◫ focal  r=2</span></span>
 <span><span class="co">#&gt;                └─ ◫ focal  r=2</span></span>
-<span><span class="co">#&gt;                   └─ ƒ map</span></span>
+<span><span class="co">#&gt;                   └─ ✕ mask</span></span>
 <span><span class="co">#&gt;                      └─ ◈ source  888×667 f32</span></span></code></pre></div>
 </div>
 <div class="section level2">
@@ -314,11 +314,14 @@ each warped on read from its native UTM grid onto the analysis grid, SCL
 morphology, masking, reflectance scaling, two composites and their
 spectral distance, planned into chunked stages, fused into compiled
 kernels, and executed across the daemon pools under a memory budget,
-with every remote asset fetched once. On benchmark workloads this engine
-composites at parity with the Python ODC/dask stack. The next steps in
-the arc: <code><a href="../articles/time-series.html">vignette("time-series")</a></code> keeps the time axis
-instead of collapsing it, and the case-study vignettes (HLS harmonized
-PCA, AEF embeddings) build on the same dataset machinery.</p>
+with every remote asset fetched once. On the synthetic HLS data of the
+repository’s benchmark suite, at medium size under a 16 GB cap, garry’s
+warped median composite took 33 s against 58 s for the best Python
+ODC/Dask arm, and its geomedian finished where ODC’s ran out of memory.
+The next steps in the arc: <code><a href="../articles/time-series.html">vignette("time-series")</a></code> keeps
+the time axis instead of collapsing it, and the case-study vignettes
+(HLS harmonized PCA, AEF embeddings) build on the same dataset
+machinery.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

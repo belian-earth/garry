@@ -3,8 +3,11 @@
 The registry surface for the flat `garry.*` option namespace: one row
 per option with its tier (`user` day-one switches, `tuning`
 budgets/targets), package default, current session value and a one-line
-description. Values are validated against the same registry when
-execution starts.
+description. Every `garry.*` option is checked against this registry
+when a run starts and at
+[`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md):
+a name it does not hold (a typo or a retired option) or an invalid value
+aborts with a `garry_option_error`.
 
 ## Usage
 

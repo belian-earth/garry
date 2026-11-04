@@ -35,12 +35,14 @@ apply_mask(x, from = NULL, where, open = 0L, dilate = 0L, join = "exact")
     such as HLS Fmask / Landsat QA_PIXEL, e.g. `qa_bits(0:3)`;
 
   - a function `\(f) ...` -\> a predicate returning a 0/1 (or logical)
-    mask, written in the `g_*` vocabulary. NaN reads as clear.
+    mask, written in the `g_*` vocabulary. A value above 0.5 counts as
+    set, in `open`/`dilate` as at the end; NaN reads as clear.
 
 - open:
 
   Opening radius (despeckle): erosion then dilation at this radius,
-  removing isolated flagged pixels up to the radius. `0` skips it.
+  removing flagged patches too small to hold a disk of that radius. `0`
+  skips it.
 
 - dilate:
 

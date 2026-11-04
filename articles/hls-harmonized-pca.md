@@ -114,7 +114,7 @@ plot of chunk truecolour
 ## PCA over the band axis
 
 A per-pixel PCA collapses the spectral vector to a few components. Fit
-it in plain R on the materialized composite – fitting a model in R is
+it in plain R on the collected composite: fitting a model in R is
 perfectly reasonable; not everything belongs in the lazy graph.
 
 ``` r
@@ -132,7 +132,7 @@ round(summary(pca)$importance[, 1:3], 3)     # variance explained, PC1-3
 ```
 
 The projection onto each principal component is a **linear combination
-of the bands** – exactly `reduce_over(over = "band")`.
+of the bands**, which is exactly `reduce_over(over = "band")`.
 [`band_project()`](https://belian-earth.github.io/garry/reference/band_project.md)
 builds the reducer (centre, then weight by the loading); stacking the
 first three gives a 3-band image. Because it is lazy, the same
@@ -161,6 +161,6 @@ The same
 reducer is the basis for any linear-model `predict` (regression,
 logistic, unmixing): fit in R, pass the coefficients as `weights`.
 Non-linear models (random forests, boosting) don’t trace to the compute
-backend – for those,
+backend; for those,
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
 the composite and predict in R.

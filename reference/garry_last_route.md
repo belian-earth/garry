@@ -1,10 +1,13 @@
 # Which execution route did the last `collect()` take?
 
-A diagnostics helper. The distributed
-[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
-picks its execution route automatically, and this reports the route the
-last call took, so pipelines can log it or assert a plan has not changed
-route. The values are:
+A diagnostics helper. garry picks the execution route automatically, and
+this reports the route the last
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md)
+or
+[`materialise()`](https://belian-earth.github.io/garry/reference/materialise.md)
+took, so pipelines can log it or assert a plan has not changed route.
+The values are:
 
 ## Usage
 
@@ -27,8 +30,7 @@ in the session.
 
 - `"scheduler"`: the general distributed scheduler;
 
-- `"single"`: the in-process single-threaded executor
-  (`distributed = FALSE`);
+- `"single"`: the in-process executor (`distributed = FALSE`);
 
 - `"read_only"`: a plan that only reads and stacks rasters, copied from
   GDAL straight into the result in either mode.

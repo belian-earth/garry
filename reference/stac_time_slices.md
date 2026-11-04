@@ -28,9 +28,10 @@ stac_time_slices(
 
 - lon:
 
-  Longitude (degrees, WGS84) whose solar time defines `"solar_day"`: use
-  the centre of the analysis area. Defaults to the circular mean of the
-  source footprint centres (safe across the antimeridian).
+  Longitude (degrees, WGS84) whose solar time defines `"solar_day"`, and
+  only with it: use the centre of the analysis area. Defaults to the
+  circular mean of the source footprint centres (safe across the
+  antimeridian).
 
 ## Value
 

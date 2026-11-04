@@ -1,9 +1,10 @@
-# Elementwise map. `fn` is an R function over scalars/arrays; it will be composed with neighbouring fusable nodes and wrapped in `anvl::jit()` at plan time. Created by [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).
+# Elementwise map. `fn` is an R function over arrays; the planner composes it with neighbouring fusable nodes into one stage kernel, which compiles where it first runs (`anvl::jit()` in this process, the stage's StableHLO program on a daemon). Created by [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).
 
-Elementwise map. `fn` is an R function over scalars/arrays; it will be
-composed with neighbouring fusable nodes and wrapped in
-[`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) at plan
-time. Created by
+Elementwise map. `fn` is an R function over arrays; the planner composes
+it with neighbouring fusable nodes into one stage kernel, which compiles
+where it first runs
+([`anvl::jit()`](https://r-xla.github.io/anvl/reference/jit.html) in
+this process, the stage's StableHLO program on a daemon). Created by
 [`lazy_map()`](https://belian-earth.github.io/garry/reference/lazy_map.md).
 
 ## Usage

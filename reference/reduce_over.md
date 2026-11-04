@@ -9,7 +9,10 @@ gives 0. (The
 [`g_min()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
 /
 [`g_max()`](https://belian-earth.github.io/garry/reference/g-reductions.md)
-primitives return their identity, `Inf` / `-Inf`, instead.)
+primitives return their identity, `Inf` / `-Inf`, instead.) A spatial
+reduction (over `x` and `y`) is combined on the host after every chunk
+has run, so computing on it fails when planned, with a
+`garry_reduce_unsupported_error`.
 
 ## Usage
 

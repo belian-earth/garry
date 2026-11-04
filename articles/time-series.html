@@ -56,7 +56,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul>
 </div>
 
@@ -95,7 +95,7 @@ days at 30 m. Query a year of it, sign the assets for Microsoft
 Planetary Computer, and describe the data as a
 <code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code>: red (B04), NIR (B08), and the Fmask QA
 band, warped on read onto an equal-area analysis grid.
-<code>apply_mask(qa_bits(0:3))</code> drops cirrus, cloud,
+<code>apply_mask(where = qa_bits(0:3))</code> drops cirrus, cloud,
 adjacent-cloud, and shadow pixels; masked values become NaN, garry’s
 nodata.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
@@ -170,9 +170,9 @@ plotting.</p>
 <div class="section level2">
 <h2 id="a-ragged-series">A ragged series<a class="anchor" aria-label="anchor" href="#a-ragged-series"></a>
 </h2>
-<p>Start the daemon pools and materialise the cube. 87 dates by 780 x
-464 pixels reads, masks, and computes in about half a minute; the result
-is an ordinary <code>(y, x, t)</code> array.</p>
+<p>Start the daemon pools and collect the cube: 87 dates by 780 x 464
+pixels are read, masked and computed in one plan, and the result is an
+ordinary <code>(y, x, t)</code> array.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/garry_daemons.html">garry_daemons</a></span><span class="op">(</span><span class="op">)</span></span>
 <span><span class="va">raw</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">ndvi</span><span class="op">)</span></span>
@@ -245,7 +245,7 @@ and smoother through every pixel’s series: a latent level and slope
 evolve with small random disturbances, each observation measures the
 level with noise, and missing dates simply contribute no update. The
 smoother is a <code><a href="../reference/scan_over.html">scan_over()</a></code> body compiled through the same
-machinery as every other kernel, batched over all 360k pixels at
+machinery as every other kernel, batched over every pixel of a chunk at
 once.</p>
 <p>The three standard deviations are the model: <code>sigma_lvl</code>
 and <code>sigma_slp</code> set how fast the level and slope may drift

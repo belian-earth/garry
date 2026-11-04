@@ -38,7 +38,7 @@ across all value bands."><meta property="og:image" content="https://belian-earth
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -83,13 +83,15 @@ e.g. <code>c(0, 1, 2, 3, 8, 9, 10, 11)</code>;</p></li>
 <li><p><code><a href="qa_bits.html">qa_bits()</a></code> -&gt; a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. <code>qa_bits(0:3)</code>;</p></li>
 <li><p>a function <code>\(f) ...</code> -&gt; a predicate returning a 0/1 (or logical)
-mask, written in the <code>g_*</code> vocabulary. NaN reads as clear.</p></li>
+mask, written in the <code>g_*</code> vocabulary. A value above 0.5 counts as set,
+in <code>open</code>/<code>dilate</code> as at the end; NaN reads as clear.</p></li>
 </ul></dd>
 
 
 <dt id="arg-open">open<a class="anchor" aria-label="anchor" href="#arg-open"></a></dt>
 <dd><p>Opening radius (despeckle): erosion then dilation at this radius,
-removing isolated flagged pixels up to the radius. <code>0</code> skips it.</p></dd>
+removing flagged patches too small to hold a disk of that radius. <code>0</code>
+skips it.</p></dd>
 
 
 <dt id="arg-dilate">dilate<a class="anchor" aria-label="anchor" href="#arg-dilate"></a></dt>

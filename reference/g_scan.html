@@ -3,17 +3,19 @@
 filters, cumulative custom ops). At step t, body(carry, x) gets
 the current carry and the step-t slice of xs (taken along dim 1
 with that unit axis dropped) and returns list(carry = , out = );
-the outs are stacked into (length, ...) buffers. reverse = TRUE
-runs t = length..1, still reading and writing at position t (what
-a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+the outs are stacked into (n, ...) buffers, n being the size of
+dim 1 of xs. reverse = TRUE runs t = n..1, still reading and
+writing at position t (what a backward smoothing pass needs, e.g.
+Rauch-Tung-Striebel). Traced
 values route to anvl::nv_scan; plain R arrays take the pure-R
 reference implementation with identical semantics."><meta property="og:description" content="The loop op behind scan_over() bodies (Kalman smoothers, EWMA, IIR
 filters, cumulative custom ops). At step t, body(carry, x) gets
 the current carry and the step-t slice of xs (taken along dim 1
 with that unit axis dropped) and returns list(carry = , out = );
-the outs are stacked into (length, ...) buffers. reverse = TRUE
-runs t = length..1, still reading and writing at position t (what
-a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+the outs are stacked into (n, ...) buffers, n being the size of
+dim 1 of xs. reverse = TRUE runs t = n..1, still reading and
+writing at position t (what a backward smoothing pass needs, e.g.
+Rauch-Tung-Striebel). Traced
 values route to anvl::nv_scan; plain R arrays take the pure-R
 reference implementation with identical semantics."><meta property="og:image" content="https://belian-earth.github.io/garry/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -48,7 +50,7 @@ reference implementation with identical semantics."><meta property="og:image" co
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -66,9 +68,10 @@ reference implementation with identical semantics."><meta property="og:image" co
 filters, cumulative custom ops). At step <code>t</code>, <code>body(carry, x)</code> gets
 the current carry and the step-<code>t</code> slice of <code>xs</code> (taken along dim 1
 with that unit axis dropped) and returns <code>list(carry = , out = )</code>;
-the <code>out</code>s are stacked into <code>(length, ...)</code> buffers. <code>reverse = TRUE</code>
-runs <code>t = length..1</code>, still reading and writing at position <code>t</code> (what
-a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+the <code>out</code>s are stacked into <code>(n, ...)</code> buffers, <code>n</code> being the size of
+dim 1 of <code>xs</code>. <code>reverse = TRUE</code> runs <code>t = n..1</code>, still reading and
+writing at position <code>t</code> (what a backward smoothing pass needs, e.g.
+Rauch-Tung-Striebel). Traced
 values route to <code><a href="https://r-xla.github.io/anvl/reference/nv_scan.html" class="external-link">anvl::nv_scan</a></code>; plain R arrays take the pure-R
 reference implementation with identical semantics.</p>
     </div>

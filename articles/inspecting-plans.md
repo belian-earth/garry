@@ -5,9 +5,14 @@ nodes to a compute graph, the planner fuses those nodes into schedulable
 stages, and nothing reads or computes until
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md).
 [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
-renders that plan as an interactive DAG, so you can see exactly what an
-execution will do, and check it, before paying for it. It accepts
-anything
+renders that plan as an interactive DAG, so you can see how the planner
+will stage an execution, and check it, before paying for it. These
+stages run in a single process and on the scheduler; with daemons up, a
+temporal composite can take a direct route instead, and
+[`garry_last_route()`](https://belian-earth.github.io/garry/reference/garry_last_route.md)
+names the route a
+[`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
+took. It accepts anything
 [`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md)
 accepts: a `LazyRaster`, a `LazyDataset`, a named list of rasters, or a
 ready-made `Plan`.
@@ -134,7 +139,7 @@ keeps its meaning: the masks
 [`apply_mask()`](https://belian-earth.github.io/garry/reference/apply_mask.md)
 created are named as masks, the reducers carry their op, the derivation
 its band. This is the diagram earning its keep: the structure you reason
-about (bands, masks, a derived index) and the structure the machine
+about (bands, masks, a derived index) and the structure the scheduler
 executes (one kernel) are both real, and
 [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
 shows which one you will pay for.
@@ -200,9 +205,9 @@ plan_view(composite, level_separation = 1000, node_spacing = 60)
 ## Related tools
 
 [`plan_draw()`](https://belian-earth.github.io/garry/reference/plan_draw.md)
-renders the same pipeline as glyphs in the terminal, and
-[`print()`](https://rdrr.io/r/base/print.html) summarises a dataset’s
-steps.
+renders the same pipeline as glyphs in the terminal, step by step for a
+dataset, and [`print()`](https://rdrr.io/r/base/print.html) summarises a
+dataset’s bands, time slices and grid.
 [`plan_dot()`](https://belian-earth.github.io/garry/reference/plan_dot.md)
 emits the plan as Graphviz DOT text for documents.
 [`plan_lazy()`](https://belian-earth.github.io/garry/reference/plan_lazy.md)

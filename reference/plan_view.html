@@ -6,10 +6,10 @@ Stages are labelled by what they compute, not just their scheduler
 kind: a compute stage is classified by the IR nodes fused into it
 (focal, scan, patch, stack, map, most informative first,
 the same vocabulary as plan_draw()), and reduce stages carry their
-reducer (reduce\u00b7median). When a LazyDataset is passed, derived
+reducer (reduce·median). When a LazyDataset is passed, derived
 bands (ds[[&quot;ndvi&quot;]] &amp;lt;- ...) are recovered from the dataset's step
 record and the stage computing one is labelled with the band name
-(derive\u00b7ndvi); the derivation is bounded structurally at the first
+(derive·ndvi); the derivation is bounded structurally at the first
 non-elementwise node, so it survives subsetting (ds[&quot;ndvi&quot;]).
 Hovering a stage shows its full op composition and any recoverable
 metadata: acquisition dates on slice sources and t-spans on
@@ -27,10 +27,10 @@ Stages are labelled by what they compute, not just their scheduler
 kind: a compute stage is classified by the IR nodes fused into it
 (focal, scan, patch, stack, map, most informative first,
 the same vocabulary as plan_draw()), and reduce stages carry their
-reducer (reduce\u00b7median). When a LazyDataset is passed, derived
+reducer (reduce·median). When a LazyDataset is passed, derived
 bands (ds[[&quot;ndvi&quot;]] &amp;lt;- ...) are recovered from the dataset's step
 record and the stage computing one is labelled with the band name
-(derive\u00b7ndvi); the derivation is bounded structurally at the first
+(derive·ndvi); the derivation is bounded structurally at the first
 non-elementwise node, so it survives subsetting (ds[&quot;ndvi&quot;]).
 Hovering a stage shows its full op composition and any recoverable
 metadata: acquisition dates on slice sources and t-spans on
@@ -74,7 +74,7 @@ change shape as a pipeline is composed."><meta property="og:image" content="http
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -95,10 +95,10 @@ Stages are labelled by what they compute, not just their scheduler
 kind: a compute stage is classified by the IR nodes fused into it
 (<code>focal</code>, <code>scan</code>, <code>patch</code>, <code>stack</code>, <code>map</code>, most informative first,
 the same vocabulary as <code><a href="plan_draw.html">plan_draw()</a></code>), and reduce stages carry their
-reducer (<code>reduce\u00b7median</code>). When a <code>LazyDataset</code> is passed, derived
+reducer (<code>reduce·median</code>). When a <code>LazyDataset</code> is passed, derived
 bands (<code>ds[["ndvi"]] &lt;- ...</code>) are recovered from the dataset's step
 record and the stage computing one is labelled with the band name
-(<code>derive\u00b7ndvi</code>); the derivation is bounded structurally at the first
+(<code>derive·ndvi</code>); the derivation is bounded structurally at the first
 non-elementwise node, so it survives subsetting (<code>ds["ndvi"]</code>).
 Hovering a stage shows its full op composition and any recoverable
 metadata: acquisition dates on slice sources and t-spans on
@@ -158,7 +158,8 @@ times the widest level's node count; lower it to compress.</p></dd>
     </div>
     <div class="section level2">
     <h2 id="see-also">See also<a class="anchor" aria-label="anchor" href="#see-also"></a></h2>
-    <div class="dont-index"><p><code><a href="plan_dot.html">plan_dot()</a></code> for DOT text, <code><a href="plan_draw.html">plan_draw()</a></code> for pixels.</p></div>
+    <div class="dont-index"><p><code><a href="plan_dot.html">plan_dot()</a></code> for DOT text, <code><a href="plan_draw.html">plan_draw()</a></code> for a terminal drawing of
+the pipeline.</p></div>
     </div>
 
     <div class="section level2">

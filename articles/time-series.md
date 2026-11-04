@@ -17,9 +17,9 @@ days at 30 m. Query a year of it, sign the assets for Microsoft
 Planetary Computer, and describe the data as a
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md):
 red (B04), NIR (B08), and the Fmask QA band, warped on read onto an
-equal-area analysis grid. `apply_mask(qa_bits(0:3))` drops cirrus,
-cloud, adjacent-cloud, and shadow pixels; masked values become NaN,
-garry’s nodata.
+equal-area analysis grid. `apply_mask(where = qa_bits(0:3))` drops
+cirrus, cloud, adjacent-cloud, and shadow pixels; masked values become
+NaN, garry’s nodata.
 
 ``` r
 
@@ -102,9 +102,9 @@ lazily); we keep the `dates` vector for plotting.
 
 ## A ragged series
 
-Start the daemon pools and materialise the cube. 87 dates by 780 x 464
-pixels reads, masks, and computes in about half a minute; the result is
-an ordinary `(y, x, t)` array.
+Start the daemon pools and collect the cube: 87 dates by 780 x 464
+pixels are read, masked and computed in one plan, and the result is an
+ordinary `(y, x, t)` array.
 
 ``` r
 
@@ -198,7 +198,7 @@ disturbances, each observation measures the level with noise, and
 missing dates simply contribute no update. The smoother is a
 [`scan_over()`](https://belian-earth.github.io/garry/reference/scan_over.md)
 body compiled through the same machinery as every other kernel, batched
-over all 360k pixels at once.
+over every pixel of a chunk at once.
 
 The three standard deviations are the model: `sigma_lvl` and `sigma_slp`
 set how fast the level and slope may drift between dates (smoothness),

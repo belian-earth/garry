@@ -42,7 +42,7 @@ automatically."><meta property="og:image" content="https://belian-earth.github.i
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul></div>
 
 
@@ -85,8 +85,8 @@ automatically.</p>
 <dd><p>Optional output dtype. Given, <code>fn</code> is not traced when the
 raster is built, so a kernel that only traces at chunk time can use it.
 Left out, it is what <code>fn</code> returns. Unsigned inputs compute in a wider
-signed dtype (<code>u8</code> in <code>i16</code>, <code>u16</code> in <code>i32</code>), so <code>fn</code> over them returns
-that unless told otherwise.</p></dd>
+dtype (<code>u8</code> in <code>i16</code>, <code>u16</code> in <code>i32</code>, <code>u32</code> in <code>i64</code>, <code>u64</code> in <code>f64</code>), so
+<code>fn</code> over them returns that unless told otherwise.</p></dd>
 
 
 <dt id="arg-bands">bands<a class="anchor" aria-label="anchor" href="#arg-bands"></a></dt>

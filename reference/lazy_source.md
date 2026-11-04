@@ -69,8 +69,8 @@ lazy_source(
 
 - block_dim:
 
-  Optional native block size (x, y), only meaningful with `grid`;
-  defaults to unconstrained.
+  Optional block size (x, y) the chunks snap to, in place of the file's
+  own. With `grid`, the default is unconstrained.
 
 - resampling:
 

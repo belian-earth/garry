@@ -56,7 +56,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul>
 </div>
 
@@ -100,33 +100,47 @@ each pixel’s embedding moved between 2023 and 2025.</p>
 <div class="section level2">
 <h2 id="open-the-store">Open the store<a class="anchor" aria-label="anchor" href="#open-the-store"></a>
 </h2>
-<p>GDAL’s Zarr driver reads the store directly. A <code>ZARR:</code>
-connection string names the zone group and the array; garry adds the
-<code>/vsicurl/</code> prefix to a bare <code>https</code> store, as it
-does for any URL.</p>
+<p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> takes the store’s URL as it is. garry
+reads the store’s consolidated metadata, one document that lists the 60
+zones and the CRS and extent each declares, and reads the arrays that
+overlap the grid it is given through GDAL’s Zarr driver. garry adds the
+<code>ZARR:</code> and <code>/vsicurl/</code> prefixes GDAL needs for a
+store over <code>https</code>.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://belian-earth.github.io/garry/">garry</a></span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">store</span> <span class="op">&lt;-</span> <span class="st">"https://data.source.coop/olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr"</span></span>
-<span><span class="va">src</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/paste.html" class="external-link">paste0</a></span><span class="op">(</span><span class="st">'ZARR:"'</span>, <span class="va">store</span>, <span class="st">'/utm11":/embeddings'</span><span class="op">)</span></span></code></pre></div>
+<span><span class="va">store</span> <span class="op">&lt;-</span> <span class="st">"https://data.source.coop/olmoearth/olmoearth-v1-3-embeddings/embeddings.zarr"</span></span></code></pre></div>
 <p>Each zone is in its own UTM CRS (Jasper is in zone 11,
-<code>EPSG:32611</code>), on a 10 m grid anchored at the zone origin. A
-grid in that CRS at 10 m with edges on multiples of 10 m is a plain
-window of the array, so the read needs no resampling. Edges on multiples
-of 2560 m also line up with the store’s 256-pixel chunks, so every chunk
-fetched is used in full.</p>
+<code>EPSG:32611</code>), on a 10 m grid from easting 0 and northing
+9,502,720. A grid in that CRS at 10 m with edges on multiples of 10 m is
+a plain window of zone 11’s array, so its read needs no resampling.
+Edges on multiples of 2560 m also line up with the store’s 256-pixel
+chunks, so every chunk fetched is used in full.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">grid</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/grid_spec.html">grid_spec</a></span><span class="op">(</span><span class="st">"EPSG:32611"</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">417280</span>, <span class="fl">5834240</span>, <span class="fl">445440</span>, <span class="fl">5870080</span><span class="op">)</span>, res <span class="op">=</span> <span class="fl">10</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/dim.html" class="external-link">dim</a></span><span class="op">(</span><span class="va">grid</span><span class="op">)</span></span>
 <span><span class="co">#&gt;    y    x </span></span>
 <span><span class="co">#&gt; 3584 2816</span></span></code></pre></div>
-<p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> reads the array’s dimension tags (GDAL
-flattens <code>(time, band)</code> into classic bands and labels each
-one) and lays the array out as dataset bands by year.
+<p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> keeps the arrays whose extent overlaps
+the grid, and its message names them. Each zone’s array reaches well
+past its zone (983 km east to west), so the grid overlaps zones 10 and
+12 as well as 11. Zone 11 is in the grid’s CRS, so it is read last:
+wherever it holds data its own pixels are read, and zones 10 and 12 show
+only where it holds none. GDAL opens the three arrays, and garry checks
+that GDAL places each one where the store declares. Building the dataset
+from the store took 18 requests to source.coop, against 8 for zone 11’s
+array named by hand,
+<code>ZARR:"&lt;store&gt;/utm11":/embeddings</code>: at about 0.75 s a
+request, 14 to 18 s against 7 to 12 s. A second build in the session
+made no request. Naming the array also reads zone 11 alone, without
+warping zones 10 and 12 into every window.</p>
+<p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> then reads the arrays’ dimension tags
+(GDAL flattens <code>(time, band)</code> into classic bands and labels
+each one) and lays them out as dataset bands by year.
 <code>bands = 1:64</code> keeps the 64-dimension embedding, which halves
 the bytes read.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">oe</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">src</span>, <span class="va">grid</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="va">oe</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">store</span>, <span class="va">grid</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span></span>
 <span><span class="va">oe</span></span>
 <span><span class="co">#&gt; ── &lt;LazyDataset&gt; ───────────────────────────────────────────────────────────────</span></span>
 <span><span class="co">#&gt;   bands  b1 b2 b3 b4 b5 b6 b7 b8 ... (+56)</span></span>
@@ -137,7 +151,8 @@ the bytes read.</p>
 <span><span class="co">#&gt;   ℹ plan_draw(x) to see the pipeline</span></span>
 <span><span class="fu"><a href="../reference/time_labels.html">time_labels</a></span><span class="op">(</span><span class="va">oe</span><span class="op">)</span></span>
 <span><span class="co">#&gt; [1] "2017" "2018" "2019" "2020" "2021" "2022" "2023" "2024" "2025"</span></span></code></pre></div>
-<p>Nothing has been fetched yet beyond the store’s metadata.</p>
+<p>Nothing has been fetched yet beyond the store’s metadata and each
+zone’s year labels.</p>
 </div>
 <div class="section level2">
 <h2 id="read-two-years">Read two years<a class="anchor" aria-label="anchor" href="#read-two-years"></a>
@@ -216,8 +231,9 @@ larger.</p>
 <p>The cosine distance <code>1 - (a . b) / (|a| |b|)</code> between a
 pixel’s 2023 and 2025 vectors measures how much its embedding changed,
 whatever the cause. The vectors are not unit length, so the norms stay
-in the formula. Each term is a band reduction, and garry fuses the whole
-expression into one kernel over the two cubes.</p>
+in the formula. Each term is a band reduction, and
+<code><a href="../reference/collect.html">collect()</a></code> computes them all in one run over the two
+cubes.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">a</span> <span class="op">&lt;-</span> <span class="va">cubes</span><span class="op">$</span><span class="va">y2023</span></span>
 <span><span class="va">b</span> <span class="op">&lt;-</span> <span class="va">cubes</span><span class="op">$</span><span class="va">y2025</span></span>
@@ -251,16 +267,17 @@ of the distribution.</p>
 <h2 id="across-zones">Across zones<a class="anchor" aria-label="anchor" href="#across-zones"></a>
 </h2>
 <p>Each zone is a separate array in its own CRS, so an area across a
-zone boundary reads from both. Give <code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> every
-zone’s array and a grid in any CRS: the warper reprojects each zone into
-every window and mosaics them, still reading all of a year’s bands in
-one task. Greenwich, on the meridian between zones 30 and 31, on the
-British National Grid:</p>
+zone boundary reads from both. The store and a grid in any CRS are still
+all <code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> needs: the warper reprojects each zone
+it finds into every window and mosaics them, still reading all of a
+year’s bands in one task. Greenwich, on the meridian between zones 30
+and 31, on the British National Grid:</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">zones</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/paste.html" class="external-link">paste0</a></span><span class="op">(</span><span class="st">'ZARR:"'</span>, <span class="va">store</span>, <span class="st">"/utm"</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">30</span>, <span class="fl">31</span><span class="op">)</span>, <span class="st">'":/embeddings'</span><span class="op">)</span></span>
-<span><span class="va">london</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/grid_spec.html">grid_spec</a></span><span class="op">(</span><span class="st">"EPSG:27700"</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">528900</span>, <span class="fl">172400</span>, <span class="fl">548900</span>, <span class="fl">182400</span><span class="op">)</span>, res <span class="op">=</span> <span class="fl">10</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">greenwich</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">zones</span>, <span class="va">london</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<code class="sourceCode R"><span><span class="va">london</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/grid_spec.html">grid_spec</a></span><span class="op">(</span><span class="st">"EPSG:27700"</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">528900</span>, <span class="fl">172400</span>, <span class="fl">548900</span>, <span class="fl">182400</span><span class="op">)</span>, res <span class="op">=</span> <span class="fl">10</span><span class="op">)</span></span>
+<span><span class="va">zones</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">store</span>, <span class="va">london</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span></span></code></pre></div>
+<p>The grid overlaps zones 30 and 31 only, and the message says so.</p>
+<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">greenwich</span> <span class="op">&lt;-</span> <span class="va">zones</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/time_sel.html">time_sel</a></span><span class="op">(</span><span class="st">"2025"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/lazy_map.html">lazy_map</a></span><span class="op">(</span>fn <span class="op">=</span> <span class="va">dequantize_olmoearth</span>, dtype <span class="op">=</span> <span class="st">"f32"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -268,7 +285,7 @@ British National Grid:</p>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">1</span><span class="op">)</span></span>
 <span><span class="va">pca_london</span> <span class="op">&lt;-</span> <span class="fu">fit_pca</span><span class="op">(</span><span class="va">greenwich</span>, <span class="va">london</span><span class="op">)</span></span></code></pre></div>
-<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="fu">false_colour</span><span class="op">(</span><span class="va">greenwich</span>, <span class="va">pca_london</span><span class="op">)</span>, main <span class="op">=</span> <span class="st">"Greenwich, 2025"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/graphics/lines.html" class="external-link">lines</a></span><span class="op">(</span><span class="fu">gdalraster</span><span class="fu">::</span><span class="fu"><a href="https://firelab.github.io/gdalraster/reference/transform_xy.html" class="external-link">transform_xy</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">cbind</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq</a></span><span class="op">(</span><span class="fl">51.4</span>, <span class="fl">51.6</span>, by <span class="op">=</span> <span class="fl">0.01</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>                               <span class="st">"EPSG:4326"</span>, <span class="st">"EPSG:27700"</span><span class="op">)</span>,</span>
@@ -277,19 +294,21 @@ British National Grid:</p>
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/zones-map-1.png" alt="plot of chunk zones-map"><div class="figcaption">plot of chunk zones-map</div>
 </div>
 <p>The dashed line is the meridian. Each zone carries embeddings a
-little past its own meridian, so near the boundary both zones hold a
-vector for the same pixel, and the later zone in <code>zones</code>
-wins. How far apart are the two? Read each zone alone and take the
+little past its own edge, so near the boundary both zones hold a vector
+for the same pixel. Neither zone is in the grid’s CRS, so they keep
+their order in the store, and zone 31, read last, wins. How far apart
+are the two? Give each zone’s array to read it alone, and take the
 cosine distance where both have data:</p>
-<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb15"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">zone</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">z</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">z</span>, <span class="va">london</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="va">src</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/paste.html" class="external-link">paste0</a></span><span class="op">(</span><span class="st">'ZARR:"'</span>, <span class="va">store</span>, <span class="st">"/utm"</span>, <span class="va">z</span>, <span class="st">'":/embeddings'</span><span class="op">)</span></span>
+<span>  <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">src</span>, <span class="va">london</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>    <span class="fu"><a href="../reference/time_sel.html">time_sel</a></span><span class="op">(</span><span class="st">"2025"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>    <span class="fu"><a href="../reference/lazy_map.html">lazy_map</a></span><span class="op">(</span>fn <span class="op">=</span> <span class="va">dequantize_olmoearth</span>, dtype <span class="op">=</span> <span class="st">"f32"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>    <span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="op">)</span></span>
 <span><span class="op">}</span></span>
-<span><span class="va">z30</span> <span class="op">&lt;-</span> <span class="fu">zone</span><span class="op">(</span><span class="va">zones</span><span class="op">[</span><span class="fl">1</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="va">z31</span> <span class="op">&lt;-</span> <span class="fu">zone</span><span class="op">(</span><span class="va">zones</span><span class="op">[</span><span class="fl">2</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">z30</span> <span class="op">&lt;-</span> <span class="fu">zone</span><span class="op">(</span><span class="fl">30</span><span class="op">)</span></span>
+<span><span class="va">z31</span> <span class="op">&lt;-</span> <span class="fu">zone</span><span class="op">(</span><span class="fl">31</span><span class="op">)</span></span>
 <span><span class="va">gap</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="fl">1</span> <span class="op">-</span> <span class="fu"><a href="../reference/reduce_over.html">reduce_over</a></span><span class="op">(</span><span class="va">z30</span> <span class="op">*</span> <span class="va">z31</span>, <span class="st">"sum"</span>, <span class="st">"band"</span><span class="op">)</span> <span class="op">/</span></span>
 <span>  <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">sqrt</a></span><span class="op">(</span><span class="fu"><a href="../reference/reduce_over.html">reduce_over</a></span><span class="op">(</span><span class="va">z30</span> <span class="op">*</span> <span class="va">z30</span>, <span class="st">"sum"</span>, <span class="st">"band"</span><span class="op">)</span> <span class="op">*</span></span>
 <span>       <span class="fu"><a href="../reference/reduce_over.html">reduce_over</a></span><span class="op">(</span><span class="va">z31</span> <span class="op">*</span> <span class="va">z31</span>, <span class="st">"sum"</span>, <span class="st">"band"</span><span class="op">)</span><span class="op">)</span><span class="op">)</span></span>

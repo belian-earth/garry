@@ -34,7 +34,9 @@ scan_over(x, fn, over = "t", direction = "forward", dtype = NULL, bands = NULL)
 
 - dtype:
 
-  Optional output dtype override (default: input dtype).
+  Optional output dtype. Left out, it is the dtype `fn` returns, found
+  by tracing `fn` when the raster is built; given, `fn` is not traced
+  then.
 
 - bands:
 

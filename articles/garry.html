@@ -56,7 +56,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul>
 </div>
 
@@ -87,13 +87,12 @@ splits it into chunks, fuses adjacent operations into single compiled
 kernels (via <a href="https://github.com/r-xla/anvl" class="external-link">anvl</a>, which
 lowers to XLA), and executes them with bounded memory. GDAL handles all
 reading, warping, and writing; the compute vocabulary is a small closed
-set of primitives (map, focal, reduce, scan, warp, stack) that compose
-freely.</p>
+set of primitives (map, focal, reduce, scan, patch, warp, stack) that
+compose freely.</p>
 <p>This vignette walks the core loop on a single elevation tile: open
 lazily, build a pipeline, inspect the graph, execute. The tile is Mount
 Hood, Oregon (LANDFIRE elevation, 30 m, UTM zone 10N), read straight
-from GitHub over HTTP; nothing is downloaded until execution touches
-it.</p>
+from GitHub over HTTP.</p>
 <div class="section level2">
 <h2 id="open-a-raster-lazily">Open a raster lazily<a class="anchor" aria-label="anchor" href="#open-a-raster-lazily"></a>
 </h2>
@@ -110,10 +109,12 @@ it.</p>
 <span><span class="co">#&gt;   crs    EPSG:26910</span></span>
 <span><span class="co">#&gt;   graph  1 nodes • lazy</span></span>
 <span><span class="co">#&gt;   ℹ plan_draw(x) to see the pipeline</span></span></code></pre></div>
-<p>Opening reads only metadata: one HTTP request for the file header,
-zero pixels. The <code>LazyRaster</code> knows its grid (extent,
-resolution, CRS, dtype) and carries a one-node graph. Accessors read the
-grid without touching the file again:</p>
+<p>Opening reads the file’s metadata. garry’s remote open asks for the
+first 4 MB in one ranged request, so this 1.6 MB tile arrives whole;
+from a large file the same request takes the header and the blocks after
+it. The <code>LazyRaster</code> knows its grid (extent, resolution, CRS,
+dtype) and carries a one-node graph. Accessors read the grid without
+touching the file again:</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/grid-accessors.html">grid_res</a></span><span class="op">(</span><span class="va">el</span><span class="op">)</span></span>
 <span><span class="co">#&gt;  x  y </span></span>
@@ -122,12 +123,17 @@ grid without touching the file again:</p>
 <span><span class="co">#&gt;      xmin      ymin      xmax      ymax </span></span>
 <span><span class="co">#&gt;  587049.6 5013342.4  617439.6 5037312.4</span></span></code></pre></div>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="va">el</span>, main <span class="op">=</span> <span class="st">"Mount Hood elevation (m)"</span><span class="op">)</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="va">el</span>, main <span class="op">=</span> <span class="st">"Mount Hood elevation (m)"</span><span class="op">)</span></span>
+<span><span class="co">#&gt; preview: reading all 809,387 cells at full resolution.</span></span>
+<span><span class="co">#&gt; ℹ Sources pinned to a grid (RESX and RESY) read their overviews instead.</span></span></code></pre></div>
 <div class="float">
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/hood-preview-1.png" alt="plot of chunk hood-preview"><div class="figcaption">plot of chunk hood-preview</div>
 </div>
-<p><code><a href="../reference/preview.html">preview()</a></code> is the cheap look: it renders a decimated
-version sized to your device, not the full raster.</p>
+<p><code><a href="../reference/preview.html">preview()</a></code> is the quick look: it plots a copy decimated
+to your device. This tile sits on its own grid, so
+<code><a href="../reference/preview.html">preview()</a></code> reads all of it first and says so; a STAC
+dataset, whose mosaic is pinned to the analysis grid, is re-planned at
+preview resolution and reads the sources’ overviews.</p>
 </div>
 <div class="section level2">
 <h2 id="build-a-computation">Build a computation<a class="anchor" aria-label="anchor" href="#build-a-computation"></a>
@@ -187,9 +193,10 @@ You never choose; garry does.</p>
 <span><span class="co">#&gt; ◫ focal  r=1</span></span>
 <span><span class="co">#&gt; └─ ◈ source  1013×799 f32</span></span></code></pre></div>
 <p>That is the whole mental model: <code>hs</code> <em>is</em> this
-pipeline, not an array. When it executes, the planner will fuse the
-focal into its source read, compile its body once, and run it chunk by
-chunk.</p>
+pipeline, not an array. When it executes, the planner reads the tile
+with a one-pixel halo, compiles the focal body once, and runs it chunk
+by chunk; with daemon pools, it can also run the focal on the read
+daemons, fused onto the read.</p>
 </div>
 <div class="section level2">
 <h2 id="grids-are-strict">Grids are strict<a class="anchor" aria-label="anchor" href="#grids-are-strict"></a>
@@ -209,8 +216,8 @@ undisclosed resampling step.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">el</span> <span class="op">-</span> <span class="va">el_mean</span></span>
 <span><span class="co">#&gt; Error in `.lazy_binop()`:</span></span>
-<span><span class="co">#&gt; ! grids differ (resolution differs: 30 x 30 vs 270 x 270); use `align_to(a,</span></span>
-<span><span class="co">#&gt;   b, to = ...)` first</span></span></code></pre></div>
+<span><span class="co">#&gt; ! grids differ (resolution differs: 30 x 30 vs 270 x 270); put one</span></span>
+<span><span class="co">#&gt;   operand on the other's grid with `align_to(b, to = a)` first</span></span></code></pre></div>
 <p>State the resample explicitly and it composes like anything else.
 Aligning the same source twice, once point-sampled and once aggregated,
 and differencing on the shared grid gives a local relief model:
@@ -248,9 +255,11 @@ georeferenced:</p>
 <div class="float">
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/hood-collect-1.png" alt="plot of chunk hood-collect"><div class="figcaption">plot of chunk hood-collect</div>
 </div>
-<p>Write straight to a GeoTIFF instead with <code><a href="../reference/write_tif.html">write_tif()</a></code>;
-chunks stream to disk as they finish, so the full result never needs to
-fit in memory:</p>
+<p>Write straight to a GeoTIFF instead with <code><a href="../reference/write_tif.html">write_tif()</a></code>.
+With daemon pools running, this pipeline’s chunks stream to the file as
+they finish, so the full result never needs to fit in memory; in a
+single process, as here, the result is computed first and then
+written:</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">tif</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/file.path.html" class="external-link">file.path</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/tempfile.html" class="external-link">tempdir</a></span><span class="op">(</span><span class="op">)</span>, <span class="st">"hood-hillshade.tif"</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/write_tif.html">write_tif</a></span><span class="op">(</span><span class="va">hs</span>, <span class="va">tif</span><span class="op">)</span></span>

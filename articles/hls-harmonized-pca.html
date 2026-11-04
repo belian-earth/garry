@@ -56,7 +56,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry"><span class="fa fa-github"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/belian-earth/garry" aria-label="GitHub"><span class="fa fa-github"></span></a></li>
       </ul>
 </div>
 
@@ -177,8 +177,8 @@ since interpolating packed QA bits would corrupt the flag values.</p>
 <h2 id="pca-over-the-band-axis">PCA over the band axis<a class="anchor" aria-label="anchor" href="#pca-over-the-band-axis"></a>
 </h2>
 <p>A per-pixel PCA collapses the spectral vector to a few components.
-Fit it in plain R on the materialized composite – fitting a model in R
-is perfectly reasonable; not everything belongs in the lazy graph.</p>
+Fit it in plain R on the collected composite: fitting a model in R is
+perfectly reasonable; not everything belongs in the lazy graph.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">cube</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/stack_bands.html">stack_bands</a></span><span class="op">(</span><span class="va">comp</span><span class="op">)</span>                    <span class="co"># LazyRaster (band, y, x)</span></span>
 <span><span class="va">arr</span>  <span class="op">&lt;-</span> <span class="fu"><a href="../reference/collect.html">collect</a></span><span class="op">(</span><span class="va">cube</span><span class="op">)</span>                        <span class="co"># (y, x, band)</span></span>
@@ -191,7 +191,7 @@ is perfectly reasonable; not everything belongs in the lazy graph.</p>
 <span><span class="co">#&gt; Proportion of Variance 0.790 0.119 0.063</span></span>
 <span><span class="co">#&gt; Cumulative Proportion  0.790 0.908 0.971</span></span></code></pre></div>
 <p>The projection onto each principal component is a <strong>linear
-combination of the bands</strong> – exactly
+combination of the bands</strong>, which is exactly
 <code>reduce_over(over = "band")</code>. <code><a href="../reference/band_project.html">band_project()</a></code>
 builds the reducer (centre, then weight by the loading); stacking the
 first three gives a 3-band image. Because it is lazy, the same
@@ -212,7 +212,7 @@ holding the whole cube in memory.</p>
 <p>The same <code><a href="../reference/band_project.html">band_project()</a></code> reducer is the basis for any
 linear-model <code>predict</code> (regression, logistic, unmixing): fit
 in R, pass the coefficients as <code>weights</code>. Non-linear models
-(random forests, boosting) don’t trace to the compute backend – for
+(random forests, boosting) don’t trace to the compute backend; for
 those, <code><a href="../reference/collect.html">collect()</a></code> the composite and predict in R.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

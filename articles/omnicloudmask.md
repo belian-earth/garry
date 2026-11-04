@@ -97,29 +97,7 @@ kernel.
 
 m <- ocm_model()
 m
-#> $fn
-#> function (x) 
-#> .ocm_infer(x, weights)
-#> <bytecode: 0x5824aca43350>
-#> <environment: 0x5824aca46cb0>
-#> 
-#> $kernel_id
-#> [1] "ocm-6709c94dbdec4de35b51a4a36ccd4e6a-regnety+edgenext"
-#> 
-#> $halo
-#> [1] 128
-#> 
-#> $bytes_px
-#> [1] 700
-#> 
-#> $flops_px
-#> [1] 80000
-#> 
-#> $models
-#> [1] "regnety"  "edgenext"
-#> 
-#> attr(,"class")
-#> [1] "garry_ocm_model"
+#> <ocm_model> regnety+edgenext  halo=128  kernel=ocm-8fd7f55dafbca78706d9d329f398a318-regnety+edgenext
 ```
 
 Pick one properly cloudy date and put the scene, its SCL band, and the
@@ -250,5 +228,16 @@ stages over locally materialised cubes: the CNN is subject to the same
 planning, chunking, halo, and distribution as any focal or reduction,
 and on a time series the per-scene inferences pipeline across the daemon
 pool. Second, for composites the natural next step is the multivariate
-route: `reduce_over(cube, geomedian(), over = "t")` on the OCM-masked
-stack gives spectra no per-band median can (see the composite vignette).
+route: stack the masked bands into a `(band, t, y, x)` cube and reduce
+it over time with
+[`geomedian()`](https://belian-earth.github.io/garry/reference/geomedian.md),
+which gives spectra no per-band median can (see the composite vignette):
+
+``` r
+
+cube <- lazy_stack(
+  list(B02 = ocm_masked[["B02"]], B03 = ocm_masked[["B03"]],
+       B04 = ocm_masked[["B04"]], B08 = ocm_masked[["B08"]]),
+  along = "band")
+gmed <- reduce_over(cube, geomedian(), over = "t")
+```

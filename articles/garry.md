@@ -13,12 +13,12 @@ adjacent operations into single compiled kernels (via
 [anvl](https://github.com/r-xla/anvl), which lowers to XLA), and
 executes them with bounded memory. GDAL handles all reading, warping,
 and writing; the compute vocabulary is a small closed set of primitives
-(map, focal, reduce, scan, warp, stack) that compose freely.
+(map, focal, reduce, scan, patch, warp, stack) that compose freely.
 
 This vignette walks the core loop on a single elevation tile: open
 lazily, build a pipeline, inspect the graph, execute. The tile is Mount
 Hood, Oregon (LANDFIRE elevation, 30 m, UTM zone 10N), read straight
-from GitHub over HTTP; nothing is downloaded until execution touches it.
+from GitHub over HTTP.
 
 ## Open a raster lazily
 
@@ -38,10 +38,12 @@ el
 #>   ℹ plan_draw(x) to see the pipeline
 ```
 
-Opening reads only metadata: one HTTP request for the file header, zero
-pixels. The `LazyRaster` knows its grid (extent, resolution, CRS, dtype)
-and carries a one-node graph. Accessors read the grid without touching
-the file again:
+Opening reads the file’s metadata. garry’s remote open asks for the
+first 4 MB in one ranged request, so this 1.6 MB tile arrives whole;
+from a large file the same request takes the header and the blocks after
+it. The `LazyRaster` knows its grid (extent, resolution, CRS, dtype) and
+carries a one-node graph. Accessors read the grid without touching the
+file again:
 
 ``` r
 
@@ -56,6 +58,8 @@ grid_bbox(el)
 ``` r
 
 preview(el, main = "Mount Hood elevation (m)")
+#> preview: reading all 809,387 cells at full resolution.
+#> ℹ Sources pinned to a grid (RESX and RESY) read their overviews instead.
 ```
 
 ![plot of chunk
@@ -64,8 +68,12 @@ hood-preview](https://raw.githubusercontent.com/belian-earth/garry/main/vignette
 plot of chunk hood-preview
 
 [`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
-is the cheap look: it renders a decimated version sized to your device,
-not the full raster.
+is the quick look: it plots a copy decimated to your device. This tile
+sits on its own grid, so
+[`preview()`](https://belian-earth.github.io/garry/reference/preview.md)
+reads all of it first and says so; a STAC dataset, whose mosaic is
+pinned to the analysis grid, is re-planned at preview resolution and
+reads the sources’ overviews.
 
 ## Build a computation
 
@@ -137,8 +145,10 @@ plan_draw(hs)
 ```
 
 That is the whole mental model: `hs` *is* this pipeline, not an array.
-When it executes, the planner will fuse the focal into its source read,
-compile its body once, and run it chunk by chunk.
+When it executes, the planner reads the tile with a one-pixel halo,
+compiles the focal body once, and runs it chunk by chunk; with daemon
+pools, it can also run the focal on the read daemons, fused onto the
+read.
 
 ## Grids are strict
 
@@ -163,8 +173,8 @@ undisclosed resampling step.
 
 el - el_mean
 #> Error in `.lazy_binop()`:
-#> ! grids differ (resolution differs: 30 x 30 vs 270 x 270); use `align_to(a,
-#>   b, to = ...)` first
+#> ! grids differ (resolution differs: 30 x 30 vs 270 x 270); put one
+#>   operand on the other's grid with `align_to(b, to = a)` first
 ```
 
 State the resample explicitly and it composes like anything else.
@@ -218,9 +228,10 @@ hood-collect](https://raw.githubusercontent.com/belian-earth/garry/main/vignette
 plot of chunk hood-collect
 
 Write straight to a GeoTIFF instead with
-[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md);
-chunks stream to disk as they finish, so the full result never needs to
-fit in memory:
+[`write_tif()`](https://belian-earth.github.io/garry/reference/write_tif.md).
+With daemon pools running, this pipeline’s chunks stream to the file as
+they finish, so the full result never needs to fit in memory; in a
+single process, as here, the result is computed first and then written:
 
 ``` r
 

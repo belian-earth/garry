@@ -42,8 +42,11 @@ Written in the `g_*` vocabulary, so applying it with
 after
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 fuses the decode onto the read, on the device rather than as a separate
-decode pass. A nodata code (`-128` in both products) must reach the
-decode as NaN:
+decode pass. A read that resamples (`resampling = "average"`, or
+[`coarsen()`](https://belian-earth.github.io/garry/reference/coarsen.md))
+must decode first: pass the function as `lazy_dataset(decode = )`, which
+decodes each code before any resampling. A nodata code (`-128` in both
+products) must reach the decode as NaN:
 [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
 does that whenever the source declares it (a GeoTIFF nodata value, a
 Zarr fill value), and NaN passes through the decode unchanged.

@@ -18,7 +18,7 @@ qa_bits(bits)
 
 - bits:
 
-  Integer bit positions (0-based) that mark a pixel as bad.
+  Whole bit positions, 0 to 30, that mark a pixel as bad.
 
 ## Value
 
