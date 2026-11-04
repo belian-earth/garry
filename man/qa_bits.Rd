@@ -7,7 +7,7 @@
 qa_bits(bits)
 }
 \arguments{
-\item{bits}{Integer bit positions (0-based) that mark a pixel as bad.}
+\item{bits}{Whole bit positions, 0 to 30, that mark a pixel as bad.}
 }
 \value{
 A predicate function of one array, returning a 0/1 mask:

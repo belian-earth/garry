@@ -50,3 +50,4 @@ one is an error. A \code{.tif} destination writes a tiled GTiff; a
 \code{VRTRawRasterBand} VRT: the intermediate format whose reads bypass
 GDAL's tile machinery; see \code{\link[=stage_raw_cube]{stage_raw_cube()}}).
 }
+\keyword{internal}

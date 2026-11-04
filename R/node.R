@@ -149,9 +149,10 @@ SourceNode <- S7::new_class(
   }
 )
 
-#' Elementwise map. `fn` is an R function over scalars/arrays; it will be
-#' composed with neighbouring fusable nodes and wrapped in `anvl::jit()`
-#' at plan time. Created by [lazy_map()].
+#' Elementwise map. `fn` is an R function over arrays; the planner composes it
+#' with neighbouring fusable nodes into one stage kernel, which compiles where
+#' it first runs (`anvl::jit()` in this process, the stage's StableHLO program
+#' on a daemon). Created by [lazy_map()].
 #'
 #' @param id Integer node id (assigned by `graph_add()`).
 #' @param parents Integer ids of parent nodes (may be empty).

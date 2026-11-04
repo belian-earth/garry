@@ -16,14 +16,18 @@ lazy_dataset(
   offset = NULL,
   bands = NULL,
   decode = NULL,
-  time = NULL
+  time = NULL,
+  array = NULL
 )
 }
 \arguments{
 \item{sources}{A STAC \code{doc_items} (from \code{\link[=stac_query]{stac_query()}}, optionally
 filtered), a \code{stac_sources()} table, or a character path / vector of
-paths to (multi-band) raster file(s) -- local, \verb{/vsicurl/}, or bare
-\verb{http(s)://} (prefixed automatically).}
+paths to (multi-band) raster files (local, \verb{/vsicurl/}, or bare
+\verb{http(s)://}, prefixed automatically), or \verb{ZARR:"<store>":/<array>}
+strings, whose bare \verb{https://} store is prefixed the same way. Or the
+root of a Zarr store, whose arrays that overlap \code{grid} are read (see
+the description).}
 
 \item{grid}{Target \code{\link[=GridSpec]{GridSpec()}} for every band. Required for the table
 form; \code{NULL} (the default) keeps the file form on its native grid.}
@@ -32,10 +36,13 @@ form; \code{NULL} (the default) keeps the file form on its native grid.}
 band names to select (file form, when the file carries band
 descriptions).}
 
-\item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}); loaded
-alongside the value assets and used as the default \code{from} in \code{\link[=apply_mask]{apply_mask()}}.}
+\item{mask_asset}{Optional QA/mask asset (e.g. \code{"Fmask"}, \code{"SCL"}), or in the
+file form the name of one selected band; loaded alongside the value assets
+and used as the default \code{from} in \code{\link[=apply_mask]{apply_mask()}}.}
 
-\item{granularity}{Time-slice granularity (see \code{\link[=stac_time_slices]{stac_time_slices()}}).}
+\item{granularity}{Table form: time-slice granularity (see
+\code{\link[=stac_time_slices]{stac_time_slices()}}). The file form refuses it: a file's slices come
+from the file; select them with \code{time}.}
 
 \item{nodata}{Nodata handling: \code{NULL} (per-band file metadata), a scalar
 (applied to every asset), or a named numeric keyed by dataset band name
@@ -92,10 +99,12 @@ works on the decoded values. With \code{resampling = "average"} onto a
 grid 3x coarser, each target cell is the mean of the valid decoded
 values of its 3 x 3 source cells, the order a nonlinear code needs,
 and a cell whose source cells are all nodata stays NaN. Values are
-Float32. Reads go through a lookup-table VRT; the source's own grid,
-a window of its pixels, or an aligned coarser grid read with
-\code{"near"} or \code{"average"} read the codes and decode them directly,
-2-3x faster. \code{NULL} (the default) reads the codes as they are.}
+Float32. A \code{mask_asset} band is read as stored, not decoded, and every
+band and source must declare one nodata code. Reads go through a
+lookup-table VRT; the source's own grid, a window of its pixels, or an
+aligned coarser grid read with \code{"near"} or \code{"average"} read the codes
+and decode them directly, about five times faster. \code{NULL} (the
+default) reads the codes as they are.}
 
 \item{time}{File form, N-D array: the time slices to build, selected
 by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or positions).
@@ -103,6 +112,12 @@ by label as \code{\link[=time_sel]{time_sel()}} selects them (\code{"2024"}, or 
 \code{time_sel(lazy_dataset(src, grid), "2024")} without building the
 other slices' bands first, which matters for long time series of
 many bands. \code{NULL} (the default) builds every slice.}
+
+\item{array}{With a Zarr store's root as \code{sources} (see the
+description): the name of the array to read in each group, the last
+part of its path, such as \code{"embeddings"}. Needed only when the
+store's arrays with a CRS and extent carry more than one name; \code{NULL}
+(the default) takes the one name they share.}
 }
 \value{
 A \code{LazyDataset}.
@@ -122,7 +137,8 @@ file carries no band descriptions; \code{bands} selects and renames them.
 \item a character path, or a vector of tile paths (mosaicked where they
 share a CRS and one pixel lattice, kept apart and warped together
 otherwise; tiles off that lattice need \code{grid}, and tiles kept apart
-must agree on dtype and on any nodata they declare): one band
+must agree on dtype, on any nodata they declare and, with
+\code{scale = TRUE}, on their scale and offset): one band
 per file band, one time slice. This is the multi-band raster entry --
 geo-embedding stacks (e.g. Alpha Earth's 64-band tiles), Zarr via the
 GDAL driver, any multi-band file GDAL reads. Each band is its own
@@ -134,9 +150,10 @@ spanning bands), \code{\link[=collect]{collect()}} reads a window's bands in one
 instead, so the shared bytes are fetched once. Bands are named by
 their file band descriptions when present, else \verb{b<index>};
 \code{grid = NULL} stays on the file's native grid, and a supplied \code{grid}
-inserts an \code{\link[=align_to]{align_to()}} warp per band. Value transforms (e.g.
-\code{\link[=dequantize_aef]{dequantize_aef()}}) go downstream as \code{\link[=lazy_map]{lazy_map()}}s, which fuse onto
-the read at \code{\link[=collect]{collect()}}.
+inserts an \code{\link[=align_to]{align_to()}} warp per band. Value transforms go downstream as
+\code{\link[=lazy_map]{lazy_map()}}s, which fuse onto the read at \code{\link[=collect]{collect()}}; 8-bit codes that
+must be decoded before resampling, such as \code{\link[=dequantize_aef]{dequantize_aef()}}'s, go
+through \code{decode}.
 
 An N-D array with a time dimension, such as a \verb{(time, band, y, x)}
 Zarr array (\verb{ZARR:"<store>":/<array>}), becomes bands x time slices:
@@ -145,6 +162,34 @@ garry reads the dimension tags GDAL puts on each band to rebuild the
 axes. Bands take the band dimension's coordinate values as names
 (else \verb{b<index>}) and slices take the time coordinate's (e.g. years);
 pick slices with \code{\link[=time_sel]{time_sel()}}, or build only some with \code{time}.
+
+A Zarr store's root (a \code{.zarr} path or URL, or \code{ZARR:"<root>"}),
+given alone, reads the store's arrays that overlap \code{grid}, so a store
+of one array per UTM zone needs no connection string per zone. In a
+Zarr v3 store with consolidated metadata, one document, garry reads
+each array's CRS and extent where GDAL 3.13 does: the zarr-conventions
+\code{proj:code}, \code{proj:wkt2} or \code{proj:projjson}, and an affine, north-up
+\code{spatial:transform} over the array's own shape along
+\code{spatial:dimensions}, on the array or its parent group, registered by
+uuid in the \code{zarr_conventions} of the first of the two that has one
+(GDAL places arrays by them from 3.13 on). GDAL places the other
+arrays, and lists the arrays of a Zarr v2 store from its \code{.zmetadata}.
+A store without consolidated metadata reads as any other source: GDAL
+opens its root as one dataset. An array whose
+declared extent misses \code{grid} is not opened, so GDAL is not asked
+where it lies. garry reads the arrays that overlap \code{grid} as it reads
+a vector of them, and says which; GDAL must place each one where the
+store declares it, or the call aborts. In a vector of sources, a store
+of one array reads as that array, and a store of several must be given
+alone. Where two arrays hold data for a cell, the later one's value is
+read: arrays in the grid's CRS go last, so their own pixels win, and
+the others go first, in the order of their paths in the store. An
+array's extent can reach well past its data: each OlmoEarth zone's
+spans 983 km, so a grid at Jasper in zone 11 also reads zones 10 and
+12. Give the arrays as connection strings to read fewer. \code{array} names
+the array to read in each group when the arrays with a CRS and extent
+carry more than one name. Without \code{grid} the store must hold one such
+array.
 }
 
 All bands share one intermediate representation (IR) graph, so a mask

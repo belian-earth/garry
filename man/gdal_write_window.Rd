@@ -38,3 +38,4 @@ Invisibly, \code{NULL}.
 NaN cells are converted back to the sink \code{nodata} value when given;
 writing NaN into an integer band without a sentinel is an error.
 }
+\keyword{internal}

@@ -4,9 +4,12 @@ NULL
 #' Execute a lazy raster and stream it to a GeoTIFF.
 #'
 #' The file-writing sibling of [collect()]: executes the plan (same
-#' routes, same daemons) and streams the result to `path` chunk by chunk,
-#' so the full raster never sits in memory. Returns the path invisibly;
-#' `collect()` always returns the in-session array.
+#' routes, same daemons) and writes the result to `path`. On the
+#' distributed scheduler, chunks stream to the file as they land, so the
+#' full raster never sits in memory; the single-process executor and the
+#' direct composite routes hold the result, then write it. A plan that only
+#' reads writes window by window on either route. Returns the path
+#' invisibly; `collect()` always returns the in-session array.
 #'
 #' `dtype` with `scale`/`offset` quantizes at the sink boundary: values
 #' are stored as `round((v - offset) / scale)` (round half to even) and
@@ -52,12 +55,13 @@ NULL
 #'   in `path`).
 #' @param path Destination path. For a named-list input: a directory
 #'   (files named `<sink>.tif`) or a named character vector keyed by sink.
-#' @param dtype Output dtype override (e.g. `"i16"`, `"u8"`); default
-#'   keeps the plan's dtype (usually `"f32"`). Values past an integer
+#' @param dtype Output dtype override, one of `"u8"`, `"i8"`, `"u16"`, `"i16"`,
+#'   `"u32"`, `"i32"`, `"f32"` or `"f64"`; default keeps the plan's dtype
+#'   (usually `"f32"`). Values past an integer
 #'   dtype's range saturate at its ends, so writing arithmetic on `u8` data,
 #'   which declares `i16`, back to Byte means asking for `dtype = "u8"`.
 #' @param scale,offset Quantization affine (see Details). Requires an
-#'   integer `dtype`; `offset` defaults to 0.
+#'   integer `dtype` other than `"u32"`; `offset` defaults to 0.
 #' @param nodata Sentinel written to the file and used for NaN demotion,
 #'   in stored (DN) units. It must fit the output dtype, `dtype` or else
 #'   the plan's own. Required when an integer output can contain NaN.

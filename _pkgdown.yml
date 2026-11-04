@@ -20,6 +20,7 @@ navbar:
     github:
       icon: fa-github
       href: https://github.com/belian-earth/garry
+      aria-label: GitHub
 reference:
 - title: Discovery & sources
   desc: |
@@ -73,7 +74,7 @@ reference:
   - kalman_llt
 - title: Geo-embeddings & model weights
   desc: |
-    Special operations for published geo-embedding products: the quantiser decodes (fused onto multi-band reads via lazy_map) and safetensors weight IO.
+    Decoders for published geo-embedding products, applied at the read with `lazy_dataset(decode = )` (before any resampling) or after it with `lazy_map()`, and safetensors weight IO.
   contents:
   - dequantize_signed_power
   - dequantize_aef
@@ -225,7 +226,7 @@ reference:
   - chunk_window_with_halo
 - title: internal
   desc: |
-    Exported only so mirai daemons can call them across the process boundary, or as low-level plumbing. Not public API; do not depend on these.
+    Internal functions documented for contributors. Not public API; do not depend on these.
   contents:
   - has_keyword("internal")
   - starts_with(".")

@@ -414,6 +414,9 @@ grid_spec <- function(crs, extent, dims = NULL, dtype = "f32", res = NULL) {
 
 #' Structural equality of two grids (geometry only, not dtype).
 #'
+#' Transforms and extents match to within 1e-9 in the CRS's units; dtype and
+#' axis labels are ignored.
+#'
 #' @param a,b `GridSpec` objects.
 #' @return `TRUE` or `FALSE`.
 #' @seealso [grid_diff()], which describes how two grids differ.

@@ -24,9 +24,10 @@ The loop op behind \code{\link[=scan_over]{scan_over()}} bodies (Kalman smoother
 filters, cumulative custom ops). At step \code{t}, \code{body(carry, x)} gets
 the current carry and the step-\code{t} slice of \code{xs} (taken along dim 1
 with that unit axis dropped) and returns \code{list(carry = , out = )};
-the \code{out}s are stacked into \verb{(length, ...)} buffers. \code{reverse = TRUE}
-runs \code{t = length..1}, still reading and writing at position \code{t} (what
-a backward smoothing pass needs, e.g. Rauch-Tung-Striebel). Traced
+the \code{out}s are stacked into \verb{(n, ...)} buffers, \code{n} being the size of
+dim 1 of \code{xs}. \code{reverse = TRUE} runs \code{t = n..1}, still reading and
+writing at position \code{t} (what a backward smoothing pass needs, e.g.
+Rauch-Tung-Striebel). Traced
 values route to \code{anvl::nv_scan}; plain R arrays take the pure-R
 reference implementation with identical semantics.
 }

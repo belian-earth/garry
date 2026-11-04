@@ -13,7 +13,8 @@ grid_equal(a, b)
 \code{TRUE} or \code{FALSE}.
 }
 \description{
-Structural equality of two grids (geometry only, not dtype).
+Transforms and extents match to within 1e-9 in the CRS's units; dtype and
+axis labels are ignored.
 }
 \seealso{
 \code{\link[=grid_diff]{grid_diff()}}, which describes how two grids differ.

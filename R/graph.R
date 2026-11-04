@@ -198,8 +198,8 @@ graph_ids <- function(graph) {
 #' @export
 graph_toposort <- function(graph) {
   ids <- graph_ids(graph)
-  indeg <- setNames(integer(length(ids)), as.character(ids))
-  children <- setNames(vector("list", length(ids)), as.character(ids))
+  indeg <- stats::setNames(integer(length(ids)), as.character(ids))
+  children <- stats::setNames(vector("list", length(ids)), as.character(ids))
 
   for (id in ids) {
     n <- graph_get(graph, id)
@@ -250,11 +250,12 @@ graph_replace <- function(graph, id, node) {
 
 #' Import the subgraph reachable from `root_id` in `src` into `dst`.
 #'
-#' Node ids are renumbered; a SourceNode identical in (path, band, nodata,
-#' grid, dtype) to one already in `dst` is deduplicated, and every node
-#' imported from `src` is memoised in `dst`, so importing the same
-#' foreign node again (or a descendant of an already-imported node)
-#' reuses the existing local copy instead of planting a second chain.
+#' Node ids are renumbered; a SourceNode identical in path, band, nodata,
+#' scale, offset, resampling, open options, grid and dtype to one already in
+#' `dst` is deduplicated, and every node imported from `src` is memoised in
+#' `dst`, so importing the same foreign node again (or a descendant of an
+#' already-imported node) reuses the existing local copy instead of planting
+#' a second chain.
 #' Without this a lazy raster built on one graph and referenced from
 #' several consumers on another gained one full read+compute chain per
 #' consumer (hutan's fused SI tail: 4-6 predicts per year, 2026-09-03).

@@ -284,7 +284,7 @@
   gd_strips = list(
     default = 0,
     tier = "tuning",
-    desc = "band-median strips in the fetch-ordered pipeline (0 = auto)",
+    desc = "strips per band reduction on the direct route (0 = auto)",
     check = .opt_num(min = 0, int = TRUE)
   ),
   # Per-daemon measured-memory correction (refresh_mem_budgets): when
@@ -403,8 +403,10 @@ garry_opt <- function(name) {
 #' The registry surface for the flat `garry.*` option namespace: one row
 #' per option with its tier (`user` day-one switches, `tuning`
 #' budgets/targets), package default, current session value and a
-#' one-line description. Values are
-#' validated against the same registry when execution starts.
+#' one-line description. Every `garry.*` option is checked against this
+#' registry when a run starts and at [garry_daemons()]: a name it does not
+#' hold (a typo or a retired option) or an invalid value aborts with a
+#' `garry_option_error`.
 #'
 #' @return A data.frame with columns `option`, `tier`, `default`,
 #'   `current`, `set` (is the session overriding the default?) and

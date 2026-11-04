@@ -17,5 +17,7 @@ g_upload(x, dtype, device = NULL)
 An \code{AnvlArray}.
 }
 \description{
-Unsigned dtypes upload via a wider signed carrier.
+\code{u8}, \code{u16} and \code{u32} upload as \code{i16}, \code{i32} and \code{i64}, and \code{u64} as \code{f64}.
+An integer buffer holds no NaN, so a missing value in \code{x} aborts with a
+\code{garry_nodata_error} when the upload dtype is an integer.
 }

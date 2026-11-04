@@ -30,9 +30,10 @@ S7::method(required_halo, PatchNode) <- function(node) node@radius
 #' Compute the output grid given this node and its parents' grids.
 #'
 #' Part of the extension API for authors of new node classes; not
-#' needed for ordinary use of the package. Default: first parent's grid
-#' (elementwise, focal, stack). Ops that change the grid override
-#' (Warp, Reduce).
+#' needed for ordinary use of the package. A source returns its own grid;
+#' map and focal nodes return their first parent's grid; a stack adds its
+#' axis, a scan may change the dtype, and warp, reduce and patch nodes change
+#' the grid.
 #'
 #' @param node An intermediate representation (IR) `Node`.
 #' @param ... Method arguments: `parent_grids`, a list of parent `GridSpec`s.

@@ -16,7 +16,8 @@ The node's output \code{GridSpec}.
 }
 \description{
 Part of the extension API for authors of new node classes; not
-needed for ordinary use of the package. Default: first parent's grid
-(elementwise, focal, stack). Ops that change the grid override
-(Warp, Reduce).
+needed for ordinary use of the package. A source returns its own grid;
+map and focal nodes return their first parent's grid; a stack adds its
+axis, a scan may change the dtype, and warp, reduce and patch nodes change
+the grid.
 }

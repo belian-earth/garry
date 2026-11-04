@@ -17,7 +17,7 @@ NULL
 #' @param plan_only Return the `Plan` instead of executing?
 #' @param distributed Execute across the [garry_daemons()] pools? Defaults to
 #'   [garry_daemons_set()], so `collect(x)` uses the pools when they are running
-#'   and runs single-threaded otherwise. Pass `TRUE`/`FALSE` to override. One
+#'   and runs in this R process otherwise. Pass `TRUE`/`FALSE` to override. One
 #'   plan gives the same cells either way; a reprojected STAC band warps by a
 #'   different route on each, so its cells can differ within GDAL's tolerance.
 #' @return With `plan_only = TRUE`, the `Plan`. Otherwise the materialised
@@ -507,15 +507,16 @@ as_terra <- function(x) {
 
 #' Which execution route did the last `collect()` take?
 #'
-#' A diagnostics helper. The distributed `collect()` picks its execution
-#' route automatically, and this reports the route the last call took,
+#' A diagnostics helper. garry picks the execution route automatically, and
+#' this reports the route the last [collect()], [write_tif()] or
+#' [materialise()] took,
 #' so pipelines can log it or assert a plan has not changed route.
 #' The values are:
 #'
 #' - `"composite_direct"`: the specialised masked-composite executor;
 #' - `"gd_reduce"`: the general reduce-decomposition executor;
 #' - `"scheduler"`: the general distributed scheduler;
-#' - `"single"`: the in-process single-threaded executor
+#' - `"single"`: the in-process executor
 #'   (`distributed = FALSE`);
 #' - `"read_only"`: a plan that only reads and stacks rasters, copied
 #'   from GDAL straight into the result in either mode.

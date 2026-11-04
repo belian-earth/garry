@@ -40,8 +40,8 @@ source, and not to a decoded one.}
 \item{grid}{Optional \code{GridSpec} declaring the source's grid and
 dtype, skipping metadata discovery (see Details).}
 
-\item{block_dim}{Optional native block size (x, y), only meaningful
-with \code{grid}; defaults to unconstrained.}
+\item{block_dim}{Optional block size (x, y) the chunks snap to, in place of
+the file's own. With \code{grid}, the default is unconstrained.}
 
 \item{resampling}{GDAL resampling used when a read reprojects or rescales
 this source onto the analysis grid. \code{"near"} (default) preserves exact

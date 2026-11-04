@@ -84,6 +84,25 @@ test_that("ocm_model validates and prints", {
   expect_match(m$kernel_id, "^ocm-")
 })
 
+test_that("an ocm_model prints its summary from a user's session", {
+  # A user's print() finds the method through base's S3 table; this test's
+  # environment inherits garry's namespace, so it calls from one that does not.
+  m <- structure(
+    list(
+      models = c("regnety", "edgenext"),
+      halo = 128L,
+      kernel_id = "ocm-abc-regnety+edgenext"
+    ),
+    class = "garry_ocm_model"
+  )
+  user <- new.env(parent = globalenv())
+  user$m <- m
+  expect_identical(
+    utils::capture.output(evalq(print(m), user)),
+    "<ocm_model> regnety+edgenext  halo=128  kernel=ocm-abc-regnety+edgenext"
+  )
+})
+
 test_that("the default OCM weights dir is the newest Python cache with v4 files", {
   home <- withr::local_tempdir()
   base <- file.path(home, ".local", "share", "omnicloudmask")

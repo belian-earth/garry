@@ -29,7 +29,10 @@ Convention's \code{geoemb:quantization} metadata names the two parameters.
 \details{
 Written in the \verb{g_*} vocabulary, so applying it with \code{\link[=lazy_map]{lazy_map()}} after
 \code{\link[=lazy_dataset]{lazy_dataset()}} fuses the decode onto the read, on the device rather
-than as a separate decode pass. A nodata code (\code{-128} in both
+than as a separate decode pass. A read that resamples
+(\code{resampling = "average"}, or \code{\link[=coarsen]{coarsen()}}) must decode first: pass the
+function as \code{lazy_dataset(decode = )}, which decodes each code before
+any resampling. A nodata code (\code{-128} in both
 products) must reach the decode as NaN: \code{lazy_dataset()} does that
 whenever the source declares it (a GeoTIFF nodata value, a Zarr fill
 value), and NaN passes through the decode unchanged.

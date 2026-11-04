@@ -15,7 +15,10 @@ NULL
 #'
 #' Written in the `g_*` vocabulary, so applying it with [lazy_map()] after
 #' [lazy_dataset()] fuses the decode onto the read, on the device rather
-#' than as a separate decode pass. A nodata code (`-128` in both
+#' than as a separate decode pass. A read that resamples
+#' (`resampling = "average"`, or [coarsen()]) must decode first: pass the
+#' function as `lazy_dataset(decode = )`, which decodes each code before
+#' any resampling. A nodata code (`-128` in both
 #' products) must reach the decode as NaN: `lazy_dataset()` does that
 #' whenever the source declares it (a GeoTIFF nodata value, a Zarr fill
 #' value), and NaN passes through the decode unchanged.
@@ -50,7 +53,10 @@ dequantize_signed_power <- function(x, power = 2, scale = 127.5) {
 #' preserving, mapping the code range `[-127, 127]` to ~`[-1, 1]`. Written in
 #' the `g_*` vocabulary, so applying it with [lazy_map()] after [lazy_dataset()]
 #' fuses the decode onto the read, on the device rather than as a separate
-#' decode pass. This is [dequantize_signed_power()] with its defaults.
+#' decode pass. A read that resamples (`resampling = "average"`, or
+#' [coarsen()]) must decode first: pass the function as
+#' `lazy_dataset(decode = )`, which decodes each code before any resampling.
+#' This is [dequantize_signed_power()] with its defaults.
 #'
 #' @param x Int8 codes (traced array or plain numeric).
 #' @return The dequantized values, same shape as `x`.

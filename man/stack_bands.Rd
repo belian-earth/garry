@@ -16,7 +16,10 @@ stack).
 \description{
 The dataset -> array operation (xarray's \code{Dataset.to_dataarray()}): stacks
 the bands along a new \code{band} axis. Needs one layer per band, so reduce time
-first (\code{reduce_over(ds, "median", "t")}). This is the hook for a multiband
-reducer that must see all bands jointly (e.g. geometric median); \code{collect()}
-calls it implicitly.
+first (\code{reduce_over(ds, "median", "t")}). This is the hook for a reducer
+over the band axis, such as \code{\link[=band_project]{band_project()}} or \code{\link[=mlp_project]{mlp_project()}} with
+\code{over = "band"}; \code{collect()} calls it implicitly. A reducer that needs
+bands and time together, such as \code{\link[=geomedian]{geomedian()}}, takes a \verb{(band, t, y, x)}
+cube from \code{lazy_stack(list(B02 = ds[["B02"]], ...), along = "band")}
+instead.
 }

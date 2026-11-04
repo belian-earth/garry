@@ -365,10 +365,10 @@ NULL
 #' kind: a compute stage is classified by the IR nodes fused into it
 #' (`focal`, `scan`, `patch`, `stack`, `map`, most informative first,
 #' the same vocabulary as [plan_draw()]), and reduce stages carry their
-#' reducer (`reduce\u00b7median`). When a `LazyDataset` is passed, derived
+#' reducer (`reduce·median`). When a `LazyDataset` is passed, derived
 #' bands (`ds[["ndvi"]] <- ...`) are recovered from the dataset's step
 #' record and the stage computing one is labelled with the band name
-#' (`derive\u00b7ndvi`); the derivation is bounded structurally at the first
+#' (`derive·ndvi`); the derivation is bounded structurally at the first
 #' non-elementwise node, so it survives subsetting (`ds["ndvi"]`).
 #' Hovering a stage shows its full op composition and any recoverable
 #' metadata: acquisition dates on slice sources and t-spans on
@@ -395,7 +395,8 @@ NULL
 #'   times the widest level's node count; lower it to compress.
 #' @param height,width Widget size, as CSS units.
 #' @return A `visNetwork` htmlwidget.
-#' @seealso [plan_dot()] for DOT text, [plan_draw()] for pixels.
+#' @seealso [plan_dot()] for DOT text, [plan_draw()] for a terminal drawing of
+#'   the pipeline.
 #' @examples
 #' \dontrun{
 #' lr <- lazy_source("cube.tif")
@@ -428,6 +429,11 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   info <- lapply(p@stages, .pv_stage_info, graph = p@graph,
                  derive_map = derive_map)
   sinks <- if (length(p@sinks)) p@sinks else stats::setNames(integer(0), NULL)
+  # The stage that produces a sink: the last holding it, since a spatial
+  # reduce's partial and combine stages both hold its node.
+  sink_stage <- function(id) {
+    Find(function(s) id %in% s@members, p@stages, right = TRUE)
+  }
 
   # Dataset sinks fuse the band-assembly stack with any derivation, so
   # every band's tail feeds the sink stage even when the derivation
@@ -437,7 +443,7 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   # drops the assembly stack.
   reroute <- NULL
   if (!is.null(band_names) && length(sinks) == 1L) {
-    S <- Find(function(s) sinks[[1L]] %in% s@members, p@stages)
+    S <- sink_stage(sinks[[1L]])
     if (!is.null(S)) {
       non_stack <- setdiff(S@members, sinks[[1L]])
       tagged <- any(vapply(non_stack, function(id)
@@ -542,7 +548,7 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   # it, describing the written product (dims, dtype, band names). The
   # dashed edge marks the compute -> write boundary.
   out_rows <- lapply(seq_along(sinks), function(i) {
-    sid <- Find(function(s) sinks[[i]] %in% s@members, p@stages)
+    sid <- sink_stage(sinks[[i]])
     if (is.null(sid)) {
       return(NULL)
     }
@@ -577,7 +583,7 @@ plan_view <- function(x, level_separation = NULL, node_spacing = 90,
   if (length(out_rows)) {
     out_nodes <- do.call(rbind, out_rows)
     sink_stage_ids <- vapply(seq_along(sinks), function(i) {
-      Find(function(s) sinks[[i]] %in% s@members, p@stages)@id
+      sink_stage(sinks[[i]])@id
     }, integer(1))
     nodes <- rbind(nodes, out_nodes)
     edges <- rbind(edges, data.frame(from = sink_stage_ids,

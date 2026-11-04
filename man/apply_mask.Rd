@@ -20,11 +20,13 @@ e.g. \code{c(0, 1, 2, 3, 8, 9, 10, 11)};
 \item \code{\link[=qa_bits]{qa_bits()}} -> a bitmask test (bad if any listed bit is set), for
 packed flags such as HLS Fmask / Landsat QA_PIXEL, e.g. \code{qa_bits(0:3)};
 \item a function \verb{\\(f) ...} -> a predicate returning a 0/1 (or logical)
-mask, written in the \verb{g_*} vocabulary. NaN reads as clear.
+mask, written in the \verb{g_*} vocabulary. A value above 0.5 counts as set,
+in \code{open}/\code{dilate} as at the end; NaN reads as clear.
 }}
 
 \item{open}{Opening radius (despeckle): erosion then dilation at this radius,
-removing isolated flagged pixels up to the radius. \code{0} skips it.}
+removing flagged patches too small to hold a disk of that radius. \code{0}
+skips it.}
 
 \item{dilate}{Dilation radius (buffer): grows the surviving bad regions
 outward, a safety margin around clouds. \code{0} skips it. Applied after \code{open}.}

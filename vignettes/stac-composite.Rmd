@@ -95,8 +95,9 @@ ds
 
 Sentinel-2's scene classification (SCL) is categorical, so the mask is a
 value set: shadow (3), cloud medium and high probability (8, 9), cirrus
-(10). Raw QA rasters are speckled, and cloud edges leak: `open = 2`
-removes mask speckle smaller than 2 px (morphological opening), and
+(10). Raw QA rasters are speckled, and cloud edges leak: `open = 2` is a
+morphological opening at radius 2 (erosion, then dilation), which removes
+flagged specks too small to hold a disk of radius 2 px, and
 `dilate = 3` grows the mask 3 px outward so translucent cloud edges go
 with the cloud. Masked pixels become NaN, garry's nodata, on every value
 band, and the QA band is consumed.
@@ -136,12 +137,12 @@ plan_draw(ds[["B04"]])
 #> ⬚ stack  along t
 #> └─ ƒ map  ×65
 #>    └─ ƒ map
-#>       └─ ƒ map  (2 inputs)
+#>       └─ ✕ mask  (2 inputs)
 #>          ├─ ◈ source  888×667 f32
 #>          └─ ◫ focal  r=3
 #>             └─ ◫ focal  r=2
 #>                └─ ◫ focal  r=2
-#>                   └─ ƒ map
+#>                   └─ ✕ mask
 #>                      └─ ◈ source  888×667 f32
 ```
 
@@ -284,9 +285,11 @@ each warped on read from its native UTM grid onto the analysis grid,
 SCL morphology, masking, reflectance scaling, two composites and
 their spectral distance, planned into chunked stages, fused into
 compiled kernels, and executed across the daemon pools under a memory
-budget, with every remote asset fetched once. On
-benchmark workloads this engine composites at parity with the Python
-ODC/dask stack. The next steps in the arc:
+budget, with every remote asset fetched once. On the synthetic HLS data
+of the repository's benchmark suite, at medium size under a 16 GB cap,
+garry's warped median composite took 33 s against 58 s for the best
+Python ODC/Dask arm, and its geomedian finished where ODC's ran out of
+memory. The next steps in the arc:
 `vignette("time-series")` keeps the time axis instead of collapsing it,
 and the case-study vignettes (HLS harmonized PCA, AEF embeddings) build
 on the same dataset machinery.

@@ -2,9 +2,10 @@
 % Please edit documentation in R/node.R
 \name{MapNode}
 \alias{MapNode}
-\title{Elementwise map. \code{fn} is an R function over scalars/arrays; it will be
-composed with neighbouring fusable nodes and wrapped in \code{anvl::jit()}
-at plan time. Created by \code{\link[=lazy_map]{lazy_map()}}.}
+\title{Elementwise map. \code{fn} is an R function over arrays; the planner composes it
+with neighbouring fusable nodes into one stage kernel, which compiles where
+it first runs (\code{anvl::jit()} in this process, the stage's StableHLO program
+on a daemon). Created by \code{\link[=lazy_map]{lazy_map()}}.}
 \usage{
 MapNode(
   id = integer(0),
@@ -35,7 +36,8 @@ dtype named by the caller of \code{\link[=lazy_map]{lazy_map()}}.}
 A \code{MapNode}.
 }
 \description{
-Elementwise map. \code{fn} is an R function over scalars/arrays; it will be
-composed with neighbouring fusable nodes and wrapped in \code{anvl::jit()}
-at plan time. Created by \code{\link[=lazy_map]{lazy_map()}}.
+Elementwise map. \code{fn} is an R function over arrays; the planner composes it
+with neighbouring fusable nodes into one stage kernel, which compiles where
+it first runs (\code{anvl::jit()} in this process, the stage's StableHLO program
+on a daemon). Created by \code{\link[=lazy_map]{lazy_map()}}.
 }

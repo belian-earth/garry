@@ -48,3 +48,4 @@ A source nodata goes to the warper as \code{-srcnodata}, so it never enters
 resampling. Area outside the source footprint reads as nodata
 (\code{.warp_dst_nodata()}).
 }
+\keyword{internal}
