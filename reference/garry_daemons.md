@@ -40,10 +40,9 @@ garry_daemons(
 
   Compute-pool daemon count; `NULL` (default) uses a third of the
   logical cores, capped at 8 with a floor of 2 (2 on CUDA: concurrent
-  clients share one card). The compute pool's residual workloads (scans,
-  big fused reductions) are compile-bound: every daemon that runs a scan
-  task pays its kernel compile, so width multiplies compiles without
-  adding admitted concurrency. Larger pools are SAFE at any width
+  clients share one card). Scan tasks run only on the first
+  `garry_opt("scan_profiles")` daemons, so width adds neither scan
+  compiles nor scan memory. Larger pools are SAFE at any width
   (per-daemon affinity masks and byte admission) and pay off for fleets
   of independent non-fusable tasks; they are an explicit choice, not the
   default. `0` tears down.
@@ -102,6 +101,18 @@ yourself to tune host-side discovery. `MALLOC_*` is only-if-unset, and
 Headers registered with
 [`garry_http_auth()`](https://belian-earth.github.io/garry/reference/garry_http_auth.md)
 are applied to the new pools.
+
+Pools from an earlier call close first, and only once none of their
+daemons is running a task, such as a read or a kernel warm-up: a pool
+closed while a daemon replies can hang R for good, through a race in
+NNG's IPC transport (fixed in NNG 1.12.5, not yet bundled in nanonext).
+After three seconds garry names the pools it waits on and the daemons
+still mid-task. A Ctrl-C, or a minute's wait, stops those daemons and
+closes the pools; after a Ctrl-C
+[`garry_daemons_set()`](https://belian-earth.github.io/garry/reference/garry_daemons_set.md)
+is `FALSE` and no pool is started. A pool still mid-task with no daemon
+garry can identify to stop, as on Windows, fails the close with a
+`garry_pool_error`.
 
 ## See also
 

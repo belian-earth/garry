@@ -5,11 +5,11 @@
 creating read and compute pools until they are torn down. This is the
 default for the `distributed` argument of
 [`collect()`](https://belian-earth.github.io/garry/reference/collect.md),
-so `collect(x)` uses the pools when they are set and runs
-single-threaded otherwise. Mirrors
+so `collect(x)` uses the pools when they are set and runs in this R
+session otherwise. Mirrors
 [`mirai::daemons_set()`](https://mirai.r-lib.org/reference/daemons_set.html):
 it says the pools were set, not that every daemon is alive, so a pool
-that lost its daemons stays `TRUE` and the next run fails with a
+that lost a daemon stays `TRUE` and the next run fails with a
 `garry_pool_error`, rather than moving onto the process the pools
 protect.
 [`garry_daemons()`](https://belian-earth.github.io/garry/reference/garry_daemons.md)
