@@ -12,15 +12,6 @@ experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](h
 coverage](https://codecov.io/gh/belian-earth/garry/graph/badge.svg)](https://app.codecov.io/gh/belian-earth/garry)
 <!-- badges: end -->
 
-> [!WARNING]
-> garry is experimental and under active development. The API changes
-> without deprecation: function signatures and behaviour may differ
-> between commits, and nothing here should be treated as stable yet.
-> Development and benchmarking happen on Linux; macOS is CI-tested but
-> less exercised, and there is a known issue with the fused execution
-> path on Apple Silicon. Performance and behaviour there are not yet
-> fully characterised.
-
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
 raster computation as a graph and it runs it fast: chunked, distributed
 across processes, with the numeric kernels JIT-compiled to XLA (CPU or
@@ -28,9 +19,10 @@ GPU).
 
 **What it is:**
 
-- **Lazy.** Every operation (`lazy_map()`, `focal_map()`, `reduce_over()`,
-  `apply_mask()`, `align_to()`) adds a node to a computation graph and returns
-  immediately. Nothing reads or computes until `collect()`.
+- **Lazy.** Every operation (`lazy_map()`, `focal_map()`,
+  `reduce_over()`, `apply_mask()`, `align_to()`) adds a node to a
+  computation graph and returns immediately. Nothing reads or computes
+  until `collect()`.
 - **Spatial-aware.** Arrays carry their CRS, transform and extent.
   Alignment is explicit: binary ops never silently resample, so a pixel
   is never quietly moved half a cell.
@@ -48,8 +40,8 @@ reductions, scans along time, whole-window model kernels; fixed-point
 iteration is planned) over grid-pinned labelled cubes. Expressions are
 written in [anvl](https://github.com/r-xla/anvl)’s vocabulary, planned
 as one graph, and executed distributed and memory-bounded. This closed
-world is what makes whole-graph fusion, cost placement and
-reproducible distributed execution possible.
+world is what makes whole-graph fusion, cost placement and reproducible
+distributed execution possible.
 
 On those primitives garry ships a growing catalogue of statistical
 verbs: `geomedian()` and `medoid()` for multivariate compositing,
@@ -117,7 +109,7 @@ final `collect()`.
 
 ``` r
 library(garry)
-#> garry: GDAL 3.13.0 "Iowa City", released 2026/05/04
+#> garry: GDAL 3.13.3 "Iowa City", released 2026/08/13
 
 # 1. Discover: HLS S30 over an AOI, Jan-March of 2023, signed for the PC.
 aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
@@ -250,6 +242,6 @@ write_tif(composite, tif,
 
 The same verbs work on a single raster. `lazy_source()` opens one COG or
 a GDAL mosaic; `lazy_map()` / `focal_map()` / `reduce_over()` build
-map-algebra graphs; `align_to()` reprojects onto a target grid; `collect()`
-brings the result into R and `write_tif()` streams it to disk. See
-`benchmarks/README.md` for the garry-vs-ODC benchmark suite.
+map-algebra graphs; `align_to()` reprojects onto a target grid;
+`collect()` brings the result into R and `write_tif()` streams it to
+disk. See `benchmarks/README.md` for the garry-vs-ODC benchmark suite.
