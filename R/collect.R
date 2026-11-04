@@ -849,7 +849,9 @@ garry_last_route <- function() .garry_state$route
 
 # The distributed read loop: one read task per chunk on the read pool,
 # at most two a daemon in flight (so finished chunks never pile up on
-# the host), each emitted as it lands.
+# the host), each emitted as it lands. A failed loop cancels the reads
+# it leaves queued: the read pool drops them, and a running one ends
+# first (.task_mirai()).
 .read_only_each_pool <- function(
   spec,
   ra,
@@ -886,6 +888,7 @@ garry_last_route <- function() .garry_state$route
     .glue("s{spec$read_stage[[todo$k[[i]]]]@id}_c{todo$j[[i]]}")
   }
   inflight <- list()
+  on.exit(mirai::stop_mirai(inflight), add = TRUE)
   next_i <- 1L
   # a dead daemon's task never resolves: `watch` adds the pools a caller's
   # own tasks wait on, whose backlog can stop these reads
@@ -1002,7 +1005,8 @@ garry_last_route <- function() .garry_state$route
   ds <- .sink_output(path, sink@grid, nodata, band_names, wspec)
   if (distributed && is.null(wq)) {
     gdal_close_output(ds, path)
-    .write_read_only_pool(p, spec, path, nodata, wdt)
+    store <- .store_broadcasts("garry_read")
+    .run_guard(.write_read_only_pool(p, spec, path, nodata, wdt, store), store)
     return(invisible(path))
   }
   on.exit(try(ds$close(), silent = TRUE), add = TRUE)
@@ -1074,7 +1078,8 @@ garry_last_route <- function() .garry_state$route
 # pinned on the reader); the host hands the region NAME to the writer
 # and, once written, has the read pool drop it. Payloads never pass
 # through the host, and the writer only writes, overlapping the reads.
-.write_read_only_pool <- function(p, spec, path, nodata, dtype) {
+# `store` (.store_broadcasts()) drops and clears the readers' regions.
+.write_read_only_pool <- function(p, spec, path, nodata, dtype, store) {
   prof <- "garry_write"
   .assert_pools_alive(prof)
   .garry_abi_check(prof)
@@ -1093,33 +1098,17 @@ garry_last_route <- function() .garry_state$route
   on.exit(tl$line("host_end", "-"), add = TRUE)
   # A drop is a broadcast to every reader, which waits for each one's
   # current read: drop in large batches (a quarter of the read budget),
-  # not per write. The rest go at the end.
+  # not per write. The run's closing clear frees the rest, and the run
+  # waits for every drop and that clear before it returns
+  # (.store_broadcasts()).
   drop <- function(regs) {
     if (length(regs)) {
-      mirai::everywhere(
-        asNamespace("garry")$.daemon_shm_drop(regs),
-        regs = regs,
-        .compute = "garry_read"
-      )
+      store$drop(regs)
     }
   }
-  # Whatever happens, drop this run's regions. A run that finished named
-  # them all, and its close is checked below. A failed one waits out the
-  # writes and closes the writer's handles, and the reads it gave up on
-  # pin regions it never hears of: the clear queues behind them, as the
-  # scheduler's does.
-  on.exit(
-    if (done) {
-      try(drop(pending), silent = TRUE)
-    } else {
-      .writer_settle(writes)
-      try(
-        mirai::everywhere(asNamespace("garry")$.daemon_shm_clear(), .compute = "garry_read"),
-        silent = TRUE
-      )
-    },
-    add = TRUE
-  )
+  # A failed run waits out the writes and closes the writer's handles
+  # before its clear (.run_guard()), as the writes map the readers' regions.
+  on.exit(if (!done) .writer_settle(writes), add = TRUE)
   harvest <- function() {
     any <- FALSE
     for (key in names(writes)) {

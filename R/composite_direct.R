@@ -568,7 +568,9 @@ NULL
   b <- .gd_build_jobs(plan, grid, tmp)
   .gd_daemon_prep("garry_read")
   t0 <- proc.time()[["elapsed"]]
-  r <- .gd_fetch_land(tl, .gd_fetch(tl, b, names(b$jobs)), "source")
+  reads <- .gd_fetch(tl, b, names(b$jobs))
+  on.exit(mirai::stop_mirai(reads), add = TRUE) # a failed wait's queued reads
+  r <- .gd_fetch_land(tl, reads, "source")
   if (isTRUE(garry_opt("progress"))) {
     t <- proc.time()[["elapsed"]] - t0
     cli::cli_inform(.glue(
@@ -710,7 +712,9 @@ NULL
 
 # Say if a warm-up failed. The bands all succeeded by now, so the kernels
 # compiled in their tasks instead, at a cost only in time. A warm-up runs
-# ahead of its daemon's strips, so this looks without waiting.
+# ahead of its daemon's strips, so this looks without waiting: one on a
+# daemon given no strip may still be compiling, and a close of its pool
+# waits for it (.pools_close()).
 .gd_warm_report <- function(warm, tl) {
   done <- Filter(Negate(mirai::unresolved), warm)
   for (key in names(done)) {
@@ -945,6 +949,13 @@ NULL
     }
   }
   fetch_units()
+  # A failed run cancels the reads it leaves queued: the read pool drops
+  # them, and a running one ends first (.task_mirai()). The compute tasks
+  # run on width-1 profiles, which have no dispatcher to drop one.
+  on.exit(
+    mirai::stop_mirai(c(fmask_p, unlist(unit_p, recursive = FALSE))),
+    add = TRUE
+  )
 
   # Kernel identity: everything the traced closure closes over (F, op, nan_rm,
   # affine, masked, device, and a joint reducer). Affine varies per band, so

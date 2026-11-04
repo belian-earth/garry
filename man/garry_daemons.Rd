@@ -17,14 +17,12 @@ logical cores. \code{0} tears the pool down.}
 
 \item{compute}{Compute-pool daemon count; \code{NULL} (default) uses a
 third of the logical cores, capped at 8 with a floor of 2 (2 on
-CUDA: concurrent clients share one card). The compute pool's
-residual workloads (scans, big fused reductions) are
-compile-bound: every daemon that runs a scan task pays its
-kernel compile, so width multiplies compiles without adding
-admitted concurrency. Larger pools are SAFE at any width
-(per-daemon affinity masks and byte admission) and pay off for
-fleets of independent non-fusable tasks; they are an explicit
-choice, not the default. \code{0} tears down.}
+CUDA: concurrent clients share one card). Scan tasks run only on
+the first \code{garry_opt("scan_profiles")} daemons, so width adds
+neither scan compiles nor scan memory. Larger pools are SAFE at
+any width (per-daemon affinity masks and byte admission) and pay
+off for fleets of independent non-fusable tasks; they are an
+explicit choice, not the default. \code{0} tears down.}
 
 \item{read_handles}{Open-handle cache depth on read daemons.
 \code{NULL} (default) uses \code{garry_opt("read_handles")}. Depth 1 suits
@@ -87,6 +85,17 @@ caller's reads); call \code{\link[=garry_gdal_config]{garry_gdal_config()}} your
 discovery. \verb{MALLOC_*} is only-if-unset, and \code{gdal_config = FALSE}
 skips the GDAL settings entirely, on every route. Headers registered
 with \code{\link[=garry_http_auth]{garry_http_auth()}} are applied to the new pools.
+
+Pools from an earlier call close first, and only once none of their
+daemons is running a task, such as a read or a kernel warm-up: a pool
+closed while a daemon replies can hang R for good, through a race in
+NNG's IPC transport (fixed in NNG 1.12.5, not yet bundled in nanonext).
+After three seconds garry names the pools it waits on and the daemons
+still mid-task. A Ctrl-C, or a minute's wait, stops those daemons and
+closes the pools; after a Ctrl-C \code{\link[=garry_daemons_set]{garry_daemons_set()}} is \code{FALSE} and
+no pool is started. A pool still mid-task with no daemon garry can
+identify to stop, as on Windows, fails the close with a
+\code{garry_pool_error}.
 }
 \seealso{
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, \code{\link[=garry_pool_hygiene]{garry_pool_hygiene()}}, \code{\link[=collect]{collect()}}
