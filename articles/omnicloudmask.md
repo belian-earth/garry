@@ -75,10 +75,10 @@ path to keep or reuse them. From here on, nothing touches the network.
 ``` r
 
 ds <- materialise(remote)
-#> materialising to '/tmp/RtmpgupY8G/materialise-1129e222133090'
+#> materialising to '
 #> (session-temporary)
 ds
-#> ── <LazyDataset> ───────────────────────────────────────────────────────────────
+#> ── <LazyDataset> ──────────────────────────────────────────────
 #>   bands  B02 B03 B04 B08  (+SCL)
 #>   time   9 slices
 #>   grid   1514 x 1336 • f32

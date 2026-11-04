@@ -104,7 +104,7 @@ from GitHub over HTTP.</p>
 <span>            <span class="st">"lf_elev_220_mt_hood_utm.tif"</span><span class="op">)</span></span>
 <span><span class="va">el</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_source.html">lazy_source</a></span><span class="op">(</span><span class="va">f</span><span class="op">)</span></span>
 <span><span class="va">el</span></span>
-<span><span class="co">#&gt; ── &lt;LazyRaster&gt; source  1013×799 f32 ───────────────────────────────────────────</span></span>
+<span><span class="co">#&gt; ── &lt;LazyRaster&gt; source  1013×799 f32 ──────────────────────────</span></span>
 <span><span class="co">#&gt;   grid   1013 x 799 • f32</span></span>
 <span><span class="co">#&gt;   crs    EPSG:26910</span></span>
 <span><span class="co">#&gt;   graph  1 nodes • lazy</span></span>
@@ -125,7 +125,8 @@ touching the file again:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="va">el</span>, main <span class="op">=</span> <span class="st">"Mount Hood elevation (m)"</span><span class="op">)</span></span>
 <span><span class="co">#&gt; preview: reading all 809,387 cells at full resolution.</span></span>
-<span><span class="co">#&gt; ℹ Sources pinned to a grid (RESX and RESY) read their overviews instead.</span></span></code></pre></div>
+<span><span class="co">#&gt; ℹ Sources pinned to a grid (RESX and RESY) read their</span></span>
+<span><span class="co">#&gt;   overviews instead.</span></span></code></pre></div>
 <div class="float">
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/hood-preview-1.png" alt="plot of chunk hood-preview"><div class="figcaption">plot of chunk hood-preview</div>
 </div>
@@ -143,7 +144,7 @@ preview resolution and reads the sources’ overviews.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">el_km</span> <span class="op">&lt;-</span> <span class="va">el</span> <span class="op">/</span> <span class="fl">1000</span></span>
 <span><span class="va">el_km</span></span>
-<span><span class="co">#&gt; ── &lt;LazyRaster&gt; map ────────────────────────────────────────────────────────────</span></span>
+<span><span class="co">#&gt; ── &lt;LazyRaster&gt; map ───────────────────────────────────────────</span></span>
 <span><span class="co">#&gt;   grid   1013 x 799 • f32</span></span>
 <span><span class="co">#&gt;   crs    EPSG:26910</span></span>
 <span><span class="co">#&gt;   graph  2 nodes • lazy</span></span>
@@ -189,7 +190,7 @@ You never choose; garry does.</p>
 </h2>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/plan_draw.html">plan_draw</a></span><span class="op">(</span><span class="va">hs</span><span class="op">)</span></span>
-<span><span class="co">#&gt; ── &lt;LazyRaster&gt; 1013 x 799 • f32 ───────────────────────────────────────────────</span></span>
+<span><span class="co">#&gt; ── &lt;LazyRaster&gt; 1013 x 799 • f32 ──────────────────────────────</span></span>
 <span><span class="co">#&gt; ◫ focal  r=1</span></span>
 <span><span class="co">#&gt; └─ ◈ source  1013×799 f32</span></span></code></pre></div>
 <p>That is the whole mental model: <code>hs</code> <em>is</em> this
@@ -216,8 +217,9 @@ undisclosed resampling step.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">el</span> <span class="op">-</span> <span class="va">el_mean</span></span>
 <span><span class="co">#&gt; Error in `.lazy_binop()`:</span></span>
-<span><span class="co">#&gt; ! grids differ (resolution differs: 30 x 30 vs 270 x 270); put one</span></span>
-<span><span class="co">#&gt;   operand on the other's grid with `align_to(b, to = a)` first</span></span></code></pre></div>
+<span><span class="co">#&gt; ! grids differ (resolution differs: 30 x 30 vs 270 x</span></span>
+<span><span class="co">#&gt;   270); put one operand on the other's grid with `align_to(b,</span></span>
+<span><span class="co">#&gt;   to = a)` first</span></span></code></pre></div>
 <p>State the resample explicitly and it composes like anything else.
 Aligning the same source twice, once point-sampled and once aggregated,
 and differencing on the shared grid gives a local relief model:

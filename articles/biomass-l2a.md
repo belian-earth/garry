@@ -116,7 +116,7 @@ gn <- lazy_dataset(
   bands = list(enclosure_tiff = c(hh = 1, vh = 2, vv = 3))
 )
 gn
-#> ── <LazyDataset> ───────────────────────────────────────────────────────────────
+#> ── <LazyDataset> ──────────────────────────────────────────────
 #>   bands  hh vh vv
 #>   time   2 slices
 #>   grid   446 x 443 • f32

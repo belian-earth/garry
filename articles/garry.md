@@ -31,7 +31,7 @@ f <- paste0("/vsicurl/https://raw.githubusercontent.com/",
             "lf_elev_220_mt_hood_utm.tif")
 el <- lazy_source(f)
 el
-#> ── <LazyRaster> source  1013×799 f32 ───────────────────────────────────────────
+#> ── <LazyRaster> source  1013×799 f32 ──────────────────────────
 #>   grid   1013 x 799 • f32
 #>   crs    EPSG:26910
 #>   graph  1 nodes • lazy
@@ -59,7 +59,8 @@ grid_bbox(el)
 
 preview(el, main = "Mount Hood elevation (m)")
 #> preview: reading all 809,387 cells at full resolution.
-#> ℹ Sources pinned to a grid (RESX and RESY) read their overviews instead.
+#> ℹ Sources pinned to a grid (RESX and RESY) read their
+#>   overviews instead.
 ```
 
 ![plot of chunk
@@ -83,7 +84,7 @@ Arithmetic on a `LazyRaster` returns a new `LazyRaster`; nothing runs.
 
 el_km <- el / 1000
 el_km
-#> ── <LazyRaster> map ────────────────────────────────────────────────────────────
+#> ── <LazyRaster> map ───────────────────────────────────────────
 #>   grid   1013 x 799 • f32
 #>   crs    EPSG:26910
 #>   graph  2 nodes • lazy
@@ -139,7 +140,7 @@ never choose; garry does.
 ``` r
 
 plan_draw(hs)
-#> ── <LazyRaster> 1013 x 799 • f32 ───────────────────────────────────────────────
+#> ── <LazyRaster> 1013 x 799 • f32 ──────────────────────────────
 #> ◫ focal  r=1
 #> └─ ◈ source  1013×799 f32
 ```
@@ -173,8 +174,9 @@ undisclosed resampling step.
 
 el - el_mean
 #> Error in `.lazy_binop()`:
-#> ! grids differ (resolution differs: 30 x 30 vs 270 x 270); put one
-#>   operand on the other's grid with `align_to(b, to = a)` first
+#> ! grids differ (resolution differs: 30 x 30 vs 270 x
+#>   270); put one operand on the other's grid with `align_to(b,
+#>   to = a)` first
 ```
 
 State the resample explicitly and it composes like anything else.

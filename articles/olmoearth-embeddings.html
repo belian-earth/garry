@@ -141,8 +141,12 @@ each one) and lays them out as dataset bands by year.
 the bytes read.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">oe</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">store</span>, <span class="va">grid</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span></span>
+<span><span class="co">#&gt; Reading 3 of the 60 "embeddings" arrays of</span></span>
+<span><span class="co">#&gt; '</span></span>
+<span><span class="co">#&gt; "/utm10/embeddings", "/utm12/embeddings", and</span></span>
+<span><span class="co">#&gt; "/utm11/embeddings".</span></span>
 <span><span class="va">oe</span></span>
-<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ───────────────────────────────────────────────────────────────</span></span>
+<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ──────────────────────────────────────────────</span></span>
 <span><span class="co">#&gt;   bands  b1 b2 b3 b4 b5 b6 b7 b8 ... (+56)</span></span>
 <span><span class="co">#&gt;   time   9 slices</span></span>
 <span><span class="co">#&gt;   grid   2816 x 3584 • f32</span></span>
@@ -150,7 +154,8 @@ the bytes read.</p>
 <span><span class="co">#&gt;   graph  1152 nodes • lazy</span></span>
 <span><span class="co">#&gt;   ℹ plan_draw(x) to see the pipeline</span></span>
 <span><span class="fu"><a href="../reference/time_labels.html">time_labels</a></span><span class="op">(</span><span class="va">oe</span><span class="op">)</span></span>
-<span><span class="co">#&gt; [1] "2017" "2018" "2019" "2020" "2021" "2022" "2023" "2024" "2025"</span></span></code></pre></div>
+<span><span class="co">#&gt; [1] "2017" "2018" "2019" "2020" "2021" "2022" "2023" "2024"</span></span>
+<span><span class="co">#&gt; [9] "2025"</span></span></code></pre></div>
 <p>Nothing has been fetched yet beyond the store’s metadata and each
 zone’s year labels.</p>
 </div>
@@ -176,7 +181,7 @@ window in one task, so every chunk crosses the network once.</p>
 <span><span class="va">t0</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.time</a></span><span class="op">(</span><span class="op">)</span></span>
 <span><span class="va">cubes</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/materialise.html">materialise</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>y2023 <span class="op">=</span> <span class="fu">year</span><span class="op">(</span><span class="st">"2023"</span><span class="op">)</span>, y2025 <span class="op">=</span> <span class="fu">year</span><span class="op">(</span><span class="st">"2025"</span><span class="op">)</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Sys.time.html" class="external-link">Sys.time</a></span><span class="op">(</span><span class="op">)</span> <span class="op">-</span> <span class="va">t0</span></span>
-<span><span class="co">#&gt; Time difference of 1.33462 mins</span></span></code></pre></div>
+<span><span class="co">#&gt; Time difference of 3.169062 mins</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="false-colour">False colour<a class="anchor" aria-label="anchor" href="#false-colour"></a>
@@ -214,7 +219,13 @@ colours mean the same thing in each.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">op</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/graphics/par.html" class="external-link">par</a></span><span class="op">(</span>mfrow <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">1</span>, <span class="fl">2</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="fu">false_colour</span><span class="op">(</span><span class="va">cubes</span><span class="op">$</span><span class="va">y2023</span>, <span class="va">pca</span><span class="op">)</span>, main <span class="op">=</span> <span class="st">"2023"</span><span class="op">)</span></span>
-<span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="fu">false_colour</span><span class="op">(</span><span class="va">cubes</span><span class="op">$</span><span class="va">y2025</span>, <span class="va">pca</span><span class="op">)</span>, main <span class="op">=</span> <span class="st">"2025"</span><span class="op">)</span></span></code></pre></div>
+<span><span class="co">#&gt; preview: reading all 30,277,632 cells at full resolution.</span></span>
+<span><span class="co">#&gt; ℹ Sources pinned to a grid (RESX and RESY) read their</span></span>
+<span><span class="co">#&gt;   overviews instead.</span></span>
+<span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="fu">false_colour</span><span class="op">(</span><span class="va">cubes</span><span class="op">$</span><span class="va">y2025</span>, <span class="va">pca</span><span class="op">)</span>, main <span class="op">=</span> <span class="st">"2025"</span><span class="op">)</span></span>
+<span><span class="co">#&gt; preview: reading all 30,277,632 cells at full resolution.</span></span>
+<span><span class="co">#&gt; ℹ Sources pinned to a grid (RESX and RESY) read their</span></span>
+<span><span class="co">#&gt;   overviews instead.</span></span></code></pre></div>
 <div class="float">
 <img src="https://raw.githubusercontent.com/belian-earth/garry/main/vignettes/figure/false-colour-1.png" alt="plot of chunk false-colour"><div class="figcaption">plot of chunk false-colour</div>
 </div>
@@ -274,7 +285,10 @@ year’s bands in one task. Greenwich, on the meridian between zones 30
 and 31, on the British National Grid:</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">london</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/grid_spec.html">grid_spec</a></span><span class="op">(</span><span class="st">"EPSG:27700"</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">528900</span>, <span class="fl">172400</span>, <span class="fl">548900</span>, <span class="fl">182400</span><span class="op">)</span>, res <span class="op">=</span> <span class="fl">10</span><span class="op">)</span></span>
-<span><span class="va">zones</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">store</span>, <span class="va">london</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span></span></code></pre></div>
+<span><span class="va">zones</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/lazy_dataset.html">lazy_dataset</a></span><span class="op">(</span><span class="va">store</span>, <span class="va">london</span>, bands <span class="op">=</span> <span class="fl">1</span><span class="op">:</span><span class="fl">64</span><span class="op">)</span></span>
+<span><span class="co">#&gt; Reading 2 of the 60 "embeddings" arrays of</span></span>
+<span><span class="co">#&gt; '</span></span>
+<span><span class="co">#&gt; "/utm30/embeddings" and "/utm31/embeddings".</span></span></code></pre></div>
 <p>The grid overlaps zones 30 and 31 only, and the message says so.</p>
 <div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">greenwich</span> <span class="op">&lt;-</span> <span class="va">zones</span> <span class="op">|&gt;</span></span>
@@ -287,6 +301,9 @@ and 31, on the British National Grid:</p>
 <span><span class="va">pca_london</span> <span class="op">&lt;-</span> <span class="fu">fit_pca</span><span class="op">(</span><span class="va">greenwich</span>, <span class="va">london</span><span class="op">)</span></span></code></pre></div>
 <div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="../reference/preview.html">preview</a></span><span class="op">(</span><span class="fu">false_colour</span><span class="op">(</span><span class="va">greenwich</span>, <span class="va">pca_london</span><span class="op">)</span>, main <span class="op">=</span> <span class="st">"Greenwich, 2025"</span><span class="op">)</span></span>
+<span><span class="co">#&gt; preview: reading all 6,000,000 cells at full resolution.</span></span>
+<span><span class="co">#&gt; ℹ Sources pinned to a grid (RESX and RESY) read their</span></span>
+<span><span class="co">#&gt;   overviews instead.</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/graphics/lines.html" class="external-link">lines</a></span><span class="op">(</span><span class="fu">gdalraster</span><span class="fu">::</span><span class="fu"><a href="https://firelab.github.io/gdalraster/reference/transform_xy.html" class="external-link">transform_xy</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/cbind.html" class="external-link">cbind</a></span><span class="op">(</span><span class="fl">0</span>, <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq</a></span><span class="op">(</span><span class="fl">51.4</span>, <span class="fl">51.6</span>, by <span class="op">=</span> <span class="fl">0.01</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>                               <span class="st">"EPSG:4326"</span>, <span class="st">"EPSG:27700"</span><span class="op">)</span>,</span>
 <span>      col <span class="op">=</span> <span class="st">"white"</span>, lty <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span></code></pre></div>

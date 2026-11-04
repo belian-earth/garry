@@ -75,9 +75,6 @@
 </div>
 <!-- badges: start -->
 
-<blockquote>
-<p>[!WARNING] garry is experimental and under active development. The API changes without deprecation: function signatures and behaviour may differ between commits, and nothing here should be treated as stable yet. Development and benchmarking happen on Linux; macOS is CI-tested but less exercised, and there is a known issue with the fused execution path on Apple Silicon. Performance and behaviour there are not yet fully characterised.</p>
-</blockquote>
 <p>garry is a lazy, spatial-aware raster engine for R. You describe a whole raster computation as a graph and it runs it fast: chunked, distributed across processes, with the numeric kernels JIT-compiled to XLA (CPU or GPU).</p>
 <p><strong>What it is:</strong></p>
 <ul>
@@ -119,7 +116,7 @@
 <p>A cloud-masked median composite of three months of HLS Sentinel-2 imagery (January to March 2023), straight from the Microsoft Planetary Computer. The whole pipeline is lazy: it reads and computes only at the final <code><a href="reference/collect.html">collect()</a></code>.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://belian-earth.github.io/garry/">garry</a></span><span class="op">)</span></span>
-<span><span class="co">#&gt; garry: GDAL 3.13.0 "Iowa City", released 2026/05/04</span></span>
+<span><span class="co">#&gt; garry: GDAL 3.13.3 "Iowa City", released 2026/08/13</span></span>
 <span></span>
 <span><span class="co"># 1. Discover: HLS S30 over an AOI, Jan-March of 2023, signed for the PC.</span></span>
 <span><span class="va">aoi</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="op">-</span><span class="fl">78.4</span>, <span class="fl">24.4</span>, <span class="op">-</span><span class="fl">77.65</span>, <span class="fl">24.8</span><span class="op">)</span>   <span class="co"># lon/lat bounding box</span></span>

@@ -111,12 +111,12 @@ arbitrary bands as a false-colour composite.</p>
 <span>                           decode <span class="op">=</span> <span class="va">dequantize_aef</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">embeddings</span></span>
-<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ────────────────────────────────</span></span>
-<span><span class="co">#&gt;   bands  A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A10 A11 A12 A13 A14 A15 A16 A17 A18 A19 A20 A21 A22 A23 A24 A25 A26 A27 A28 A29 A30 A31 A32 A33 A34 A35 A36 A37 A38 A39 A40 A41 A42 A43 A44 A45 A46 A47 A48 A49 A50 A51 A52 A53 A54 A55 A56 A57 A58 A59 A60 A61 A62 A63</span></span>
+<span><span class="co">#&gt; ── &lt;LazyDataset&gt; ──────────────────────────────────────────────</span></span>
+<span><span class="co">#&gt;   bands  A00 A01 A02 A03 A04 A05 A06 A07 ... (+56)</span></span>
 <span><span class="co">#&gt;   time   1 slice</span></span>
 <span><span class="co">#&gt;   grid   2732 x 2731 • f32</span></span>
 <span><span class="co">#&gt;   crs    EPSG:32736</span></span>
-<span><span class="co">#&gt;   graph  192 nodes • lazy</span></span>
+<span><span class="co">#&gt;   graph  128 nodes • lazy</span></span>
 <span><span class="co">#&gt;   ℹ plan_draw(x) to see the pipeline</span></span></code></pre></div>
 <p><code><a href="../reference/lazy_dataset.html">lazy_dataset()</a></code> records a lazy 64-band dataset; nothing
 is fetched yet (the construction costs one metadata probe, however many
@@ -184,7 +184,7 @@ converts points from sf, terra or a data frame).</p>
 <span><span class="va">px</span> <span class="op">&lt;-</span> <span class="va">px</span><span class="op">[</span><span class="fu">stats</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/r/stats/complete.cases.html" class="external-link">complete.cases</a></span><span class="op">(</span><span class="va">px</span><span class="op">)</span>, <span class="op">]</span></span>
 <span><span class="va">km</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/kmeans.html" class="external-link">kmeans</a></span><span class="op">(</span><span class="va">px</span>, centers <span class="op">=</span> <span class="fl">5</span><span class="op">)</span></span>
 <span><span class="va">km</span><span class="op">$</span><span class="va">size</span></span>
-<span><span class="co">#&gt; [1] 12935 30046 24230 22641 10148</span></span></code></pre></div>
+<span><span class="co">#&gt; [1] 12303 31500 24144 22116  9937</span></span></code></pre></div>
 <p>The same call is how a model gets its training table off any garry
 pipeline: give it the GEDI shots, the field plots or the labelled points
 instead of random ones. <code>interp = "bilinear"</code> interpolates

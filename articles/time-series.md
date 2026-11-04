@@ -34,7 +34,7 @@ items <- stac_query(bbox = aoi, stac_source = mpc, collection = "hls2-s30",
   stac_filter_cloud(30) |>
   stac_drop_duplicates()
 length(items$features)
-#> [1] 170
+#> [1] 172
 
 ds <- lazy_dataset(
   items, grid = grid_from_bbox(aoi, res = 30),
@@ -44,12 +44,12 @@ ds <- lazy_dataset(
 ) |>
   apply_mask(from = "Fmask", where = qa_bits(0:3))
 ds
-#> ── <LazyDataset> ───────────────────────────────────────────────────────────────
+#> ── <LazyDataset> ──────────────────────────────────────────────
 #>   bands  B04 B08
-#>   time   87 slices
+#>   time   88 slices
 #>   grid   780 x 464 • f32
 #>   crs    Lambert Azimuthal Equal Area
-#>   graph  522 nodes • lazy
+#>   graph  528 nodes • lazy
 #>   ℹ plan_draw(x) to see the pipeline
 ```
 
@@ -75,7 +75,7 @@ ndvi <- lazy_map((nir - red) / (nir + red), dtype = "f32",
                  fn = function(x) g_ifelse(x > 1 | x < -1, NaN, x))
 dates <- as.Date(time_labels(ndvi))
 range(dates)
-#> [1] "2023-12-16" "2024-12-27"
+#> [1] "2023-12-16" "2024-12-30"
 ```
 
 Second, scene edges lie. The one to two pixels just inside each
@@ -111,9 +111,9 @@ ordinary `(y, x, t)` array.
 garry_daemons()
 raw <- collect(ndvi)
 dim(raw)
-#> [1] 464 780  87
+#> [1] 464 780  88
 mean(is.finite(raw))
-#> [1] 0.6714264
+#> [1] 0.6750045
 ```
 
 Over a third of the cube is missing, and not at random: the inter-orbit
@@ -161,8 +161,9 @@ monthly <- ds |>
   reduce_over("median", over = "t", nan_rm = TRUE)
 mc <- collect(monthly)
 names(mc)
-#>  [1] "2023-12" "2024-01" "2024-02" "2024-03" "2024-04" "2024-05" "2024-06"
-#>  [8] "2024-07" "2024-08" "2024-09" "2024-10" "2024-11" "2024-12"
+#>  [1] "2023-12" "2024-01" "2024-02" "2024-03" "2024-04"
+#>  [6] "2024-05" "2024-06" "2024-07" "2024-08" "2024-09"
+#> [11] "2024-10" "2024-11" "2024-12"
 ```
 
 ``` r

@@ -35,7 +35,7 @@ items <- stac_query(bbox = aoi, stac_source = mpc,
   stac_filter_cloud(30) |>            # scene-level cloud cover < 30%
   stac_drop_duplicates()
 length(items$features)
-#> [1] 65
+#> [1] 66
 ```
 
 ## Frame
@@ -74,12 +74,12 @@ ds <- lazy_dataset(
   resampling = "bilinear"
 )
 ds
-#> ── <LazyDataset> ───────────────────────────────────────────────────────────────
+#> ── <LazyDataset> ──────────────────────────────────────────────
 #>   bands  B02 B03 B04 B08  (+SCL)
-#>   time   65 slices
+#>   time   66 slices
 #>   grid   888 x 667 • f32
 #>   crs    Lambert Azimuthal Equal Area
-#>   graph  325 nodes • lazy
+#>   graph  330 nodes • lazy
 #>   ℹ plan_draw(x) to see the pipeline
 ```
 
@@ -99,12 +99,12 @@ band, and the QA band is consumed.
 ds <- apply_mask(ds, where = c(3, 8, 9, 10), open = 2, dilate = 3)
 ds <- (ds * 0.0001) - 0.1     # STAC raster metadata: scale, then offset
 ds
-#> ── <LazyDataset> ───────────────────────────────────────────────────────────────
+#> ── <LazyDataset> ──────────────────────────────────────────────
 #>   bands  B02 B03 B04 B08
-#>   time   65 slices
+#>   time   66 slices
 #>   grid   888 x 667 • f32
 #>   crs    Lambert Azimuthal Equal Area
-#>   graph  1365 nodes • lazy
+#>   graph  1386 nodes • lazy
 #>   ℹ plan_draw(x) to see the pipeline
 ```
 
@@ -126,9 +126,9 @@ shows the pipeline behind any one band:
 ``` r
 
 plan_draw(ds[["B04"]])
-#> ── <LazyRaster> 888 x 667 • f32 ────────────────────────────────────────────────
+#> ── <LazyRaster> 888 x 667 • f32 ───────────────────────────────
 #> ⬚ stack  along t
-#> └─ ƒ map  ×65
+#> └─ ƒ map  ×66
 #>    └─ ƒ map
 #>       └─ ✕ mask  (2 inputs)
 #>          ├─ ◈ source  888×667 f32
@@ -273,7 +273,7 @@ tif <- file.path(tempdir(), "salinas-geomedian.tif")
 write_tif(gmed, tif, dtype = "i16", scale = 0.0001, offset = -0.1,
           nodata = -32768)
 file.size(tif)
-#> [1] 3617080
+#> [1] 3614799
 ```
 
 Pass `cog = TRUE` to finalise the same streamed write into a Cloud

@@ -38,12 +38,12 @@ embeddings <- lazy_dataset(tile, grid, resampling = "average",
                            decode = dequantize_aef)
 
 embeddings
-#> ── <LazyDataset> ────────────────────────────────
-#>   bands  A00 A01 A02 A03 A04 A05 A06 A07 A08 A09 A10 A11 A12 A13 A14 A15 A16 A17 A18 A19 A20 A21 A22 A23 A24 A25 A26 A27 A28 A29 A30 A31 A32 A33 A34 A35 A36 A37 A38 A39 A40 A41 A42 A43 A44 A45 A46 A47 A48 A49 A50 A51 A52 A53 A54 A55 A56 A57 A58 A59 A60 A61 A62 A63
+#> ── <LazyDataset> ──────────────────────────────────────────────
+#>   bands  A00 A01 A02 A03 A04 A05 A06 A07 ... (+56)
 #>   time   1 slice
 #>   grid   2732 x 2731 • f32
 #>   crs    EPSG:32736
-#>   graph  192 nodes • lazy
+#>   graph  128 nodes • lazy
 #>   ℹ plan_draw(x) to see the pipeline
 ```
 
@@ -128,7 +128,7 @@ dim(px)
 px <- px[stats::complete.cases(px), ]
 km <- kmeans(px, centers = 5)
 km$size
-#> [1] 12935 30046 24230 22641 10148
+#> [1] 12303 31500 24144 22116  9937
 ```
 
 The same call is how a model gets its training table off any garry

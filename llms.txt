@@ -1,13 +1,5 @@
 # garry
 
-> \[!WARNING\] garry is experimental and under active development. The
-> API changes without deprecation: function signatures and behaviour may
-> differ between commits, and nothing here should be treated as stable
-> yet. Development and benchmarking happen on Linux; macOS is CI-tested
-> but less exercised, and there is a known issue with the fused
-> execution path on Apple Silicon. Performance and behaviour there are
-> not yet fully characterised.
-
 garry is a lazy, spatial-aware raster engine for R. You describe a whole
 raster computation as a graph and it runs it fast: chunked, distributed
 across processes, with the numeric kernels JIT-compiled to XLA (CPU or
@@ -127,7 +119,7 @@ final
 ``` r
 
 library(garry)
-#> garry: GDAL 3.13.0 "Iowa City", released 2026/05/04
+#> garry: GDAL 3.13.3 "Iowa City", released 2026/08/13
 
 # 1. Discover: HLS S30 over an AOI, Jan-March of 2023, signed for the PC.
 aoi <- c(-78.4, 24.4, -77.65, 24.8)   # lon/lat bounding box
