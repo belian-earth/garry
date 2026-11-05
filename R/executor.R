@@ -199,12 +199,7 @@ NULL
     offset = snode@offset,
     decim = NULL,
     warped = TRUE,
-    prefetch = .gdal_warp_src_bytes(
-      snode@path,
-      snode@grid,
-      snode@stored,
-      wnode@target_grid
-    )
+    prefetch = .gdal_warp_prefetch_src(snode@path, snode@grid, snode@stored, snode@block_dim)
   )
 }
 
