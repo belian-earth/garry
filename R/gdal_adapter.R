@@ -622,9 +622,12 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 #
 # A read daemon opens every file it reads, and 4 MB can outweigh the
 # window it came for, so a daemon ingests what the run's files need
-# (`.garry_open_bytes`, shipped by .daemon_policy()). The host opens few
-# files and keeps 4 MB, and so does a Zarr open: its metadata is no TIFF
-# header, and a daemon opens a store once.
+# (`.garry_open_bytes`, shipped by .daemon_policy()). The host ingests 4 MB
+# until it has opened a remote TIFF, then what the headers it has seen need
+# (.gdal_host_open_bytes()): a daily series opens one file a day, and ten
+# MUR SST days took 19 s at 4 MB each against 8 s at their 53 KB headers. A
+# Zarr open keeps 4 MB: its metadata is no TIFF header, and a daemon opens a
+# store once.
 .gdal_quiet_remote <- function(code, zarr = FALSE) {
   prev_rd <- .gdal_config_prev("GDAL_DISABLE_READDIR_ON_OPEN")
   prev_ib <- .gdal_config_prev("GDAL_INGESTED_BYTES_AT_OPEN")
@@ -633,7 +636,7 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   gdalraster::set_config_option(
     "GDAL_INGESTED_BYTES_AT_OPEN",
-    if (zarr) .gdal_open_bytes_most else getOption(".garry_open_bytes", .gdal_open_bytes_most)
+    if (zarr) .gdal_open_bytes_most else getOption(".garry_open_bytes", .gdal_host_open_bytes())
   )
   if (zarr && !nzchar(allowlist)) {
     gdalraster::set_config_option(
@@ -689,6 +692,13 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     .gdal_cache$header_bytes <- max(.gdal_cache$header_bytes, .gtiff_header_bytes(ds))
   }
   invisible(NULL)
+}
+
+# What the host's remote open ingests: the most until a remote TIFF header
+# is noted, then what the largest noted needs, as a daemon would. A later file
+# with a larger header fetches the rest as GDAL needs it, and is noted.
+.gdal_host_open_bytes <- function() {
+  if (.gdal_cache$header_bytes > 0) .gdal_daemon_open_bytes() else .gdal_open_bytes_most
 }
 
 # What a read daemon's remote open ingests, for .daemon_policy().
