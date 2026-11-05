@@ -871,16 +871,34 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # (.gdal_warp_prefetch_plan()), or NULL where reads stay on the machine, which
 # has no round trips to save. A remote file prefetches, and a local VRT of
 # remote files (classic VRTs of remote COGs). A GTI mosaic does not: its
-# sources warp one by one inside it. Nothing is opened but a local VRT: the
-# source's opener recorded its type and row order (`stored`) and its tiles
-# (`block`), and reopening ten remote files on the host to ask again cost a
-# header fetch each. A VRT's reads pass to its files, whose tiles its first
-# SourceProperties gives, else its own blocks stand in.
-.gdal_warp_prefetch_src <- function(path, src_grid, stored, block, open_options, resampling) {
-  if (!.gdal_is_remote(path)) {
-    if (!grepl("\\.vrt$", path, ignore.case = TRUE) || !.gdal_reads_remote(path)) {
-      return(NULL)
-    }
+# sources warp one by one inside it. `vrt` is the warped VRT, whose source may
+# be an overview of the file (.gdal_vrt_overview_level()).
+.gdal_warp_prefetch_src <- function(path, src_grid, stored, block, open_options, resampling, vrt = NULL) {
+  remote <- .gdal_is_remote(path) ||
+    (grepl("\\.vrt$", path, ignore.case = TRUE) && .gdal_reads_remote(path))
+  if (!remote) {
+    return(NULL)
+  }
+  .gdal_source_desc(
+    path, src_grid, stored, block, open_options, resampling,
+    level = .gdal_vrt_overview_level(vrt)
+  )
+}
+
+# A source file as its reads see it: its garry grid (CRS, north-up
+# geotransform and size, onto which windows map), its tiles, sample bytes, row
+# order and GTiff thread pool, and the reach of `resampling`'s kernel. Nothing
+# is opened but a local VRT: the source's opener recorded its type and row
+# order (`stored`) and its tiles (`block`), and reopening ten remote files on
+# the host to ask again cost a header fetch each. A VRT's reads pass to its
+# files, whose tiles its first SourceProperties gives, else its own blocks
+# stand in. At overview `level` (0 the first) the grid is that overview's as
+# GDAL's COG driver lays it out: each level halves the last, rounding down, in
+# the base tiles. Other builders round up, a pixel off at most: this judges a
+# prefetch, and plan_reads() opens the overview for its exact size.
+# Shared by the warp prefetch and plan_reads().
+.gdal_source_desc <- function(path, src_grid, stored, block, open_options, resampling, level = NA) {
+  if (grepl("\\.vrt$", path, ignore.case = TRUE) && !.gdal_is_remote(path)) {
     xml <- readLines(path, warn = FALSE)
     props <- regmatches(xml, regexpr('<SourceProperties[^>]*BlockXSize="[0-9]+"[^>]*BlockYSize="[0-9]+"', xml))
     if (length(props)) {
@@ -891,16 +909,40 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     }
   }
   pool <- grep("^NUM_THREADS=", open_options, ignore.case = TRUE, value = TRUE)
+  dims <- as.numeric(src_grid@dims[c("x", "y")])
+  gt <- src_grid@transform
+  if (!is.na(level)) {
+    ov <- dims
+    for (k in seq_len(level + 1L)) {
+      ov <- pmax(1, floor(ov / 2))
+    }
+    gt[c(2L, 6L)] <- gt[c(2L, 6L)] * dims / ov
+    dims <- ov
+  }
   list(
     crs = src_grid@crs,
-    transform = src_grid@transform,
-    dims = as.numeric(src_grid@dims[c("x", "y")]),
+    transform = gt,
+    dims = dims,
+    level = level,
     tile = if (length(block) == 2L) as.numeric(block) else c(256, 256),
     bytes = if (length(stored$dtype)) .dtype_width(stored$dtype) / 8 else 8,
     south_up = isTRUE(stored$south_up),
     threads = if (length(pool)) sub("^NUM_THREADS=", "", pool[[1L]], ignore.case = TRUE) else "",
     radius = .warp_kernel_radius[[resampling]] %||% 3
   )
+}
+
+# The overview level (0 the first) that warped VRT `vrt` reads its source at,
+# or NA for full resolution. gdalwarp picks one for a coarse target (its
+# `-ovr AUTO`) and records it as the source's OVERVIEW_LEVEL open option: a
+# 4096 px COG warped onto 512 px reads level 2, an eighth of its pixels a side.
+.gdal_vrt_overview_level <- function(vrt) {
+  if (is.null(vrt) || !file.exists(vrt)) {
+    return(NA_integer_)
+  }
+  xml <- readLines(vrt, warn = FALSE)
+  m <- regmatches(xml, regexpr('key="OVERVIEW_LEVEL">[0-9]+', xml))
+  if (length(m)) as.integer(sub(".*>", "", m[[1L]])) else NA_integer_
 }
 
 # Source pixels a resampling's kernel reaches either side at scale 1, as the

@@ -625,6 +625,34 @@ test_that("a warp prefetches a window only where it saves round trips", {
   expect_null(garry:::.gdal_warp_prefetch_plan(polar, src, win(0, 0, 1000, 1000)))
 })
 
+test_that("a warp onto a coarse grid is judged at the overview it reads", {
+  m <- withr::local_tempfile(fileext = ".tif")
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", m, 1500, 1100, 1, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 4600000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$close()
+  gdalraster::translate(m, f, cl_arg = c("-of", "COG", "-co", "BLOCKSIZE=256"), quiet = TRUE)
+  src <- lazy_source(f)
+  node <- graph_get(src@graph, src@node_id)
+  b <- gdalraster::transform_bounds(node@grid@extent, node@grid@crs, "EPSG:4326")
+  fine <- gdal_warp_vrt(f, 1L, grid_spec("EPSG:4326", extent = b, dims = c(1500L, 1100L), dtype = "f32"), "bilinear")
+  coarse <- gdal_warp_vrt(f, 1L, grid_spec("EPSG:4326", extent = b, dims = c(180L, 130L), dtype = "f32"), "bilinear")
+  expect_identical(garry:::.gdal_vrt_overview_level(fine), NA_integer_)
+  level <- garry:::.gdal_vrt_overview_level(coarse)
+  expect_gte(level, 1L)
+  desc <- garry:::.gdal_warp_prefetch_src(
+    "/vsicurl/https://example.com/a.tif", node@grid, node@stored, node@block_dim, character(0), "bilinear", coarse
+  )
+  ov <- methods::new(gdalraster::GDALRaster, f, TRUE, paste0("OVERVIEW_LEVEL=", level))
+  withr::defer(ov$close())
+  expect_identical(desc$level, level)
+  # as the COG driver rounds; another builder may round the other way
+  expect_lte(max(abs(desc$dims - c(ov$getRasterXSize(), ov$getRasterYSize()))), 1)
+  expect_equal(desc$transform, ov$getGeoTransform(), tolerance = 0.01)
+  expect_equal(desc$tile, as.numeric(ov$getBlockSize(1L)))
+})
+
 test_that("a prefetched warp leaves a window across a disk's limb to its blocks", {
   f <- withr::local_tempfile(fileext = ".tif")
   r <- 6.4e6

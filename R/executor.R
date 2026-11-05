@@ -182,16 +182,17 @@ NULL
   if (!build) {
     return(list())
   }
+  vrt <- gdal_warp_vrt(
+    .gti_resampled_path(snode@path, snode@resampling),
+    band,
+    wnode@target_grid,
+    wnode@resampling,
+    src_nodata = snode@nodata,
+    open_options = snode@open_options,
+    alike = alike
+  )
   list(
-    path = gdal_warp_vrt(
-      .gti_resampled_path(snode@path, snode@resampling),
-      band,
-      wnode@target_grid,
-      wnode@resampling,
-      src_nodata = snode@nodata,
-      open_options = snode@open_options,
-      alike = alike
-    ),
+    path = vrt,
     band = seq_along(band),
     nodata = snode@nodata,
     open_options = character(0),
@@ -205,7 +206,8 @@ NULL
       snode@stored,
       snode@block_dim,
       snode@open_options,
-      wnode@resampling
+      wnode@resampling,
+      vrt
     )
   )
 }
