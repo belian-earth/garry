@@ -870,35 +870,36 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # What a warped VRT of `path` needs to judge its prefetches
 # (.gdal_warp_prefetch_plan()), or NULL where reads stay on the machine, which
 # has no round trips to save. A remote file prefetches, and a local VRT of
-# remote files (classic VRTs of remote COGs), judged by its first remote
-# file's tiles, the reads it passes on. A GTI mosaic does not: its sources warp
-# one by one inside it. Opens the file, or that first one, if its source has not.
-.gdal_warp_prefetch_src <- function(path, src_grid, open_options, resampling) {
-  if (.gdal_is_remote(path)) {
-    return(.gdal_warp_src_info(.gdal_probe(path, open_options), src_grid, resampling, open_options))
+# remote files (classic VRTs of remote COGs). A GTI mosaic does not: its
+# sources warp one by one inside it. Nothing is opened but a local VRT: the
+# source's opener recorded its type and row order (`stored`) and its tiles
+# (`block`), and reopening ten remote files on the host to ask again cost a
+# header fetch each. A VRT's reads pass to its files, whose tiles its first
+# SourceProperties gives, else its own blocks stand in.
+.gdal_warp_prefetch_src <- function(path, src_grid, stored, block, open_options, resampling) {
+  if (!.gdal_is_remote(path)) {
+    if (!grepl("\\.vrt$", path, ignore.case = TRUE) || !.gdal_reads_remote(path)) {
+      return(NULL)
+    }
+    props <- regmatches(
+      readLines(path, warn = FALSE),
+      regexpr('<SourceProperties[^>]*BlockXSize="[0-9]+"[^>]*BlockYSize="[0-9]+"', readLines(path, warn = FALSE))
+    )
+    if (length(props)) {
+      block <- as.numeric(c(
+        sub('.*BlockXSize="([0-9]+)".*', "\\1", props[[1L]]),
+        sub('.*BlockYSize="([0-9]+)".*', "\\1", props[[1L]])
+      ))
+    }
   }
-  if (!grepl("\\.vrt$", path, ignore.case = TRUE) || !.gdal_reads_remote(path)) {
-    return(NULL)
-  }
-  files <- .gdal_probe(path)$getFileList()
-  info <- .gdal_warp_src_info(.gdal_probe(files[.gdal_is_remote(files)][[1L]]), src_grid, resampling)
-  info$bytes <- .dtype_width(.gdal_band_dtype(.gdal_probe(path), 1L)) / 8
-  info
-}
-
-# .gdal_warp_prefetch_src()'s description of a source from its open handle
-# `ds` (its tiles, sample bytes and row order), the GTiff thread pool its
-# `open_options` ask for, and its garry
-# grid (CRS, north-up geotransform and size, as the warp's windows map onto).
-.gdal_warp_src_info <- function(ds, src_grid, resampling, open_options = character(0)) {
   pool <- grep("^NUM_THREADS=", open_options, ignore.case = TRUE, value = TRUE)
   list(
     crs = src_grid@crs,
     transform = src_grid@transform,
     dims = as.numeric(src_grid@dims[c("x", "y")]),
-    tile = as.numeric(ds$getBlockSize(1L)),
-    bytes = .dtype_width(.gdal_band_dtype(ds, 1L)) / 8,
-    south_up = ds$getGeoTransform()[[6L]] > 0,
+    tile = if (length(block) == 2L) as.numeric(block) else c(256, 256),
+    bytes = if (length(stored$dtype)) .dtype_width(stored$dtype) / 8 else 8,
+    south_up = isTRUE(stored$south_up),
     threads = if (length(pool)) sub("^NUM_THREADS=", "", pool[[1L]], ignore.case = TRUE) else "",
     radius = .warp_kernel_radius[[resampling]] %||% 3
   )

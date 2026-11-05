@@ -202,6 +202,8 @@ NULL
     prefetch = .gdal_warp_prefetch_src(
       snode@path,
       snode@grid,
+      snode@stored,
+      snode@block_dim,
       snode@open_options,
       wnode@resampling
     )
