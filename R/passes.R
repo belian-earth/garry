@@ -782,6 +782,35 @@ NULL
 # it would make a cycle.
 .merge_chunk_pipelines <- function(protos, graph, halos, chunk_dim) {
   n <- length(protos)
+  n_cons <- tabulate(
+    as.integer(unlist(lapply(protos, `[[`, "inputs"))),
+    nbins = n
+  )
+  # Under cost placement a stage fed by one read that nothing else
+  # consumes can run on that read's tasks (.placement_candidates()).
+  # Where it exports fewer planes than it reads, folding it into its
+  # consumer would hold the wider raw window in the store until the
+  # consumer runs: 13 yearly 17-band predicts folded into their stack
+  # ran on the compute pool and kept the read budget full. A stage that
+  # does not shrink its read saves no store bytes on the reader, and
+  # folding it keeps the chunk's pipeline in one program.
+  on_read <- identical(garry_opt("placement"), "cost")
+  consumed <- unique(unlist(lapply(protos, `[[`, "input_nodes")))
+  planes <- function(ids) {
+    sum(vapply(
+      ids,
+      function(id) .grid_planes(.node_grid(graph_get(graph, id))),
+      numeric(1)
+    ))
+  }
+  shrinks_read <- function(p) {
+    on_read &&
+      length(p$inputs) == 1L &&
+      length(p$input_nodes) == 1L &&
+      protos[[p$inputs]]$kind == "source_read" &&
+      n_cons[[p$inputs]] == 1L &&
+      planes(intersect(p$members, consumed)) < planes(p$input_nodes)
+  }
   # As .merge_stages: a stage that needs a halo keeps its own ring and
   # edge handling, and a sealed stage stays on its reader.
   comp <- vapply(
@@ -789,6 +818,7 @@ NULL
     function(p) {
       p$kind == "compute" &&
         !isTRUE(p$sealed) &&
+        !shrinks_read(p) &&
         .stage_halo(graph, p$members, p$input_nodes, halos) == 0L
     },
     logical(1)
