@@ -661,14 +661,14 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # two read layouts, p99 246 DN from exact against 17 by blocks, at the same
 # speed. Blocks hold the rows of the warp to 512 px whatever is read.
 #
-# Over the network each block's warp is a RasterIO of its own, and each
-# RasterIO fetches the tile rows it crosses one request after another. One
-# day of MUR SST onto a 1000 x 1000 polar grid took 37 serial GETs that way,
-# against 6 for one RasterIO of the window. So where the window passes
-# .gdal_warp_prefetch_window(), its blocks are first warped whole and the
-# values dropped: the source tiles arrive in one coalesced request a tile row
-# and stay in the block cache, where the block reads that give the cells find
-# them. The cells are the blocks' as before.
+# Over the network each block's warp is a RasterIO of its own: one round trip
+# for the source tiles it is first to touch, in ranges fetched together. One
+# day of MUR SST onto a 1000 x 1000 polar grid took 36 requests in 7 such
+# batches by blocks, against 5 in one for a RasterIO of the window. So where
+# .gdal_warp_prefetch_plan() finds it pays, the window's blocks are first warped
+# whole, in strips, and the values dropped: the source tiles arrive in a batch
+# a strip and stay in the block cache, where the block reads that give the cells
+# find them. The cells are the blocks' as before.
 .gdal_read_warped <- function(ra, code, win = NULL) {
   if (!isTRUE(ra$warped)) {
     return(code)
@@ -678,37 +678,56 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   on.exit(gdalraster::set_config_option(key, prev), add = TRUE)
   if (!is.null(ra$prefetch) && !is.null(win)) {
     ds <- .gdal_handle(ra$path, ra$open_options)
-    env <- .gdal_warp_prefetch_window(ds, ra$prefetch, win)
-    if (!is.null(env)) {
+    plan <- .gdal_warp_prefetch_plan(ds, ra$prefetch, win)
+    if (!is.null(plan)) {
+      # GTiff fetches a read's tiles as ranges together up to this many
+      # compressed bytes, then one tile at a time: 10 MB by default, under a
+      # strip of large tiles (nine 2.5 MB DEM tiles went in eight requests)
+      raw <- "GDAL_MAX_RAW_BLOCK_CACHE_SIZE"
+      prev_raw <- .gdal_config_prev(raw)
+      on.exit(gdalraster::set_config_option(raw, prev_raw), add = TRUE)
+      gdalraster::set_config_option(raw, format(plan$raw_bytes, scientific = FALSE))
       gdalraster::set_config_option(key, "YES")
-      ds$read(1L, env[[1L]], env[[2L]], env[[3L]], env[[4L]], env[[3L]], env[[4L]])
+      for (st in plan$strips) {
+        ds$read(1L, st[[1L]], st[[2L]], st[[3L]], st[[4L]], st[[3L]], st[[4L]])
+      }
     }
   }
   gdalraster::set_config_option(key, "NO")
   force(code)
 }
 
-# The window of warped VRT `ds` to prefetch for a read of `win`, as
-# c(x_off, y_off, x_size, y_size), or NULL for none. The window grows to whole
-# VRT blocks, the ones its read warps. GDAL warps a request whole only for a
-# one-band VRT, only past one block column and one block row, and with
-# GDAL_NUM_THREADS set it caches no block of a request that covers the whole
-# source, so none of those gains. A window whose footprint on the source PROJ
-# cannot bound, or that misses the source, may have no source window for the
-# whole warp, which then fails where its blocks read nodata: none either.
+# Pixels of one prefetch strip: its dropped values (8 bytes each) and its
+# warp's buffers stay well inside the warper's 64 MB, which would otherwise
+# split the strip into reads of its own.
+.warp_prefetch_strip_px <- 2^22
+# The round trip a prefetch saves is priced at 20 ms, about an object store's
+# first byte in region, and the extra warp at 30 ns a pixel, as measured for a
+# bilinear warp on one core (0.08 s for a 2.6 Mpx DEM window).
+.warp_prefetch_rtt_s <- 0.02
+.warp_prefetch_px_s <- 3e-8
+
+# How to prefetch window `win` of warped VRT `ds` (.gdal_read_warped()):
+# list(strips, raw_bytes), strips as c(x_off, y_off, x_size, y_size), or NULL
+# for none. The window grows to whole VRT blocks, the ones its read warps, and
+# splits into strips of whole block rows. GDAL warps a request whole only for a
+# one-band VRT and only past one block column and one block row, so nothing
+# else gains. A strip any of whose sampled points PROJ cannot transform, or that
+# misses the source, is left to its blocks: a whole warp of it may find no
+# source window and fail where its blocks read nodata. Under a GTiff thread
+# pool a request for the whole source skips the block cache, so such a strip
+# declines the window.
 #
-# The prefetch is a second warp of the window, so it must save round trips to
-# pay: the block reads must take at least four requests a tile row
-# (.gdal_warp_block_fetches()), where the whole warp takes about one. A Copernicus
-# DEM tile onto UTM took two a row by blocks, nine requests for three rows
-# whole, and lost 0.2 s of 1.8 to the prefetch; MUR SST onto a polar grid took
-# seven and ten a row, and the prefetch cut 38 s to 13. Last, the window's
-# source tiles must fit half the block cache, or the prefetch evicts its own
-# first tiles before the blocks reach them, and the dropped values (8 bytes a
-# pixel) half of it too. Footprints are at full resolution: a target coarse
-# enough for an overview overstates them, which only declines.
-.gdal_warp_prefetch_window <- function(ds, src, win) {
-  if (ds$getRasterCount() != 1L || nzchar(gdalraster::get_config_option("GDAL_NUM_THREADS"))) {
+# Then it must pay. By blocks the window takes a round trip for each block
+# that first touches some tile (.gdal_warp_block_batches()); prefetched, one a
+# strip. The round trips saved must outweigh a second warp of the strips'
+# pixels, and the window's tiles must fit half the block cache, or the prefetch
+# evicts its own first tiles before the blocks reach them. MUR SST onto a polar
+# grid saves about 6 round trips a megapixel; a Copernicus DEM tile onto UTM 5 over
+# 2.6 Mpx in nine tiles of 1024 x 1024, which a strip fetches in one batch only
+# above GTiff's default range cap (`raw_bytes`).
+.gdal_warp_prefetch_plan <- function(ds, src, win) {
+  if (ds$getRasterCount() != 1L) {
     return(NULL)
   }
   bs <- ds$getBlockSize(1L)
@@ -721,35 +740,66 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   if (x1 - x0 <= bs[[1L]] || y1 - y0 <= bs[[2L]]) {
     return(NULL)
   }
-  env <- c(x0, y0, x1 - x0, y1 - y0)
-  if (is.null(.gdal_warp_src_window(ds, src, env))) {
+  rows <- bs[[2L]] * max(1, floor(.warp_prefetch_strip_px / ((x1 - x0) * bs[[2L]])))
+  tops <- seq(y0, y1 - 1, by = rows)
+  strips <- lapply(tops, function(y) c(x0, y, x1 - x0, min(rows, y1 - y)))
+  threaded <- !src$threads %in% c("", "1") ||
+    !gdalraster::get_config_option("GDAL_NUM_THREADS") %in% c("", "1")
+  keep <- logical(length(strips))
+  for (k in seq_along(strips)) {
+    w <- .gdal_warp_src_window(ds, src, strips[[k]], strict = TRUE)
+    if (!is.null(w) && threaded && all(w == c(0, 0, src$dims - 1))) {
+      return(NULL)
+    }
+    keep[[k]] <- !is.null(w)
+  }
+  strips <- strips[keep]
+  if (!length(strips)) {
     return(NULL)
   }
-  f <- .gdal_warp_block_fetches(ds, src, env, bs)
+  b <- .gdal_warp_block_batches(ds, src, strips, bs)
+  px <- sum(vapply(strips, function(st) st[[3L]] * st[[4L]], numeric(1)))
+  tile_bytes <- prod(src$tile) * src$bytes
   half <- as.numeric(gdalraster::get_cache_max("bytes")) / 2
+  saved <- b[["batches"]] - length(strips)
   if (
-    f[["requests"]] < 4 * f[["tile_rows"]] ||
-      f[["tiles"]] * prod(src$tile) * src$bytes > half ||
-      env[[3L]] * env[[4L]] * 8 > half
+    b[["tiles"]] == 0 ||
+      b[["tiles"]] * tile_bytes > half ||
+      saved * .warp_prefetch_rtt_s <= px * .warp_prefetch_px_s
   ) {
     return(NULL)
   }
-  env
+  list(strips = strips, raw_bytes = max(10 * 2^20, b[["strip_tiles"]] * tile_bytes))
 }
 
-# The source pixels c(c0, r0, c1, r1) (inclusive, clipped to the source) under
-# window `env` c(x_off, y_off, x_size, y_size) of warped VRT `ds`: the box of
-# its edges on the source, two pixels wider for the kernel, as the warper pads
-# its source windows. NULL where PROJ cannot bound the edges (it warns and gives
-# NA) or the box misses the source.
-.gdal_warp_src_window <- function(ds, src, env) {
+# The source pixels c(c0, r0, c1, r1) (inclusive, clipped to the source, rows
+# north first) under window `env` c(x_off, y_off, x_size, y_size) of warped VRT
+# `ds`, padded as the warper pads for its kernel: the kernel's radius in source
+# pixels, wider where the warp shrinks the source. NULL where the box misses the
+# source or PROJ cannot bound it; `strict` also where any of the window's edge
+# and interior sample points fails to transform, as for a window that crosses
+# the limb of an orthographic or geostationary disk.
+.gdal_warp_src_window <- function(ds, src, env, strict = FALSE) {
   gt <- ds$getGeoTransform()
-  ext <- c(
-    gt[[1L]] + env[[1L]] * gt[[2L]],
-    gt[[4L]] + (env[[2L]] + env[[4L]]) * gt[[6L]],
-    gt[[1L]] + (env[[1L]] + env[[3L]]) * gt[[2L]],
-    gt[[4L]] + env[[2L]] * gt[[6L]]
-  )
+  xs <- gt[[1L]] + (env[[1L]] + c(0, env[[3L]])) * gt[[2L]]
+  ys <- gt[[4L]] + (env[[2L]] + c(0, env[[4L]])) * gt[[6L]]
+  if (strict) {
+    gx <- seq(xs[[1L]], xs[[2L]], length.out = 21L)
+    gy <- seq(ys[[1L]], ys[[2L]], length.out = 21L)
+    inner <- expand.grid(x = gx[c(1, 6, 11, 16, 21)], y = gy[c(1, 6, 11, 16, 21)])
+    pts <- rbind(
+      cbind(gx, ys[[1L]]), cbind(gx, ys[[2L]]),
+      cbind(xs[[1L]], gy), cbind(xs[[2L]], gy),
+      as.matrix(inner)
+    )
+    # failed points come back NA, with an R warning and a GDAL error each
+    out <- suppressWarnings(.gdal_quiet_errors(gdalraster::transform_xy(pts, ds$getProjection(), src$crs)))
+    if (anyNA(out)) {
+      return(NULL)
+    }
+  }
+  ext <- c(min(xs), min(ys), max(xs), max(ys))
+  # PROJ warns and gives NA for edges it cannot transform
   b <- suppressWarnings(
     gdalraster::transform_bounds(ext, ds$getProjection(), src$crs, densify_pts = 21L)
   )
@@ -757,13 +807,14 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     return(NULL)
   }
   sg <- src$transform
-  cols <- c((b[[1L]] - sg[[1L]]) / sg[[2L]], (b[[3L]] - sg[[1L]]) / sg[[2L]])
-  rows <- c((b[[4L]] - sg[[4L]]) / sg[[6L]], (b[[2L]] - sg[[4L]]) / sg[[6L]])
+  cols <- sort(c((b[[1L]] - sg[[1L]]) / sg[[2L]], (b[[3L]] - sg[[1L]]) / sg[[2L]]))
+  rows <- sort(c((b[[4L]] - sg[[4L]]) / sg[[6L]], (b[[2L]] - sg[[4L]]) / sg[[6L]]))
+  pad <- ceiling(src$radius * pmax(1, c(diff(cols) / env[[3L]], diff(rows) / env[[4L]]))) + 1
   w <- c(
-    max(0, floor(min(cols)) - 2),
-    max(0, floor(min(rows)) - 2),
-    min(src$dims[[1L]] - 1, ceiling(max(cols)) + 2),
-    min(src$dims[[2L]] - 1, ceiling(max(rows)) + 2)
+    max(0, floor(cols[[1L]]) - pad[[1L]]),
+    max(0, floor(rows[[1L]]) - pad[[2L]]),
+    min(src$dims[[1L]] - 1, ceiling(cols[[2L]]) + pad[[1L]]),
+    min(src$dims[[2L]] - 1, ceiling(rows[[2L]]) + pad[[2L]])
   )
   if (w[[3L]] < w[[1L]] || w[[4L]] < w[[2L]]) {
     return(NULL)
@@ -771,66 +822,95 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   w
 }
 
-# What the block reads of window `env` fetch, block by block in GDAL's order:
-# each block's new source tiles (those no earlier block cached) in one request
-# for each run of adjacent tiles in a tile row, as GDAL coalesces a read. Gives
-# c(requests, tile_rows, tiles): the requests, and the tile rows and tiles the
-# window's source covers. One day of MUR SST onto a 1000 x 1000 polar grid
-# models as 36 requests over 5 rows, a Copernicus DEM tile onto UTM as 6 over
-# 3; 36 and 6 were measured.
-.gdal_warp_block_fetches <- function(ds, src, env, bs) {
+# What the block reads of `strips` fetch, block by block in GDAL's order: a
+# block that is first to touch some source tile costs a round trip, its new
+# tiles going together in that read's ranges. Gives c(batches, tiles,
+# strip_tiles): those blocks, the tiles under the strips, and the most under
+# one strip. Tile rows count from the file's first row, the south edge of a
+# south-up file. Footprints are boxes, so a rotated block grazes tiles it does
+# not read: one day of MUR SST onto a 1000 x 1000 polar grid models as 14
+# batches over 60 tiles, where 7 were measured.
+.gdal_warp_block_batches <- function(ds, src, strips, bs) {
   tile <- src$tile
   seen <- new.env(parent = emptyenv())
-  requests <- 0
-  rows <- integer(0)
-  for (yb in seq(env[[2L]], env[[2L]] + env[[4L]] - 1, by = bs[[2L]])) {
-    for (xb in seq(env[[1L]], env[[1L]] + env[[3L]] - 1, by = bs[[1L]])) {
-      blk <- c(
-        xb,
-        yb,
-        min(bs[[1L]], env[[1L]] + env[[3L]] - xb),
-        min(bs[[2L]], env[[2L]] + env[[4L]] - yb)
-      )
-      w <- .gdal_warp_src_window(ds, src, blk)
-      if (is.null(w)) {
-        next
-      }
-      for (ty in seq(w[[2L]] %/% tile[[2L]], w[[4L]] %/% tile[[2L]])) {
-        tx <- seq(w[[1L]] %/% tile[[1L]], w[[3L]] %/% tile[[1L]])
-        key <- paste(tx, ty)
-        new <- tx[!vapply(key, exists, NA, envir = seen, inherits = FALSE)]
+  batches <- 0
+  most <- 0
+  for (st in strips) {
+    before <- length(seen)
+    for (yb in seq(st[[2L]], st[[2L]] + st[[4L]] - 1, by = bs[[2L]])) {
+      for (xb in seq(st[[1L]], st[[1L]] + st[[3L]] - 1, by = bs[[1L]])) {
+        blk <- c(xb, yb, min(bs[[1L]], st[[1L]] + st[[3L]] - xb), min(bs[[2L]], st[[2L]] + st[[4L]] - yb))
+        w <- .gdal_warp_src_window(ds, src, blk)
+        if (is.null(w)) {
+          next
+        }
+        r <- c(w[[2L]], w[[4L]])
+        if (src$south_up) {
+          r <- rev(src$dims[[2L]] - 1 - r)
+        }
+        key <- as.vector(outer(
+          seq(w[[1L]] %/% tile[[1L]], w[[3L]] %/% tile[[1L]]),
+          seq(r[[1L]] %/% tile[[2L]], r[[2L]] %/% tile[[2L]]),
+          paste
+        ))
+        new <- key[!vapply(key, exists, NA, envir = seen, inherits = FALSE)]
         if (length(new)) {
-          requests <- requests + sum(diff(new) != 1L) + 1
-          for (k in paste(new, ty)) {
+          batches <- batches + 1
+          for (k in new) {
             assign(k, TRUE, envir = seen)
           }
         }
-        rows <- c(rows, ty)
       }
     }
+    most <- max(most, length(seen) - before)
   }
-  c(requests = requests, tile_rows = length(unique(rows)), tiles = length(seen))
+  c(batches = batches, tiles = length(seen), strip_tiles = most)
 }
 
 # What a warped VRT of `path` needs to judge its prefetches
-# (.gdal_warp_prefetch_window()): the source's CRS, geotransform, size, tile
-# size (`block`, 256 x 256 where unknown) and bytes a pixel. NULL where reads stay on the machine, which has no round
-# trips to save: a remote file, or a local VRT of remote files (classic VRTs
-# of remote COGs), prefetches. A GTI mosaic does not: its sources warp one by
-# one inside it.
-.gdal_warp_prefetch_src <- function(path, src_grid, stored, block = integer(0)) {
-  vrt <- grepl("\\.vrt$", path, ignore.case = TRUE)
-  if (!.gdal_is_remote(path) && !(vrt && .gdal_reads_remote(path))) {
+# (.gdal_warp_prefetch_plan()), or NULL where reads stay on the machine, which
+# has no round trips to save. A remote file prefetches, and a local VRT of
+# remote files (classic VRTs of remote COGs), judged by its first remote
+# file's tiles, the reads it passes on. A GTI mosaic does not: its sources warp
+# one by one inside it. Opens the file, or that first one, if its source has not.
+.gdal_warp_prefetch_src <- function(path, src_grid, open_options, resampling) {
+  if (.gdal_is_remote(path)) {
+    return(.gdal_warp_src_info(.gdal_probe(path, open_options), src_grid, resampling, open_options))
+  }
+  if (!grepl("\\.vrt$", path, ignore.case = TRUE) || !.gdal_reads_remote(path)) {
     return(NULL)
   }
+  files <- .gdal_probe(path)$getFileList()
+  info <- .gdal_warp_src_info(.gdal_probe(files[.gdal_is_remote(files)][[1L]]), src_grid, resampling)
+  info$bytes <- .dtype_width(.gdal_band_dtype(.gdal_probe(path), 1L)) / 8
+  info
+}
+
+# .gdal_warp_prefetch_src()'s description of a source from its open handle
+# `ds` (its tiles, sample bytes and row order), the GTiff thread pool its
+# `open_options` ask for, and its garry
+# grid (CRS, north-up geotransform and size, as the warp's windows map onto).
+.gdal_warp_src_info <- function(ds, src_grid, resampling, open_options = character(0)) {
+  pool <- grep("^NUM_THREADS=", open_options, ignore.case = TRUE, value = TRUE)
   list(
     crs = src_grid@crs,
     transform = src_grid@transform,
     dims = as.numeric(src_grid@dims[c("x", "y")]),
-    tile = if (length(block)) as.numeric(block) else c(256, 256),
-    bytes = if (length(stored$dtype)) .dtype_width(stored$dtype) / 8 else 8
+    tile = as.numeric(ds$getBlockSize(1L)),
+    bytes = .dtype_width(.gdal_band_dtype(ds, 1L)) / 8,
+    south_up = ds$getGeoTransform()[[6L]] > 0,
+    threads = if (length(pool)) sub("^NUM_THREADS=", "", pool[[1L]], ignore.case = TRUE) else "",
+    radius = .warp_kernel_radius[[resampling]] %||% 3
   )
 }
+
+# Source pixels a resampling's kernel reaches either side at scale 1, as the
+# warper pads its source windows (GWKGetFilterRadius()).
+.warp_kernel_radius <- list(
+  near = 1, nearest = 1, bilinear = 1, cubic = 2, cubicspline = 2,
+  lanczos = 3, average = 1, rms = 1, mode = 1, min = 1, max = 1, med = 1,
+  q1 = 1, q3 = 1, sum = 1
+)
 
 # A TIFF's tile offsets and sizes in bytes: 16 a tile a band in a BigTIFF,
 # a third more for its overviews. They sit in the header, and a remote
