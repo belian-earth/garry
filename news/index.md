@@ -496,6 +496,17 @@
 
 ### Bug fixes
 
+- `stage_merge = "auto"` no longer folds a stage that could run on its
+  read’s tasks, and exports fewer planes than it reads, into its
+  consumer. A predict per year, stacked along time, had become one
+  compute stage holding every year’s raw read until it ran. A production
+  index’s predict took 539 s against 293 s on 0.1.0, with the read
+  budget full for most of the run. On 13 years of 17-band rasters at 64
+  chunks the stack took 19 s cold against 28 s, with identical results.
+  A stage that keeps its read’s width, such as a one-band map, still
+  folds, and under `garry.placement = "rules"` every such stage folds as
+  before.
+
 - An in-process
   [`collect()`](https://belian-earth.github.io/garry/reference/collect.md)
   of a warped 32-bit integer band no longer prints gdalraster’s Int64
