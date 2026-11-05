@@ -881,10 +881,8 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     if (!grepl("\\.vrt$", path, ignore.case = TRUE) || !.gdal_reads_remote(path)) {
       return(NULL)
     }
-    props <- regmatches(
-      readLines(path, warn = FALSE),
-      regexpr('<SourceProperties[^>]*BlockXSize="[0-9]+"[^>]*BlockYSize="[0-9]+"', readLines(path, warn = FALSE))
-    )
+    xml <- readLines(path, warn = FALSE)
+    props <- regmatches(xml, regexpr('<SourceProperties[^>]*BlockXSize="[0-9]+"[^>]*BlockYSize="[0-9]+"', xml))
     if (length(props)) {
       block <- as.numeric(c(
         sub('.*BlockXSize="([0-9]+)".*', "\\1", props[[1L]]),
