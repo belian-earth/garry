@@ -103,6 +103,17 @@
 
 ## New features
 
+* `plan_reads()` lists where a plan reads its sources, without reading a
+  pixel: each read window of each read stage, the source pixels behind it
+  (the box of its footprint, padded for the kernel, for a warp) and the source
+  tiles it touches. `tiles = TRUE` gives one row per tile with its byte offset
+  and length in the file, from its TIFF metadata, ready to join to a table of
+  byte references. For ten days of MUR SST warped onto a polar grid it gives the
+  windows that were rebuilt by hand from `chunk_iter()` and `transform_bounds()`,
+  70 tiles and about 2 MB a day. A classic VRT of one file a band resolves to its
+  files; reads of several files, GTI mosaics, Zarr arrays and coarsened warps
+  list their windows with no source window.
+
 * `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
   by block means of its valid values. Its read assembles each window's
   finer cells from the sources as their nearest-neighbour read does

@@ -945,6 +945,37 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   if (length(m)) as.integer(sub(".*>", "", m[[1L]])) else NA_integer_
 }
 
+# The file under pixel (px, py) of band `band` of a VRT, by GDAL's
+# LocationInfo, or NA where none lies there. No source is opened.
+gdal_vrt_file_at <- function(path, band, px, py) {
+  ds <- .gdal_handle(path)
+  info <- ds$getMetadataItem(band, paste0("Pixel_", px, "_", py), "LocationInfo")
+  file <- regmatches(info, regexpr("(?<=<File>)[^<]+(?=</File>)", info, perl = TRUE))
+  if (length(file)) file[[1L]] else NA_character_
+}
+
+# Byte offset and length of tiles (tx, ty) of band `band` of a GTiff, from its
+# TIFF metadata; 0 and 0 for a tile the file leaves empty (sparse), NA for a
+# file that is no TIFF. Opens the file, a remote one included.
+gdal_tile_bytes <- function(path, band, tx, ty) {
+  ds <- .gdal_probe(path)
+  item <- function(what) {
+    as.numeric(vapply(
+      paste0(what, "_", tx, "_", ty),
+      function(k) {
+        v <- ds$getMetadataItem(band, k, "TIFF")
+        if (nzchar(v)) v else NA_character_
+      },
+      character(1),
+      USE.NAMES = FALSE
+    ))
+  }
+  if (!identical(ds$getDriverShortName(), "GTiff")) {
+    return(list(offset = rep(NA_real_, length(tx)), length = rep(NA_real_, length(tx))))
+  }
+  list(offset = item("BLOCK_OFFSET"), length = item("BLOCK_SIZE"))
+}
+
 # Source pixels a resampling's kernel reaches either side at scale 1, as the
 # warper pads its source windows (GWKGetFilterRadius()).
 .warp_kernel_radius <- list(
