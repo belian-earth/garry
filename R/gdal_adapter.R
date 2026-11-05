@@ -977,6 +977,49 @@ gdal_tile_bytes <- function(path, band, tx, ty, open_options = character(0)) {
   list(offset = item("BLOCK_OFFSET"), length = item("BLOCK_SIZE"))
 }
 
+# The overview (0 the first) a RasterIO decimating `factor` times reads, as
+# GDAL picks it: the coarsest whose factor is at most the read's, with a fifth
+# more leeway for nearest neighbour (GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD
+# overrides it). NA for full resolution. A 4096 px COG read by 2, 4, 6, 8 and
+# 16 took levels 0, 1, 1, 2 and 2. Opens each overview of the file.
+.gdal_rasterio_overview <- function(path, open_options, factor, resampling) {
+  if (factor < 2) {
+    return(NA_integer_)
+  }
+  n <- .gdal_probe(path, open_options)$getOverviewCount(1L)
+  set <- gdalraster::get_config_option("GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD")
+  thr <- if (nzchar(set)) as.numeric(set) else if (resampling %in% c("near", "nearest")) 1.2 else 1
+  base <- .gdal_probe(path, open_options)$getRasterXSize()
+  best <- NA_integer_
+  for (k in seq_len(n) - 1L) {
+    f <- base / .gdal_probe(path, c(open_options, paste0("OVERVIEW_LEVEL=", k, " only")))$getRasterXSize()
+    if (f <= factor * thr) {
+      best <- k
+    }
+  }
+  best
+}
+
+# `desc` (.gdal_source_desc()) at overview `level` of `path`, as the file holds
+# it: its size, north-up geotransform and tiles. A local VRT keeps the COG
+# layout .gdal_source_desc() assumes.
+.gdal_overview_desc <- function(desc, path, open_options, level) {
+  if (grepl("\\.vrt$", path, ignore.case = TRUE) && !.gdal_is_remote(path)) {
+    return(desc)
+  }
+  ov <- .gdal_probe(path, c(open_options, paste0("OVERVIEW_LEVEL=", level, " only")))
+  gt <- ov$getGeoTransform()
+  ny <- ov$getRasterYSize()
+  if (gt[[6L]] > 0) {
+    gt <- c(gt[[1L]], gt[[2L]], 0, gt[[4L]] + ny * gt[[6L]], 0, -gt[[6L]])
+  }
+  desc$transform <- gt
+  desc$dims <- c(ov$getRasterXSize(), ny)
+  desc$tile <- as.numeric(ov$getBlockSize(1L))
+  desc$level <- level
+  desc
+}
+
 # Source pixels a resampling's kernel reaches either side at scale 1, as the
 # warper pads its source windows (GWKGetFilterRadius()).
 .warp_kernel_radius <- list(
