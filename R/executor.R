@@ -198,7 +198,13 @@ NULL
     scale = snode@scale,
     offset = snode@offset,
     decim = NULL,
-    warped = TRUE
+    warped = TRUE,
+    prefetch = .gdal_warp_src_bytes(
+      snode@path,
+      snode@grid,
+      snode@stored,
+      wnode@target_grid
+    )
   )
 }
 
@@ -290,7 +296,8 @@ NULL
           out_nodata = nodata,
           open_options = ra$open_options,
           decim = ra$decim
-        )
+        ),
+        core
       )
     },
     what = "read",
@@ -447,7 +454,8 @@ NULL
         scale = ra$scale,
         offset = ra$offset,
         decim = ra$decim
-      )
+      ),
+      w
     )
   }
   sub <- .gdal_with_retry(read_one, what = "read", src = ra$path)

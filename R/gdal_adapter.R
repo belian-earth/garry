@@ -660,15 +660,78 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # source pixels a cell takes: 93 % of a Landsat band's cells moved between
 # two read layouts, p99 246 DN from exact against 17 by blocks, at the same
 # speed. Blocks hold the rows of the warp to 512 px whatever is read.
-.gdal_read_warped <- function(ra, code) {
+#
+# Over a remote file each block's warp is a RasterIO of its own, and each
+# RasterIO fetches the tile rows it crosses one request after another. One
+# day of MUR SST onto a 1000 x 1000 polar grid took 37 serial GETs that way,
+# against 6 for one RasterIO of the window. So where `ra$prefetch` says the
+# window's source fits the block cache, the window is first warped whole and
+# dropped: its source tiles arrive in one coalesced request a tile row and
+# stay in the block cache, and the block reads that give the cells find them
+# there. The cells are the blocks' as before.
+.gdal_read_warped <- function(ra, code, win = NULL) {
   if (!isTRUE(ra$warped)) {
     return(code)
   }
   key <- "GDAL_VRT_WARP_USE_DATASET_RASTERIO"
   prev <- .gdal_config_prev(key)
-  gdalraster::set_config_option(key, "NO")
   on.exit(gdalraster::set_config_option(key, prev), add = TRUE)
+  if (.gdal_warp_prefetches(ra, win)) {
+    gdalraster::set_config_option(key, "YES")
+    ds <- .gdal_handle(ra$path, ra$open_options)
+    for (b in ra$band) {
+      .gdal_read_rows(ds, b, win$x_off, win$y_off, win$x_size, win$y_size)
+    }
+  }
+  gdalraster::set_config_option(key, "NO")
   force(code)
+}
+
+# Does a warped read of window `win` prefetch its source (.gdal_read_warped())?
+# Only where the window's source blocks fit in half the block cache: a larger
+# window would evict its own first tiles before the block reads reach them and
+# fetch them twice. The prefetch's dropped values are one band of the window at
+# a time, no more than the read itself returns.
+.gdal_warp_prefetches <- function(ra, win) {
+  if (is.null(ra$prefetch) || is.null(win)) {
+    return(FALSE)
+  }
+  px <- as.numeric(win$x_size) * win$y_size
+  cache <- as.numeric(gdalraster::get_cache_max("bytes"))
+  px * ra$prefetch * length(ra$band) <= cache / 2
+}
+
+# Source bytes behind one target pixel, per band, of a remote file warped onto
+# `target_grid`, for .gdal_warp_prefetches(); NULL for a local file, which has
+# no round trips to save, and where the target's footprint on the source has
+# no box (it crosses the antimeridian or leaves the projection). The source
+# pixels of the target's bounding box on the source, inside the source's
+# extent, over the target's pixels: a target that covers more than the source
+# spreads them thinner than a window inside it sees, which the halved cache in
+# the gate absorbs.
+.gdal_warp_src_bytes <- function(path, src_grid, stored, target_grid) {
+  if (!.gdal_is_remote(path)) {
+    return(NULL)
+  }
+  b <- tryCatch(
+    gdalraster::transform_bounds(
+      target_grid@extent,
+      target_grid@crs,
+      src_grid@crs,
+      densify_pts = 21L
+    ),
+    error = function(e) rep(NA_real_, 4L)
+  )
+  se <- src_grid@extent
+  w <- min(b[[3L]], se[[3L]]) - max(b[[1L]], se[[1L]])
+  h <- min(b[[4L]], se[[4L]]) - max(b[[2L]], se[[2L]])
+  if (!all(is.finite(b)) || b[[3L]] < b[[1L]] || !(w > 0 && h > 0)) {
+    return(NULL)
+  }
+  gt <- src_grid@transform
+  src_px <- w * h / abs(gt[[2L]] * gt[[6L]])
+  bytes <- if (length(stored$dtype)) .dtype_width(stored$dtype) / 8 else 8
+  src_px / prod(as.numeric(target_grid@dims[c("x", "y")])) * bytes
 }
 
 # A TIFF's tile offsets and sizes in bytes: 16 a tile a band in a BigTIFF,

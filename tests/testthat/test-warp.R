@@ -488,6 +488,69 @@ test_that("a warp's cells do not depend on its chunks at GDAL's tolerance", {
   expect_lt(max(abs(c(collect(warped, distributed = FALSE)) - c(whole)), na.rm = TRUE), 200)
 })
 
+test_that("a warp's prefetch of its source leaves its cells as the blocks give them", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  nx <- 1400L
+  ny <- 400L
+  ds <- gdalraster::create("GTiff", f, nx, ny, 1, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 4600000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, nx, ny, as.numeric(round(t(outer(seq_len(ny), seq_len(nx), function(y, x) {
+    1000 * sin(x / 3) * cos(y / 5)
+  })))))
+  ds$close()
+  g <- gdal_grid_spec(f)$grid
+  b <- gdalraster::transform_bounds(g@extent, g@crs, "EPSG:4326")
+  target <- grid_spec("EPSG:4326", extent = b, dims = c(1300L, 380L), dtype = "f32")
+  warped <- align_to(lazy_source(f), target, resampling = "bilinear")
+  layouts <- function() {
+    whole <- collect(warped, distributed = FALSE)
+    withr::with_options(list(garry.read_target_px = 2^14, garry.chunk_target_px = 2^14), {
+      split <- collect(warped, distributed = FALSE)
+    })
+    list(c(whole), c(split))
+  }
+  blocks <- layouts()
+
+  # a local file is never prefetched; stand it in for a remote one
+  expect_null(garry:::.gdal_warp_src_bytes(f, g, list(dtype = "i16"), target))
+  ran <- 0L
+  gate <- garry:::.gdal_warp_prefetches
+  local_mocked_bindings(
+    .gdal_warp_src_bytes = function(...) 2,
+    .gdal_warp_prefetches = function(ra, win) {
+      ok <- gate(ra, win)
+      ran <<- ran + ok
+      ok
+    }
+  )
+  expect_identical(layouts(), blocks)
+  expect_gt(ran, 1L)
+  expect_identical(gdalraster::get_config_option("GDAL_VRT_WARP_USE_DATASET_RASTERIO"), "")
+})
+
+test_that("a warp prefetches only a remote window its block cache holds", {
+  src <- grid_spec("EPSG:32632", extent = c(500000, 4588000, 542000, 4600000), dims = c(1400L, 400L))
+  half <- grid_spec("EPSG:32632", extent = c(500000, 4588000, 542000, 4600000), dims = c(700L, 200L))
+  url <- "/vsicurl/https://example.com/a.tif"
+  # four source pixels of two bytes behind each target pixel
+  expect_equal(garry:::.gdal_warp_src_bytes(url, src, list(dtype = "i16"), half), 8)
+  # an unopened source counts eight bytes a pixel
+  expect_equal(garry:::.gdal_warp_src_bytes(url, src, list(), half), 32)
+  away <- grid_spec("EPSG:32632", extent = c(600000, 4588000, 642000, 4600000), dims = c(700L, 200L))
+  expect_null(garry:::.gdal_warp_src_bytes(url, src, list(dtype = "i16"), away))
+
+  cache <- as.numeric(gdalraster::get_cache_max("bytes"))
+  ra <- list(prefetch = 8, band = 1L)
+  fits <- floor(sqrt(cache / 2 / 8))
+  win <- function(n) list(x_off = 0, y_off = 0, x_size = n, y_size = n)
+  expect_true(garry:::.gdal_warp_prefetches(ra, win(fits)))
+  expect_false(garry:::.gdal_warp_prefetches(ra, win(fits + 1)))
+  expect_false(garry:::.gdal_warp_prefetches(utils::modifyList(ra, list(band = 1:2)), win(fits)))
+  expect_false(garry:::.gdal_warp_prefetches(list(band = 1L), win(10)))
+  expect_false(garry:::.gdal_warp_prefetches(ra, NULL))
+})
+
 test_that("a grid that cannot align declines a direct read before any open", {
   f <- fixture_gradient_f32()
   g <- gdal_grid_spec(f)$grid
