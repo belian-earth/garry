@@ -171,15 +171,23 @@ test_that("a plan worth merging folds its stages, and never a halo stage", {
   # small chunks clear .merge_worth(), which the plans above stay under
   withr::local_options(garry.chunk_target_px = 16L)
   g <- graph_new()
-  a <- lazy_source_stub("a.tif", graph = g)
-  b <- lazy_source_stub("b.tif", graph = g)
+  src <- lapply(c("a", "b", "c", "d"), function(f) {
+    lazy_source_stub(glue::glue("{f}.tif"), graph = g)
+  })
+  a <- src[[1L]]
+  b <- src[[2L]]
   n_compute <- function(x) {
     sum(vapply(plan_lazy(x)@stages, function(s) s@kind == "compute", logical(1)))
   }
   median_of <- function(...) {
     reduce_over(lazy_stack(list(...)), "median", "t", nan_rm = TRUE)
   }
-  bands <- lazy_stack(list(median_of(a + 1, a * 2), median_of(b + 1, b * 2)), along = "band")
+  # two reads per median, so neither median can run on a read's tasks
+  pair <- function(x, y) median_of(x + y, x * y)
+  bands <- lazy_stack(
+    list(pair(src[[1L]], src[[2L]]), pair(src[[3L]], src[[4L]])),
+    along = "band"
+  )
   expect_identical(n_compute(bands), 1L)
   withr::with_options(
     list(garry.stage_merge = "guarded"),
@@ -189,6 +197,46 @@ test_that("a plan worth merging folds its stages, and never a halo stage", {
     focal_map(x + 1, fn = function(sh) Reduce(`+`, sh) / 9, radius = 1L)
   }
   expect_identical(n_compute(median_of(smooth(a), smooth(b))), 3L)
+})
+
+test_that("a stage that can run on its read's tasks stays out of a merge", {
+  withr::local_options(garry.chunk_target_px = 16L)
+  g <- graph_new()
+  mlp <- mlp_project(
+    list(matrix(0.1, 4, 3), matrix(0.1, 1, 4)),
+    list(rep(0, 4), 0)
+  )
+  # a predict per year over one multi-band file, stacked along t
+  year <- function(y) {
+    bands <- lapply(1:3, function(b) {
+      lazy_source_stub(glue::glue("esd-{y}.tif"), band = b, graph = g)
+    })
+    reduce_over(lazy_stack(bands, along = "band"), mlp, over = "band")
+  }
+  x <- lazy_stack(lapply(2012:2015, year), along = "t")
+  kinds <- function() {
+    stages <- plan_lazy(x)@stages
+    kind <- vapply(stages, function(s) s@kind, character(1))
+    feeds <- vapply(
+      stages,
+      function(s) paste(kind[s@inputs], collapse = ","),
+      character(1)
+    )
+    list(kind = kind, feeds = feeds)
+  }
+  k <- kinds()
+  expect_identical(sum(k$kind == "compute"), 5L)
+  expect_identical(sum(k$kind == "compute" & k$feeds == "source_read"), 4L)
+  # rules placement fuses no multi-band read, so the merge folds them all
+  withr::with_options(list(garry.placement = "rules"), {
+    expect_identical(sum(kinds()$kind == "compute"), 1L)
+  })
+  # a map that does not shrink its read gains nothing on the reader
+  maps <- lapply(2012:2015, function(y) {
+    lazy_source_stub(glue::glue("b-{y}.tif"), graph = g) * 2
+  })
+  x <- lazy_stack(maps, along = "t")
+  expect_identical(sum(kinds()$kind == "compute"), 1L)
 })
 
 test_that("sources with different native blocks share one chunk table", {

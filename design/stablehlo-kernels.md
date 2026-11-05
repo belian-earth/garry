@@ -149,6 +149,17 @@ With the loop, whole chunk loses little or nothing cold and wins warm on both fi
 
 The timed-out predict run is the dead daemon hang of section 4, not a merge effect: its stages are the same as the auto arm's. The constants in `.merge_worth()` are coarse, calibrated on these workloads, and include the host sweep's quadratic term, so fixing the sweep changes them.
 
+**What the rule must leave on the readers.** The first production index on 0.2.0 (2026-11-04) showed a cost these workloads did not. The rule merged hutan's 13 yearly predicts into the stack that joins them, because each year's reduce has one consumer and is not sealed. Placement then had no single-read stage to fuse, so every year's raw window waited in the store for one compute task to run all 13 forward passes. The predict took 539 s against 293 s on 0.1.0, and the read budget was full in 93 % of sweeps. The fixture's predict missed this: at its size `.merge_worth()` left it split. Under cost placement the rule now leaves out a stage fed by one read that nothing else consumes, the precondition of `.placement_candidates()`, when it exports fewer planes than it reads. Leaving out every such stage was tried first, and it cost the tail: its one-band maps gain nothing on a reader, and splitting them off cut the chunk's program apart. Two runs per arm, 8 GB, cold and warm seconds, identical hashes:
+
+| Workload | Main | Leave out every one-read stage | Only those that shrink their read |
+|---|---:|---:|---:|
+| Tail, 876 tasks | 19.5, 12.3 | 23.5, 15.9 | 19.4, 12.4 |
+| Tail, 3,225 tasks | 17.6, 11.4 | 28.4, 21.0 | 17.9, 12.0 |
+| Predict (fixture) | 13.3, 12.6 | 11.7, 11.9 | 11.7, 10.7 |
+| Predict, 13 years x 17 bands, 64 chunks, 16 GB | 28.0, 27.1 | 19.8, 21.0 | 19.0, 20.8 |
+
+Morphology, bilateral and OCM moved within noise, and so did every task of the benchmark suite at both sizes: their stages read a band and its mask, so none is a one-read stage.
+
 **A second metric.** The tail run again in one pool with its own calibration and variances, then the first metric repeated. Text census: every float constant replaced by a placeholder.
 
 | Arm | Programs, metric 1 | New for metric 2 | Programs with scalars as inputs | Wall, first, new metric, repeat |
