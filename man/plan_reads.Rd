@@ -18,7 +18,8 @@ daemon pools, which reads a remote mosaic by fetching its items.}
 }
 \value{
 A data frame with one row per window: \code{stage}, \code{route},
-\code{chunk}, \code{path}, \code{band} (comma-separated for a band stack), the
+\code{chunk}, \code{path}, \code{band} (comma-separated for a band stack),
+\code{overview}, the
 window \code{x_off}, \code{y_off}, \code{x_size}, \code{y_size} in the stage's grid,
 halo included, the source window \code{src_x_off}, \code{src_y_off},
 \code{src_x_size}, \code{src_y_size} in the file's pixels (rows from the
@@ -26,7 +27,8 @@ north), and the inclusive tile range \code{tile_x0}, \code{tile_y0}, \code{tile_
 \code{tile_y1} with the tile size \code{tile_x_size}, \code{tile_y_size} (tile rows
 count from the file's first row, the south edge of a south-up file).
 With \code{tiles = TRUE}, one row per window, band and tile in place of
-the range: \code{file}, \code{band}, \code{tile_x}, \code{tile_y}, \code{offset}, \code{length}.
+the range: \code{file}, \code{overview}, \code{band}, \code{tile_x}, \code{tile_y}, \code{offset},
+\code{length}.
 }
 \description{
 Lists the windows a plan's read stages read and the source pixels and
@@ -55,9 +57,14 @@ A local VRT reads through to its files and is described by the tiles
 its \code{SourceProperties} record, which holds for a VRT whose bands each
 take one file on the VRT's own pixels, such as a classic VRT of a
 daily series. A footprint is a box, so a rotated or curved warp lists
-tiles in its corners that it does not read. A decimating read may
-take a file's overview, which GDAL chooses; its tiles are given at full
-resolution.
+tiles in its corners that it does not read.
+
+A read onto a coarse grid reads an overview of its file where the file
+has them: a warp the level gdalwarp picked for it, a decimating read the
+one GDAL's RasterIO takes (the coarsest no coarser than the read). Its
+source window and tiles are then that overview's, numbered in
+\code{overview} (0 the first, \code{NA} full resolution); finding it opens the
+file's overviews.
 
 With \code{tiles = TRUE} each window becomes one row per source tile, with
 the tile's byte \code{offset} and \code{length} in its file, from the file's TIFF

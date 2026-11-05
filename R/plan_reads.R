@@ -23,9 +23,14 @@
 #' its `SourceProperties` record, which holds for a VRT whose bands each
 #' take one file on the VRT's own pixels, such as a classic VRT of a
 #' daily series. A footprint is a box, so a rotated or curved warp lists
-#' tiles in its corners that it does not read. A decimating read may
-#' take a file's overview, which GDAL chooses; its tiles are given at full
-#' resolution.
+#' tiles in its corners that it does not read.
+#'
+#' A read onto a coarse grid reads an overview of its file where the file
+#' has them: a warp the level gdalwarp picked for it, a decimating read the
+#' one GDAL's RasterIO takes (the coarsest no coarser than the read). Its
+#' source window and tiles are then that overview's, numbered in
+#' `overview` (0 the first, `NA` full resolution); finding it opens the
+#' file's overviews.
 #'
 #' With `tiles = TRUE` each window becomes one row per source tile, with
 #' the tile's byte `offset` and `length` in its file, from the file's TIFF
@@ -42,7 +47,8 @@
 #' @param distributed As in [collect()]: whether the plan is read by the
 #'   daemon pools, which reads a remote mosaic by fetching its items.
 #' @return A data frame with one row per window: `stage`, `route`,
-#'   `chunk`, `path`, `band` (comma-separated for a band stack), the
+#'   `chunk`, `path`, `band` (comma-separated for a band stack),
+#'   `overview`, the
 #'   window `x_off`, `y_off`, `x_size`, `y_size` in the stage's grid,
 #'   halo included, the source window `src_x_off`, `src_y_off`,
 #'   `src_x_size`, `src_y_size` in the file's pixels (rows from the
@@ -50,7 +56,8 @@
 #'   `tile_y1` with the tile size `tile_x_size`, `tile_y_size` (tile rows
 #'   count from the file's first row, the south edge of a south-up file).
 #'   With `tiles = TRUE`, one row per window, band and tile in place of
-#'   the range: `file`, `band`, `tile_x`, `tile_y`, `offset`, `length`.
+#'   the range: `file`, `overview`, `band`, `tile_x`, `tile_y`, `offset`,
+#'   `length`.
 #' @seealso [plan_view()] for the stages themselves.
 #' @examples
 #' f <- system.file("extdata", "storml_elev.tif", package = "gdalraster")
@@ -118,6 +125,18 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
     )
   }
   vrt <- if (route == "warp") .gdal_handle(ra$path)
+  # the overview the read takes: the warped VRT records gdalwarp's pick, and
+  # a decimating read takes the one GDAL's RasterIO would
+  level <- switch(
+    route,
+    warp = .gdal_vrt_overview_level(ra$path),
+    direct = .plan_rasterio_overview(file, snode@open_options, min(ra$decim$fx, ra$decim$fy), ra$resampling %||% "near"),
+    NA_integer_
+  )
+  full <- desc
+  if (!is.na(level)) {
+    desc <- .plan_overview_desc(desc, file, snode@open_options, level)
+  }
   ck <- chunk_iter(s@chunks)
   rows <- lapply(seq_len(nrow(ck)), function(i) {
     w <- chunk_window_with_halo(s@chunks, ck$x_off[[i]], ck$y_off[[i]], ck$x_size[[i]], ck$y_size[[i]])
@@ -125,11 +144,15 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
     src <- switch(
       route,
       read = win,
-      direct = c(
-        ra$decim$x_off + win[[1L]] * ra$decim$fx,
-        ra$decim$y_off + win[[2L]] * ra$decim$fy,
-        win[[3L]] * ra$decim$fx,
-        win[[4L]] * ra$decim$fy
+      direct = .plan_onto_overview(
+        c(
+          ra$decim$x_off + win[[1L]] * ra$decim$fx,
+          ra$decim$y_off + win[[2L]] * ra$decim$fy,
+          win[[3L]] * ra$decim$fx,
+          win[[4L]] * ra$decim$fy
+        ),
+        full,
+        desc
       ),
       warp = {
         b <- .gdal_warp_src_window(vrt, desc, win)
@@ -146,6 +169,7 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
     chunk = as.integer(m[, 1L]),
     path = file,
     band = paste(if (warp && length(node@bands)) node@bands else snode@band, collapse = ","),
+    overview = level,
     x_off = m[, 2L],
     y_off = m[, 3L],
     x_size = m[, 4L],
@@ -212,6 +236,61 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
   !length(size) || !all(vapply(bands, whole, NA))
 }
 
+# The overview (0 the first) a RasterIO decimating `factor` times reads, as
+# GDAL picks it: the coarsest whose factor is at most the read's, with a fifth
+# more leeway for nearest neighbour (GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD
+# overrides it). NA for full resolution. A 4096 px COG read by 2, 4, 6, 8 and
+# 16 took levels 0, 1, 1, 2 and 2. Opens each overview of the file.
+.plan_rasterio_overview <- function(path, open_options, factor, resampling) {
+  if (factor < 2) {
+    return(NA_integer_)
+  }
+  n <- .gdal_probe(path, open_options)$getOverviewCount(1L)
+  set <- gdalraster::get_config_option("GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD")
+  thr <- if (nzchar(set)) as.numeric(set) else if (resampling %in% c("near", "nearest")) 1.2 else 1
+  base <- .gdal_probe(path, open_options)$getRasterXSize()
+  best <- NA_integer_
+  for (k in seq_len(n) - 1L) {
+    f <- base / .gdal_probe(path, c(open_options, paste0("OVERVIEW_LEVEL=", k, " only")))$getRasterXSize()
+    if (f <= factor * thr) {
+      best <- k
+    }
+  }
+  best
+}
+
+# `desc` (.gdal_source_desc()) at overview `level` of `path`, as the file holds
+# it: its size, north-up geotransform and tiles. A local VRT keeps the COG
+# layout .gdal_source_desc() assumes.
+.plan_overview_desc <- function(desc, path, open_options, level) {
+  if (grepl("\\.vrt$", path, ignore.case = TRUE) && !.gdal_is_remote(path)) {
+    return(desc)
+  }
+  ov <- .gdal_probe(path, c(open_options, paste0("OVERVIEW_LEVEL=", level, " only")))
+  gt <- ov$getGeoTransform()
+  ny <- ov$getRasterYSize()
+  if (gt[[6L]] > 0) {
+    gt <- c(gt[[1L]], gt[[2L]], 0, gt[[4L]] + ny * gt[[6L]], 0, -gt[[6L]])
+  }
+  desc$transform <- gt
+  desc$dims <- c(ov$getRasterXSize(), ny)
+  desc$tile <- as.numeric(ov$getBlockSize(1L))
+  desc$level <- level
+  desc
+}
+
+# Full-resolution source window `src` (`full`'s pixels) in the pixels of
+# `desc`, its overview: the overview pixels it covers.
+.plan_onto_overview <- function(src, full, desc) {
+  if (is.na(desc$level %||% NA)) {
+    return(src)
+  }
+  r <- full$dims / desc$dims
+  x0 <- floor(src[[1L]] / r[[1L]])
+  y0 <- floor(src[[2L]] / r[[2L]])
+  c(x0, y0, ceiling((src[[1L]] + src[[3L]]) / r[[1L]]) - x0, ceiling((src[[2L]] + src[[4L]]) / r[[2L]]) - y0)
+}
+
 # The inclusive tile range c(tx0, ty0, tx1, ty1) and tile size under source
 # window `src` c(x_off, y_off, x_size, y_size), rows from the north, clipped to
 # the file; NA where there is no window. Tile rows count from the file's first
@@ -263,9 +342,10 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
     tx <- seq(r$tile_x0, r$tile_x1)
     ty <- seq(r$tile_y0, r$tile_y1)
     grid <- expand.grid(tile_x = tx, tile_y = ty, band = bands)
+    oo <- if (is.na(r$overview)) character(0) else paste0("OVERVIEW_LEVEL=", r$overview, " only")
     by <- lapply(bands, function(b) {
       sel <- grid$band == b
-      gdal_tile_bytes(file, b, grid$tile_x[sel], grid$tile_y[sel])
+      gdal_tile_bytes(file, b, grid$tile_x[sel], grid$tile_y[sel], open_options = oo)
     })
     data.frame(
       stage = r$stage,
@@ -273,6 +353,7 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
       chunk = r$chunk,
       path = r$path,
       file = file,
+      overview = r$overview,
       band = grid$band,
       tile_x = grid$tile_x,
       tile_y = grid$tile_y,
@@ -284,7 +365,7 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
   out <- do.call(rbind, c(
     list(data.frame(
       stage = integer(0), route = character(0), chunk = integer(0), path = character(0),
-      file = character(0), band = integer(0), tile_x = numeric(0), tile_y = numeric(0),
+      file = character(0), overview = integer(0), band = integer(0), tile_x = numeric(0), tile_y = numeric(0),
       offset = numeric(0), length = numeric(0), stringsAsFactors = FALSE
     )),
     rows
@@ -297,7 +378,7 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
   num <- numeric(0)
   data.frame(
     stage = integer(0), route = character(0), chunk = integer(0), path = character(0),
-    band = character(0), x_off = num, y_off = num, x_size = num, y_size = num,
+    band = character(0), overview = integer(0), x_off = num, y_off = num, x_size = num, y_size = num,
     src_x_off = num, src_y_off = num, src_x_size = num, src_y_size = num,
     tile_x0 = num, tile_y0 = num, tile_x1 = num, tile_y1 = num,
     tile_x_size = num, tile_y_size = num, stringsAsFactors = FALSE

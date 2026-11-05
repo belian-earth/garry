@@ -956,9 +956,10 @@ gdal_vrt_file_at <- function(path, band, px, py) {
 
 # Byte offset and length of tiles (tx, ty) of band `band` of a GTiff, from its
 # TIFF metadata; 0 and 0 for a tile the file leaves empty (sparse), NA for a
-# file that is no TIFF. Opens the file, a remote one included.
-gdal_tile_bytes <- function(path, band, tx, ty) {
-  ds <- .gdal_probe(path)
+# file that is no TIFF. Opens the file, a remote one included, with
+# `open_options` (an OVERVIEW_LEVEL gives that overview's tiles).
+gdal_tile_bytes <- function(path, band, tx, ty, open_options = character(0)) {
+  ds <- .gdal_probe(path, open_options)
   item <- function(what) {
     as.numeric(vapply(
       paste0(what, "_", tx, "_", ty),

@@ -116,3 +116,50 @@ test_that("plan_reads() takes a plan as planned", {
   r <- lazy_source(f)
   expect_identical(plan_reads(plan_lazy(r), distributed = FALSE), plan_reads(r, distributed = FALSE))
 })
+
+test_that("a read onto a coarse grid lists the overview it reads", {
+  m <- withr::local_tempfile(fileext = ".tif")
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", m, 2048, 2048, 1, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 4600000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$write(1, 0, 0, 2048, 2048, as.numeric(seq_len(2048^2) %% 3000))
+  ds$close()
+  gdalraster::translate(m, f, cl_arg = c("-of", "COG", "-co", "BLOCKSIZE=256"), quiet = TRUE)
+  src <- lazy_source(f)
+  at <- function(k) {
+    h <- methods::new(gdalraster::GDALRaster, f, TRUE, paste0("OVERVIEW_LEVEL=", k, " only"))
+    withr::defer(h$close(), envir = parent.frame())
+    h
+  }
+
+  # a decimating read takes the coarsest overview no coarser than itself
+  by <- function(k) {
+    g <- grid_spec(src@grid@crs, extent = src@grid@extent, dims = c(2048L, 2048L) %/% k, dtype = "f32")
+    plan_reads(align_to(src, g, resampling = "near"), distributed = FALSE)
+  }
+  expect_identical(by(1)$overview, NA_integer_)
+  two <- by(2)
+  expect_identical(two$route, "direct")
+  expect_identical(two$overview, 0L)
+  four <- by(4)
+  expect_identical(four$overview, 1L)
+  expect_equal(c(four$src_x_size, four$src_y_size), c(512, 512))
+  expect_equal(c(four$tile_x1, four$tile_y1), c(1, 1))
+
+  # a warp onto a coarse grid reads the level its VRT names
+  b <- gdalraster::transform_bounds(src@grid@extent, src@grid@crs, "EPSG:4326")
+  w <- plan_reads(align_to(src, grid_spec("EPSG:4326", extent = b, dims = c(200L, 200L), dtype = "f32"), resampling = "bilinear"), distributed = FALSE)
+  expect_identical(w$route, "warp")
+  expect_gte(w$overview, 1L)
+  ov <- at(w$overview)
+  expect_lte(w$src_x_off + w$src_x_size, ov$getRasterXSize())
+  expect_lte(w$src_y_off + w$src_y_size, ov$getRasterYSize())
+
+  # and its tiles are the overview's, at the overview's offsets
+  t <- plan_reads(align_to(src, grid_spec(src@grid@crs, extent = src@grid@extent, dims = c(512L, 512L), dtype = "f32"), resampling = "near"), tiles = TRUE, distributed = FALSE)
+  expect_identical(unique(t$overview), 1L)
+  expect_identical(nrow(t), 4L)
+  o1 <- at(1L)
+  expect_equal(t$offset, as.numeric(mapply(function(x, y) o1$getMetadataItem(1L, paste0("BLOCK_OFFSET_", x, "_", y), "TIFF"), t$tile_x, t$tile_y)))
+})

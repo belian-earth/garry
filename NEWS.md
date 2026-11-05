@@ -112,7 +112,9 @@
   windows that were rebuilt by hand from `chunk_iter()` and `transform_bounds()`,
   70 tiles and about 2 MB a day. A classic VRT of one file a band resolves to its
   files; reads of several files, GTI mosaics, Zarr arrays and coarsened warps
-  list their windows with no source window.
+  list their windows with no source window. A read onto a coarse grid lists
+  the overview it reads, the level gdalwarp picked for a warp or the one
+  RasterIO takes for a decimating read, with that overview's pixels and tiles.
 
 * `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
   by block means of its valid values. Its read assembles each window's
