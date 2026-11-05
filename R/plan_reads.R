@@ -96,6 +96,11 @@ plan_reads <- function(x, tiles = FALSE, distributed = garry_daemons_set()) {
     grown <- stats::setNames(spec$read_stage, vapply(spec$read_stage, function(s) as.character(s@id), ""))
     stages <- lapply(stages, function(s) grown[[as.character(s@id)]] %||% s)
   }
+  # every file stays open through the call, at each overview it is read at:
+  # the host caches four handles, and a series of files read in turn, or one
+  # file at its levels, would reopen each, a header fetch apiece if remote
+  old <- .gdal_handle_cap(max(.gdal_cache$cap, 8L * length(stages) + 4L))
+  on.exit(.gdal_handle_cap(old), add = TRUE)
   rows <- lapply(stages, function(s) .plan_stage_reads(graph, s))
   out <- do.call(rbind, c(list(.plan_reads_empty()), rows))
   rownames(out) <- NULL
