@@ -609,7 +609,7 @@ test_that("a payload loses its srcrefs and nothing else", {
   expect_null(garry:::.unsrc(y))
 })
 
-test_that("tasks and broadcasts cross without srcrefs only where source is kept", {
+test_that("tasks and broadcasts cross without srcrefs", {
   sent <- list()
   testthat::local_mocked_bindings(
     mirai = function(.expr, ...) {
@@ -623,31 +623,28 @@ test_that("tasks and broadcasts cross without srcrefs only where source is kept"
     .package = "mirai"
   )
   x <- .with_srcrefs()
-  send <- function() {
-    sent <<- list()
-    garry:::.task_mirai(x$e, obj = x$obj, f = x$f, .compute = "garry_read")
-    garry:::.pool_send(x$e, "garry_read", obj = x$obj)
-    sent
-  }
-  testthat::local_mocked_bindings(.src_kept = function() TRUE)
-  got <- send()
-  expect_length(got, 2L)
-  expect_false(.carries_src(got))
-  task <- as.list(got[[1L]]$data)
+  garry:::.task_mirai(x$e, obj = x$obj, f = x$f, .compute = "garry_read")
+  garry:::.pool_send(x$e, "garry_read", obj = x$obj)
+  expect_length(sent, 2L)
+  expect_false(.carries_src(sent))
+  task <- as.list(sent[[1L]]$data)
   expect_identical(sort(names(task)), c("f", "obj"))
   expect_identical(task$f(1), x$f(1))
   expect_identical(task$obj@v, 2)
-  expect_identical(got[[2L]]$data$obj@v, 2)
-  # an install without kept source sends them as they are
-  testthat::local_mocked_bindings(.src_kept = function() FALSE)
-  got <- send()
-  expect_identical(as.list(got[[1L]]$data)$f, x$f)
-  expect_identical(got[[2L]]$data$obj, x$obj)
+  expect_identical(sent[[2L]]$data$obj@v, 2)
+  # data without srcrefs crosses as it is
+  sent <- list()
+  garry:::.task_mirai(quote(m), m = x$m, n = x$n$call, .compute = "garry_read")
+  task <- as.list(sent[[1L]]$data)
+  expect_identical(task$m, x$m)
+  expect_identical(task$n, x$n$call)
 })
 
-test_that("garry's own S7 objects cross small where its source is kept", {
-  # fails with the payload stripping removed, on an install that keeps
-  # source; on a plain install it cannot fail
+test_that("garry's own S7 objects cross small", {
+  # Every garry class's parent is S7's base class, as built with S7's
+  # source wherever S7 was installed keeping it (CI's R-devel: 21 MB). This
+  # fails without the stripping there, or where garry's source is kept; on
+  # an install keeping neither it cannot fail.
   g <- grid_spec(
     "EPSG:3857",
     extent = c(0, 0, 600, 400),

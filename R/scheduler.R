@@ -179,23 +179,20 @@ NULL
   )
 }
 
-# What crosses to a daemon, without srcrefs. Wherever garry's source is
-# kept (load_all(), covr, R_KEEP_PKG_SOURCE=yes), a srcref holds its
-# srcfile, the package's whole source text, and three things garry sends
-# carry one: a `{` quoted from its code, a closure it wrote, and every S7
-# object, through its class's constructor and validators. Each weighed
-# 21.6 MB: a small distributed collect sent 688 MB against 0.9 MB, and
-# the suite took 1403 s against 214 s. A copy without srcrefs crosses
-# instead; with garry's own source not kept, `x` crosses as it is.
+# What crosses to a daemon, without srcrefs. A srcref holds its srcfile, a
+# package's whole source text, and garry sends three things that carry
+# one wherever source is kept: a `{` quoted from its code and a closure it
+# wrote, when garry's source is kept (load_all(), covr,
+# R_KEEP_PKG_SOURCE=yes), and every S7 object, through its class, when
+# garry's or S7's is: the class's parent is S7's own base class, built
+# with S7's source wherever S7 was installed from source keeping it, as
+# on CI's R-devel. Each weighed 4 to 21.6 MB: a small distributed collect
+# sent 688 MB against 0.9 MB, and the suite took 1403 s against 214 s. A
+# copy without srcrefs crosses instead; a value with none crosses as it
+# is, so a plain install sends what it did.
 .wire <- function(x) {
-  if (!.src_kept()) {
-    return(x)
-  }
   .unsrc(x) %||% x
 }
-
-# Whether garry's own functions carry srcrefs.
-.src_kept <- function() !is.null(attr(.src_kept, "srcref"))
 
 # `x` without srcrefs, or NULL when it carries none. Walks calls, lists,
 # closures (body and attributes) and attributes, never environments: a
