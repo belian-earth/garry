@@ -828,17 +828,11 @@ NULL
 # Every daemon pid of a profile: what the CPU masks and the memory
 # measurements work from, so a daemon that will not answer stops the pool.
 .garry_pool_pids <- function(profile) {
-  pids <- unlist(.pool_broadcast(
+  unlist(.pool_broadcast(
     quote(Sys.getpid()),
     profiles = profile,
     what = "the pid query"
   ))
-  # by daemon, in the order of its pools: what .pool_live() checks on Linux
-  g <- .pool_record(profile)
-  if (!is.null(g)) {
-    g$pids <- pids
-  }
-  pids
 }
 
 # The command line of process `pid`, or "" for none: from /proc on Linux,
@@ -1202,22 +1196,17 @@ garry_daemons <- function(
     if (compute > 0L) .comp_profiles(),
     if (read > 0L || compute > 0L) "garry_write"
   )
-  # Fleet pids, recorded once per pool generation and before any other
-  # task, so a close can stop a daemon stuck in this setup: the per-daemon
-  # RSS poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
-  # and the affinity/shaping calls mask them by global index (one pid
-  # collection round trip per generation, shared by both).
-  .garry_state$comp_pids <- if (compute > 0L) {
-    unlist(lapply(.comp_profiles(), .garry_pool_pids))
-  } else {
-    integer(0)
-  }
-  p_read <- if (read > 0L) .garry_pool_pids("garry_read") else integer(0)
-  p_write <- if (read > 0L || compute > 0L) {
-    .garry_pool_pids("garry_write")
-  } else {
-    integer(0)
-  }
+  # Fleet pids, recorded once per pool generation and before any task, from
+  # the pid file each daemon wrote at start (.pools_start()), so a close can
+  # stop a daemon stuck in this setup: the per-daemon RSS poll
+  # (refresh_mem_budgets) reads /proc/<pid>/status against them, and the
+  # affinity/shaping calls mask them by global index. A probe would be a
+  # task, and a task loads garry on a fresh daemon first (.daemon_resumable()),
+  # a second each in turn.
+  pids_of <- function(p) .pool_record(p)$pids %||% integer(0)
+  .garry_state$comp_pids <- unlist(lapply(.comp_profiles(), pids_of)) %||% integer(0)
+  p_read <- pids_of("garry_read")
+  p_write <- pids_of("garry_write")
   .garry_state$pool_pids <- c(p_read, .garry_state$comp_pids, p_write)
   # by profile: the widths .assert_pools_alive() holds each pool to, and
   # the daemons a close may have to stop mid-task

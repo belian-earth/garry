@@ -240,16 +240,23 @@ NULL
       )
     }
   )
+  # every daemon has joined, so each has written its pid
+  pids <- vapply(
+    files,
+    function(f) as.integer(readLines(paste0(f, ".pid"), warn = FALSE)),
+    integer(1),
+    USE.NAMES = FALSE
+  )
   for (p in names(sizes)) {
     g <- new.env(parent = emptyenv())
     g$members <- pools[owner == p]
+    g$pids <- pids[owner == p] # by daemon: what .pool_live() checks on Linux
     n <- length(g$members)
     g$depth <- if (n > 1L) as.integer(depth) else Inf
     g$queue <- list()
     g$backlog <- rep(list(list()), n)
     g$launched <- rep(list(list()), n)
     g$load <- integer(n)
-    g$pids <- NULL
     g$dir <- dir
     assign(p, g, envir = .garry_pools)
   }
