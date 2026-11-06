@@ -508,7 +508,14 @@ test_that("a Ctrl-C during a close stops the daemons still mid-task, closes, and
         garry_pool_message = function(m) {
           msgs <<- c(msgs, gsub("\\s+", " ", conditionMessage(m)))
           if (length(msgs) == 1L) {
-            tools::pskill(Sys.getpid(), tools::SIGINT) # the user's Ctrl-C
+            # the user's Ctrl-C, sent from outside once this handler has
+            # returned: one that landed in it would be taken by the
+            # tryCatch() below, outside the close
+            system2(
+              "sh",
+              c("-c", shQuote(paste("sleep 0.3; kill -INT", Sys.getpid()))),
+              wait = FALSE
+            )
           }
           invokeRestart("muffleMessage")
         }
