@@ -2,6 +2,12 @@
 
 ## Breaking changes
 
+* garry imports mizu (>= 0.1.0) in place of mirai. A close of the pools, by
+  `garry_daemons()` or `garry_daemons(0, 0)`, now drops the tasks they hold
+  queued and discards results not yet collected; a daemon still finishes the
+  task it runs, and the close waits for it as before. A Ctrl-C at the host
+  still leaves every daemon running. On Windows, where garry reads no process's
+  command line, each pool's stop waits for its daemon itself.
 * `geomedian()`, `medoid()` and custom reducers declaring `f32` over a band stack
   of time stacks take the direct route, so warped cells move. On small HLS a warped geomedian
   moved by a median of 0.22 DN, p99 12 DN and at most 1,277 DN, with the same NaN
@@ -209,6 +215,20 @@
 
 ## Performance
 
+* garry's daemon pools run on mizu, over shared memory, in place of mirai and
+  its sockets. Each daemon is a mizu pool of its own, so broadcasts, the
+  store's drops and compute routing still reach one daemon, and the readers are
+  routed on the host, two reads a reader as before. Every daemon of a
+  generation starts at once. On a 20-thread workstation with the default 20
+  readers, 6 compute daemons and the writer, `garry_daemons()` took 3.7 s
+  against 4.5 s and its close 0.03 s against 1.6 s, and the benchmark suite's
+  start, pools included, fell from 5.5 s to 4.6-4.7 s. Most of what remains is
+  27 processes loading garry at once: one load costs 0.9 s, 0.59 s of it
+  gdalraster's shared libraries. Run times are level: across the suite's tasks,
+  wall on mizu was 1.004 times wall on mirai on small data and 1.010 on
+  medium, every output byte-identical, and garry's tests ran in 189 s against
+  220 s. An idle daemon holds 4 MB more anonymous memory and 1 MB of shared
+  memory for its rings, about 130 MB across that fleet.
 * A warp of one remote file, or of a local VRT of remote files, fetches a
   window's source tiles in a few batched reads where its blocks would fetch
   them piecemeal. Each 512 x 128 block of the warped VRT was a source read of
