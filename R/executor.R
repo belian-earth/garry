@@ -182,23 +182,33 @@ NULL
   if (!build) {
     return(list())
   }
+  vrt <- gdal_warp_vrt(
+    .gti_resampled_path(snode@path, snode@resampling),
+    band,
+    wnode@target_grid,
+    wnode@resampling,
+    src_nodata = snode@nodata,
+    open_options = snode@open_options,
+    alike = alike
+  )
   list(
-    path = gdal_warp_vrt(
-      .gti_resampled_path(snode@path, snode@resampling),
-      band,
-      wnode@target_grid,
-      wnode@resampling,
-      src_nodata = snode@nodata,
-      open_options = snode@open_options,
-      alike = alike
-    ),
+    path = vrt,
     band = seq_along(band),
     nodata = snode@nodata,
     open_options = character(0),
     scale = snode@scale,
     offset = snode@offset,
     decim = NULL,
-    warped = TRUE
+    warped = TRUE,
+    prefetch = .gdal_warp_prefetch_src(
+      snode@path,
+      snode@grid,
+      snode@stored,
+      snode@block_dim,
+      snode@open_options,
+      wnode@resampling,
+      vrt
+    )
   )
 }
 
@@ -290,7 +300,8 @@ NULL
           out_nodata = nodata,
           open_options = ra$open_options,
           decim = ra$decim
-        )
+        ),
+        core
       )
     },
     what = "read",
@@ -447,7 +458,8 @@ NULL
         scale = ra$scale,
         offset = ra$offset,
         decim = ra$decim
-      )
+      ),
+      w
     )
   }
   sub <- .gdal_with_retry(read_one, what = "read", src = ra$path)

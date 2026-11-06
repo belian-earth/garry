@@ -488,6 +488,217 @@ test_that("a warp's cells do not depend on its chunks at GDAL's tolerance", {
   expect_lt(max(abs(c(collect(warped, distributed = FALSE)) - c(whole)), na.rm = TRUE), 200)
 })
 
+# A lat/lon field off East Antarctica in 128 x 128 tiles and the polar grid it
+# warps onto: by blocks its rotated footprint takes many round trips, as MUR
+# SST does, so its windows prefetch.
+polar_warp_fixture <- function(env = parent.frame()) {
+  f <- withr::local_tempfile(fileext = ".tif", .local_envir = env)
+  ds <- gdalraster::create(
+    "GTiff", f, 1600, 400, 1, "Int16",
+    options = c("TILED=YES", "BLOCKXSIZE=128", "BLOCKYSIZE=128"),
+    return_obj = TRUE
+  )
+  ds$setGeoTransform(c(60, 0.025, 0, -60, 0, -0.025))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:4326"))
+  ds$write(1, 0, 0, 1600, 400, as.numeric(round(t(outer(seq_len(400), seq_len(1600), function(y, x) {
+    1000 * sin(x / 3) * cos(y / 5)
+  })))))
+  ds$close()
+  src <- lazy_source(f, nodata = -32768)
+  node <- graph_get(src@graph, src@node_id)
+  list(
+    path = f,
+    src = src,
+    node = node,
+    info = garry:::.gdal_warp_prefetch_src("/vsicurl/https://example.com/a.tif", node@grid, node@stored, node@block_dim, character(0), "bilinear"),
+    target = grid_spec("EPSG:3031", extent = c(1.5e6, -1e6, 3.5e6, 1e6), dims = c(1000L, 1000L), dtype = "f32")
+  )
+}
+
+# A warped VRT of `path` onto `target`, closed with the caller
+warp_vrt_handle <- function(path, target, band = 1L, env = parent.frame()) {
+  h <- methods::new(gdalraster::GDALRaster, gdal_warp_vrt(path, band, target, "bilinear"))
+  withr::defer(h$close(), envir = env)
+  h
+}
+
+test_that("a warp's prefetch of its source leaves its cells as the blocks give them", {
+  fx <- polar_warp_fixture()
+  # a computed warp: a read-only one reads under GDAL_NUM_THREADS
+  warped <- align_to(fx$src, fx$target, resampling = "bilinear") + 1
+  layouts <- function() {
+    lapply(c(Inf, 2^19, 2^14), function(px) {
+      opts <- if (is.finite(px)) list(garry.read_target_px = px, garry.chunk_target_px = px)
+      withr::with_options(opts, c(collect(warped, distributed = FALSE)))
+    })
+  }
+  blocks <- layouts()
+  option <- gdalraster::get_config_option("GDAL_VRT_WARP_USE_DATASET_RASTERIO")
+
+  # a local file is never prefetched; stand it in for a remote one
+  expect_null(garry:::.gdal_warp_prefetch_src(fx$path, fx$node@grid, fx$node@stored, fx$node@block_dim, character(0), "bilinear"))
+  ran <- 0L
+  plan <- garry:::.gdal_warp_prefetch_plan
+  local_mocked_bindings(
+    .gdal_warp_prefetch_src = function(...) fx$info,
+    .gdal_warp_prefetch_plan = function(ds, src, win) {
+      p <- plan(ds, src, win)
+      ran <<- ran + !is.null(p)
+      p
+    }
+  )
+  expect_identical(layouts(), blocks)
+  expect_gt(ran, 0L)
+  expect_identical(gdalraster::get_config_option("GDAL_VRT_WARP_USE_DATASET_RASTERIO"), option)
+  expect_identical(gdalraster::get_config_option("GDAL_MAX_RAW_BLOCK_CACHE_SIZE"), "")
+})
+
+test_that("a warp prefetches a window only where it saves round trips", {
+  fx <- polar_warp_fixture()
+  src <- fx$info
+  expect_identical(src$tile, c(128, 128))
+  expect_identical(src$bytes, 2)
+  expect_false(src$south_up)
+  expect_identical(src$threads, "")
+  expect_identical(
+    garry:::.gdal_warp_prefetch_src("/vsicurl/https://example.com/a.tif", fx$node@grid, fx$node@stored, fx$node@block_dim, "NUM_THREADS=4", "near")$threads,
+    "4"
+  )
+  # an unopened source counts eight bytes a sample and 256 x 256 tiles
+  bare <- garry:::.gdal_warp_prefetch_src("/vsicurl/https://example.com/a.tif", fx$node@grid, list(), integer(0), character(0), "near")
+  expect_identical(c(bare$bytes, bare$tile), c(8, 256, 256))
+  # a local VRT reads remote where it names remote files, which opening it
+  # does not touch
+  vrt <- withr::local_tempfile(fileext = ".vrt")
+  gdalraster::buildVRT(vrt, fx$path, quiet = TRUE)
+  expect_null(garry:::.gdal_warp_prefetch_src(vrt, fx$node@grid, fx$node@stored, c(128L, 128L), character(0), "bilinear"))
+  writeLines(sub(
+    "<SourceFilename[^>]*>[^<]*</SourceFilename>",
+    "<SourceFilename relativeToVRT=\"0\">/vsicurl/https://example.com/a.tif</SourceFilename>",
+    paste(readLines(vrt), collapse = "\n")
+  ), vrt)
+  expect_true(garry:::.gdal_reads_remote(vrt))
+  # judged by its files' tiles, which it records
+  writeLines(sub("<SourceFilename", "<SourceProperties RasterXSize=\"1600\" RasterYSize=\"400\" DataType=\"Int16\" BlockXSize=\"512\" BlockYSize=\"256\" />\n<SourceFilename", paste(readLines(vrt), collapse = "\n")), vrt)
+  garry:::.gdal_handle_drop(vrt)
+  expect_identical(garry:::.gdal_warp_prefetch_src(vrt, fx$node@grid, fx$node@stored, c(128L, 128L), character(0), "bilinear")$tile, c(512, 256))
+
+  polar <- warp_vrt_handle(fx$path, fx$target)
+  expect_equal(polar$getBlockSize(1L), c(512, 128))
+  win <- function(x, y, w, h) list(x_off = x, y_off = y, x_size = w, y_size = h)
+  whole <- garry:::.gdal_warp_prefetch_plan(polar, src, win(0, 0, 1000, 1000))
+  expect_identical(whole$strips, list(c(0, 0, 1000, 1000)))
+  expect_gte(whole$raw_bytes, 10 * 2^20)
+  b <- garry:::.gdal_warp_block_batches(polar, src, whole$strips, c(512, 128))
+  expect_gt(b[["batches"]], 2)
+  # tiles as large as the source: the blocks' first read fetches them all
+  expect_null(garry:::.gdal_warp_prefetch_plan(polar, utils::modifyList(src, list(tile = c(2048, 2048))), win(0, 0, 1000, 1000)))
+  # more tiles than half the block cache holds
+  expect_null(garry:::.gdal_warp_prefetch_plan(polar, utils::modifyList(src, list(bytes = 1e9)), win(0, 0, 1000, 1000)))
+
+  local_mocked_bindings(.gdal_warp_block_batches = function(...) c(batches = 100, tiles = 1, strip_tiles = 1))
+  # whole blocks, clipped to the raster
+  expect_identical(garry:::.gdal_warp_prefetch_plan(polar, src, win(10, 300, 900, 300))$strips, list(c(0, 256, 1000, 384)))
+  # one block column or row warps by blocks anyway
+  expect_null(garry:::.gdal_warp_prefetch_plan(polar, src, win(0, 0, 500, 1000)))
+  expect_null(garry:::.gdal_warp_prefetch_plan(polar, src, win(0, 0, 1000, 100)))
+  # a large window goes in strips of whole block rows
+  wide <- warp_vrt_handle(fx$path, grid_spec("EPSG:3031", extent = c(1.5e6, -1e6, 3.5e6, 1e6), dims = c(4000L, 2000L), dtype = "f32"))
+  expect_identical(
+    garry:::.gdal_warp_prefetch_plan(wide, src, win(0, 0, 4000, 2000))$strips,
+    list(c(0, 0, 4000, 1024), c(0, 1024, 4000, 976))
+  )
+  # a thread pool skips the block cache only for a request of the whole source
+  pooled <- utils::modifyList(src, list(threads = "ALL_CPUS"))
+  all_of <- identical(garry:::.gdal_warp_src_window(polar, src, c(0, 0, 1000, 1000)), c(0, 0, src$dims - 1))
+  expect_identical(is.null(garry:::.gdal_warp_prefetch_plan(polar, pooled, win(0, 0, 1000, 1000))), all_of)
+  withr::with_envvar(c(GDAL_NUM_THREADS = "1"), {
+    expect_false(is.null(garry:::.gdal_warp_prefetch_plan(polar, src, win(0, 0, 1000, 1000))))
+  })
+  two <- withr::local_tempfile(fileext = ".tif")
+  gdalraster::translate(fx$path, two, cl_arg = c("-b", "1", "-b", "1"), quiet = TRUE)
+  expect_null(garry:::.gdal_warp_prefetch_plan(warp_vrt_handle(two, fx$target, 1:2), src, win(0, 0, 1000, 1000)))
+  # a window off the source has nothing to fetch
+  far <- grid_spec("EPSG:3031", extent = c(-3.5e6, -1e6, -1.5e6, 1e6), dims = c(1000L, 1000L), dtype = "f32")
+  expect_null(garry:::.gdal_warp_prefetch_plan(warp_vrt_handle(fx$path, far), src, win(0, 0, 1000, 1000)))
+  local_mocked_bindings(.gdal_warp_block_batches = function(...) c(batches = 100, tiles = 0, strip_tiles = 0))
+  expect_null(garry:::.gdal_warp_prefetch_plan(polar, src, win(0, 0, 1000, 1000)))
+})
+
+test_that("a warp onto a coarse grid is judged at the overview it reads", {
+  m <- withr::local_tempfile(fileext = ".tif")
+  f <- withr::local_tempfile(fileext = ".tif")
+  ds <- gdalraster::create("GTiff", m, 1500, 1100, 1, "Int16", return_obj = TRUE)
+  ds$setGeoTransform(c(500000, 30, 0, 4600000, 0, -30))
+  ds$setProjection(gdalraster::srs_to_wkt("EPSG:32632"))
+  ds$close()
+  gdalraster::translate(m, f, cl_arg = c("-of", "COG", "-co", "BLOCKSIZE=256"), quiet = TRUE)
+  src <- lazy_source(f)
+  node <- graph_get(src@graph, src@node_id)
+  b <- gdalraster::transform_bounds(node@grid@extent, node@grid@crs, "EPSG:4326")
+  fine <- gdal_warp_vrt(f, 1L, grid_spec("EPSG:4326", extent = b, dims = c(1500L, 1100L), dtype = "f32"), "bilinear")
+  coarse <- gdal_warp_vrt(f, 1L, grid_spec("EPSG:4326", extent = b, dims = c(180L, 130L), dtype = "f32"), "bilinear")
+  expect_identical(garry:::.gdal_vrt_overview_level(fine), NA_integer_)
+  level <- garry:::.gdal_vrt_overview_level(coarse)
+  expect_gte(level, 1L)
+  desc <- garry:::.gdal_warp_prefetch_src(
+    "/vsicurl/https://example.com/a.tif", node@grid, node@stored, node@block_dim, character(0), "bilinear", coarse
+  )
+  ov <- methods::new(gdalraster::GDALRaster, f, TRUE, paste0("OVERVIEW_LEVEL=", level))
+  withr::defer(ov$close())
+  expect_identical(desc$level, level)
+  # as the COG driver rounds; another builder may round the other way
+  expect_lte(max(abs(desc$dims - c(ov$getRasterXSize(), ov$getRasterYSize()))), 1)
+  expect_equal(desc$transform, ov$getGeoTransform(), tolerance = 0.01)
+  expect_equal(desc$tile, as.numeric(ov$getBlockSize(1L)))
+})
+
+test_that("a prefetched warp leaves a window across a disk's limb to its blocks", {
+  f <- withr::local_tempfile(fileext = ".tif")
+  r <- 6.4e6
+  ds <- gdalraster::create(
+    "GTiff", f, 1000, 1000, 1, "Int16",
+    options = c("TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256"),
+    return_obj = TRUE
+  )
+  ds$setGeoTransform(c(-r, 2 * r / 1000, 0, r, 0, -2 * r / 1000))
+  ds$setProjection(gdalraster::srs_to_wkt("+proj=ortho +lat_0=0 +lon_0=9 +datum=WGS84 +units=m"))
+  ds$write(1, 0, 0, 1000, 1000, rep(7, 1e6))
+  ds$close()
+  src <- lazy_source(f, nodata = -32768)
+  # 0.1 degree from 120 W to 140 E: windows 1024 wide cross the limb (81 W and
+  # 99 E) at either side and lie on the disk between
+  target <- grid_spec("EPSG:4326", extent = c(-120, -60, 140, 60), dims = c(2600L, 1200L), dtype = "f32")
+  node <- graph_get(src@graph, src@node_id)
+  info <- garry:::.gdal_warp_prefetch_src("/vsicurl/https://example.com/a.tif", node@grid, node@stored, node@block_dim, character(0), "bilinear")
+
+  # a window across the limb has a box on the source, but not every point
+  h <- warp_vrt_handle(f, target)
+  limb <- c(0, 0, 1024, 1024)
+  expect_false(is.null(garry:::.gdal_warp_src_window(h, info, limb)))
+  expect_null(garry:::.gdal_warp_src_window(h, info, limb, strict = TRUE))
+
+  warped <- align_to(src, target, resampling = "bilinear") + 1
+  withr::local_options(garry.read_target_px = 2^20, garry.chunk_target_px = 2^20, garry.read_retry = 1)
+  base <- collect(warped, distributed = FALSE)
+  plan <- garry:::.gdal_warp_prefetch_plan
+  plans <- list()
+  # every window worth a prefetch by its round trips: only the disk decides
+  local_mocked_bindings(
+    .gdal_warp_prefetch_src = function(...) info,
+    .gdal_warp_block_batches = function(...) c(batches = 100, tiles = 1, strip_tiles = 1),
+    .gdal_warp_prefetch_plan = function(ds, src, win) {
+      p <- plan(ds, src, win)
+      plans <<- c(plans, list(p))
+      p
+    }
+  )
+  expect_identical(c(collect(warped, distributed = FALSE)), c(base))
+  # windows on the disk prefetch, windows across or off it do not
+  on <- !vapply(plans, is.null, NA)
+  expect_true(any(on) && !all(on))
+})
+
 test_that("a grid that cannot align declines a direct read before any open", {
   f <- fixture_gradient_f32()
   g <- gdal_grid_spec(f)$grid
