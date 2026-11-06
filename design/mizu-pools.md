@@ -67,6 +67,8 @@ Same workstation (20 threads, 62 GB), base commit `c63c96e` on mirai against thi
 | whole-run memory.peak, median difference | +123 MB | +19 MB (most runs sit at the 16 GB cap) |
 | outputs | byte-identical, every task | byte-identical, every task |
 
+A one-repeat small run of the final branch, after the review's fixes, gave a geometric mean of 0.999 and a 4.61 s start against 5.50 s.
+
 Medium leans 1 % slower, 14 of its 20 phases above 1.0, most within the spread of a run: median on warped reads, the largest at +0.7 s, took 28.0 to 29.9 s cold over four further runs of this branch, against base's 29.1 s. Forcing the reader group's depth to 1 instead of 2 changed nothing there (28.0 and 29.7 s against 29.9 and 28.9 s), so the reads that queue behind a running one are not the cause.
 
 **Pools** (`garry_daemons()` defaults: 20 readers, 6 compute daemons, the writer):
@@ -78,7 +80,7 @@ Medium leans 1 % slower, 14 of its 20 phases above 1.0, most within the spread o
 | close | 1.6 s | 0.03 s |
 | idle daemon, anonymous memory | 120.6 MB (reader) | 124.5 MB |
 | `/dev/shm` for the fleet | 0 | 27 MB |
-| full test suite, 4 workers | 220 s | 189 s |
+| full test suite, 4 workers, two interleaved runs each | 209.7, 208.0 s | 179.5, 179.8 s |
 
 **Transfers.** Five tiny collects and five small writes cost the same (1.33 s and 1.72 s either way), so garry's per-run floor is not the transport. Collecting 55 medium HLS dates of one band into an R array (737 M cells, 2.9 GB of f32 crossing to the host) took a median 2.85 s against 2.94 s over eight interleaved runs each; in both the host's copy sets the pace, results waiting 0.6 to 0.7 s on average to land. A single 256 MB result is 3 times faster on mizu, but garry's reads land in pieces the host copies one at a time.
 

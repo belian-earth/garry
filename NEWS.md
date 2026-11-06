@@ -226,8 +226,8 @@
   27 processes loading garry at once: one load costs 0.9 s, 0.59 s of it
   gdalraster's shared libraries. Run times are level: across the suite's tasks,
   wall on mizu was 1.004 times wall on mirai on small data and 1.010 on
-  medium, every output byte-identical, and garry's tests ran in 189 s against
-  220 s. An idle daemon holds 4 MB more anonymous memory and 1 MB of shared
+  medium, every output byte-identical, and garry's tests ran in 180 s against
+  209 s. An idle daemon holds 4 MB more anonymous memory and 1 MB of shared
   memory for its rings, about 130 MB across that fleet.
 * A warp of one remote file, or of a local VRT of remote files, fetches a
   window's source tiles in a few batched reads where its blocks would fetch
