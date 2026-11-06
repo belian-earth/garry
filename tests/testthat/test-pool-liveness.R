@@ -58,6 +58,8 @@ test_that("a reset connection reads as a lost daemon", {
 })
 
 test_that("an unknown core count is said, not assumed in silence", {
+  # off Linux, where detectCores() is the only count
+  testthat::local_mocked_bindings(.cpus_allowed = function(...) NULL)
   testthat::local_mocked_bindings(
     detectCores = function(...) NA_integer_,
     .package = "parallel"
@@ -66,6 +68,7 @@ test_that("an unknown core count is said, not assumed in silence", {
   withr::defer(rlang::reset_warning_verbosity("garry_cores_unknown"))
   expect_warning(cr <- garry:::.garry_cores(), class = "garry_cores_warning")
   expect_identical(cr$logical, 4L)
+  expect_identical(cr$cpus, 0:3)
 })
 
 test_that("a bare error value names itself", {

@@ -16,10 +16,29 @@ NULL
 .garry_state <- new.env(parent = emptyenv())
 
 
-# Physical / logical core counts. detectCores() can return NA: pools then
-# size from an assumed 4 cores, which the warning says, once a session.
-.garry_cores <- function() {
-  phys <- parallel::detectCores(logical = FALSE)
+# The CPUs this process may use: list(logical, cpus). `cpus` are the ids a
+# daemon's mask may name; `logical` is how many of them the process can
+# keep busy, which sizes the pools and the placement pass's widths. On
+# Linux `cpus` is the process's affinity list, which a cgroup cpuset
+# (docker --cpuset-cpus, systemd AllowedCPUs) or a parent's taskset
+# narrows, and a cgroup CPU quota (docker --cpus, an ECS task's CPU)
+# caps `logical`, rounded up. detectCores() counts the whole machine:
+# pools sized from it on 4 of 20 CPUs ran 20 readers, a mask naming no
+# allowed CPU failed and left its pool unpinned, and masks under a taskset
+# moved daemons onto CPUs the run was never given. Elsewhere
+# detectCores() is all there is. It can return NA: pools then size from
+# an assumed 4 cores, which the warning says, once a session. The paths
+# are injectable for tests.
+.garry_cores <- function(
+  status = "/proc/self/status",
+  root = "/sys/fs/cgroup",
+  self = "/proc/self/cgroup"
+) {
+  cpus <- .cpus_allowed(status)
+  if (!is.null(cpus)) {
+    n <- min(length(cpus), ceiling(.garry_cgroup_cpus(root, self)))
+    return(list(logical = as.integer(n), cpus = cpus))
+  }
   logi <- parallel::detectCores(logical = TRUE)
   if (is.na(logi) || logi < 1L) {
     logi <- 4L
@@ -33,10 +52,129 @@ NULL
       .frequency_id = "garry_cores_unknown"
     )
   }
-  if (is.na(phys) || phys < 1L) {
-    phys <- logi
+  list(logical = as.integer(logi), cpus = seq_len(logi) - 1L)
+}
+
+# This process's affinity list from /proc ("0-3,8" as 0:3 and 8); NULL off
+# Linux, or on a kernel whose status file has no such line. A line that
+# is there and will not parse aborts.
+.cpus_allowed <- function(status = "/proc/self/status") {
+  if (!file.exists(status)) {
+    return(NULL)
   }
-  list(physical = as.integer(phys), logical = as.integer(logi))
+  ln <- grep(
+    "^Cpus_allowed_list:",
+    .cgroup_lines(status, what = "cpu"),
+    value = TRUE
+  )
+  if (!length(ln)) {
+    return(NULL)
+  }
+  v <- trimws(sub("^Cpus_allowed_list:", "", ln[[1L]]))
+  ids <- lapply(strsplit(v, ",", fixed = TRUE)[[1L]], function(part) {
+    r <- suppressWarnings(as.integer(strsplit(part, "-", fixed = TRUE)[[1L]]))
+    if (!length(r) || length(r) > 2L || anyNA(r) || r[[1L]] > r[[length(r)]]) {
+      .cgroup_abort(status, .glue("its Cpus_allowed_list is {v}"), "cpu")
+    }
+    seq(r[[1L]], r[[length(r)]])
+  })
+  if (!length(ids)) {
+    .cgroup_abort(status, "its Cpus_allowed_list is empty", "cpu")
+  }
+  sort(unique(unlist(ids)))
+}
+
+# The tightest cgroup CPU quota over this process's cgroup and its
+# ancestors, in CPUs (quota / period); Inf when none. Walked as
+# .garry_cgroup_mem() walks memory: a quota often sits on an ancestor,
+# and a container sees its own cgroup at the mount root. cgroup v2 reads
+# cpu.max ("max 100000" is none); v1 the cpu controller's CFS quota and
+# period (a quota of -1 is none).
+.garry_cgroup_cpus <- function(
+  root = "/sys/fs/cgroup",
+  self = "/proc/self/cgroup"
+) {
+  lv <- .cgroup_levels("cpu", root, self)
+  best <- Inf
+  for (dir in lv$dirs) {
+    if (lv$v1) {
+      fq <- file.path(dir, "cpu.cfs_quota_us")
+      fp <- file.path(dir, "cpu.cfs_period_us")
+      if (!file.exists(fq) || !file.exists(fp)) {
+        next
+      }
+      q <- .cgroup_number(.cgroup_lines(fq, 1L, "cpu"), fq, "cpu")
+      per <- .cgroup_number(.cgroup_lines(fp, 1L, "cpu"), fp, "cpu")
+      if (q < 0) {
+        next
+      }
+      src <- fp
+    } else {
+      f <- file.path(dir, "cpu.max")
+      if (!file.exists(f)) {
+        next
+      }
+      v <- strsplit(.cgroup_lines(f, 1L, "cpu"), " ", fixed = TRUE)[[1L]]
+      if (length(v) != 2L) {
+        .cgroup_abort(f, .glue("it holds {paste(v, collapse = ' ')}"), "cpu")
+      }
+      if (identical(v[[1L]], "max")) {
+        next
+      }
+      q <- .cgroup_number(v[[1L]], f, "cpu")
+      per <- .cgroup_number(v[[2L]], f, "cpu")
+      src <- f
+    }
+    if (q <= 0 || per <= 0) {
+      .cgroup_abort(src, .glue("its quota is {q} per period of {per}"), "cpu")
+    }
+    best <- min(best, q / per)
+  }
+  best
+}
+
+# This process's cgroup for `controller` and each ancestor up to the
+# hierarchy's mount root, leaf first: list(v1, dirs). cgroup v1 (and
+# hybrid hosts, where a controller stays on v1) reads that controller's
+# line and mount; v2 the unified line. NULL off Linux or with no cgroup.
+.cgroup_levels <- function(controller, root, self) {
+  if (!file.exists(self)) {
+    return(NULL)
+  }
+  what <- if (identical(controller, "memory")) "memory" else "cpu"
+  ln <- .cgroup_lines(self, 50L, what)
+  v1 <- grep(
+    .glue("^[0-9]+:([^:]*,)?{controller}(,[^:]*)?:"),
+    ln,
+    value = TRUE
+  )[1L]
+  v2 <- grep("^0::", ln, value = TRUE)[1L]
+  if (!is.na(v1)) {
+    rel <- sub("^[^:]*:[^:]*:", "", v1)
+    base <- file.path(root, controller)
+  } else if (!is.na(v2)) {
+    rel <- sub("^0::", "", v2)
+    base <- root
+  } else {
+    return(NULL)
+  }
+  if (!nzchar(rel)) {
+    return(NULL)
+  }
+  parts <- strsplit(sub("^/", "", rel), "/", fixed = TRUE)[[1L]]
+  parts <- parts[nzchar(parts)]
+  dirs <- vapply(
+    rev(seq(0L, length(parts))),
+    function(k) {
+      if (k == 0L) {
+        base
+      } else {
+        file.path(base, paste(parts[seq_len(k)], collapse = "/"))
+      }
+    },
+    character(1)
+  )
+  list(v1 = !is.na(v1), dirs = dirs)
 }
 
 # The memory cgroup level whose limit binds this process, in MB:
@@ -67,30 +205,19 @@ NULL
   root = "/sys/fs/cgroup",
   self = "/proc/self/cgroup"
 ) {
-  if (!file.exists(self)) {
+  lv <- .cgroup_levels("memory", root, self)
+  if (is.null(lv)) {
     return(NULL)
-  } # non-Linux
-  ln <- .cgroup_lines(self, 50L)
-  v1 <- grep("^[0-9]+:([^:]*,)?memory(,[^:]*)?:", ln, value = TRUE)[1L]
-  v2 <- grep("^0::", ln, value = TRUE)[1L]
-  if (!is.na(v1)) {
-    rel <- sub("^[^:]*:[^:]*:", "", v1)
-    base <- file.path(root, "memory")
-    f <- c(
+  }
+  f <- if (lv$v1) {
+    c(
       "memory.limit_in_bytes",
       "memory.usage_in_bytes",
       "total_inactive_file",
       "total_active_file"
     )
-  } else if (!is.na(v2)) {
-    rel <- sub("^0::", "", v2)
-    base <- root
-    f <- c("memory.max", "memory.current", "inactive_file", "active_file")
   } else {
-    return(NULL)
-  }
-  if (!nzchar(rel)) {
-    return(NULL)
+    c("memory.max", "memory.current", "inactive_file", "active_file")
   }
   # NA when the level has no such file, Inf for "max"
   read1 <- function(p) {
@@ -109,15 +236,8 @@ NULL
     v <- sub(key, "", grep(key, .cgroup_lines(p), value = TRUE))
     if (length(v)) .cgroup_number(v[[1L]], p) else 0
   }
-  parts <- strsplit(sub("^/", "", rel), "/", fixed = TRUE)[[1L]]
-  parts <- parts[nzchar(parts)]
   best <- NULL
-  for (k in rev(seq(0L, length(parts)))) {
-    dir <- if (k == 0L) {
-      base
-    } else {
-      file.path(base, paste(parts[seq_len(k)], collapse = "/"))
-    }
+  for (dir in lv$dirs) {
     mx <- read1(file.path(dir, f[[1L]]))
     cur <- read1(file.path(dir, f[[2L]]))
     # v1 writes unlimited as ~2^63
@@ -137,31 +257,37 @@ NULL
   best
 }
 
-# A kernel-written cgroup file, whose failure leaves the memory limit
-# unknown: budgeting past it risks the OOM kill the limit will deliver.
-.cgroup_lines <- function(path, n = -1L) {
+# A kernel-written cgroup or /proc file, whose failure leaves a limit
+# unknown: budgeting past a memory limit risks the OOM kill it will
+# deliver, and sizing past a CPU limit oversubscribes it.
+.cgroup_lines <- function(path, n = -1L, what = "memory") {
   tryCatch(
     suppressWarnings(readLines(path, n = n, warn = FALSE)),
-    error = function(e) .cgroup_abort(path, conditionMessage(e))
+    error = function(e) .cgroup_abort(path, conditionMessage(e), what)
   )
 }
 
-.cgroup_number <- function(v, path) {
+.cgroup_number <- function(v, path, what = "memory") {
   n <- suppressWarnings(as.numeric(v))
   if (length(n) != 1L || is.na(n)) {
-    .cgroup_abort(path, .glue("it holds {paste(v, collapse = ' ')}"))
+    .cgroup_abort(path, .glue("it holds {paste(v, collapse = ' ')}"), what)
   }
   n
 }
 
-.cgroup_abort <- function(path, why) {
+.cgroup_abort <- function(path, why, what = "memory") {
+  if (identical(what, "memory")) {
+    msg <- "cannot read {.file {path}}, so this process's memory limit is unknown."
+    hint <- "Make the cgroup files readable in this container."
+    cls <- "garry_memory_error"
+  } else {
+    msg <- "cannot read {.file {path}}, so the CPUs this process may use are unknown."
+    hint <- "Make the cgroup and {.file /proc} files readable in this container."
+    cls <- "garry_cores_error"
+  }
   cli::cli_abort(
-    c(
-      "cannot read {.file {path}}, so this process's memory limit is unknown.",
-      "x" = "{why}",
-      "i" = "Make the cgroup files readable in this container."
-    ),
-    class = c("garry_memory_error", "garry_error"),
+    c(msg, "x" = "{why}", "i" = hint),
+    class = c(cls, "garry_error"),
     call = NULL
   )
 }
@@ -1015,7 +1141,8 @@ NULL
 # instead of all cores. This is a GENERAL rule, not a reader special
 # case: every process that may run an XLA client: readers via fused
 # kernels, compute daemons always: gets a bounded, mostly-disjoint
-# slice of the machine, which is what makes pool width a free
+# slice of the CPUs this process may use (.garry_cores()), which is
+# what makes pool width a free
 # parameter (slots) while admission controls concurrency. XLA sizes
 # its eigen pool via tsl::port::MaxParallelism() = NumSchedulableCPUs,
 # which respects sched_setaffinity, and the client inits lazily on the
@@ -1038,18 +1165,20 @@ NULL
     .affinity_warn("the {.code taskset} program is not installed")
     return(NULL)
   }
-  cores <- .garry_cores()$logical
-  k <- as.integer(k %||% max(2L, cores %/% max(1L, length(pids))))
-  if (k >= cores) {
+  cr <- .garry_cores()
+  n <- length(cr$cpus)
+  k <- as.integer(k %||% max(2L, cr$logical %/% max(1L, length(pids))))
+  if (k >= n) {
     return(NULL)
   } # cap would be a no-op
   # Apply EVERY mask before judging success: an early return would leave
   # the pool half re-masked while the recorded thread state kept the old
-  # width.
+  # width. Masks take consecutive slices of the CPUs this process may
+  # use, wrapping past the last.
   failed <- character(0)
   for (i in seq_along(pids)) {
-    lo <- ((i - 1L) * k) %% cores
-    cpus <- paste(seq(lo, lo + k - 1L) %% cores, collapse = ",")
+    lo <- ((i - 1L) * k) %% n
+    cpus <- paste(cr$cpus[seq(lo, lo + k - 1L) %% n + 1L], collapse = ",")
     out <- suppressWarnings(system2(
       "taskset",
       c("-a", "-cp", cpus, pids[[i]]),
@@ -1144,11 +1273,15 @@ NULL
 #' while read and compute masks overlap), so an XLA client created
 #' anywhere is narrow rather than all-cores; the scheduler's live-RAM byte budgets
 #' decide how many tasks are actually in flight; excess daemons idle
-#' lean. Called with no arguments it sizes the pools to the machine:
-#' `read` = all logical cores (remote fetch is latency-bound, so a
-#' wide read pool keeps the network drain full) and `compute` = a
-#' third of the logical cores, capped at 8 with a floor of 2; on CUDA
-#' the compute pool is 2, since concurrent clients share one card.
+#' lean. Called with no arguments it sizes the pools to the CPUs this
+#' process may use: `read` = one per CPU (remote fetch is
+#' latency-bound, so a wide read pool keeps the network drain full) and
+#' `compute` = a third of them, capped at 8 with a floor of 2; on CUDA
+#' the compute pool is 2, since concurrent clients share one card. On
+#' Linux those CPUs are the process's affinity list, which a container's
+#' cpuset, a systemd scope's `AllowedCPUs` or a `taskset` narrows,
+#' counted no higher than a cgroup CPU quota such as `docker --cpus`;
+#' the masks name only CPUs on that list.
 #' `collect(distributed = TRUE)` detects the pools automatically and
 #' pre-compiles stage kernels on idle daemons at run start, scan kernels
 #' on the `garry_opt("scan_profiles")` designated profiles only.
@@ -1187,10 +1320,10 @@ NULL
 #' identify to stop, as on Windows, fails the close with a
 #' `garry_pool_error`.
 #'
-#' @param read Read-pool daemon count; `NULL` (default) uses all
-#'   logical cores. `0` tears the pool down.
+#' @param read Read-pool daemon count; `NULL` (default) uses one per
+#'   CPU this process may use. `0` tears the pool down.
 #' @param compute Compute-pool daemon count; `NULL` (default) uses a
-#'   third of the logical cores, capped at 8 with a floor of 2 (2 on
+#'   third of those CPUs, capped at 8 with a floor of 2 (2 on
 #'   CUDA: concurrent clients share one card). Scan tasks run only on
 #'   the first `garry_opt("scan_profiles")` daemons, so width adds
 #'   neither scan compiles nor scan memory. Larger pools are SAFE at
@@ -1229,7 +1362,7 @@ garry_daemons <- function(
     #   compiles or scan memory; the sweep measured the sweet spot at 6
     #   on a 20-core box, with width beyond it flat. CUDA keeps 2:
     #   concurrent clients share one card.
-    # - read: all logical cores. Remote fetch is LATENCY-bound, and
+    # - read: one per usable CPU. Remote fetch is LATENCY-bound, and
     #   width = cores keeps ODC parity. A pipeline of LOCAL raw-cube
     #   reads competing with compute for cores pins its own width.
     if (is.null(compute)) {

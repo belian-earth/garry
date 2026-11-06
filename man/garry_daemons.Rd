@@ -12,11 +12,11 @@ garry_daemons(
 )
 }
 \arguments{
-\item{read}{Read-pool daemon count; \code{NULL} (default) uses all
-logical cores. \code{0} tears the pool down.}
+\item{read}{Read-pool daemon count; \code{NULL} (default) uses one per
+CPU this process may use. \code{0} tears the pool down.}
 
 \item{compute}{Compute-pool daemon count; \code{NULL} (default) uses a
-third of the logical cores, capped at 8 with a floor of 2 (2 on
+third of those CPUs, capped at 8 with a floor of 2 (2 on
 CUDA: concurrent clients share one card). Scan tasks run only on
 the first \code{garry_opt("scan_profiles")} daemons, so width adds
 neither scan compiles nor scan memory. Larger pools are SAFE at
@@ -53,11 +53,15 @@ daemon is pinned to a bounded, interleaved CPU mask at creation
 while read and compute masks overlap), so an XLA client created
 anywhere is narrow rather than all-cores; the scheduler's live-RAM byte budgets
 decide how many tasks are actually in flight; excess daemons idle
-lean. Called with no arguments it sizes the pools to the machine:
-\code{read} = all logical cores (remote fetch is latency-bound, so a
-wide read pool keeps the network drain full) and \code{compute} = a
-third of the logical cores, capped at 8 with a floor of 2; on CUDA
-the compute pool is 2, since concurrent clients share one card.
+lean. Called with no arguments it sizes the pools to the CPUs this
+process may use: \code{read} = one per CPU (remote fetch is
+latency-bound, so a wide read pool keeps the network drain full) and
+\code{compute} = a third of them, capped at 8 with a floor of 2; on CUDA
+the compute pool is 2, since concurrent clients share one card. On
+Linux those CPUs are the process's affinity list, which a container's
+cpuset, a systemd scope's \code{AllowedCPUs} or a \code{taskset} narrows,
+counted no higher than a cgroup CPU quota such as \code{docker --cpus};
+the masks name only CPUs on that list.
 \code{collect(distributed = TRUE)} detects the pools automatically and
 pre-compiles stage kernels on idle daemons at run start, scan kernels
 on the \code{garry_opt("scan_profiles")} designated profiles only.

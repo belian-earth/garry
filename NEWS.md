@@ -420,6 +420,16 @@
 
 ## Bug fixes
 
+* garry sizes and pins its pools to the CPUs this process may use, not the
+  whole machine. On Linux these are the process's affinity list, which a
+  container's cpuset, a systemd scope's `AllowedCPUs` or a `taskset` narrows,
+  counted no higher than a cgroup CPU quota such as `docker --cpus`.
+  `detectCores()` counts every CPU on the host: in `docker --cpuset-cpus=16-19`
+  on a 20-CPU host, `garry_daemons()` started 20 readers and 6 compute daemons
+  and spread their masks over CPUs 0-19. Most masks fell outside 16-19 and
+  failed, so garry warned and treated both pools as unpinned. Under a
+  `taskset`, the masks moved daemons onto CPUs the run was never given. The
+  placement pass's widths follow the same count.
 * `stage_merge = "auto"` no longer folds a stage that could run on its read's
   tasks, and exports fewer planes than it reads, into its consumer. A predict
   per year, stacked along time, had become one compute stage holding every

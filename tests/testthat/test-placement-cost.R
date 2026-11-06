@@ -12,7 +12,7 @@
   # the cost model reads (CI runners go as low as 3 logical cores,
   # which flips the materialise/fuse comparison).
   testthat::local_mocked_bindings(
-    .garry_cores = function() list(physical = 8L, logical = 16L),
+    .garry_cores = function() list(logical = 16L, cpus = 0:15),
     .package = "garry")
   sc <- garry:::.placement_scan(p)
   garry:::.plan_placement(p, sc$consumers_of, sc$warp_only, ...,
