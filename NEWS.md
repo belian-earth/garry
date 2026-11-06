@@ -430,6 +430,14 @@
   failed, so garry warned and treated both pools as unpinned. Under a
   `taskset`, the masks moved daemons onto CPUs the run was never given. The
   placement pass's widths follow the same count.
+* Work sent to daemons no longer carries garry's source text where that source
+  is kept (`devtools::load_all()`, covr, `R_KEEP_PKG_SOURCE=yes`). A srcref
+  holds the package's whole source, and a `{` quoted from garry's code, a
+  closure it wrote or any S7 object (through its class) carried one: 21.6 MB
+  each. A small distributed collect sent 688 MB against 0.9 MB, and the test
+  suite took 1403 s against 214 s on a plain install. Tasks and broadcasts now
+  cross without srcrefs, and the suite takes 235 s with source kept. A plain
+  install sends what it did.
 * `stage_merge = "auto"` no longer folds a stage that could run on its read's
   tasks, and exports fewer planes than it reads, into its consumer. A predict
   per year, stacked along time, had become one compute stage holding every

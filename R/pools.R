@@ -763,7 +763,7 @@ NULL
 # (.assert_pools_moving()), so a send runs to its end. It never blocks:
 # garry's pools set no memory limit for mirai to gate on.
 .pool_send <- function(expr, profiles, ...) {
-  args <- c(list(expr), list(...))
+  args <- c(list(.wire(expr)), .wire(list(...)))
   stats::setNames(
     lapply(profiles, function(p) {
       suspendInterrupts(unclass(do.call(

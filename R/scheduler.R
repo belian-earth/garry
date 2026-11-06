@@ -154,10 +154,8 @@ NULL
   # message (5 of 30 cancels, cli 3.6.6), so a task resumes through an
   # interrupt and runs to its end: a cancel drops a queued task, and the
   # host stops waiting for a running one's reply. The handler lives on the
-  # daemon: a function literal here would carry its srcref, and with it
-  # garry's source text, about 4 MB in every task wherever source is kept
-  # (covr, R CMD check, load_all()).
-  .expr <- bquote(asNamespace("garry")$.daemon_resumable(.(.expr)))
+  # daemon, and what the task carries crosses without srcrefs (.wire()).
+  .expr <- bquote(asNamespace("garry")$.daemon_resumable(.(.wire(.expr))))
   if (.timed) {
     .expr <- bquote({
       .garry_t0 <- Sys.time()
@@ -173,7 +171,110 @@ NULL
       )
     })
   }
-  mirai::mirai(.expr, ..., .compute = .compute)
+  # mirai takes a task's data as named dots or as one environment
+  mirai::mirai(
+    .expr,
+    list2env(.wire(list(...)), parent = emptyenv()),
+    .compute = .compute
+  )
+}
+
+# What crosses to a daemon, without srcrefs. Wherever garry's source is
+# kept (load_all(), covr, R_KEEP_PKG_SOURCE=yes), a srcref holds its
+# srcfile, the package's whole source text, and three things garry sends
+# carry one: a `{` quoted from its code, a closure it wrote, and every S7
+# object, through its class's constructor and validators. Each weighed
+# 21.6 MB: a small distributed collect sent 688 MB against 0.9 MB, and
+# the suite took 1403 s against 214 s. A copy without srcrefs crosses
+# instead; with garry's own source not kept, `x` crosses as it is.
+.wire <- function(x) {
+  if (!.src_kept()) {
+    return(x)
+  }
+  .unsrc(x) %||% x
+}
+
+# Whether garry's own functions carry srcrefs.
+.src_kept <- function() !is.null(attr(.src_kept, "srcref"))
+
+# `x` without srcrefs, or NULL when it carries none. Walks calls, lists,
+# closures (body and attributes) and attributes, never environments: a
+# namespace crosses by name, and any other environment is the caller's
+# own. Every S7 instance carries its class, so a class is stripped once
+# and kept by name for as long as it is the same class.
+.unsrc <- function(x) {
+  if (is.null(x) || is.environment(x) || is.symbol(x) || is.primitive(x)) {
+    return(NULL)
+  }
+  key <- NULL
+  if (inherits(x, "S7_class")) {
+    memo <- .garry_state$unsrc_memo
+    if (is.null(memo)) {
+      memo <- .garry_state$unsrc_memo <- new.env(parent = emptyenv())
+    }
+    key <- paste0(attr(x, "package"), "::", attr(x, "name"))
+    hit <- memo[[key]]
+    if (!is.null(hit)) {
+      if (identical(hit$x, x, ignore.srcref = FALSE)) {
+        return(hit$y)
+      }
+      if (!is.null(hit$y) && identical(hit$y, x, ignore.srcref = FALSE)) {
+        return(NULL) # already stripped
+      }
+    }
+  }
+  y <- .unsrc_attrs(x)
+  if (is.function(x)) {
+    b <- .unsrc(body(x))
+    if (!is.null(b)) {
+      y <- y %||% x
+      a <- attributes(y)
+      body(y) <- b # drops the attributes
+      attributes(y) <- a
+    }
+  } else if (is.call(x) || is.expression(x) || is.pairlist(x) || is.list(x)) {
+    for (i in seq_along(x)) {
+      # read in place: an empty argument (`x[i, ]`) bound to a name
+      # errors when the name is read
+      if (is.symbol(x[[i]])) {
+        next
+      }
+      e2 <- .unsrc(x[[i]])
+      if (!is.null(e2)) {
+        y <- y %||% x
+        y[[i]] <- e2
+      }
+    }
+  }
+  if (!is.null(key)) {
+    memo[[key]] <- list(x = x, y = y)
+  }
+  y
+}
+
+# `x` with its srcref attributes dropped and the others stripped, or NULL
+# when none carries a srcref. Data attributes (dim, names, ...) are left
+# alone, so a large array is never copied.
+.unsrc_attrs <- function(x) {
+  nm <- names(attributes(x))
+  if (!length(nm)) {
+    return(NULL)
+  }
+  y <- NULL
+  for (n in nm) {
+    v <- attr(x, n, exact = TRUE)
+    if (n %in% c("srcref", "srcfile", "wholeSrcref")) {
+      y <- y %||% x
+      attr(y, n) <- NULL
+    } else if (!is.atomic(v)) {
+      v2 <- .unsrc(v)
+      if (!is.null(v2)) {
+        y <- y %||% x
+        attr(y, n) <- v2
+      }
+    }
+  }
+  y
 }
 
 # Daemon side of .task_mirai(): evaluate a task's expression, resuming

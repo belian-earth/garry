@@ -556,6 +556,107 @@ test_that("a task carries its expression and no source text", {
   }
 })
 
+# Objects as garry's kept source makes them: a closure, a quoted `{` and
+# an S7 object whose class has a validator, each with srcrefs. Closures
+# live in the base environment, so none drags this test's frame along.
+.with_srcrefs <- function() {
+  src <- function(text) {
+    eval(parse(text = text, keep.source = TRUE)[[1L]], baseenv())
+  }
+  val <- src(
+    "function(self) {\n  if (length(self@v) != 1L) \"v must be one number\"\n}"
+  )
+  # made in an empty environment, which its constructor keeps
+  K <- eval(
+    bquote(S7::new_class(
+      "K",
+      package = "garrytest",
+      properties = list(v = S7::class_double),
+      validator = .(val)
+    )),
+    new.env(parent = baseenv())
+  )
+  list(
+    f = src("function(x) {\n  y <- x + 1\n  y * 2\n}"),
+    e = parse(text = "{\n  a <- 2\n  a + 1\n}", keep.source = TRUE)[[1L]],
+    obj = K(v = 2),
+    m = matrix(1:6, 2),
+    n = list(call = quote(g(x, , 1)), g = src("function(m) {\n  m[1, ]\n}"))
+  )
+}
+
+.carries_src <- function(x) {
+  grepl("srcref|srcfile", rawToChar(serialize(x, NULL, ascii = TRUE)))
+}
+
+test_that("a payload loses its srcrefs and nothing else", {
+  x <- .with_srcrefs()
+  expect_true(.carries_src(x))
+  y <- garry:::.unsrc(x)
+  expect_false(.carries_src(y))
+  expect_identical(y$f(1), x$f(1))
+  expect_identical(eval(y$e), eval(x$e))
+  expect_identical(y$m, x$m)
+  expect_identical(y$n$call, x$n$call)
+  expect_identical(y$n$g(diag(2)), c(1, 0))
+  # the object keeps its class, properties and validator
+  expect_true(S7::S7_inherits(y$obj))
+  expect_identical(class(y$obj), class(x$obj))
+  expect_identical(y$obj@v, 2)
+  expect_error(y$obj@v <- c(1, 2), "v must be one number")
+  # what carries none comes back as NULL, and is never copied
+  expect_null(garry:::.unsrc(list(1, "a", matrix(1:4, 2), quote(f(x, , 1)))))
+  expect_null(garry:::.unsrc(y))
+})
+
+test_that("tasks and broadcasts cross without srcrefs only where source is kept", {
+  sent <- list()
+  testthat::local_mocked_bindings(
+    mirai = function(.expr, ...) {
+      sent <<- c(sent, list(list(expr = .expr, data = ..1)))
+      NULL
+    },
+    everywhere = function(.expr, ..., .compute) {
+      sent <<- c(sent, list(list(expr = substitute(.expr), data = list(...))))
+      NULL
+    },
+    .package = "mirai"
+  )
+  x <- .with_srcrefs()
+  send <- function() {
+    sent <<- list()
+    garry:::.task_mirai(x$e, obj = x$obj, f = x$f, .compute = "garry_read")
+    garry:::.pool_send(x$e, "garry_read", obj = x$obj)
+    sent
+  }
+  testthat::local_mocked_bindings(.src_kept = function() TRUE)
+  got <- send()
+  expect_length(got, 2L)
+  expect_false(.carries_src(got))
+  task <- as.list(got[[1L]]$data)
+  expect_identical(sort(names(task)), c("f", "obj"))
+  expect_identical(task$f(1), x$f(1))
+  expect_identical(task$obj@v, 2)
+  expect_identical(got[[2L]]$data$obj@v, 2)
+  # an install without kept source sends them as they are
+  testthat::local_mocked_bindings(.src_kept = function() FALSE)
+  got <- send()
+  expect_identical(as.list(got[[1L]]$data)$f, x$f)
+  expect_identical(got[[2L]]$data$obj, x$obj)
+})
+
+test_that("garry's own S7 objects cross small where its source is kept", {
+  # fails with the payload stripping removed, on an install that keeps
+  # source; on a plain install it cannot fail
+  g <- grid_spec(
+    "EPSG:3857",
+    extent = c(0, 0, 600, 400),
+    dims = c(60L, 40L),
+    dtype = "f32"
+  )
+  expect_lt(length(serialize(garry:::.wire(list(g = g)), NULL)), 1e5)
+})
+
 test_that("a cancel lets a running task run to its end", {
   local_pools(1, 0)
   .local_wait_limit()
