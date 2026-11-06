@@ -2,6 +2,14 @@
 
 ## Breaking changes
 
+* garry imports mizu (>= 0.1.0) in place of mirai. A close of the pools, by
+  `garry_daemons()` or `garry_daemons(0, 0)`, now drops the tasks they hold
+  queued and discards results not yet collected; a daemon still finishes the
+  task it runs, and the close waits for it as before, until its process has
+  exited. A close left early, by a Ctrl-C or by a condition a handler outside
+  it takes, stops the daemons still mid-task. A Ctrl-C at the host still
+  leaves every daemon running. On Windows, where garry reads no process's
+  command line, each pool's stop waits for its daemon itself.
 * `geomedian()`, `medoid()` and custom reducers declaring `f32` over a band stack
   of time stacks take the direct route, so warped cells move. On small HLS a warped geomedian
   moved by a median of 0.22 DN, p99 12 DN and at most 1,277 DN, with the same NaN
@@ -103,6 +111,19 @@
 
 ## New features
 
+* `plan_reads()` lists where a plan reads its sources, without reading a
+  pixel: each read window of each read stage, the source pixels behind it
+  (the box of its footprint, padded for the kernel, for a warp) and the source
+  tiles it touches. `tiles = TRUE` gives one row per tile with its byte offset
+  and length in the file, from its TIFF metadata, ready to join to a table of
+  byte references. For ten days of MUR SST warped onto a polar grid it gives the
+  windows that were rebuilt by hand from `chunk_iter()` and `transform_bounds()`,
+  70 tiles and about 2 MB a day. A classic VRT of one file a band resolves to its
+  files; reads of several files, GTI mosaics, Zarr arrays and coarsened warps
+  list their windows with no source window. A read onto a coarse grid lists
+  the overview it reads, the level gdalwarp picked for a warp or the one
+  RasterIO takes for a decimating read, with that overview's pixels and tiles.
+
 * `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
   by block means of its valid values. Its read assembles each window's
   finer cells from the sources as their nearest-neighbour read does
@@ -196,6 +217,33 @@
 
 ## Performance
 
+* garry's daemon pools run on mizu, over shared memory, in place of mirai and
+  its sockets. Each daemon is a mizu pool of its own, so broadcasts, the
+  store's drops and compute routing still reach one daemon, and the readers are
+  routed on the host, two reads a reader as before. Every daemon of a
+  generation starts at once. On a 20-thread workstation with the default 20
+  readers, 6 compute daemons and the writer, `garry_daemons()` took 3.7 s
+  against 4.5 s and its close 0.12 s against 1.6 s, and the benchmark suite's
+  start, pools included, fell from 5.5 s to 4.6-4.7 s. Most of what remains is
+  27 processes loading garry at once: one load costs 0.9 s, 0.59 s of it
+  gdalraster's shared libraries. Run times are level: across the suite's tasks,
+  wall on mizu was 1.004 times wall on mirai on small data and 1.010 on
+  medium, every output byte-identical, and garry's tests ran in 180 s against
+  209 s. An idle daemon holds 4 MB more anonymous memory and 1 MB of shared
+  memory for its rings, about 130 MB across that fleet.
+* A warp of one remote file, or of a local VRT of remote files, fetches a
+  window's source tiles in a few batched reads where its blocks would fetch
+  them piecemeal. Each 512 x 128 block of the warped VRT was a source read of
+  its own, a round trip for the tiles it was first to touch: a day of MUR SST
+  onto a 1000 x 1000 polar grid took 36 requests in 7 trips. The window is now
+  warped whole first, in strips, and the values dropped, so its tiles sit in
+  the block cache when the blocks read, and the cells are the blocks' as before.
+  It does so where the trips saved outweigh the second warp, the tiles fit half
+  the block cache and every sampled point of a strip lies on the source. On two
+  CPUs, ten days of MUR SST took 15 s on two readers against 38 s, 7 s against
+  14 s on eight, 18 s against 37 s at 500 m, and 43 s against 64 s as one
+  classic VRT. A Copernicus DEM tile onto UTM took 1.5 s against 1.9 s, its
+  nine large tiles now fetched in one batch.
 * On the CPU a mask or band task of the direct route's pipeline reads its batch
   or strip into C memory that XLA takes with no copy, and frees it on exit with no gc,
   where a read in R's heap needs a full pass to go. Cells do not change. Reads

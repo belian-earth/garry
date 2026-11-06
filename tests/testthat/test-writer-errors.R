@@ -9,7 +9,7 @@
 # host-side mock never ships). Fails from the `from`-th call on; earlier
 # calls run the real writer so an output handle is genuinely open.
 .we_break_writer <- function(from = 2L) {
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(".daemon_write_chunk", ns)
     .we_real <<- get(".daemon_write_chunk", envir = ns)
@@ -23,7 +23,7 @@
 }
 
 .we_fix_writer <- function() {
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     if (exists(".we_real", inherits = TRUE))
       assign(".daemon_write_chunk", .we_real, envir = ns)
@@ -67,7 +67,7 @@ test_that("a close that fails or dies on the writer fails the write, and only a 
   garry:::.garry_abi_check("garry_write") # the guard would refuse the mocks below
   # the pools are torn down at the end of the test, mocks included
   mock_close <- function(fn) {
-    mirai::everywhere({
+    .everywhere({
       ns <- asNamespace("garry")
       unlockBinding(".daemon_write_close", ns)
       assign(".daemon_write_close", fn, envir = ns)

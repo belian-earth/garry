@@ -569,7 +569,7 @@ NULL
   .gd_daemon_prep("garry_read")
   t0 <- proc.time()[["elapsed"]]
   reads <- .gd_fetch(tl, b, names(b$jobs))
-  on.exit(mirai::stop_mirai(reads), add = TRUE) # a failed wait's queued reads
+  on.exit(.task_cancel(reads), add = TRUE) # a failed wait's queued reads
   r <- .gd_fetch_land(tl, reads, "source")
   if (isTRUE(garry_opt("progress"))) {
     t <- proc.time()[["elapsed"]] - t0
@@ -586,7 +586,7 @@ NULL
 
 # Build the per-source warp job bundle WITHOUT dispatching: `jobs` (keyed by
 # source node id, each with its .bin path) and the grid-constant bundle `K`
-# sent once via mirai .args. Callers warp all sources at once
+# sent with each task. Callers warp all sources at once
 # (.gd_warp_sources) or per-asset (the fetch-ordered pipeline).
 .gd_build_jobs <- function(plan, grid, tmp) {
   graph <- plan@graph
@@ -637,14 +637,12 @@ NULL
 }
 
 # Launch the warp-on-read of sources `ids` WITHOUT blocking (b from
-# .gd_build_jobs()), handles named by task key. Raw mirai() per job with
-# the task fn resolved BY NAME on the daemon, the same pattern as the
-# scheduler's launch functions. mirai_map() ships the function object
-# inside every task's .args; measured on this pipeline that per-task
-# overhead inflates from ~6 ms (idle pool) to ~100 ms once the read
-# daemons are busy with live warps, serialising a 220-task dispatch into
-# ~25 s of host stall that delayed every downstream phase (the "slow
-# lead-in").
+# .gd_build_jobs()), handles named by task key: one task per job with the
+# task fn resolved BY NAME on the daemon, the same pattern as the
+# scheduler's launch functions. Shipping the function object in every task
+# once cost ~100 ms a task on busy readers, a 220-task dispatch serialised
+# into ~25 s of host stall (the "slow lead-in"). The read group holds the
+# jobs on the host and hands them to readers as they free up.
 .gd_fetch <- function(tl, b, ids, K = b$K) {
   stats::setNames(
     lapply(ids, function(id) {
@@ -680,7 +678,7 @@ NULL
 # A read is the run's failure: a collected fetch group aborts on a failed
 # warp, or a reader lost under one, naming the source and the cause.
 .gd_check_fetch <- function(r, label) {
-  errs <- Filter(function(x) inherits(x, "errorValue"), r)
+  errs <- Filter(function(x) inherits(x, "garry_task_failure"), r)
   if (length(errs)) {
     .task_abort(
       .glue("gdal-direct: {length(errs)}/{length(r)} {label} warps failed"),
@@ -698,9 +696,9 @@ NULL
 }
 
 # tmpfs dir for a run's per-source .bin payloads.
-# A fresh scratch dir per run: tasks orphaned by an aborted run (the pools
-# have no dispatcher to cancel them) must not write into the next run's
-# files, which reuse node-id names.
+# A fresh scratch dir per run: tasks an aborted run left running (a cancel
+# lets a running task finish) must not write into the next run's files,
+# which reuse node-id names.
 .gd_tmp <- function() {
   tmp <- tempfile(
     .glue("gdirect-{Sys.getpid()}-"),
@@ -716,11 +714,11 @@ NULL
 # daemon given no strip may still be compiling, and a close of its pool
 # waits for it (.pools_close()).
 .gd_warm_report <- function(warm, tl) {
-  done <- Filter(Negate(mirai::unresolved), warm)
+  done <- Filter(Negate(.task_unresolved), warm)
   for (key in names(done)) {
     .task_landed(tl$line, key, done[[key]]$data)
   }
-  failed <- Filter(function(h) inherits(h$data, "miraiError"), done)
+  failed <- Filter(function(h) inherits(h$data, "garry_task_raised"), done)
   if (length(failed)) {
     why <- .task_failure(failed[[1L]]$data)
     cli::cli_warn(
@@ -950,10 +948,11 @@ NULL
   }
   fetch_units()
   # A failed run cancels the reads it leaves queued: the read pool drops
-  # them, and a running one ends first (.task_mirai()). The compute tasks
-  # run on width-1 profiles, which have no dispatcher to drop one.
+  # them, and a running one ends first (.task_cancel()). The compute tasks
+  # are left to finish: the store's failure path waits for what each compute
+  # daemon was sent (.store_broadcasts()).
   on.exit(
-    mirai::stop_mirai(c(fmask_p, unlist(unit_p, recursive = FALSE))),
+    .task_cancel(c(fmask_p, unlist(unit_p, recursive = FALSE))),
     add = TRUE
   )
 
@@ -1054,7 +1053,7 @@ NULL
     it <- mask_p[[1L]]
     mask_p[[1L]] <<- NULL
     v <- .await_task(it$h, comp_profs)
-    if (inherits(v, "miraiError")) {
+    if (inherits(v, "garry_task_raised")) {
       .task_abort("gdal-direct mask computation failed", v)
     }
     .task_landed(tl$line, it$key, v)
@@ -1159,7 +1158,7 @@ NULL
     it <- inflight[[1L]]
     inflight <<- inflight[-1L]
     v <- .await_task(it$h, comp_profs)
-    if (inherits(v, "miraiError")) {
+    if (inherits(v, "garry_task_raised")) {
       .task_abort(.glue("gdal-direct pipeline compute failed on kernel {it$u} strip {it$si}"), v)
     }
     v <- .task_landed(tl$line, it$key, v)

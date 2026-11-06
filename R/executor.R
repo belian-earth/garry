@@ -77,7 +77,7 @@ NULL
 # a source lies on the target's pixels (.mosaic_read_spec()). A Zarr
 # store, or other sources together, warp straight into each window
 # (gdal_warp_window()); anything else builds the warped VRT. Shared by
-# execute_plan() and the mirai scheduler so the two cannot disagree
+# execute_plan() and the distributed scheduler so the two cannot disagree
 # about which read they do. `build = FALSE` asks only which: a warped VRT,
 # the last resort, comes back as an empty plan, unbuilt.
 .warp_read_plan <- function(wnode, snode, build = TRUE) {
@@ -182,23 +182,33 @@ NULL
   if (!build) {
     return(list())
   }
+  vrt <- gdal_warp_vrt(
+    .gti_resampled_path(snode@path, snode@resampling),
+    band,
+    wnode@target_grid,
+    wnode@resampling,
+    src_nodata = snode@nodata,
+    open_options = snode@open_options,
+    alike = alike
+  )
   list(
-    path = gdal_warp_vrt(
-      .gti_resampled_path(snode@path, snode@resampling),
-      band,
-      wnode@target_grid,
-      wnode@resampling,
-      src_nodata = snode@nodata,
-      open_options = snode@open_options,
-      alike = alike
-    ),
+    path = vrt,
     band = seq_along(band),
     nodata = snode@nodata,
     open_options = character(0),
     scale = snode@scale,
     offset = snode@offset,
     decim = NULL,
-    warped = TRUE
+    warped = TRUE,
+    prefetch = .gdal_warp_prefetch_src(
+      snode@path,
+      snode@grid,
+      snode@stored,
+      snode@block_dim,
+      snode@open_options,
+      wnode@resampling,
+      vrt
+    )
   )
 }
 
@@ -290,7 +300,8 @@ NULL
           out_nodata = nodata,
           open_options = ra$open_options,
           decim = ra$decim
-        )
+        ),
+        core
       )
     },
     what = "read",
@@ -447,7 +458,8 @@ NULL
         scale = ra$scale,
         offset = ra$offset,
         decim = ra$decim
-      )
+      ),
+      w
     )
   }
   sub <- .gdal_with_retry(read_one, what = "read", src = ra$path)

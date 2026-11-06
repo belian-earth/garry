@@ -3,7 +3,7 @@
 NULL
 
 # ---------------------------------------------------------------------------
-# Daemon-side code: every function that executes IN a mirai daemon
+# Daemon-side code: every function that executes IN a garry daemon
 # process, addressed cross-process via `garry::`: the .daemon_*
 # family, the composite-direct task bodies, memory hygiene, and the
 # ABI token that guards host/daemon namespace skew. Keeping every
@@ -206,7 +206,7 @@ NULL
 #'
 #' Daemons resolve the `.daemon_*` bodies from their INSTALLED library while
 #' a development host frequently runs a `load_all()` tree; a namespace
-#' skew yields "unused argument" mirai errors at best and silent
+#' skew yields "unused argument" task errors at best and silent
 #' semantic drift at worst (positional renames, new masking arguments).
 #' `packageVersion()` cannot guard this (constant through development);
 #' the formals can. Internal; daemons evaluate their own token through
@@ -239,12 +239,12 @@ NULL
   # Ask every pool at once: the first ask loads garry on a fresh daemon
   # (about a second), and serially that was 6 s of a first collect().
   asks <- lapply(profiles, function(p) {
-    mirai::mirai(asNamespace("garry")$.garry_abi_token(), .compute = p)
+    .pool_submit(p, quote(asNamespace("garry")$.garry_abi_token()))
   })
   for (i in seq_along(profiles)) {
     p <- profiles[[i]]
     d <- .await_task(asks[[i]], p)
-    if (inherits(d, "miraiError")) {
+    if (inherits(d, "garry_task_raised")) {
       why <- .task_failure(d)
       cli::cli_abort(
         c(
@@ -778,7 +778,7 @@ NULL
   sh <- mori::share(res)
   .daemon_shm[[reg_key]] <- sh
   # Release this chunk's device buffers and input copies now: nothing
-  # triggers gc between mirai tasks, so consecutive fused chunks on
+  # triggers gc between daemon tasks, so consecutive fused chunks on
   # one daemon otherwise stack ~0.5 GB of dead buffers each (phase
   # 10b: compute daemons measured at 1.2-1.7 GB anon vs a ~300 MB
   # working set). Pair with MALLOC_MMAP_THRESHOLD_/
@@ -1114,8 +1114,7 @@ NULL
 # into memory we hold (no R double, no tmpfs GTiff, no local index) -- and
 # writes the payload to `bin`.
 # `j` carries only this slice's varying data (locs, dt, band, nodata, resampling, bin); `k` is
-# the grid-constant bundle passed once via mirai `.args` (embedding it in every
-# task instead throttles the dispatcher and starves the daemon pool).
+# the grid-constant bundle, the same for every slice of a run.
 #' Daemon task body: bring one slice's items to an f32 plane file.
 #'
 #' One item on the grid's own pixels is translated; anything else warps

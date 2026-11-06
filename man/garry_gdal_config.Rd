@@ -21,7 +21,7 @@ plus the metadata and chunk keys of Zarr stores), and
 permission to open MEM-driver datasets, which garry's internal warp
 readers require. \code{garry_daemons()} calls this
 on every read daemon automatically; call it yourself for host-side
-discovery reads or when you drive \code{mirai::daemons()} directly. Each
+discovery reads or in processes of your own. Each
 option is set via \code{set_config_option}, so a value you set afterwards
 wins.
 }

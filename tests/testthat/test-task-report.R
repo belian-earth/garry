@@ -292,14 +292,14 @@ test_that("pools record daemon roles and cap every daemon's GDAL cache", {
   expect_setequal(names(st$pid_role), as.character(st$pool_pids))
   expect_setequal(unname(st$pid_role), c("read", "comp", "write"))
   cache_mb <- function(p) {
-    mirai::mirai(
+    .on_daemon(
       as.numeric(format(gdalraster::get_cache_max("MB"))) / 1.048576,
       .compute = p
-    )[]
+    )
   }
   for (p in c("garry_read", garry:::.comp_profiles(), "garry_write")) {
     expect_equal(cache_mb(p), 200, tolerance = 0.01)
     # read slabs and garry_gdal_config() size from the option
-    expect_identical(mirai::mirai(getOption("garry.gdal_cachemax_mb"), .compute = p)[], 200)
+    expect_identical(.on_daemon(getOption("garry.gdal_cachemax_mb"), .compute = p), 200)
   }
 })

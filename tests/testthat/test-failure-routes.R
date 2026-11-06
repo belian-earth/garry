@@ -86,7 +86,7 @@
 # this is how a kernel fails inside a task.
 .fr_call_fails <- function(name, prof, at) {
   garry:::.garry_abi_check(prof) # the guard would refuse the mock below
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(name, ns)
     .fr_real <<- get(name, envir = ns)

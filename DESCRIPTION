@@ -4,9 +4,9 @@ Version: 0.2.0
 Authors@R:
     person("Hugh", "Graham", email = "hugh@belian.earth", role = c("aut", "cre"))
 Description: Experimental. Lazy raster arrays with CRS/transform-aware
-    semantics, chunked execution via mirai, and JIT-compiled kernels via
-    anvl (XLA). Compute graph IR is R-native; GDAL handles IO via
-    gdalraster.
+    semantics, chunked execution on shared-memory daemon pools via mizu,
+    and JIT-compiled kernels via anvl (XLA). Compute graph IR is R-native;
+    GDAL handles IO via gdalraster.
 License: MIT + file LICENSE
 SystemRequirements: GDAL (>= 3.9, for the GTI mosaic driver)
 Encoding: UTF-8
@@ -22,7 +22,7 @@ Imports:
     glue,
     memuse,
     methods,
-    mirai,
+    mizu (>= 0.1.0),
     mori,
     pjrt (>= 0.6.0.9100),
     rlang,
@@ -70,6 +70,7 @@ Collate:
     'collect.R'
     'executor.R'
     'daemon.R'
+    'tasks.R'
     'pools.R'
     'scheduler.R'
     'composite_direct.R'
@@ -87,6 +88,7 @@ Collate:
     'ocm_edgenext.R'
     'ocm_weights.R'
     'placement.R'
+    'plan_reads.R'
     'plan_view.R'
     'preview.R'
     'program.R'

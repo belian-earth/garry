@@ -3,7 +3,7 @@
 NULL
 
 # ---------------------------------------------------------------------------
-# Distributed executor over mirai daemons (Phase 7, decision D16).
+# Distributed executor over garry's daemon pools (Phase 7, decision D16).
 #
 # Tasks are keyed (stage_id, chunk_idx). Dependencies: source/warp chunk
 # tasks are free; compute/reduce_partial chunk j depends on chunk j of
@@ -141,23 +141,14 @@ NULL
 
 # Launch a scheduler task's daemon call. With `timed`, the call runs
 # inside an envelope that records when the DAEMON started it, so the
-# task log can split queue time (a width-1 profile holds up to two
-# tasks; the second waits behind the first) from run time. Launch-to-
-# done alone conflates them: the SI tail's busy scan daemons read ~2x
-# slower per task than they were (2026-10-23). `.expr` is the call as a
-# language object; `...` are its data, as for mirai::mirai(). The
-# formals are dotted so no data name partially matches them (`ex = ex`
-# once bound to an `expr` formal).
-.task_mirai <- function(.expr, ..., .compute, .timed = FALSE) {
-  # A cancel (stop_mirai()) interrupts a running task. One that lands inside
-  # cli's formatting leaves the daemon's cli unable to format any later
-  # message (5 of 30 cancels, cli 3.6.6), so a task resumes through an
-  # interrupt and runs to its end: a cancel drops a queued task, and the
-  # host stops waiting for a running one's reply. The handler lives on the
-  # daemon: a function literal here would carry its srcref, and with it
-  # garry's source text, about 4 MB in every task wherever source is kept
-  # (covr, R CMD check, load_all()).
-  .expr <- bquote(asNamespace("garry")$.daemon_resumable(.(.expr)))
+# task log can split queue time (a daemon holds up to two tasks; the
+# second waits behind the first) from run time. Launch-to-done alone
+# conflates them: the SI tail's busy scan daemons read ~2x slower per
+# task than they were (2026-10-23). `.expr` is the call as a language
+# object; `...` are its data, named. The formals are dotted so no data
+# name partially matches them (`ex = ex` once bound to an `expr` formal).
+# .pool_submit() runs it through .daemon_resumable().
+.task_submit <- function(.expr, ..., .compute, .timed = FALSE) {
   if (.timed) {
     .expr <- bquote({
       .garry_t0 <- Sys.time()
@@ -173,18 +164,7 @@ NULL
       )
     })
   }
-  mirai::mirai(.expr, ..., .compute = .compute)
-}
-
-# Daemon side of .task_mirai(): evaluate a task's expression, resuming
-# through any interrupt. `expr` is a promise, forced inside the handler.
-.daemon_resumable <- function(expr) {
-  withCallingHandlers(
-    expr,
-    interrupt = function(cnd) {
-      if (!is.null(findRestart("resume"))) invokeRestart("resume")
-    }
-  )
+  .pool_submit(.compute, .expr, list(...))
 }
 
 # A timed task's rows, from the daemon's own clock: when it started and
@@ -212,7 +192,7 @@ NULL
 
 # Launch a task outside the scheduler's ready queue with its launch row,
 # ready as it launches. `.key` is only evaluated with a log, and the
-# formals are dotted for .task_mirai()'s reason.
+# formals are dotted for .task_submit()'s reason.
 .task_launch <- function(
   .tl,
   .key,
@@ -235,7 +215,7 @@ NULL
       ready = ready
     )
   }
-  .task_mirai(.expr, ..., .compute = .compute, .timed = .tl$timed)
+  .task_submit(.expr, ..., .compute = .compute, .timed = .tl$timed)
 }
 
 # Open a run's task log: `line` writes rows (runs share a log file, so
@@ -417,7 +397,7 @@ NULL
   .grid_planes(.node_grid(graph_get(graph, nid)))
 }
 
-#' Execute a Plan across mirai daemons.
+#' Execute a Plan across garry's daemon pools.
 #'
 #' Requires garry's daemon pools: call [garry_daemons()] first (the
 #' function errors when the pools are not running). Results are
@@ -620,7 +600,7 @@ execute_plan_mirai <- function(
   # dispatcher to drop a task, so the clear waits behind what it holds.
   inflight <- list()
   on.exit(
-    mirai::stop_mirai(inflight[vapply(
+    .task_cancel(inflight[vapply(
       names(inflight),
       function(k) tasks[[k]]$pool == "read",
       NA
@@ -718,7 +698,7 @@ execute_plan_mirai <- function(
         cr <- grid@crs
         tr <- grid@transform[[2L]] # target x resolution: decimate coarse fetches
         add_task(key, character(0), "read", prio = 1L, launch = function(prof) {
-          .task_mirai(
+          .task_submit(
             quote(
               asNamespace("garry")$.daemon_fetch_window(
                 src,
@@ -831,7 +811,7 @@ execute_plan_mirai <- function(
       mb = rd$mb,
       store_mb = rd$store_mb,
       launch = function(prof) {
-        .task_mirai(
+        .task_submit(
           quote(asNamespace("garry")$.daemon_run_source_shm(
             ra,
             cg,
@@ -901,7 +881,7 @@ execute_plan_mirai <- function(
       dev = cd$device,
       ck = cd$ck,
       launch = function(prof, with_fn = TRUE) {
-        .task_mirai(
+        .task_submit(
           quote(asNamespace("garry")$.daemon_run_compute_shm(
             ck,
             fn,
@@ -1418,8 +1398,8 @@ execute_plan_mirai <- function(
     done_any <- FALSE
     for (p in names(warm_inflight)) {
       w <- warm_inflight[[p]]
-      if (mirai::unresolved(w$h)) next
-      if (inherits(w$h$data, "errorValue")) {
+      if (.task_unresolved(w$h)) next
+      if (inherits(w$h$data, "garry_task_failure")) {
         warm_failed(p, w, .task_failure(w$h$data))
       }
       .task_landed(log_line, w$key, w$h$data)
@@ -1887,10 +1867,10 @@ execute_plan_mirai <- function(
     any_done <- FALSE
     for (wk in names(wr_inflight)) {
       w <- wr_inflight[[wk]]
-      if (mirai::unresolved(w$h)) {
+      if (.task_unresolved(w$h)) {
         next
       }
-      if (inherits(w$h$data, "errorValue")) {
+      if (inherits(w$h$data, "garry_task_failure")) {
         .task_abort(
           "sink write failed on the writer daemon",
           w$h$data,
@@ -1922,7 +1902,7 @@ execute_plan_mirai <- function(
   is_ready <- function(k) dep_left[[k]] == 0L
   remaining <- function() n_done < n_total
   progress <- isTRUE(garry_opt("progress"))
-  # daemon-side start times ride the task log (see .task_mirai)
+  # daemon-side start times ride the task log (see .task_submit)
   tl <- .task_log_open(
     run_id,
     c(
@@ -2069,15 +2049,15 @@ execute_plan_mirai <- function(
     harvested <- FALSE
     for (k in names(inflight)) {
       h <- inflight[[k]]
-      if (!mirai::unresolved(h)) {
-        if (inherits(h$data, "errorValue")) {
+      if (!.task_unresolved(h)) {
+        if (inherits(h$data, "garry_task_failure")) {
           # A key-only launch found the daemon's jit cache cold (the
           # cache was wiped, or warmth outlived it): resend once with
           # the kernel, and clear the mark, or every later task of this
           # kernel misses too. Resend to the SAME profile: the miss
           # identifies the one daemon that lacks it.
           if (
-            "garry_jit_miss" %in% attr(h$data, "condition.class", exact = TRUE) &&
+            "garry_jit_miss" %in% class(h$data$condition) &&
               !isTRUE(tasks[[k]]$resent)
           ) {
             tasks[[k]]$resent <- TRUE

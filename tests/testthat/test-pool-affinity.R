@@ -10,13 +10,12 @@ skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
 
 # Each daemon's CPU list, as the kernel reports it.
 .cpu_lists <- function(profile) {
-  h <- mirai::everywhere({
+  unlist(.everywhere({
     sub("Cpus_allowed_list:\\s*", "",
         grep("^Cpus_allowed_list:",
              readLines(sprintf("/proc/%d/status", Sys.getpid())),
              value = TRUE))
-  }, .compute = profile)
-  vapply(h, function(m) m[], character(1))
+  }, .compute = profile))
 }
 
 # "0-2,7" as c(0, 1, 2, 7).

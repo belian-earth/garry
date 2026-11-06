@@ -622,9 +622,12 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 #
 # A read daemon opens every file it reads, and 4 MB can outweigh the
 # window it came for, so a daemon ingests what the run's files need
-# (`.garry_open_bytes`, shipped by .daemon_policy()). The host opens few
-# files and keeps 4 MB, and so does a Zarr open: its metadata is no TIFF
-# header, and a daemon opens a store once.
+# (`.garry_open_bytes`, shipped by .daemon_policy()). The host ingests 4 MB
+# until it has opened a remote TIFF, then what the headers it has seen need
+# (.gdal_host_open_bytes()): a daily series opens one file a day, and ten
+# MUR SST days took 19 s at 4 MB each against 8 s at their 53 KB headers. A
+# Zarr open keeps 4 MB: its metadata is no TIFF header, and a daemon opens a
+# store once.
 .gdal_quiet_remote <- function(code, zarr = FALSE) {
   prev_rd <- .gdal_config_prev("GDAL_DISABLE_READDIR_ON_OPEN")
   prev_ib <- .gdal_config_prev("GDAL_INGESTED_BYTES_AT_OPEN")
@@ -633,7 +636,7 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
   gdalraster::set_config_option("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
   gdalraster::set_config_option(
     "GDAL_INGESTED_BYTES_AT_OPEN",
-    if (zarr) .gdal_open_bytes_most else getOption(".garry_open_bytes", .gdal_open_bytes_most)
+    if (zarr) .gdal_open_bytes_most else getOption(".garry_open_bytes", .gdal_host_open_bytes())
   )
   if (zarr && !nzchar(allowlist)) {
     gdalraster::set_config_option(
@@ -660,16 +663,373 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
 # source pixels a cell takes: 93 % of a Landsat band's cells moved between
 # two read layouts, p99 246 DN from exact against 17 by blocks, at the same
 # speed. Blocks hold the rows of the warp to 512 px whatever is read.
-.gdal_read_warped <- function(ra, code) {
+#
+# Over the network each block's warp is a RasterIO of its own: one round trip
+# for the source tiles it is first to touch, in ranges fetched together. One
+# day of MUR SST onto a 1000 x 1000 polar grid took 36 requests in 7 such
+# batches by blocks, against 5 in one for a RasterIO of the window. So where
+# .gdal_warp_prefetch_plan() finds it pays, the window's blocks are first warped
+# whole, in strips, and the values dropped: the source tiles arrive in a batch
+# a strip and stay in the block cache, where the block reads that give the cells
+# find them. The cells are the blocks' as before.
+.gdal_read_warped <- function(ra, code, win = NULL) {
   if (!isTRUE(ra$warped)) {
     return(code)
   }
   key <- "GDAL_VRT_WARP_USE_DATASET_RASTERIO"
   prev <- .gdal_config_prev(key)
-  gdalraster::set_config_option(key, "NO")
   on.exit(gdalraster::set_config_option(key, prev), add = TRUE)
+  if (!is.null(ra$prefetch) && !is.null(win)) {
+    ds <- .gdal_handle(ra$path, ra$open_options)
+    plan <- .gdal_warp_prefetch_plan(ds, ra$prefetch, win)
+    if (!is.null(plan)) {
+      # GTiff fetches a read's tiles as ranges together up to this many
+      # compressed bytes, then one tile at a time: 10 MB by default, under a
+      # strip of large tiles (nine 2.5 MB DEM tiles went in eight requests)
+      raw <- "GDAL_MAX_RAW_BLOCK_CACHE_SIZE"
+      prev_raw <- .gdal_config_prev(raw)
+      on.exit(gdalraster::set_config_option(raw, prev_raw), add = TRUE)
+      gdalraster::set_config_option(raw, format(plan$raw_bytes, scientific = FALSE))
+      gdalraster::set_config_option(key, "YES")
+      for (st in plan$strips) {
+        ds$read(1L, st[[1L]], st[[2L]], st[[3L]], st[[4L]], st[[3L]], st[[4L]])
+      }
+    }
+  }
+  gdalraster::set_config_option(key, "NO")
   force(code)
 }
+
+# Pixels of one prefetch strip: its dropped values (8 bytes each) and its
+# warp's buffers stay well inside the warper's 64 MB, which would otherwise
+# split the strip into reads of its own.
+.warp_prefetch_strip_px <- 2^22
+# The round trip a prefetch saves is priced at 20 ms, about an object store's
+# first byte in region, and the extra warp at 30 ns a pixel, as measured for a
+# bilinear warp on one core (0.08 s for a 2.6 Mpx DEM window).
+.warp_prefetch_rtt_s <- 0.02
+.warp_prefetch_px_s <- 3e-8
+
+# How to prefetch window `win` of warped VRT `ds` (.gdal_read_warped()):
+# list(strips, raw_bytes), strips as c(x_off, y_off, x_size, y_size), or NULL
+# for none. The window grows to whole VRT blocks, the ones its read warps, and
+# splits into strips of whole block rows. GDAL warps a request whole only for a
+# one-band VRT and only past one block column and one block row, so nothing
+# else gains. A strip any of whose sampled points PROJ cannot transform, or that
+# misses the source, is left to its blocks: a whole warp of it may find no
+# source window and fail where its blocks read nodata. Under a GTiff thread
+# pool a request for the whole source skips the block cache, so such a strip
+# declines the window.
+#
+# Then it must pay. By blocks the window takes a round trip for each block
+# that first touches some tile (.gdal_warp_block_batches()); prefetched, one a
+# strip. The round trips saved must outweigh a second warp of the strips'
+# pixels, and the window's tiles must fit half the block cache, or the prefetch
+# evicts its own first tiles before the blocks reach them. MUR SST onto a polar
+# grid saves about 6 round trips a megapixel; a Copernicus DEM tile onto UTM 5 over
+# 2.6 Mpx in nine tiles of 1024 x 1024, which a strip fetches in one batch only
+# above GTiff's default range cap (`raw_bytes`).
+.gdal_warp_prefetch_plan <- function(ds, src, win) {
+  if (ds$getRasterCount() != 1L) {
+    return(NULL)
+  }
+  bs <- ds$getBlockSize(1L)
+  nx <- ds$getRasterXSize()
+  ny <- ds$getRasterYSize()
+  x0 <- floor(win$x_off / bs[[1L]]) * bs[[1L]]
+  y0 <- floor(win$y_off / bs[[2L]]) * bs[[2L]]
+  x1 <- min(nx, ceiling((win$x_off + win$x_size) / bs[[1L]]) * bs[[1L]])
+  y1 <- min(ny, ceiling((win$y_off + win$y_size) / bs[[2L]]) * bs[[2L]])
+  if (x1 - x0 <= bs[[1L]] || y1 - y0 <= bs[[2L]]) {
+    return(NULL)
+  }
+  rows <- bs[[2L]] * max(1, floor(.warp_prefetch_strip_px / ((x1 - x0) * bs[[2L]])))
+  tops <- seq(y0, y1 - 1, by = rows)
+  strips <- lapply(tops, function(y) c(x0, y, x1 - x0, min(rows, y1 - y)))
+  threaded <- !src$threads %in% c("", "1") ||
+    !gdalraster::get_config_option("GDAL_NUM_THREADS") %in% c("", "1")
+  keep <- logical(length(strips))
+  for (k in seq_along(strips)) {
+    w <- .gdal_warp_src_window(ds, src, strips[[k]], strict = TRUE)
+    if (!is.null(w) && threaded && all(w == c(0, 0, src$dims - 1))) {
+      return(NULL)
+    }
+    keep[[k]] <- !is.null(w)
+  }
+  strips <- strips[keep]
+  if (!length(strips)) {
+    return(NULL)
+  }
+  b <- .gdal_warp_block_batches(ds, src, strips, bs)
+  px <- sum(vapply(strips, function(st) st[[3L]] * st[[4L]], numeric(1)))
+  tile_bytes <- prod(src$tile) * src$bytes
+  half <- as.numeric(gdalraster::get_cache_max("bytes")) / 2
+  saved <- b[["batches"]] - length(strips)
+  if (
+    b[["tiles"]] == 0 ||
+      b[["tiles"]] * tile_bytes > half ||
+      saved * .warp_prefetch_rtt_s <= px * .warp_prefetch_px_s
+  ) {
+    return(NULL)
+  }
+  list(strips = strips, raw_bytes = max(10 * 2^20, b[["strip_tiles"]] * tile_bytes))
+}
+
+# The source pixels c(c0, r0, c1, r1) (inclusive, clipped to the source, rows
+# north first) under window `env` c(x_off, y_off, x_size, y_size) of warped VRT
+# `ds`, padded as the warper pads for its kernel: the kernel's radius in source
+# pixels, wider where the warp shrinks the source. NULL where the box misses the
+# source or PROJ cannot bound it; `strict` also where any of the window's edge
+# and interior sample points fails to transform, as for a window that crosses
+# the limb of an orthographic or geostationary disk.
+.gdal_warp_src_window <- function(ds, src, env, strict = FALSE) {
+  gt <- ds$getGeoTransform()
+  xs <- gt[[1L]] + (env[[1L]] + c(0, env[[3L]])) * gt[[2L]]
+  ys <- gt[[4L]] + (env[[2L]] + c(0, env[[4L]])) * gt[[6L]]
+  if (strict) {
+    gx <- seq(xs[[1L]], xs[[2L]], length.out = 21L)
+    gy <- seq(ys[[1L]], ys[[2L]], length.out = 21L)
+    inner <- expand.grid(x = gx[c(1, 6, 11, 16, 21)], y = gy[c(1, 6, 11, 16, 21)])
+    pts <- rbind(
+      cbind(gx, ys[[1L]]), cbind(gx, ys[[2L]]),
+      cbind(xs[[1L]], gy), cbind(xs[[2L]], gy),
+      as.matrix(inner)
+    )
+    # failed points come back NA, with an R warning and a GDAL error each
+    out <- suppressWarnings(.gdal_quiet_errors(gdalraster::transform_xy(pts, ds$getProjection(), src$crs)))
+    if (anyNA(out)) {
+      return(NULL)
+    }
+  }
+  ext <- c(min(xs), min(ys), max(xs), max(ys))
+  # PROJ warns and gives NA for edges it cannot transform
+  b <- suppressWarnings(
+    gdalraster::transform_bounds(ext, ds$getProjection(), src$crs, densify_pts = 21L)
+  )
+  if (!all(is.finite(b)) || b[[3L]] < b[[1L]]) {
+    return(NULL)
+  }
+  sg <- src$transform
+  cols <- sort(c((b[[1L]] - sg[[1L]]) / sg[[2L]], (b[[3L]] - sg[[1L]]) / sg[[2L]]))
+  rows <- sort(c((b[[4L]] - sg[[4L]]) / sg[[6L]], (b[[2L]] - sg[[4L]]) / sg[[6L]]))
+  pad <- ceiling(src$radius * pmax(1, c(diff(cols) / env[[3L]], diff(rows) / env[[4L]]))) + 1
+  w <- c(
+    max(0, floor(cols[[1L]]) - pad[[1L]]),
+    max(0, floor(rows[[1L]]) - pad[[2L]]),
+    min(src$dims[[1L]] - 1, ceiling(cols[[2L]]) + pad[[1L]]),
+    min(src$dims[[2L]] - 1, ceiling(rows[[2L]]) + pad[[2L]])
+  )
+  if (w[[3L]] < w[[1L]] || w[[4L]] < w[[2L]]) {
+    return(NULL)
+  }
+  w
+}
+
+# What the block reads of `strips` fetch, block by block in GDAL's order: a
+# block that is first to touch some source tile costs a round trip, its new
+# tiles going together in that read's ranges. Gives c(batches, tiles,
+# strip_tiles): those blocks, the tiles under the strips, and the most under
+# one strip. Tile rows count from the file's first row, the south edge of a
+# south-up file. Footprints are boxes, so a rotated block grazes tiles it does
+# not read: one day of MUR SST onto a 1000 x 1000 polar grid models as 14
+# batches over 60 tiles, where 7 were measured.
+.gdal_warp_block_batches <- function(ds, src, strips, bs) {
+  tile <- src$tile
+  seen <- new.env(parent = emptyenv())
+  batches <- 0
+  most <- 0
+  for (st in strips) {
+    before <- length(seen)
+    for (yb in seq(st[[2L]], st[[2L]] + st[[4L]] - 1, by = bs[[2L]])) {
+      for (xb in seq(st[[1L]], st[[1L]] + st[[3L]] - 1, by = bs[[1L]])) {
+        blk <- c(xb, yb, min(bs[[1L]], st[[1L]] + st[[3L]] - xb), min(bs[[2L]], st[[2L]] + st[[4L]] - yb))
+        w <- .gdal_warp_src_window(ds, src, blk)
+        if (is.null(w)) {
+          next
+        }
+        r <- c(w[[2L]], w[[4L]])
+        if (src$south_up) {
+          r <- rev(src$dims[[2L]] - 1 - r)
+        }
+        key <- as.vector(outer(
+          seq(w[[1L]] %/% tile[[1L]], w[[3L]] %/% tile[[1L]]),
+          seq(r[[1L]] %/% tile[[2L]], r[[2L]] %/% tile[[2L]]),
+          paste
+        ))
+        new <- key[!vapply(key, exists, NA, envir = seen, inherits = FALSE)]
+        if (length(new)) {
+          batches <- batches + 1
+          for (k in new) {
+            assign(k, TRUE, envir = seen)
+          }
+        }
+      }
+    }
+    most <- max(most, length(seen) - before)
+  }
+  c(batches = batches, tiles = length(seen), strip_tiles = most)
+}
+
+# What a warped VRT of `path` needs to judge its prefetches
+# (.gdal_warp_prefetch_plan()), or NULL where reads stay on the machine, which
+# has no round trips to save. A remote file prefetches, and a local VRT of
+# remote files (classic VRTs of remote COGs). A GTI mosaic does not: its
+# sources warp one by one inside it. `vrt` is the warped VRT, whose source may
+# be an overview of the file (.gdal_vrt_overview_level()).
+.gdal_warp_prefetch_src <- function(path, src_grid, stored, block, open_options, resampling, vrt = NULL) {
+  remote <- .gdal_is_remote(path) ||
+    (grepl("\\.vrt$", path, ignore.case = TRUE) && .gdal_reads_remote(path))
+  if (!remote) {
+    return(NULL)
+  }
+  .gdal_source_desc(
+    path, src_grid, stored, block, open_options, resampling,
+    level = .gdal_vrt_overview_level(vrt)
+  )
+}
+
+# A source file as its reads see it: its garry grid (CRS, north-up
+# geotransform and size, onto which windows map), its tiles, sample bytes, row
+# order and GTiff thread pool, and the reach of `resampling`'s kernel. Nothing
+# is opened but a local VRT: the source's opener recorded its type and row
+# order (`stored`) and its tiles (`block`), and reopening ten remote files on
+# the host to ask again cost a header fetch each. A VRT's reads pass to its
+# files, whose tiles its first SourceProperties gives, else its own blocks
+# stand in. At overview `level` (0 the first) the grid is that overview's as
+# GDAL's COG driver lays it out: each level halves the last, rounding down, in
+# the base tiles. Other builders round up, a pixel off at most: this judges a
+# prefetch, and plan_reads() opens the overview for its exact size.
+# Shared by the warp prefetch and plan_reads().
+.gdal_source_desc <- function(path, src_grid, stored, block, open_options, resampling, level = NA) {
+  if (grepl("\\.vrt$", path, ignore.case = TRUE) && !.gdal_is_remote(path)) {
+    xml <- readLines(path, warn = FALSE)
+    props <- regmatches(xml, regexpr('<SourceProperties[^>]*BlockXSize="[0-9]+"[^>]*BlockYSize="[0-9]+"', xml))
+    if (length(props)) {
+      block <- as.numeric(c(
+        sub('.*BlockXSize="([0-9]+)".*', "\\1", props[[1L]]),
+        sub('.*BlockYSize="([0-9]+)".*', "\\1", props[[1L]])
+      ))
+    }
+  }
+  pool <- grep("^NUM_THREADS=", open_options, ignore.case = TRUE, value = TRUE)
+  dims <- as.numeric(src_grid@dims[c("x", "y")])
+  gt <- src_grid@transform
+  if (!is.na(level)) {
+    ov <- dims
+    for (k in seq_len(level + 1L)) {
+      ov <- pmax(1, floor(ov / 2))
+    }
+    gt[c(2L, 6L)] <- gt[c(2L, 6L)] * dims / ov
+    dims <- ov
+  }
+  list(
+    crs = src_grid@crs,
+    transform = gt,
+    dims = dims,
+    level = level,
+    tile = if (length(block) == 2L) as.numeric(block) else c(256, 256),
+    bytes = if (length(stored$dtype)) .dtype_width(stored$dtype) / 8 else 8,
+    south_up = isTRUE(stored$south_up),
+    threads = if (length(pool)) sub("^NUM_THREADS=", "", pool[[1L]], ignore.case = TRUE) else "",
+    radius = .warp_kernel_radius[[resampling]] %||% 3
+  )
+}
+
+# The overview level (0 the first) that warped VRT `vrt` reads its source at,
+# or NA for full resolution. gdalwarp picks one for a coarse target (its
+# `-ovr AUTO`) and records it as the source's OVERVIEW_LEVEL open option: a
+# 4096 px COG warped onto 512 px reads level 2, an eighth of its pixels a side.
+.gdal_vrt_overview_level <- function(vrt) {
+  if (is.null(vrt) || !file.exists(vrt)) {
+    return(NA_integer_)
+  }
+  xml <- readLines(vrt, warn = FALSE)
+  m <- regmatches(xml, regexpr('key="OVERVIEW_LEVEL">[0-9]+', xml))
+  if (length(m)) as.integer(sub(".*>", "", m[[1L]])) else NA_integer_
+}
+
+# The file under pixel (px, py) of band `band` of a VRT, by GDAL's
+# LocationInfo, or NA where none lies there. No source is opened.
+gdal_vrt_file_at <- function(path, band, px, py) {
+  ds <- .gdal_handle(path)
+  info <- ds$getMetadataItem(band, paste0("Pixel_", px, "_", py), "LocationInfo")
+  file <- regmatches(info, regexpr("(?<=<File>)[^<]+(?=</File>)", info, perl = TRUE))
+  if (length(file)) file[[1L]] else NA_character_
+}
+
+# Byte offset and length of tiles (tx, ty) of band `band` of a GTiff, from its
+# TIFF metadata; 0 and 0 for a tile the file leaves empty (sparse), NA for a
+# file that is no TIFF. Opens the file, a remote one included, with
+# `open_options` (an OVERVIEW_LEVEL gives that overview's tiles).
+gdal_tile_bytes <- function(path, band, tx, ty, open_options = character(0)) {
+  ds <- .gdal_probe(path, open_options)
+  item <- function(what) {
+    as.numeric(vapply(
+      paste0(what, "_", tx, "_", ty),
+      function(k) {
+        v <- ds$getMetadataItem(band, k, "TIFF")
+        if (nzchar(v)) v else NA_character_
+      },
+      character(1),
+      USE.NAMES = FALSE
+    ))
+  }
+  if (!identical(ds$getDriverShortName(), "GTiff")) {
+    return(list(offset = rep(NA_real_, length(tx)), length = rep(NA_real_, length(tx))))
+  }
+  list(offset = item("BLOCK_OFFSET"), length = item("BLOCK_SIZE"))
+}
+
+# The overview (0 the first) a RasterIO decimating `factor` times reads, as
+# GDAL picks it: the coarsest whose factor is at most the read's, with a fifth
+# more leeway for nearest neighbour (GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD
+# overrides it). NA for full resolution. A 4096 px COG read by 2, 4, 6, 8 and
+# 16 took levels 0, 1, 1, 2 and 2. Opens each overview of the file.
+.gdal_rasterio_overview <- function(path, open_options, factor, resampling) {
+  if (factor < 2) {
+    return(NA_integer_)
+  }
+  n <- .gdal_probe(path, open_options)$getOverviewCount(1L)
+  set <- gdalraster::get_config_option("GDAL_OVERVIEW_OVERSAMPLING_THRESHOLD")
+  thr <- if (nzchar(set)) as.numeric(set) else if (resampling %in% c("near", "nearest")) 1.2 else 1
+  base <- .gdal_probe(path, open_options)$getRasterXSize()
+  best <- NA_integer_
+  for (k in seq_len(n) - 1L) {
+    f <- base / .gdal_probe(path, c(open_options, paste0("OVERVIEW_LEVEL=", k, " only")))$getRasterXSize()
+    if (f <= factor * thr) {
+      best <- k
+    }
+  }
+  best
+}
+
+# `desc` (.gdal_source_desc()) at overview `level` of `path`, as the file holds
+# it: its size, north-up geotransform and tiles. A local VRT keeps the COG
+# layout .gdal_source_desc() assumes.
+.gdal_overview_desc <- function(desc, path, open_options, level) {
+  if (grepl("\\.vrt$", path, ignore.case = TRUE) && !.gdal_is_remote(path)) {
+    return(desc)
+  }
+  ov <- .gdal_probe(path, c(open_options, paste0("OVERVIEW_LEVEL=", level, " only")))
+  gt <- ov$getGeoTransform()
+  ny <- ov$getRasterYSize()
+  if (gt[[6L]] > 0) {
+    gt <- c(gt[[1L]], gt[[2L]], 0, gt[[4L]] + ny * gt[[6L]], 0, -gt[[6L]])
+  }
+  desc$transform <- gt
+  desc$dims <- c(ov$getRasterXSize(), ny)
+  desc$tile <- as.numeric(ov$getBlockSize(1L))
+  desc$level <- level
+  desc
+}
+
+# Source pixels a resampling's kernel reaches either side at scale 1, as the
+# warper pads its source windows (GWKGetFilterRadius()).
+.warp_kernel_radius <- list(
+  near = 1, nearest = 1, bilinear = 1, cubic = 2, cubicspline = 2,
+  lanczos = 3, average = 1, rms = 1, mode = 1, min = 1, max = 1, med = 1,
+  q1 = 1, q3 = 1, sum = 1
+)
 
 # A TIFF's tile offsets and sizes in bytes: 16 a tile a band in a BigTIFF,
 # a third more for its overviews. They sit in the header, and a remote
@@ -689,6 +1049,13 @@ gdal_zarr_arrays <- function(root, array = NULL, call = rlang::caller_env()) {
     .gdal_cache$header_bytes <- max(.gdal_cache$header_bytes, .gtiff_header_bytes(ds))
   }
   invisible(NULL)
+}
+
+# What the host's remote open ingests: the most until a remote TIFF header
+# is noted, then what the largest noted needs, as a daemon would. A later file
+# with a larger header fetches the rest as GDAL needs it, and is noted.
+.gdal_host_open_bytes <- function() {
+  if (.gdal_cache$header_bytes > 0) .gdal_daemon_open_bytes() else .gdal_open_bytes_most
 }
 
 # What a read daemon's remote open ingests, for .daemon_policy().
@@ -3894,7 +4261,7 @@ gdal_read_window_coarsen <- function(
   )
 }
 
-# Retries since the last ask, for a timed task's envelope (.task_mirai()).
+# Retries since the last ask, for a timed task's envelope (.task_submit()).
 .daemon_retries_take <- function() {
   n <- .gdal_cache$retries %||% 0L
   .gdal_cache$retries <- 0L
@@ -3923,7 +4290,7 @@ gdal_read_window_coarsen <- function(
 #' permission to open MEM-driver datasets, which garry's internal warp
 #' readers require. `garry_daemons()` calls this
 #' on every read daemon automatically; call it yourself for host-side
-#' discovery reads or when you drive `mirai::daemons()` directly. Each
+#' discovery reads or in processes of your own. Each
 #' option is set via `set_config_option`, so a value you set afterwards
 #' wins.
 #'

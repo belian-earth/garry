@@ -1,4 +1,4 @@
-#' @include daemon.R options.R
+#' @include daemon.R options.R tasks.R
 #' @keywords internal
 NULL
 
@@ -305,9 +305,9 @@ NULL
   }
 }
 
-# Number of connected daemons in a mirai profile (0 if it has none).
+# Number of running daemons in a profile (0 if it has none).
 .gd_n_compute <- function(prof) {
-  as.integer(mirai::status(.compute = prof)$connections)
+  .pool_live(prof)
 }
 
 # Active compute-pool profile names: the N width-1 profiles
@@ -337,30 +337,20 @@ NULL
   .glue("{Sys.getpid()}x{n}")
 }
 
-# Which of `profiles` can take no task: fewer daemons connected than
+# Which of `profiles` can take no task: fewer daemons running than
 # garry_daemons() started there, whose pids it recorded (none at all for a
-# profile it did not start), or a dispatcher found stuck
-# (.assert_pools_moving()).
+# profile it did not start).
 .pools_down <- function(profiles) {
   have <- vapply(profiles, .gd_n_compute, integer(1), USE.NAMES = FALSE)
   want <- lengths(lapply(profiles, function(p) .garry_state$prof_pids[[p]]))
-  stuck <- profiles %in% .garry_state$pool_stuck
-  list(
-    down = have < pmax(want, 1L) | stuck,
-    have = have,
-    want = want,
-    stuck = stuck
-  )
+  list(down = have < pmax(want, 1L), have = have, want = want)
 }
 
-# Abort if a pool in `profiles` is short of the daemons it started with,
-# or stuck. A lost daemon (an OOM kill, a crash) leaves its profile
-# registered, and a wait on it can then last forever: a width-1 profile
-# has no dispatcher to fail the task it lost, and a dispatcher strands a
-# broadcast's last task when the one daemon that took no other task of it
-# dies before taking that one, with every later task queued behind it.
-# The check runs at a run's start and once a second in every wait. A pool
-# stays down until garry_daemons() restarts it.
+# Abort if a pool in `profiles` is short of the daemons it started with. A
+# task its lost daemon (an OOM kill, a crash) was running fails as it goes,
+# but one sent to the daemon after it died never runs, and a wait on that one
+# would last forever. The check runs at a run's start and once a second in
+# every wait. A pool stays down until garry_daemons() restarts it.
 .assert_pools_alive <- function(profiles, call = rlang::caller_env()) {
   s <- .pools_down(profiles)
   if (!any(s$down)) {
@@ -369,21 +359,15 @@ NULL
   p <- profiles[s$down]
   have <- s$have[s$down]
   want <- s$want[s$down]
-  stuck <- s$stuck[s$down]
   lines <- ifelse(
-    stuck,
-    .glue("\"{p}\" takes no more tasks"),
-    ifelse(
-      want > 0L,
-      .glue("\"{p}\" has {have} of its {want}"),
-      .glue("\"{p}\" has none")
-    )
+    want > 0L,
+    .glue("\"{p}\" has {have} of its {want}"),
+    .glue("\"{p}\" has none")
   )
   cli::cli_abort(
     c(
       "{length(p)} garry daemon pool{?s} cannot run tasks: {lines}.",
-      "i" = if (!all(stuck)) "A daemon was probably killed (out of memory?).",
-      "i" = if (any(stuck)) "A broadcast left a task no daemon may take.",
+      "i" = "A daemon was probably killed (out of memory?).",
       "i" = "Call {.fn garry_daemons} to restart the pools."
     ),
     class = c("garry_pool_error", "garry_error"),
@@ -391,53 +375,16 @@ NULL
   )
 }
 
-# Abort if a dispatcher of `profiles` hands out no task with all its
-# daemons connected: tasks queued, none running, and none finished since
-# `before` (this function's value at the last check, a second or more
-# ago). A task waits on an idle daemon for milliseconds at most, unless a
-# broadcast left its sync generation open: its last task cancelled while
-# queued, or its send cut partway. The next broadcast then puts every
-# daemon in that generation, and its own last tasks can never go out
-# (design/mirai-broadcast-wedge.md). garry does neither, so this is a
-# defect, and no daemon of the pool takes a task again. The pool is
-# marked stuck, so every later run fails at its start, until
-# garry_daemons() restarts it; it is not closed from inside the wait. A
-# width-1 profile has no dispatcher and no queue.
-.assert_pools_moving <- function(profiles, before = list(), call = rlang::caller_env()) {
-  now <- lapply(
-    stats::setNames(nm = profiles),
-    function(p) mirai::status(.compute = p)$mirai
-  )
-  blocked <- function(q) {
-    !is.null(q) && q[["awaiting"]] > 0L && q[["executing"]] == 0L
-  }
-  stuck <- Filter(
-    function(p) {
-      blocked(now[[p]]) &&
-        blocked(before[[p]]) &&
-        now[[p]][["completed"]] == before[[p]][["completed"]]
-    },
-    profiles
-  )
-  if (length(stuck)) {
-    .garry_state$pool_stuck <- union(.garry_state$pool_stuck, stuck)
-    .assert_pools_alive(profiles, call = call)
-  }
-  now
-}
-
-# One idle step of a wait on `profiles`: a short sleep, and once a
-# second the checks that every pool still has the daemons it started
-# with and that its queue moves. A task a lost daemon leaves, or one a
-# stuck dispatcher holds, can stay unresolved forever, and only this
-# ends the wait.
+# One idle step of a wait on `profiles`: the queued tasks of every group go
+# out to daemons with room, a short sleep follows, and once a second every
+# pool is checked for the daemons it started with, which alone ends a wait
+# on a task sent to a daemon that has died.
 .idle_step <- function(profiles, call = rlang::caller_env()) {
   last_check <- Sys.time()
-  queues <- list()
   function() {
+    .groups_pump()
     if (difftime(Sys.time(), last_check, units = "secs") > 1) {
       .assert_pools_alive(profiles, call = call)
-      queues <<- .assert_pools_moving(profiles, queues, call = call)
       last_check <<- Sys.time()
     }
     Sys.sleep(0.002)
@@ -448,121 +395,114 @@ NULL
 # before it stops the daemons still mid-task.
 .pools_close_s <- function() c(say = 3, kill = 60)
 
-# Close garry's pools `profiles`, the only place garry closes one, once no
-# daemon of them can still send a reply: closing a pool under a reply can
-# hang R for good, in a race in NNG's IPC transport (fixed in NNG 1.12.5,
-# not yet bundled in nanonext). Every daemon gets a pid probe, which it
-# answers once it has finished what it holds, and a pool is done once each
-# of its probes has come back, or its daemon has gone. A dispatcher pool is
-# also done with its probes queued and nothing running: a stranded task, or
-# an open generation, holds them for good (design/mirai-broadcast-wedge.md),
-# and no daemon of it is mid-task. At `say` seconds the wait names the pools
-# still mid-task and the daemons that have not answered. A Ctrl-C, or `kill`
-# seconds, stops those daemons with SIGKILL, as a dead daemon cannot be
-# mid-reply; the pools then close, and a Ctrl-C is raised again. A pool
-# still mid-task with no daemon garry can identify (no pid recorded, or on
-# Windows, where garry reads no command line) fails the close instead.
+# Close garry's pools `profiles`, the only place garry closes one. Every task
+# they hold on the host or a daemon is cancelled, no result not yet collected
+# comes back, and every daemon is told to exit: an idle daemon does at once,
+# and one mid-task once it has finished, freeing the shared memory it pinned.
+# The close waits for that. At `say` seconds it names the daemons still
+# mid-task, by pool; a Ctrl-C, or `kill` seconds, stops them with SIGKILL, and
+# a Ctrl-C is then raised again. A close left any other way, by an interrupt
+# or an error that a handler outside it takes, stops them too. A daemon is
+# known by the pid file it wrote at start and its command line, which names
+# its generation, and is waited on until it has exited; where garry reads no
+# command line (Windows), each pool's stop waits for its daemon instead, up
+# to `kill` seconds.
 .pools_close <- function(profiles) {
-  live <- profiles[vapply(profiles, .gd_n_compute, integer(1)) > 0L]
-  probe <- .pool_send(quote(Sys.getpid()), live)
-  answered <- function() {
-    got <- Filter(Negate(mirai::unresolved), unlist(probe, recursive = FALSE))
-    unlist(Filter(is.integer, lapply(got, function(h) h$data)))
-  }
-  # the pools still mid-task
-  busy <- function() {
-    Filter(
-      function(p) {
-        s <- mirai::status(.compute = p)
-        q <- s$mirai
-        open <- any(vapply(probe[[p]], mirai::unresolved, logical(1)))
-        if (is.null(q)) {
-          open && s$connections > 0L
-        } else {
-          open && (q[["executing"]] > 0L || q[["awaiting"]] == 0L)
-        }
-      },
-      live
-    )
-  }
-  # The daemons of pool `p` that have not answered, as pids whose process
-  # still runs one: its command line names the pool's URL. A daemon lost
-  # before the close never answers, and its pid may since have gone to
-  # another process.
-  pending <- function(p) {
-    url <- mirai::nextget("url", .compute = p)
-    pids <- setdiff(.garry_state$prof_pids[[p]], answered())
-    ours <- vapply(
-      pids,
-      function(i) grepl(url, .pid_cmdline(i), fixed = TRUE),
-      logical(1)
-    )
-    pids[ours]
-  }
-  # pools `ps`, with the daemons `pids` of each that have not answered
-  mid_task <- function(ps, pids = lapply(ps, pending)) {
-    who <- vapply(pids, paste, "", collapse = ", ")
-    .glue(
-      "\"{ps}\" ({ifelse(nzchar(who), paste('pid', who), 'no daemon garry can stop')})"
-    )
-  }
+  known <- .garry_state$prof_pids
   wait <- .pools_close_s()
+  dirs <- .pools_stop(profiles, wait = wait[["kill"]])
+  on.exit(unlink(dirs, recursive = TRUE), add = TRUE)
+  fleet <- do.call(rbind, c(
+    list(data.frame(pid = integer(0), dir = character(0))),
+    lapply(dirs, function(d) {
+      pids <- .pid_files(sub("\\.pid$", "", list.files(d, "\\.pid$", full.names = TRUE)))
+      data.frame(pid = pids, dir = rep(d, length(pids)))
+    })
+  ))
+  ours <- function(f) as.logical(mapply(.pid_ours, f$pid, f$dir))
+  fleet <- fleet[ours(fleet), , drop = FALSE]
+  # the daemons not yet exited
+  running <- function() {
+    fleet <<- fleet[!vapply(fleet$pid, .pid_exited, logical(1)), , drop = FALSE]
+    fleet$pid
+  }
+  # SIGKILL the daemons still running, those whose command line is still a
+  # daemon's (a pid may since belong to another process); returns their pids
+  stop_left <- function() {
+    running()
+    mine <- fleet$pid[ours(fleet)]
+    if (length(mine)) {
+      tools::pskill(mine, tools::SIGKILL)
+    }
+    mine
+  }
+  gone <- function() {
+    t1 <- Sys.time()
+    while (length(running()) && difftime(Sys.time(), t1, units = "secs") < 10) {
+      Sys.sleep(0.005)
+    }
+  }
+  settled <- FALSE
+  on.exit(
+    if (!settled) {
+      stop_left()
+      gone()
+    },
+    add = TRUE,
+    after = FALSE
+  )
+  # pids `left` by pool, as "pool" (pid a, b)
+  by_pool <- function(left) {
+    pool <- vapply(
+      left,
+      function(i) {
+        hit <- names(known)[vapply(known, function(v) i %in% v, logical(1))]
+        if (length(hit)) hit[[1L]] else "garry"
+      },
+      character(1)
+    )
+    .glue("\"{unique(pool)}\" (pid {vapply(split(left, pool)[unique(pool)], paste, '', collapse = ', ')})")
+  }
   t0 <- Sys.time()
   said <- FALSE
-  # TRUE once no daemon is mid-task, FALSE at the deadline, NA on a Ctrl-C
+  # TRUE once every daemon has exited, FALSE at the deadline, NA on a Ctrl-C
   idle <- tryCatch(
     {
       repeat {
-        ps <- busy()
+        left <- running()
         waited <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
-        if (!length(ps) || waited >= wait[["kill"]]) {
+        if (!length(left) || waited >= wait[["kill"]]) {
           break
         }
         if (!said && waited >= wait[["say"]]) {
           said <- TRUE
-          lines <- mid_task(ps)
+          lines <- by_pool(left)
           cli::cli_inform(
             c(
               "i" = "Closing garry's pools once no daemon is mid-task: {lines}.",
-              " " = "A pool closed while a daemon replies can hang R for good (an NNG race, fixed in NNG 1.12.5 and not yet in nanonext).",
-              " " = "Press Ctrl-C to close now by stopping those daemons; garry stops them after {wait[['kill']]} s."
+              " " = "Press Ctrl-C to stop those daemons now; garry stops them after {wait[['kill']]} s."
             ),
             class = c("garry_pool_message", "garry_message")
           )
         }
         Sys.sleep(0.005)
       }
-      !length(ps)
+      !length(left)
     },
     interrupt = function(i) NA
   )
-  ps <- if (isTRUE(idle)) character(0) else busy()
-  if (length(ps)) {
-    pids <- lapply(ps, pending)
-    lines <- mid_task(ps, pids)
-    if (!all(lengths(pids))) {
-      cli::cli_abort(
-        c(
-          "garry's pools cannot close while a daemon is mid-task: {lines}.",
-          "x" = "garry cannot identify a daemon to stop in each of these pools.",
-          "i" = "Wait for their tasks or stop their daemons, then call {.fn garry_daemons} again."
-        ),
-        class = c("garry_pool_error", "garry_error"),
-        call = NULL
+  if (!isTRUE(idle)) {
+    left <- stop_left()
+    if (length(left)) {
+      lines <- by_pool(left)
+      cli::cli_inform(
+        "Stopped {length(left)} daemon{?s} still mid-task to close garry's pools: {lines}.",
+        class = c("garry_pool_message", "garry_message")
       )
     }
-    tools::pskill(unlist(pids), tools::SIGKILL)
-    cli::cli_inform(
-      "Stopped {length(unlist(pids))} daemon{?s} still mid-task to close garry's pools: {lines}.",
-      class = c("garry_pool_message", "garry_message")
-    )
-    while (length(busy())) {
-      Sys.sleep(0.005) # until each pool has seen its daemons go
-    }
+    gone()
   }
-  suspendInterrupts(lapply(profiles, function(p) {
-    mirai::daemons(0L, .compute = p)
-  }))
+  settled <- TRUE
   if (is.na(idle)) {
     rlang::interrupt()
   }
@@ -570,8 +510,8 @@ NULL
 }
 
 # Wait for a task, but not for a daemon that has gone. A caller with its
-# own failure policy takes a bare error value back; otherwise it is the
-# connection, not the task, and the caller would take it for a result.
+# own failure policy takes a lost task's value back; otherwise it is the
+# daemon, not the task, and the caller would take it for a result.
 .await_task <- function(
   h,
   profiles,
@@ -580,32 +520,24 @@ NULL
 ) {
   lost <- match.arg(lost)
   idle <- .idle_step(profiles, call)
-  while (mirai::unresolved(h)) {
+  while (.task_unresolved(h)) {
     idle()
   }
-  if (
-    identical(lost, "abort") &&
-      inherits(h$data, "errorValue") &&
-      !inherits(h$data, "miraiError")
-  ) {
+  if (identical(lost, "abort") && inherits(h$data, "garry_task_lost")) {
     .task_abort("task failed on daemon", h$data, call = call)
   }
   h$data
 }
 
-# What a failed task reports. A bare error value is the connection: 19
-# is a reset, the daemon dying under the task. A daemon's error is its
-# header alone in as.character(): cli's bullets, where garry puts GDAL's
-# cause and the next step, ride as `body`.
+# What a failed task reports: why it was lost, or the daemon's error, its
+# header with cli's bullets after it, where garry puts GDAL's cause and the
+# next step.
 .task_failure <- function(x) {
-  if (!inherits(x, "miraiError")) {
-    code <- as.integer(x)
-    if (identical(code, 19L)) {
-      return("its daemon exited, probably killed (out of memory?)")
-    }
-    return(.glue("daemon connection error {code}"))
+  if (inherits(x, "garry_task_lost")) {
+    return(x$why)
   }
-  paste(c(as.character(x), attr(x, "body", exact = TRUE)), collapse = " ")
+  cnd <- x$condition
+  paste(c(cnd$message, cnd$body), collapse = " ")
 }
 
 # Abort on a failed task: `what` failed, with the daemon's account, classed
@@ -619,7 +551,7 @@ NULL
   call = rlang::caller_env()
 ) {
   why <- .task_failure(x)
-  raised <- grep("^garry_", attr(x, "condition.class", exact = TRUE), value = TRUE)
+  raised <- grep("^garry_", class(x$condition), value = TRUE)
   cli::cli_abort(
     "{what}: {why}",
     class = unique(c(class, raised, "garry_error")),
@@ -630,20 +562,14 @@ NULL
 
 # Send one QUOTED expression to every daemon of each of `profiles`,
 # shipping `...` as task args, and return the handles by profile without
-# waiting: .pool_await() waits. do.call defeats everywhere()'s NSE so one
-# language object serves the whole loop (probed 2026-08-02). A broadcast
-# cut partway, by an interrupt or a time limit, leaves its dispatcher's
-# sync generation open, and the next one wedges the pool
-# (.assert_pools_moving()), so a send runs to its end. It never blocks:
-# garry's pools set no memory limit for mirai to gate on.
+# waiting: .pool_await() waits. Each daemon takes it after what it already
+# holds, ahead of its group's host queue.
 .pool_send <- function(expr, profiles, ...) {
-  args <- c(list(expr), list(...))
+  args <- list(...)
   stats::setNames(
     lapply(profiles, function(p) {
-      suspendInterrupts(unclass(do.call(
-        mirai::everywhere,
-        c(args, list(.compute = p))
-      )))
+      g <- .pool_record(p)
+      lapply(seq_along(g$members), function(i) .pool_submit(p, expr, args, member = i))
     }),
     profiles
   )
@@ -653,9 +579,9 @@ NULL
 # them) on every profile before judging any, so a failure on one leaves no
 # reply in flight on another, then abort on the first failure, naming its
 # pool. A task that raised says why, classed `class`. A daemon lost under
-# the broadcast (a bare error value, such as 19 for a reset connection), or
-# a wait that found its pool down (.idle_step()), is a garry_pool_error as
-# well, which `live_only` lets pass. Returns every value, in order.
+# the broadcast, or a wait that found its pool down (.idle_step()), is a
+# garry_pool_error as well, which `live_only` lets pass. Returns every
+# value, in order.
 .pool_await <- function(
   sent,
   live_only = FALSE,
@@ -675,8 +601,8 @@ NULL
       next
     }
     out <- c(out, got)
-    bad <- Filter(function(r) inherits(r, "errorValue"), got)
-    mine <- Filter(function(r) inherits(r, "miraiError"), bad)
+    bad <- Filter(function(r) inherits(r, "garry_task_failure"), got)
+    mine <- Filter(function(r) inherits(r, "garry_task_raised"), bad)
     if (length(mine)) {
       raised <- raised %||%
         list(p = p, n = length(mine), why = .task_failure(mine[[1L]]))
@@ -770,7 +696,7 @@ NULL
   settle <- function(profiles, landed = FALSE) {
     got <- list()
     for (p in intersect(names(sent), profiles)) {
-      take <- !landed | !vapply(sent[[p]], mirai::unresolved, logical(1))
+      take <- !landed | !vapply(sent[[p]], .task_unresolved, logical(1))
       got[[p]] <- sent[[p]][take]
       sent[[p]] <<- sent[[p]][!take]
     }
@@ -927,10 +853,14 @@ NULL
   )
 }
 
-# Every daemon pid of a mirai profile: what the CPU masks and the memory
+# Every daemon pid of a profile: what the CPU masks and the memory
 # measurements work from, so a daemon that will not answer stops the pool.
 .garry_pool_pids <- function(profile) {
-  unlist(.pool_broadcast(quote(Sys.getpid()), profiles = profile, what = "the pid query"))
+  unlist(.pool_broadcast(
+    quote(Sys.getpid()),
+    profiles = profile,
+    what = "the pid query"
+  ))
 }
 
 # The command line of process `pid`, or "" for none: from /proc on Linux,
@@ -1133,7 +1063,7 @@ NULL
   invisible(NULL)
 }
 
-#' Set up split mirai daemon pools for distributed execution.
+#' Set up split daemon pools for distributed execution.
 #'
 #' Two pools instead of one: `read` daemons execute source/warp read
 #' tasks (and any kernels the placement pass fuses onto them), while
@@ -1176,16 +1106,18 @@ NULL
 #' skips the GDAL settings entirely, on every route. Headers registered
 #' with [garry_http_auth()] are applied to the new pools.
 #'
-#' Pools from an earlier call close first, and only once none of their
-#' daemons is running a task, such as a read or a kernel warm-up: a pool
-#' closed while a daemon replies can hang R for good, through a race in
-#' NNG's IPC transport (fixed in NNG 1.12.5, not yet bundled in nanonext).
-#' After three seconds garry names the pools it waits on and the daemons
-#' still mid-task. A Ctrl-C, or a minute's wait, stops those daemons and
-#' closes the pools; after a Ctrl-C [garry_daemons_set()] is `FALSE` and
-#' no pool is started. A pool still mid-task with no daemon garry can
-#' identify to stop, as on Windows, fails the close with a
-#' `garry_pool_error`.
+#' Each daemon is an R process of its own, joined to the host through a
+#' shared-memory task pool ('mizu'), so tasks and their results move between
+#' processes on this machine without sockets. Every daemon of a call starts at
+#' once, and the call returns when each has joined and loaded garry.
+#'
+#' Pools from an earlier call close first: their queued tasks are dropped,
+#' and garry waits for every daemon to exit, which a daemon running a task,
+#' such as a read or a kernel warm-up, does once it has finished it. After
+#' three seconds garry names the daemons it waits on. A Ctrl-C, or a minute's
+#' wait, stops them; after a Ctrl-C [garry_daemons_set()] is `FALSE` and no
+#' pool is started. On Windows garry does not wait for the old daemons to
+#' exit.
 #'
 #' @param read Read-pool daemon count; `NULL` (default) uses all
 #'   logical cores. `0` tears the pool down.
@@ -1261,68 +1193,48 @@ garry_daemons <- function(
   # to tune host-side discovery.
   .garry_env_defaults()
   .garry_state$pools_set <- FALSE
-  # Under covr, daemons must not load the INSTRUMENTED garry: covr
-  # bakes a trace-file finalizer into the instrumented package, and a
-  # daemon hitting the (benign) XLA teardown segfault leaves a
-  # truncated trace that aborts covr's merge ("error reading from
-  # connection", diagnosed 2026-08-12). Dropping covr's temp library
-  # from R_LIBS for the spawn makes daemons run the normally installed
-  # garry: identical formals (the ABI token passes), no trace files.
-  # Daemon-process execution is therefore uncounted in coverage; the
-  # single-process equivalence tests exercise the same logic on the
-  # host, where it IS counted.
-  restore_libs <- .covr_daemon_libs()
-  if (!is.null(restore_libs)) {
-    on.exit(restore_libs(), add = TRUE)
-  }
-  # The previous generation closes first, whole, once none of its daemons
-  # can still send a reply (.pools_close()), so generations never mix.
+  # The previous generation closes first, whole, once its daemons have
+  # exited (.pools_close()), so generations never mix.
   .pools_close(c("garry_read", .comp_profiles(), "garry_write"))
   .garry_state$comp_profiles <- NULL
   .garry_state$prof_pids <- NULL
-  .garry_state$pool_stuck <- NULL
-  mirai::daemons(read, .compute = "garry_read")
-  # Compute pool: N width-1 direct-connection profiles (no dispatcher
-  # processes), giving the scheduler daemon identity: exact per-profile
-  # kernel warmth and scan-memory confinement
-  # (design/routed-dispatch.md).
+  # Every daemon is a mizu pool of its own (R/tasks.R). The readers form one
+  # group, routed on the host. Compute is N single-daemon profiles, giving
+  # the scheduler daemon identity: exact per-profile kernel warmth and
+  # scan-memory confinement (design/routed-dispatch.md). ONE writer daemon
+  # rides along with the pools: streamed sink chunks write there instead of
+  # on the host dispatch thread (GTiff is single-writer, so one daemon
+  # serialises file access safely while isolating the write-path conversion
+  # transients away from the host). Lean: no anvl, no GDAL session config
+  # needed.
+  profs <- if (compute > 0L) .glue("garry_comp_{seq_len(compute)}") else character(0)
+  .pools_start(
+    c(
+      garry_read = read,
+      stats::setNames(rep(1L, compute), profs),
+      garry_write = if (read > 0L || compute > 0L) 1L else 0L
+    ),
+    depth = .daemon_depth
+  )
   if (compute > 0L) {
-    profs <- .glue("garry_comp_{seq_len(compute)}")
-    for (p in profs) {
-      mirai::daemons(1L, dispatcher = FALSE, .compute = p)
-    }
     .garry_state$comp_profiles <- profs
   }
-  # ONE writer daemon rides along with the pools: streamed sink chunks
-  # write there instead of on the host dispatch thread (GTiff is
-  # single-writer, so one daemon serialises file access safely while
-  # isolating the write-path conversion transients away from the
-  # host). Lean: no anvl, no GDAL session config needed.
-  mirai::daemons(
-    if (read > 0L || compute > 0L) 1L else 0L,
-    .compute = "garry_write"
-  )
   pools <- c(
     if (read > 0L) "garry_read",
     if (compute > 0L) .comp_profiles(),
     if (read > 0L || compute > 0L) "garry_write"
   )
-  # Fleet pids, recorded once per pool generation and before any other
-  # task, so a close can stop a daemon stuck in this setup: the per-daemon
-  # RSS poll (refresh_mem_budgets) reads /proc/<pid>/status against them,
-  # and the affinity/shaping calls mask them by global index (one pid
-  # collection round trip per generation, shared by both).
-  .garry_state$comp_pids <- if (compute > 0L) {
-    unlist(lapply(.comp_profiles(), .garry_pool_pids))
-  } else {
-    integer(0)
-  }
-  p_read <- if (read > 0L) .garry_pool_pids("garry_read") else integer(0)
-  p_write <- if (read > 0L || compute > 0L) {
-    .garry_pool_pids("garry_write")
-  } else {
-    integer(0)
-  }
+  # Fleet pids, recorded once per pool generation and before any task, from
+  # the pid file each daemon wrote at start (.pools_start()), so a close can
+  # stop a daemon stuck in this setup: the per-daemon RSS poll
+  # (refresh_mem_budgets) reads /proc/<pid>/status against them, and the
+  # affinity/shaping calls mask them by global index. A probe would be a
+  # task, and a task loads garry on a fresh daemon first (.daemon_resumable()),
+  # a second each in turn.
+  pids_of <- function(p) .pool_record(p)$pids %||% integer(0)
+  .garry_state$comp_pids <- unlist(lapply(.comp_profiles(), pids_of)) %||% integer(0)
+  p_read <- pids_of("garry_read")
+  p_write <- pids_of("garry_write")
   .garry_state$pool_pids <- c(p_read, .garry_state$comp_pids, p_write)
   # by profile: the widths .assert_pools_alive() holds each pool to, and
   # the daemons a close may have to stop mid-task
@@ -1431,8 +1343,8 @@ garry_pool_hygiene <- function(deep = FALSE) {
 #' `TRUE` from [garry_daemons()] creating read and compute pools until
 #' they are torn down. This is the default for the `distributed` argument
 #' of [collect()], so `collect(x)` uses the pools when they are set and
-#' runs in this R session otherwise. Mirrors `mirai::daemons_set()`: it
-#' says the pools were set, not that every daemon is alive, so a pool that
+#' runs in this R session otherwise. It says the pools were set, not that
+#' every daemon is alive, so a pool that
 #' lost a daemon stays `TRUE` and the next run fails with a
 #' `garry_pool_error`, rather than moving onto the process the pools
 #' protect. [garry_daemons()] restarts them.
@@ -1441,52 +1353,4 @@ garry_pool_hygiene <- function(deep = FALSE) {
 #' @export
 garry_daemons_set <- function() {
   isTRUE(.garry_state$pools_set)
-}
-
-# Coverage-safe daemon library path: when covr is active, scope R_LIBS
-# (for the daemon spawn only) to exclude covr's temp install library,
-# provided the real garry exists elsewhere on the path. Returns a
-# restore closure, or NULL when nothing needs doing. See the call site
-# in garry_daemons() for the full rationale.
-.covr_daemon_libs <- function() {
-  if (!identical(Sys.getenv("R_COVR"), "true")) {
-    return(NULL)
-  }
-  # Identify covr's temp library by CONTENT, not via find.package():
-  # under testthat::test_local() the host garry is pkgload-loaded from
-  # the SOURCE TREE, so find.package() points there while covr's
-  # instrumented install still sits first on the lib path (diagnosed
-  # 2026-08-12: daemons resolved the instrumented copy and wrote the
-  # corrupt traces). An instrumented install is recognisable by the
-  # covr save-hook covr:::add_hooks() writes into the package load
-  # script.
-  instrumented <- function(lib) {
-    ls_ <- file.path(lib, "garry", "R", "garry")
-    file.exists(ls_) &&
-      any(grepl(
-        "covr:::save_trace",
-        tryCatch(readLines(ls_, warn = FALSE), error = function(e) {
-          character(0)
-        }),
-        fixed = TRUE
-      ))
-  }
-  libs <- .libPaths()
-  bad <- vapply(libs, instrumented, logical(1))
-  clean <- libs[!bad]
-  has_garry <- vapply(
-    clean,
-    function(l) {
-      file.exists(file.path(l, "garry", "R", "garry"))
-    },
-    logical(1)
-  )
-  if (!any(bad) || !any(has_garry)) {
-    return(NULL)
-  } # nothing to strip, or no clean garry to fall back to
-  old <- Sys.getenv("R_LIBS", unset = NA)
-  Sys.setenv(R_LIBS = paste(clean, collapse = .Platform$path.sep))
-  function() {
-    if (is.na(old)) Sys.unsetenv("R_LIBS") else Sys.setenv(R_LIBS = old)
-  }
 }

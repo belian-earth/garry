@@ -120,6 +120,7 @@ reference:
   - preview
   - plan_draw
   - plan_view
+  - plan_reads
   - garry_last_route
   - garry_task_report
   - garry_explain_placement

@@ -35,10 +35,10 @@ local({
   local_pools(2, 1)
   m <- .fixture_values(60, 40)
   held <- function() {
-    mirai::mirai(
+    .on_daemon(
       length(ls(asNamespace("garry")$.daemon_cache)),
       .compute = garry:::.comp_profiles()[[1L]]
-    )[]
+    )
   }
 
   test_that("a kernel resent to a daemon that lost it leaves a task-log row", {
@@ -48,7 +48,7 @@ local({
     x <- .kko_compute_plan(7)
     a <- collect(x, distributed = TRUE)
     expect_equal(unclass(a), (m + 7) * m, tolerance = 0, ignore_attr = TRUE)
-    mirai::everywhere({
+    .everywhere({
       e <- asNamespace("garry")$.daemon_cache
       rm(list = ls(e, all.names = TRUE), envir = e)
     }, .compute = garry:::.comp_profiles()[[1L]])
@@ -78,13 +78,13 @@ local({
     x <- .kko_compute_plan(3)
     prof <- garry:::.comp_profiles()[[1L]]
     garry:::.garry_abi_check(prof) # the guard would refuse the mock below
-    mirai::everywhere({
+    .everywhere({
       ns <- asNamespace("garry")
       unlockBinding(".daemon_warm_jit", ns)
       .kko_real <<- get(".daemon_warm_jit", envir = ns)
       assign(".daemon_warm_jit", function(specs) stop("mock warm failure"), envir = ns)
     }, .compute = prof)
-    withr::defer(mirai::everywhere(
+    withr::defer(.everywhere(
       assign(".daemon_warm_jit", .kko_real, envir = asNamespace("garry")),
       .compute = prof
     ))

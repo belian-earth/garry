@@ -851,7 +851,7 @@ garry_last_route <- function() .garry_state$route
 # at most two a daemon in flight (so finished chunks never pile up on
 # the host), each emitted as it lands. A failed loop cancels the reads
 # it leaves queued: the read pool drops them, and a running one ends
-# first (.task_mirai()).
+# first (.task_cancel()).
 .read_only_each_pool <- function(
   spec,
   ra,
@@ -888,7 +888,7 @@ garry_last_route <- function() .garry_state$route
     .glue("s{spec$read_stage[[todo$k[[i]]]]@id}_c{todo$j[[i]]}")
   }
   inflight <- list()
-  on.exit(mirai::stop_mirai(inflight), add = TRUE)
+  on.exit(.task_cancel(inflight), add = TRUE)
   next_i <- 1L
   # a dead daemon's task never resolves: `watch` adds the pools a caller's
   # own tasks wait on, whose backlog can stop these reads
@@ -910,7 +910,7 @@ garry_last_route <- function() .garry_state$route
     if (!is.null(task)) {
       return(task(i, a, spec$read_stage[[k]]@chunks, core, timed))
     }
-    .task_mirai(
+    .task_submit(
       quote(asNamespace("garry")$.exec_read_padded(a, cg, core, out = "raw_f32")),
       a = a,
       cg = spec$read_stage[[k]]@chunks,
@@ -932,12 +932,12 @@ garry_last_route <- function() .garry_state$route
     harvested <- poll()
     for (key in names(inflight)) {
       h <- inflight[[key]]
-      if (mirai::unresolved(h)) {
+      if (.task_unresolved(h)) {
         next
       }
       inflight[[key]] <- NULL
       harvested <- TRUE
-      if (inherits(h$data, "errorValue")) {
+      if (inherits(h$data, "garry_task_failure")) {
         .task_abort("read task failed on daemon", h$data)
       }
       i <- as.integer(key)
@@ -1113,10 +1113,10 @@ garry_last_route <- function() .garry_state$route
     any <- FALSE
     for (key in names(writes)) {
       w <- writes[[key]]
-      if (mirai::unresolved(w$h)) {
+      if (.task_unresolved(w$h)) {
         next
       }
-      if (inherits(w$h$data, "errorValue")) {
+      if (inherits(w$h$data, "garry_task_failure")) {
         .task_abort("write failed on the writer daemon", w$h$data, "garry_write_error")
       }
       .task_landed(tl$line, w$key, w$h$data)
@@ -1203,7 +1203,7 @@ garry_last_route <- function() .garry_state$route
     tl = tl,
     watch = prof,
     task = function(i, a, cg, core, timed) {
-      .task_mirai(
+      .task_submit(
         quote(asNamespace("garry")$.daemon_read_for_write(
           a,
           cg,

@@ -58,19 +58,18 @@ requireNamespace("rstac", quietly = TRUE)
 # no session without terra has, so it stays out of the test workers.
 # skip_if_not_installed() and rlang::is_installed() would load it here.
 .with_terra <- function(f, x) {
-  prof <- "garry_test_terra"
-  mirai::daemons(1L, dispatcher = FALSE, .compute = prof)
-  on.exit(mirai::daemons(0L, .compute = prof))
+  pool <- mizu::mizu_pool(1L, launcher = mizu::mizu_launcher(stdout = FALSE, stderr = FALSE))
+  on.exit(mizu::mizu_pool_stop(pool))
   environment(f) <- globalenv()
-  got <- mirai::call_mirai(mirai::mirai(
-    if (requireNamespace("terra", quietly = TRUE)) f(x),
-    f = f,
-    x = x,
-    .compute = prof
-  ))$data
-  if (mirai::is_error_value(got)) {
-    stop(as.character(got), call. = FALSE)
-  }
+  got <- tryCatch(
+    mizu::mizu_collect(mizu::mizu_submit(
+      pool,
+      if (requireNamespace("terra", quietly = TRUE)) f(x),
+      f = f,
+      x = x
+    )),
+    error = function(e) stop(conditionMessage(e), call. = FALSE)
+  )
   testthat::skip_if(is.null(got), "terra cannot be loaded")
   got
 }

@@ -2,7 +2,7 @@
 # gdalwarp say a plan is, on the shapes that need coarse reads or a warp.
 # test-route-dtype.R holds the golden pipeline shapes, and that warm-up
 # lands in the compute pool's cache. Distributed execution requires the
-# garry pools: a plain mirai::daemons() pool is not silently used.
+# garry pools: a mizu pool of the session's own is not silently used.
 
 local({
   local_pools(2, 1)
@@ -53,9 +53,13 @@ test_that("no daemons gives the structured scheduler error", {
   expect_error(execute_plan_mirai(p), class = "garry_scheduler_error")
 })
 
-test_that("a plain mirai pool is NOT used; garry pools are required", {
-  mirai::daemons(2) # a plain default pool, not garry's split
-  on.exit(mirai::daemons(0), add = TRUE)
+test_that("a mizu pool of the session's own is NOT used; garry pools are required", {
+  pool <- mizu::mizu_pool(1L, launcher = mizu::mizu_launcher(stdout = FALSE, stderr = FALSE))
+  old <- mizu::mizu_set_default_pool(pool)
+  on.exit({
+    mizu::mizu_set_default_pool(old)
+    mizu::mizu_pool_stop(pool)
+  }, add = TRUE)
   p <- plan_lazy(lazy_source(fixture_gradient_f32()) + 1)
   expect_error(execute_plan_mirai(p), class = "garry_scheduler_error")
 })

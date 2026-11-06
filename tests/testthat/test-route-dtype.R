@@ -436,7 +436,7 @@ local({
     expect_true(any(startsWith(utils::read.csv(tlog)$key, "warm")))
     n <- vapply(
       garry:::.comp_profiles(),
-      function(p) mirai::mirai(length(ls(garry:::.daemon_cache)), .compute = p)[],
+      function(p) .on_daemon(length(ls(garry:::.daemon_cache)), .compute = p),
       integer(1)
     )
     expect_gt(sum(n), 0L)

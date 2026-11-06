@@ -330,14 +330,20 @@ test_that("a GTI sidecar is remembered until it changes", {
   expect_identical(garry:::.gti_meta(idx)$entries$location, c("a.tif", "b.tif"))
 })
 
-test_that("a read daemon's remote open ingests what the run's headers need", {
+test_that("a remote open ingests what the headers seen need", {
   key <- "GDAL_INGESTED_BYTES_AT_OPEN"
   ingest <- function(...) garry:::.gdal_quiet_remote(gdalraster::get_config_option(key), ...)
   cache <- garry:::.gdal_cache
   withr::defer(cache$header_bytes <- 0)
 
-  # the host opens few files and keeps the most, as does any Zarr open
+  # the host takes the most until it has seen a header, then what headers
+  # need; a Zarr open keeps the most
+  cache$header_bytes <- 0
   expect_identical(ingest(), "4194304")
+  cache$header_bytes <- 54528
+  expect_identical(ingest(), "54528")
+  expect_identical(ingest(zarr = TRUE), "4194304")
+  cache$header_bytes <- 0
   withr::local_options(.garry_open_bytes = "32768")
   expect_identical(ingest(), "32768")
   expect_identical(ingest(zarr = TRUE), "4194304")
