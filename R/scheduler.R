@@ -147,8 +147,7 @@ NULL
 # task than they were (2026-10-23). `.expr` is the call as a language
 # object; `...` are its data, named. The formals are dotted so no data
 # name partially matches them (`ex = ex` once bound to an `expr` formal).
-# A cancel never interrupts a running task (.task_cancel()), so the call
-# needs no guard against one.
+# .pool_submit() runs it through .daemon_resumable().
 .task_submit <- function(.expr, ..., .compute, .timed = FALSE) {
   if (.timed) {
     .expr <- bquote({

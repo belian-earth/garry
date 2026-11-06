@@ -403,10 +403,12 @@ NULL
 # mid-task, by pool; a Ctrl-C, or `kill` seconds, stops them with SIGKILL, and
 # a Ctrl-C is then raised again. A daemon is known by the pid file it wrote at
 # start, and while it runs by its command line, which names its generation;
-# where garry reads no command line (Windows), the close does not wait.
+# where garry reads no command line (Windows), each pool's stop waits for its
+# daemon instead, up to `kill` seconds.
 .pools_close <- function(profiles) {
   known <- .garry_state$prof_pids
-  dirs <- .pools_stop(profiles)
+  wait <- .pools_close_s()
+  dirs <- .pools_stop(profiles, wait = wait[["kill"]])
   on.exit(unlink(dirs, recursive = TRUE), add = TRUE)
   fleet <- do.call(rbind, c(
     list(data.frame(pid = integer(0), dir = character(0))),
@@ -430,7 +432,6 @@ NULL
     )
     .glue("\"{unique(pool)}\" (pid {vapply(split(left, pool)[unique(pool)], paste, '', collapse = ', ')})")
   }
-  wait <- .pools_close_s()
   t0 <- Sys.time()
   said <- FALSE
   # TRUE once every daemon has exited, FALSE at the deadline, NA on a Ctrl-C
@@ -827,7 +828,17 @@ NULL
 # Every daemon pid of a profile: what the CPU masks and the memory
 # measurements work from, so a daemon that will not answer stops the pool.
 .garry_pool_pids <- function(profile) {
-  unlist(.pool_broadcast(quote(Sys.getpid()), profiles = profile, what = "the pid query"))
+  pids <- unlist(.pool_broadcast(
+    quote(Sys.getpid()),
+    profiles = profile,
+    what = "the pid query"
+  ))
+  # by daemon, in the order of its pools: what .pool_live() checks on Linux
+  g <- .pool_record(profile)
+  if (!is.null(g)) {
+    g$pids <- pids
+  }
+  pids
 }
 
 # The command line of process `pid`, or "" for none: from /proc on Linux,

@@ -429,6 +429,79 @@ test_that("a reader group holds tasks on the host, two a reader, and lands them 
   expect_length(unique(unlist(.everywhere(Sys.getpid(), .compute = "garry_read"))), 2L)
 })
 
+test_that("a daemon past its cap holds the rest on the host, in order, and cancels them there", {
+  local_pools(1, 1)
+  .local_wait_limit()
+  prof <- garry:::.comp_profiles()[[1L]]
+  g <- garry:::.pool_record(prof)
+  cap <- garry:::.member_cap
+  f <- tempfile()
+  n <- cap + 12L
+  hs <- lapply(seq_len(n), function(i) {
+    garry:::.task_submit(quote({
+      Sys.sleep(0.01)
+      cat(i, "\n", file = f, append = TRUE)
+      i
+    }), i = i, f = f, .compute = prof)
+  })
+  expect_length(g$launched[[1L]], cap)
+  expect_length(g$backlog[[1L]], 12L)
+  # one held on the host cancels there and never runs
+  garry:::.task_cancel(hs[n])
+  expect_length(g$backlog[[1L]], 11L)
+  expect_s3_class(hs[[n]]$data, "garry_task_lost")
+  got <- vapply(hs[-n], function(h) garry:::.await_task(h, prof), numeric(1))
+  expect_identical(got, as.numeric(seq_len(n - 1L)))
+  expect_identical(as.integer(readLines(f)), seq_len(n - 1L))
+  expect_length(g$launched[[1L]], 0L)
+  expect_length(g$backlog[[1L]], 0L)
+})
+
+test_that("a cancel that comes after the task finished lands it, and frees its reader", {
+  local_pools(2, 0)
+  .local_wait_limit()
+  g <- garry:::.pool_record("garry_read")
+  h <- garry:::.task_submit(quote(6 * 7), .compute = "garry_read")
+  .pool_drained("garry_read")
+  expect_identical(g$load, c(1L, 0L)) # not polled yet
+  garry:::.task_cancel(list(h))
+  expect_identical(h$data, 42)
+  expect_identical(g$load, c(0L, 0L))
+  expect_length(g$launched[[1L]], 0L)
+})
+
+test_that("on Linux a daemon whose process has gone is down, whatever mizu reports", {
+  skip_if_not(dir.exists("/proc/self"), "garry reads processes from /proc")
+  local_pools(1, 1)
+  prof <- garry:::.comp_profiles()[[1L]]
+  expect_identical(garry:::.gd_n_compute(prof), 1L)
+  testthat::local_mocked_bindings(.pid_ours = function(pid, dir) FALSE, .package = "garry")
+  expect_identical(garry:::.gd_n_compute(prof), 0L)
+  expect_error(garry:::.assert_pools_alive(prof), class = "garry_pool_error")
+})
+
+test_that("an interrupt at a daemon, as a Ctrl-C at the host's terminal sends, ends no task", {
+  local_pools(1, 0)
+  .local_wait_limit()
+  f <- tempfile()
+  h <- garry:::.task_submit(
+    quote({
+      writeLines(as.character(Sys.getpid()), f)
+      Sys.sleep(1)
+      "ran to its end"
+    }),
+    f = f,
+    .compute = "garry_read"
+  )
+  while (!file.exists(f) || !length(readLines(f))) {
+    Sys.sleep(0.01)
+  }
+  tools::pskill(as.integer(readLines(f)), tools::SIGINT)
+  expect_identical(garry:::.await_task(h, "garry_read"), "ran to its end")
+  expect_identical(garry:::.gd_n_compute("garry_read"), 1L)
+  expect_identical(.on_daemon(3, .compute = "garry_read"), 3)
+})
+
 test_that("a daemon that cannot start fails garry_daemons(), and no daemon is left", {
   .local_wait_limit()
   testthat::local_mocked_bindings(
@@ -440,9 +513,9 @@ test_that("a daemon that cannot start fails garry_daemons(), and no daemon is le
   dir <- NULL
   real <- garry:::.pools_spawn
   testthat::local_mocked_bindings(
-    .pools_spawn = function(n, d) {
-      dir <<- d
-      real(n, d)
+    .pools_spawn = function(files) {
+      dir <<- dirname(files[[1L]])
+      real(files)
     },
     .package = "garry"
   )

@@ -48,7 +48,7 @@ local_pools <- function(read, compute, ..., gdal_config = FALSE,
     function(m) mizu::mizu_pool_dump(m)$workers$park_state == "running",
     logical(1)
   ))
-  c(queued = queued + length(g$queue), running = running)
+  c(queued = queued + length(g$queue) + sum(lengths(g$backlog)), running = running)
 }
 
 # Wait until no daemon of `prof` runs or queues a task.

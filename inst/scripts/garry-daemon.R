@@ -35,4 +35,9 @@ while (!file.exists(f)) {
   Sys.sleep(0.002)
 }
 tok <- readLines(f)
-mizu:::worker_main(tok[[1L]], as.integer(tok[[2L]]))
+# A daemon shares the host's process group, so a Ctrl-C at the host's
+# terminal reaches it too. No one interrupts a daemon on purpose: a cancel
+# never does, and a pool stops through its shared memory. So the worker's own
+# loop takes no interrupt, and each task resumes through one
+# (garry:::.daemon_resumable()), as mizu turns interrupts back on to run it.
+suspendInterrupts(mizu:::worker_main(tok[[1L]], as.integer(tok[[2L]])))

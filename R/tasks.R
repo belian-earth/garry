@@ -13,7 +13,8 @@ NULL
 # daemons has fewer than `depth` running or queued, the least loaded first, so
 # a reader never idles while reads wait and no more than one read queues behind
 # a running one. A single-daemon profile takes each task as it is submitted:
-# the scheduler routes compute itself.
+# the scheduler routes compute itself. Past `.member_cap` tasks out on one
+# daemon, its tasks wait on the host in order.
 #
 # A task's handle is an environment: `state` is "queued" (on the host),
 # "launched" or "done", and `data` holds the value once done, or a failure
@@ -40,9 +41,15 @@ NULL
   slot_size = 4096L
 )
 
+# Tasks sent to one daemon and not yet landed, at most. Past it a daemon's tasks
+# wait on the host, in order (.member_put()), so its ring never fills and its
+# result slots never run out: a writer behind its queue of writes, or a compute
+# daemon in a long compile collecting the store's drops, takes them in turn.
+.member_cap <- 48L
+
 # Seconds a pool waits for its daemon to join, and a submission for room in a
-# daemon's ring. A daemon joins once R and mizu have started, so either one
-# running out means something is wrong.
+# daemon's ring, which `.member_cap` keeps from filling. A daemon joins once R
+# and mizu have started, so either one running out means something is wrong.
 .pool_join_s <- 60
 .pool_submit_s <- 60
 
@@ -53,16 +60,22 @@ NULL
   }
 }
 
-# Daemons of profile `prof` that are running: a dead daemon frees its mizu
-# slot as soon as the kernel reports its exit.
+# Daemons of profile `prof` that are running. mizu frees a dead daemon's slot
+# as soon as the kernel reports its exit, through a death watch it cannot set
+# up everywhere (Linux's pidfd_open() can be missing or refused, as under some
+# sandboxes), so on Linux a daemon whose process has gone counts as dead too.
 .pool_live <- function(prof) {
   g <- .pool_record(prof)
   if (is.null(g)) {
     return(0L)
   }
+  proc <- !is.null(g$pids) && dir.exists("/proc/self")
   sum(vapply(
-    g$members,
-    function(m) identical(mizu::mizu_pool_info(m)$workers, "live"),
+    seq_along(g$members),
+    function(i) {
+      identical(mizu::mizu_pool_info(g$members[[i]])$workers, "live") &&
+        (!proc || .pid_ours(g$pids[[i]], g$dir))
+    },
     logical(1)
   ))
 }
@@ -133,10 +146,10 @@ NULL
   )
 }
 
-# Start `n` daemon processes at once (inst/scripts/garry-daemon.R), each
-# waiting for the token of the pool it will join. Returns their token files,
-# in `dir`, which also names the generation in every daemon's command line.
-.pools_spawn <- function(n, dir) {
+# Start a daemon process for each of token files `files` at once
+# (inst/scripts/garry-daemon.R), each waiting for the token of the pool it will
+# join. Their directory names the generation in every daemon's command line.
+.pools_spawn <- function(files) {
   script <- system.file(
     "scripts",
     "garry-daemon.R",
@@ -149,7 +162,6 @@ NULL
   )
   libs <- vapply(.daemon_lib_paths(), .hex, character(1), USE.NAMES = FALSE)
   env <- .daemon_env()
-  files <- file.path(dir, .glue("d{seq_len(n)}"))
   for (f in files) {
     system2(
       rscript,
@@ -160,7 +172,7 @@ NULL
       stderr = FALSE
     )
   }
-  files
+  invisible(files)
 }
 
 # The mizu pool for the daemon waiting on token file `f`: its launcher hands the
@@ -186,7 +198,7 @@ NULL
 # `depth` is the routed depth of a group of more than one daemon. Every daemon
 # starts at once and joins its pool in turn, so a generation takes about one R
 # start-up, not one per daemon. A daemon that does not join fails the start,
-# and the daemons already up stop with it.
+# and the daemons already up stop with it, as they do on an interrupt.
 .pools_start <- function(sizes, depth) {
   sizes <- sizes[sizes > 0L]
   if (!length(sizes)) {
@@ -194,20 +206,21 @@ NULL
   }
   dir <- tempfile("garry-pool-")
   dir.create(dir)
-  files <- .pools_spawn(sum(sizes), dir)
-  owner <- rep(names(sizes), sizes)
+  files <- file.path(dir, .glue("d{seq_len(sum(sizes))}"))
   made <- list()
   ok <- FALSE
   on.exit(
     if (!ok) {
       for (m in made) {
-        mizu::mizu_pool_stop(m, timeout = 0)
+        suppressWarnings(mizu::mizu_pool_stop(m, timeout = 0))
       }
       .pid_kill(.pid_files(files), dir)
-      unlink(dir, recursive = TRUE)
+      unlink(dir, recursive = TRUE) # a daemon not yet joined exits with it
     },
     add = TRUE
   )
+  .pools_spawn(files)
+  owner <- rep(names(sizes), sizes)
   pools <- tryCatch(
     lapply(files, function(f) {
       m <- .pool_join(f)
@@ -233,8 +246,10 @@ NULL
     n <- length(g$members)
     g$depth <- if (n > 1L) as.integer(depth) else Inf
     g$queue <- list()
-    g$routed <- rep(list(list()), n)
+    g$backlog <- rep(list(list()), n)
+    g$launched <- rep(list(list()), n)
     g$load <- integer(n)
+    g$pids <- NULL
     g$dir <- dir
     assign(p, g, envir = .garry_pools)
   }
@@ -304,24 +319,50 @@ NULL
   h <- new.env(parent = emptyenv())
   h$id <- .task_seq()
   h$prof <- prof
-  h$expr <- expr
+  # Daemons share the host's process group, so a Ctrl-C at its terminal
+  # interrupts them too, and an interrupt mid-task would end the daemon: its
+  # worker catches errors only, and mizu turns interrupts back on to run a
+  # task. A task resumes through one and runs to its end. The handler lives on
+  # the daemon: a function literal here would carry its srcref, and with it
+  # garry's source text, about 4 MB in every task wherever source is kept
+  # (covr, R CMD check, load_all()).
+  h$expr <- bquote(asNamespace("garry")$.daemon_resumable(.(expr)))
   h$args <- args
   h$state <- "queued"
   h$data <- NULL
   h$rec <- g
+  h$member <- NULL
+  h$routed <- FALSE
   if (!is.null(member)) {
-    .task_launch_on(g, member, h, routed = FALSE)
+    .member_put(g, member, h, routed = FALSE)
   } else if (is.finite(g$depth)) {
     g$queue[[length(g$queue) + 1L]] <- h
     .group_launch(g)
   } else {
-    .task_launch_on(g, 1L, h, routed = FALSE)
+    .member_put(g, 1L, h, routed = FALSE)
   }
   h
 }
 
-# Hand handle `h` to daemon `i` of profile record `g`.
-.task_launch_on <- function(g, i, h, routed) {
+# Give handle `h` to daemon `i` of record `g`: sent now, or held in the
+# daemon's backlog, in order, while `.member_cap` of its tasks are out.
+.member_put <- function(g, i, h, routed) {
+  h$member <- i
+  h$routed <- routed
+  if (routed) {
+    g$load[[i]] <- g$load[[i]] + 1L
+  }
+  if (length(g$backlog[[i]]) || length(g$launched[[i]]) >= .member_cap) {
+    g$backlog[[i]][[length(g$backlog[[i]]) + 1L]] <- h
+  } else {
+    .member_send(g, i, h)
+  }
+  invisible(h)
+}
+
+# Send handle `h` to daemon `i` of record `g`. A send that fails leaves the
+# handle lost, and fails the caller.
+.member_send <- function(g, i, h) {
   h$task <- tryCatch(
     do.call(
       mizu::mizu_submit,
@@ -332,6 +373,11 @@ NULL
       )
     ),
     mizu_error = function(e) {
+      h$data <- .task_lost_value("it could not be sent", e)
+      h$state <- "done"
+      if (h$routed) {
+        g$load[[i]] <- g$load[[i]] - 1L
+      }
       cli::cli_abort(
         c(
           "cannot send a task to garry pool {.val {h$prof}}.",
@@ -343,32 +389,38 @@ NULL
       )
     }
   )
-  h$member <- i
-  h$rec <- g
   h$state <- "launched"
   h$expr <- NULL
   h$args <- NULL
-  h$routed <- routed
-  if (routed) {
-    g$routed[[i]][[length(g$routed[[i]]) + 1L]] <- h
-    g$load[[i]] <- g$load[[i]] + 1L
-  }
+  g$launched[[i]][[length(g$launched[[i]]) + 1L]] <- h
   invisible(h)
 }
 
-# A routed task has landed: its daemon has room again.
-.task_unroute <- function(h) {
+# A sent task of handle `h` has landed, or was cancelled: its daemon has room
+# for one more, from its backlog.
+.member_landed <- function(h) {
   g <- h$rec
-  r <- g$routed[[h$member]]
-  r <- r[!vapply(r, function(x) identical(x$id, h$id), logical(1))]
-  g$routed[[h$member]] <- r
-  g$load[[h$member]] <- length(r)
+  i <- h$member
+  r <- g$launched[[i]]
+  g$launched[[i]] <- r[
+    !vapply(r, function(x) identical(x$id, h$id), logical(1))
+  ]
+  if (h$routed) {
+    g$load[[i]] <- g$load[[i]] - 1L
+  }
+  if (!isTRUE(g$closed)) {
+    while (length(g$backlog[[i]]) && length(g$launched[[i]]) < .member_cap) {
+      b <- g$backlog[[i]][[1L]]
+      g$backlog[[i]][[1L]] <- NULL
+      .member_send(g, i, b)
+    }
+  }
   invisible(NULL)
 }
 
-# Launch a group's queued tasks while a daemon has room, the least loaded
-# first. A task on a daemon that has died never runs: .assert_pools_alive()
-# fails the wait on it within a second.
+# Give a group's queued tasks to daemons with room, the least loaded first. A
+# task on a daemon that has died never runs: .assert_pools_alive() fails the
+# wait on it within a second.
 .group_launch <- function(g) {
   while (length(g$queue)) {
     free <- which(g$load < g$depth)
@@ -378,29 +430,37 @@ NULL
     i <- free[[which.min(g$load[free])]]
     h <- g$queue[[1L]]
     g$queue[[1L]] <- NULL
-    .task_launch_on(g, i, h, routed = TRUE)
+    .member_put(g, i, h, routed = TRUE)
   }
   invisible(g)
 }
 
-# Land every routed task of group `g` that has finished, then launch what its
-# daemons have room for.
-.group_pump <- function(g) {
-  for (r in g$routed) {
-    for (h in r) {
-      .task_poll(h)
+# Does record `g` hold tasks on the host, in its group's queue or a daemon's
+# backlog?
+.pool_held <- function(g) {
+  length(g$queue) > 0L || any(lengths(g$backlog) > 0L)
+}
+
+# Land what has finished on the daemons of record `g` that tasks wait for,
+# then give the group's queue to daemons with room.
+.pool_pump <- function(g) {
+  for (i in seq_along(g$members)) {
+    if (length(g$queue) || length(g$backlog[[i]])) {
+      for (h in g$launched[[i]]) {
+        .task_poll(h)
+      }
     }
   }
   .group_launch(g)
 }
 
-# Pump every group holding tasks on the host: what an idle wait does, so
-# queued tasks go out whichever handle the host waits on.
+# Pump every record holding tasks on the host: what an idle wait does, so
+# held tasks go out whichever handle the host waits on.
 .groups_pump <- function() {
   for (p in ls(.garry_pools)) {
     g <- get(p, envir = .garry_pools, inherits = FALSE)
-    if (length(g$queue)) {
-      .group_pump(g)
+    if (.pool_held(g)) {
+      .pool_pump(g)
     }
   }
   invisible(NULL)
@@ -426,10 +486,19 @@ NULL
   h$data <- r
   h$state <- "done"
   h$task <- NULL
-  if (isTRUE(h$routed)) {
-    .task_unroute(h)
-  }
+  .member_landed(h)
   TRUE
+}
+
+# Daemon side of .pool_submit(): evaluate a task's expression, resuming
+# through any interrupt. `expr` is a promise, forced inside the handler.
+.daemon_resumable <- function(expr) {
+  withCallingHandlers(
+    expr,
+    interrupt = function(cnd) {
+      if (!is.null(findRestart("resume"))) invokeRestart("resume")
+    }
+  )
 }
 
 # Collect handle `h`'s task without waiting: its value, its failure value,
@@ -454,20 +523,20 @@ NULL
 }
 
 # Is handle `h` still unresolved? Lands it when its task has finished, and
-# first pumps its group while the group holds tasks on the host. A task its
+# first pumps its record while that holds tasks on the host. A task its
 # closed pool still held on the host is lost.
 .task_unresolved <- function(h) {
   if (identical(h$state, "done")) {
     return(FALSE)
   }
-  if (identical(h$state, "queued") && isTRUE(h$rec$closed)) {
+  g <- h$rec
+  if (identical(h$state, "queued") && isTRUE(g$closed)) {
     h$data <- .task_lost_value("its pool was closed")
     h$state <- "done"
     return(FALSE)
   }
-  g <- .pool_record(h$prof)
-  if (!is.null(g) && length(g$queue)) {
-    .group_pump(g)
+  if (.pool_held(g)) {
+    .pool_pump(g)
   }
   !.task_poll(h)
 }
@@ -476,25 +545,32 @@ NULL
 # queued on its daemon is skipped; one running finishes, and its value is
 # discarded. A cancelled handle lands as lost at once: mizu frees a cancelled
 # task's slot when it ends, so it can never be collected. One that finished
-# first lands as usual.
+# first lands now, as it would at its next poll.
 .task_cancel <- function(hs) {
   for (h in hs) {
+    g <- h$rec
     if (identical(h$state, "queued")) {
-      g <- h$rec
-      keep <- !vapply(g$queue, function(q) identical(q$id, h$id), logical(1))
-      g$queue <- g$queue[keep]
+      drop <- function(q) {
+        q[!vapply(q, function(x) identical(x$id, h$id), logical(1))]
+      }
+      if (is.null(h$member)) {
+        g$queue <- drop(g$queue)
+      } else {
+        g$backlog[[h$member]] <- drop(g$backlog[[h$member]])
+        if (h$routed) {
+          g$load[[h$member]] <- g$load[[h$member]] - 1L
+        }
+      }
       h$data <- .task_lost_value("it was cancelled")
       h$state <- "done"
-    } else if (
-      identical(h$state, "launched") &&
-        !isTRUE(h$rec$closed) &&
-        mizu::mizu_cancel(h$task)
-    ) {
-      h$data <- .task_lost_value("it was cancelled")
-      h$state <- "done"
-      h$task <- NULL
-      if (isTRUE(h$routed)) {
-        .task_unroute(h)
+    } else if (identical(h$state, "launched") && !isTRUE(g$closed)) {
+      if (mizu::mizu_cancel(h$task)) {
+        h$data <- .task_lost_value("it was cancelled")
+        h$state <- "done"
+        h$task <- NULL
+        .member_landed(h)
+      } else {
+        .task_poll(h)
       }
     }
   }
@@ -504,8 +580,11 @@ NULL
 # Stop the pools of `profiles` and forget them: every task they hold is
 # cancelled, and each daemon exits once it has finished the task it runs.
 # Returns the generation directories, for the caller to wait on and remove.
-.pools_stop <- function(profiles) {
+# garry reads no process's command line on Windows, so there each stop waits
+# for its daemon itself, up to `wait` seconds.
+.pools_stop <- function(profiles, wait = 0) {
   dirs <- character(0)
+  secs <- if (.Platform$OS.type == "windows") wait else 0
   for (p in profiles) {
     g <- .pool_record(p)
     if (is.null(g)) {
@@ -513,8 +592,9 @@ NULL
     }
     g$closed <- TRUE
     for (m in g$members) {
-      # a stop's own wait is 0 s: .pools_close() waits for the daemons
-      suppressWarnings(mizu::mizu_pool_stop(m, timeout = 0))
+      # the stop's own warning that a daemon is still mid-task: the close
+      # waits for those daemons itself
+      suppressWarnings(mizu::mizu_pool_stop(m, timeout = secs))
     }
     dirs <- union(dirs, g$dir)
     rm(list = p, envir = .garry_pools)
