@@ -13,7 +13,7 @@ A single hash string.
 \description{
 Daemons resolve the \verb{.daemon_*} bodies from their INSTALLED library while
 a development host frequently runs a \code{load_all()} tree; a namespace
-skew yields "unused argument" mirai errors at best and silent
+skew yields "unused argument" task errors at best and silent
 semantic drift at worst (positional renames, new masking arguments).
 \code{packageVersion()} cannot guard this (constant through development);
 the formals can. Internal; daemons evaluate their own token through

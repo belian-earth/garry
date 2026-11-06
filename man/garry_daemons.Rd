@@ -2,7 +2,7 @@
 % Please edit documentation in R/pools.R
 \name{garry_daemons}
 \alias{garry_daemons}
-\title{Set up split mirai daemon pools for distributed execution.}
+\title{Set up split daemon pools for distributed execution.}
 \usage{
 garry_daemons(
   read = NULL,
@@ -86,16 +86,18 @@ discovery. \verb{MALLOC_*} is only-if-unset, and \code{gdal_config = FALSE}
 skips the GDAL settings entirely, on every route. Headers registered
 with \code{\link[=garry_http_auth]{garry_http_auth()}} are applied to the new pools.
 
-Pools from an earlier call close first, and only once none of their
-daemons is running a task, such as a read or a kernel warm-up: a pool
-closed while a daemon replies can hang R for good, through a race in
-NNG's IPC transport (fixed in NNG 1.12.5, not yet bundled in nanonext).
-After three seconds garry names the pools it waits on and the daemons
-still mid-task. A Ctrl-C, or a minute's wait, stops those daemons and
-closes the pools; after a Ctrl-C \code{\link[=garry_daemons_set]{garry_daemons_set()}} is \code{FALSE} and
-no pool is started. A pool still mid-task with no daemon garry can
-identify to stop, as on Windows, fails the close with a
-\code{garry_pool_error}.
+Each daemon is an R process of its own, joined to the host through a
+shared-memory task pool ('mizu'), so tasks and their results move between
+processes on this machine without sockets. Every daemon of a call starts at
+once, and the call returns when each has joined and loaded garry.
+
+Pools from an earlier call close first: their queued tasks are dropped,
+and garry waits for every daemon to exit, which a daemon running a task,
+such as a read or a kernel warm-up, does once it has finished it. After
+three seconds garry names the daemons it waits on. A Ctrl-C, or a minute's
+wait, stops them; after a Ctrl-C \code{\link[=garry_daemons_set]{garry_daemons_set()}} is \code{FALSE} and no
+pool is started. On Windows garry does not wait for the old daemons to
+exit.
 }
 \seealso{
 \code{\link[=garry_daemons_set]{garry_daemons_set()}}, \code{\link[=garry_pool_hygiene]{garry_pool_hygiene()}}, \code{\link[=collect]{collect()}}

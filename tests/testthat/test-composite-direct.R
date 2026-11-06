@@ -40,7 +40,7 @@ test_that("GTI sources the fast routes cannot read themselves fall through", {
 })
 
 test_that("a failed warp is the run's failure", {
-  bad <- structure("slice warp failed: a.tif", class = c("miraiError", "errorValue"))
+  bad <- garry:::.task_raised_value(simpleError("slice warp failed: a.tif"))
   err <- expect_error(.gd_check_fetch(list(list(tw = 1), bad), "band 1"), class = "garry_read_error")
   expect_match(conditionMessage(err), "1/2 band 1 warps failed", fixed = TRUE)
   expect_match(conditionMessage(err), "a.tif", fixed = TRUE)
@@ -170,14 +170,14 @@ local({
     ds$close()
     bin <- withr::local_tempfile(fileext = ".bin")
     fetch <- function(j, k) {
-      mirai::collect_mirai(mirai::mirai(
+      .on_daemon(
         {
           res <- asNamespace("garry")$.cd_fetch_warp(j, k)
           res$listing <- gdalraster::get_config_option("GDAL_DISABLE_READDIR_ON_OPEN")
           res
         },
         j = j, k = k, .compute = "garry_read"
-      ))
+      )
     }
     g <- lazy_source(f)@grid
     k <- .gd_rows_K(g, 0L, 30L)

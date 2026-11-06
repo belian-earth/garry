@@ -2,7 +2,7 @@
 % Please edit documentation in R/scheduler.R
 \name{execute_plan_mirai}
 \alias{execute_plan_mirai}
-\title{Execute a Plan across mirai daemons.}
+\title{Execute a Plan across garry's daemon pools.}
 \usage{
 execute_plan_mirai(
   plan,

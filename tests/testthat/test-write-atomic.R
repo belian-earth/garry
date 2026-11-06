@@ -547,7 +547,7 @@ local({
 # Call number `at` of `name` fails on the daemons of `prof`, and only that one.
 .wa_call_fails <- function(name, prof, at) {
   garry:::.garry_abi_check(prof) # the guard would refuse the mock below
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(name, ns)
     .wa_real <<- get(name, envir = ns)
@@ -671,7 +671,7 @@ local({
   test_that("a failure on the writer names the target, not its temporary path", {
     withr::local_options(garry.placement = "rules")
     garry:::.garry_abi_check("garry_write")
-    mirai::everywhere({
+    .everywhere({
       ns <- asNamespace("garry")
       unlockBinding(".gdal_close_failure", ns)
       assign(".gdal_close_failure", function(ds, path) {

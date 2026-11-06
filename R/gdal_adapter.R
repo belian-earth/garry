@@ -4261,7 +4261,7 @@ gdal_read_window_coarsen <- function(
   )
 }
 
-# Retries since the last ask, for a timed task's envelope (.task_mirai()).
+# Retries since the last ask, for a timed task's envelope (.task_submit()).
 .daemon_retries_take <- function() {
   n <- .gdal_cache$retries %||% 0L
   .gdal_cache$retries <- 0L
@@ -4290,7 +4290,7 @@ gdal_read_window_coarsen <- function(
 #' permission to open MEM-driver datasets, which garry's internal warp
 #' readers require. `garry_daemons()` calls this
 #' on every read daemon automatically; call it yourself for host-side
-#' discovery reads or when you drive `mirai::daemons()` directly. Each
+#' discovery reads or in processes of your own. Each
 #' option is set via `set_config_option`, so a value you set afterwards
 #' wins.
 #'

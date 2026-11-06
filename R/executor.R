@@ -77,7 +77,7 @@ NULL
 # a source lies on the target's pixels (.mosaic_read_spec()). A Zarr
 # store, or other sources together, warp straight into each window
 # (gdal_warp_window()); anything else builds the warped VRT. Shared by
-# execute_plan() and the mirai scheduler so the two cannot disagree
+# execute_plan() and the distributed scheduler so the two cannot disagree
 # about which read they do. `build = FALSE` asks only which: a warped VRT,
 # the last resort, comes back as an empty plan, unbuilt.
 .warp_read_plan <- function(wnode, snode, build = TRUE) {

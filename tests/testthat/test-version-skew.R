@@ -3,7 +3,7 @@
 # formals-hash token (.garry_abi_token) is compared host-vs-daemon once
 # per pool generation at execute_plan_mirai entry; a mismatch is a
 # classed garry_version_skew_error instead of undefined behavior
-# mid-drain ("unused argument" mirai errors, silent semantic drift).
+# mid-drain ("unused argument" task errors, silent semantic drift).
 
 # garry_daemons() clears the check, which test-routed-dispatch.R holds on a
 # real new generation. Each test here starts from that state.
@@ -48,13 +48,13 @@ local({
 
   test_that("a daemon that cannot answer says why, and is not called skewed", {
     state$abi_ok <- NULL
-    mirai::everywhere({
+    .everywhere({
       ns <- asNamespace("garry")
       unlockBinding(".garry_abi_token", ns)
       .vs_real <<- get(".garry_abi_token", envir = ns)
       assign(".garry_abi_token", function() stop("package garry is broken here"), envir = ns)
     }, .compute = "garry_write")
-    withr::defer(mirai::everywhere(
+    withr::defer(.everywhere(
       assign(".garry_abi_token", .vs_real, envir = asNamespace("garry")),
       .compute = "garry_write"
     ))

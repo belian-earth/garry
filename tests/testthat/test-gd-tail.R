@@ -108,13 +108,13 @@ test_that("a whole-grid kernel's key holds all it closes over", {
 # of what compiles starts cold whatever ran before it.
 .gt_creates <- function() {
   sum(vapply(garry:::.comp_profiles(), function(p) {
-    mirai::mirai(asNamespace("garry")$.daemon_jit_creates(), .compute = p)[]
+    .on_daemon(asNamespace("garry")$.daemon_jit_creates(), .compute = p)
   }, integer(1)))
 }
 
 .gt_drop_kernels <- function() {
   for (p in garry:::.comp_profiles()) {
-    mirai::mirai(asNamespace("garry")$.exec_jit_clear(), .compute = p)[]
+    .on_daemon(asNamespace("garry")$.exec_jit_clear(), .compute = p)
   }
 }
 

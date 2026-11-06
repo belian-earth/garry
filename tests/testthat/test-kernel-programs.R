@@ -304,7 +304,7 @@ test_that("a deep hygiene pass forgets which kernels daemons hold", {
 
 test_that("a read lost to a dead connection is a failed read, not data", {
   expect_error(
-    garry:::.gd_check_fetch(list(structure(19L, class = "errorValue")), "source"),
+    garry:::.gd_check_fetch(list(garry:::.task_lost_value("its daemon exited, probably killed (out of memory?)")), "source"),
     "daemon exited"
   )
 })

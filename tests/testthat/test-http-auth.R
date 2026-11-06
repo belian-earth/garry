@@ -109,7 +109,7 @@ test_that("every pool sends the header, including pools started later", {
   # opens these files, so their log lines come from the daemons alone.
   daemon_read <- function(f) {
     for (p in c("garry_read", .comp_profiles(), "garry_write")) {
-      r <- mirai::everywhere(
+      .everywhere(
         {
           r <- methods::new(gdalraster::GDALRaster, u)
           r$read(1L, 0L, 0L, 128L, 128L, 128L, 128L)
@@ -118,7 +118,6 @@ test_that("every pool sends the header, including pools started later", {
         u = S$url(f),
         .compute = p
       )
-      lapply(r, function(m) m[])
     }
   }
 
@@ -141,7 +140,7 @@ test_that("a push a daemon refuses fails, and the next run pushes again", {
   local_pools(1, 1)
   tok <- "Authorization: Bearer one"
   garry_http_auth("https://push.test/", function() tok, refresh = 1e-3)
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(".http_auth_apply", ns)
     .real_apply <<- get(".http_auth_apply", envir = ns)
@@ -151,7 +150,7 @@ test_that("a push a daemon refuses fails, and the next run pushes again", {
   Sys.sleep(0.01)
   err <- expect_error(garry:::.http_auth_sync(), class = "garry_pool_error")
   expect_match(conditionMessage(err), "no header for you", fixed = TRUE)
-  mirai::everywhere({
+  .everywhere({
     assign(".http_auth_apply", .real_apply, envir = asNamespace("garry"))
   }, .compute = "garry_write")
   Sys.sleep(0.01)

@@ -9,6 +9,56 @@ local_pools <- function(read, compute, ..., gdal_config = FALSE,
   withr::defer(garry_daemons(0, 0, gdal_config = FALSE), envir = env)
 }
 
+# Every daemon of pool `.compute` evaluates `expr` with the named data in
+# `...`; waits for all of them and returns their values. A failure aborts,
+# as any garry broadcast does.
+.everywhere <- function(expr, ..., .compute) {
+  garry:::.pool_broadcast(
+    substitute(expr),
+    profiles = .compute,
+    ...,
+    what = "a test broadcast"
+  )
+}
+
+# One daemon of pool `.compute` evaluates `expr` with the named data in
+# `...`; returns its value, and raises the daemon's error when it failed.
+.on_daemon <- function(expr, ..., .compute) {
+  v <- garry:::.await_task(
+    garry:::.pool_submit(.compute, substitute(expr), list(...)),
+    .compute
+  )
+  if (inherits(v, "garry_task_raised")) {
+    stop(v$condition)
+  }
+  v
+}
+
+# Tasks queued for the daemons of pool `prof` (on them or on the host), and
+# daemons running one, a cancelled task included.
+.pool_counts <- function(prof) {
+  g <- garry:::.pool_record(prof)
+  queued <- sum(vapply(
+    g$members,
+    function(m) mizu::mizu_pool_info(m)$tasks[["pending"]],
+    integer(1)
+  ))
+  running <- sum(vapply(
+    g$members,
+    function(m) mizu::mizu_pool_dump(m)$workers$park_state == "running",
+    logical(1)
+  ))
+  c(queued = queued + length(g$queue), running = running)
+}
+
+# Wait until no daemon of `prof` runs or queues a task.
+.pool_drained <- function(prof) {
+  while (sum(.pool_counts(prof)) > 0L) {
+    Sys.sleep(0.02)
+  }
+  invisible(TRUE)
+}
+
 # Run `code` under a temporary chunk-size target (shared by the
 # oracle/scan/chunk-invariance sweeps; was four inline copies).
 .with_chunk_px <- function(px, code) {

@@ -13,8 +13,8 @@ A single logical.
 \code{TRUE} from \code{\link[=garry_daemons]{garry_daemons()}} creating read and compute pools until
 they are torn down. This is the default for the \code{distributed} argument
 of \code{\link[=collect]{collect()}}, so \code{collect(x)} uses the pools when they are set and
-runs in this R session otherwise. Mirrors \code{mirai::daemons_set()}: it
-says the pools were set, not that every daemon is alive, so a pool that
+runs in this R session otherwise. It says the pools were set, not that
+every daemon is alive, so a pool that
 lost a daemon stays \code{TRUE} and the next run fails with a
 \code{garry_pool_error}, rather than moving onto the process the pools
 protect. \code{\link[=garry_daemons]{garry_daemons()}} restarts them.

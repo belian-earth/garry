@@ -52,7 +52,7 @@ test_that("a failing kernel aborts classed and leaves a clean store", {
   x <- lazy_source(f) + 1
   prof <- garry:::.comp_profiles()[[1L]]
   garry:::.garry_abi_check(prof) # the guard would refuse the mock below
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(".daemon_run_compute_shm", ns)
     .sf_real <<- get(".daemon_run_compute_shm", envir = ns)
@@ -82,7 +82,7 @@ test_that("a daemon dying mid-drain aborts classed; pools are rebuildable", {
   prof <- garry:::.comp_profiles()
   garry:::.garry_abi_check(prof) # the guard would refuse the mock below
   # Deterministic death: the compute task body kills its own daemon.
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(".daemon_run_compute_shm", ns)
     assign(".daemon_run_compute_shm", function(...) {
@@ -111,7 +111,7 @@ test_that("a failed read-only write leaves no region on the readers", {
   before <- .sf_shm(pids)
   garry:::.garry_abi_check("garry_read") # the guard would refuse the mock below
   # the first read fails, and the rest are still running when the host gives up
-  mirai::everywhere({
+  .everywhere({
     ns <- asNamespace("garry")
     unlockBinding(".daemon_read_for_write", ns)
     .sf_real <<- get(".daemon_read_for_write", envir = ns)
@@ -128,7 +128,7 @@ test_that("a failed read-only write leaves no region on the readers", {
   expect_match(conditionMessage(err), "read bomb on a daemon")
   # a retry at once, with those reads still running, keeps its own regions:
   # the clear is queued ahead of it
-  mirai::everywhere(
+  .everywhere(
     assign(".daemon_read_for_write", .sf_real, envir = asNamespace("garry")),
     .compute = "garry_read"
   )
