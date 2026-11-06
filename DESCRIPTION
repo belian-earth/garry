@@ -87,6 +87,7 @@ Collate:
     'ocm_edgenext.R'
     'ocm_weights.R'
     'placement.R'
+    'plan_reads.R'
     'plan_view.R'
     'preview.R'
     'program.R'
