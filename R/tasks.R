@@ -288,6 +288,23 @@ NULL
   grepl(.hex(file.path(dir, "d")), .pid_cmdline(pid), fixed = TRUE)
 }
 
+# Has process `pid` exited? A process loses its command line as it starts to
+# exit, before the kernel has freed its memory, so on Linux this waits for
+# the exit itself: the pid gone, or a zombie. Elsewhere garry reads only the
+# command line.
+.pid_exited <- function(pid) {
+  if (!dir.exists("/proc/self")) {
+    return(!nzchar(.pid_cmdline(pid)))
+  }
+  st <- tryCatch(
+    readLines(file.path("/proc", pid, "stat"), warn = FALSE),
+    error = function(e) character(0),
+    warning = function(w) character(0)
+  )
+  # the state follows the command name, which may hold ") "
+  !length(st) || substr(sub("^.*\\) ", "", st[[1L]]), 1L, 1L) %in% c("Z", "X")
+}
+
 # ---- tasks ------------------------------------------------------------------
 
 .task_seq <- function() {

@@ -187,30 +187,55 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
   )
   garry:::.garry_abi_check(c("garry_read", garry:::.comp_profiles()))
   mark <- withr::local_tempfile()
-  ran <- function() {
-    .pool_drained("garry_read")
-    got <- Sys.glob(paste0(mark, "_*"))
+  go <- paste0(mark, "_go")
+  # Each route's first read fails at once. Every other read waits for the
+  # host's cancel, then leaves a mark, so the reads that run are those each
+  # reader was running when the cancel came, however slow the host: at most
+  # two. A read that starts after the cancel is one it did not drop.
+  real_cancel <- garry:::.task_cancel
+  testthat::local_mocked_bindings(
+    .task_cancel = function(hs) {
+      real_cancel(hs)
+      if (length(hs)) {
+        file.create(go)
+      }
+      invisible(NULL)
+    },
+    .package = "garry"
+  )
+  marks <- function(what) {
+    got <- Sys.glob(paste0(mark, "_", what, "_*"))
     unlink(got)
     length(got)
   }
-  # Each route's first read fails at once; every other read sleeps 3 s, the
-  # time the host has to cancel, then leaves a mark. Four are in flight when
-  # the first fails: the one on the other reader and the one its own reader
-  # takes next run to their end, and the one queued behind them never
-  # starts.
+  ran <- function() {
+    .pool_drained("garry_read")
+    n <- marks("ran")
+    expect_identical(marks("late"), 0L)
+    unlink(go)
+    n
+  }
   sent <- .local_sent()
   .daemon_mock(
     "garry_read",
     ".daemon_run_source_shm",
     function(ra, cg, core, key, reg_key, ...) {
+      if (file.exists(go)) {
+        file.create(paste0(mark, "_late_", reg_key))
+      }
       if (grepl("_[cr]1$", reg_key)) {
         stop("read bomb on a daemon")
       }
-      Sys.sleep(3)
-      file.create(paste0(mark, "_", reg_key))
+      t0 <- Sys.time()
+      while (
+        !file.exists(go) && difftime(Sys.time(), t0, units = "secs") < 30
+      ) {
+        Sys.sleep(0.01)
+      }
+      file.create(paste0(mark, "_ran_", reg_key))
       NULL
     },
-    vars = list(mark = mark)
+    vars = list(mark = mark, go = go)
   )
   x <- lazy_source(fixture_gradient_f32())
   err <- expect_error(
@@ -220,48 +245,63 @@ test_that("a failed run keeps its error and drops the reads it left queued, on e
   expect_match(conditionMessage(err), "read bomb on a daemon", fixed = TRUE)
   .expect_quiet(sent)
   expect_identical(length(sent("task")), 4L)
-  expect_identical(ran(), 2L)
+  expect_lte(ran(), 2L)
   # the read-only route
   .daemon_mock(
     "garry_read",
     ".exec_read_padded",
     function(a, cg, core, ...) {
+      k <- paste0(core$y_off, "_", core$x_off)
+      if (file.exists(go)) {
+        file.create(paste0(mark, "_late_", k))
+      }
       if (core$y_off == 0 && core$x_off == 0) {
         stop("read bomb on a daemon")
       }
-      Sys.sleep(3)
-      file.create(paste0(mark, "_", core$y_off, "_", core$x_off))
+      t0 <- Sys.time()
+      while (
+        !file.exists(go) && difftime(Sys.time(), t0, units = "secs") < 30
+      ) {
+        Sys.sleep(0.01)
+      }
+      file.create(paste0(mark, "_ran_", k))
       NULL
     },
-    vars = list(mark = mark)
+    vars = list(mark = mark, go = go)
   )
   expect_error(collect(x, distributed = TRUE), "read bomb on a daemon")
   expect_identical(garry_last_route(), "read_only")
-  expect_identical(ran(), 2L)
-  # the composite route: its mask reads fail once all have landed, with two
-  # of its four band reads running and two queued behind them
+  expect_lte(ran(), 2L)
+  # the composite route: its mask reads fail once all have landed, with
+  # band reads running and queued behind them
   .daemon_mock(
     "garry_read",
     ".cd_fetch_warp",
     function(j, k) {
+      b <- basename(j$bin)
+      if (file.exists(go)) {
+        file.create(paste0(mark, "_late_", b))
+      }
       if (grepl("-fmask", j$bin, fixed = TRUE)) {
         stop("mask bomb on a daemon")
       }
-      Sys.sleep(3)
-      file.create(paste0(mark, "_", basename(j$bin)))
+      t0 <- Sys.time()
+      while (
+        !file.exists(go) && difftime(Sys.time(), t0, units = "secs") < 30
+      ) {
+        Sys.sleep(0.01)
+      }
+      file.create(paste0(mark, "_ran_", b))
       NULL
     },
-    vars = list(mark = mark)
+    vars = list(mark = mark, go = go)
   )
   expect_error(
     collect(.gg_masked_composite(), distributed = TRUE),
     "mask bomb on a daemon"
   )
   expect_identical(garry_last_route(), "composite_direct")
-  # A queued band read can start before the cancel lands on a slow host
-  # (R-devel on CI started 3 of the 4), and then runs to its end; without the
-  # cancel all 4 run.
-  expect_lt(ran(), 4L)
+  expect_lte(ran(), 2L)
 })
 
 test_that("a failed cleanup is said once, and the run's error stays its own, whatever warn is", {
@@ -470,7 +510,14 @@ test_that("a Ctrl-C during a close stops the daemons still mid-task, closes, and
         garry_pool_message = function(m) {
           msgs <<- c(msgs, gsub("\\s+", " ", conditionMessage(m)))
           if (length(msgs) == 1L) {
-            tools::pskill(Sys.getpid(), tools::SIGINT) # the user's Ctrl-C
+            # the user's Ctrl-C, sent from outside once this handler has
+            # returned: one that landed in it would be taken by the
+            # tryCatch() below, outside the close (the next test's case)
+            system2(
+              "sh",
+              c("-c", shQuote(paste("sleep 0.3; kill -INT", Sys.getpid()))),
+              wait = FALSE
+            )
           }
           invokeRestart("muffleMessage")
         }
@@ -492,6 +539,28 @@ test_that("a Ctrl-C during a close stops the daemons still mid-task, closes, and
   )
   expect_true(.pid_gone(spin))
   # closed, and no pool started after the Ctrl-C
+  expect_false(garry_daemons_set())
+  expect_identical(garry:::.gd_n_compute("garry_read"), 0L)
+})
+
+test_that("a close left early, by a condition a handler outside it takes, stops the daemons still mid-task", {
+  local_pools(2, 1)
+  .local_wait_limit()
+  testthat::local_mocked_bindings(
+    .pools_close_s = function() c(say = 0.2, kill = 60),
+    .package = "garry"
+  )
+  spin <- .spin_reader()
+  # as an interrupt that lands in a handler of the close's message would be
+  took <- .elapsed(expect_error(
+    withCallingHandlers(
+      garry_daemons(2, 1, gdal_config = FALSE),
+      garry_pool_message = function(m) stop("left the close")
+    ),
+    "left the close"
+  ))
+  expect_lt(took, 5)
+  expect_true(.pid_gone(spin))
   expect_false(garry_daemons_set())
   expect_identical(garry:::.gd_n_compute("garry_read"), 0L)
 })

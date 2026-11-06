@@ -401,10 +401,12 @@ NULL
 # and one mid-task once it has finished, freeing the shared memory it pinned.
 # The close waits for that. At `say` seconds it names the daemons still
 # mid-task, by pool; a Ctrl-C, or `kill` seconds, stops them with SIGKILL, and
-# a Ctrl-C is then raised again. A daemon is known by the pid file it wrote at
-# start, and while it runs by its command line, which names its generation;
-# where garry reads no command line (Windows), each pool's stop waits for its
-# daemon instead, up to `kill` seconds.
+# a Ctrl-C is then raised again. A close left any other way, by an interrupt
+# or an error that a handler outside it takes, stops them too. A daemon is
+# known by the pid file it wrote at start and its command line, which names
+# its generation, and is waited on until it has exited; where garry reads no
+# command line (Windows), each pool's stop waits for its daemon instead, up
+# to `kill` seconds.
 .pools_close <- function(profiles) {
   known <- .garry_state$prof_pids
   wait <- .pools_close_s()
@@ -417,9 +419,38 @@ NULL
       data.frame(pid = pids, dir = rep(d, length(pids)))
     })
   ))
+  ours <- function(f) as.logical(mapply(.pid_ours, f$pid, f$dir))
+  fleet <- fleet[ours(fleet), , drop = FALSE]
+  # the daemons not yet exited
   running <- function() {
-    fleet$pid[as.logical(mapply(.pid_ours, fleet$pid, fleet$dir))]
+    fleet <<- fleet[!vapply(fleet$pid, .pid_exited, logical(1)), , drop = FALSE]
+    fleet$pid
   }
+  # SIGKILL the daemons still running, those whose command line is still a
+  # daemon's (a pid may since belong to another process); returns their pids
+  stop_left <- function() {
+    running()
+    mine <- fleet$pid[ours(fleet)]
+    if (length(mine)) {
+      tools::pskill(mine, tools::SIGKILL)
+    }
+    mine
+  }
+  gone <- function() {
+    t1 <- Sys.time()
+    while (length(running()) && difftime(Sys.time(), t1, units = "secs") < 10) {
+      Sys.sleep(0.005)
+    }
+  }
+  settled <- FALSE
+  on.exit(
+    if (!settled) {
+      stop_left()
+      gone()
+    },
+    add = TRUE,
+    after = FALSE
+  )
   # pids `left` by pool, as "pool" (pid a, b)
   by_pool <- function(left) {
     pool <- vapply(
@@ -461,20 +492,17 @@ NULL
     interrupt = function(i) NA
   )
   if (!isTRUE(idle)) {
-    left <- running()
+    left <- stop_left()
     if (length(left)) {
       lines <- by_pool(left)
-      tools::pskill(left, tools::SIGKILL)
       cli::cli_inform(
         "Stopped {length(left)} daemon{?s} still mid-task to close garry's pools: {lines}.",
         class = c("garry_pool_message", "garry_message")
       )
-      t1 <- Sys.time()
-      while (length(running()) && difftime(Sys.time(), t1, units = "secs") < 10) {
-        Sys.sleep(0.005) # until each one has gone
-      }
     }
+    gone()
   }
+  settled <- TRUE
   if (is.na(idle)) {
     rlang::interrupt()
   }
