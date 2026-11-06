@@ -31,12 +31,12 @@ NULL
 # result slots bound what one daemon holds at once (two routed tasks and the
 # broadcasts behind them), and a slot of 4 KB carries a daemon's error with
 # cli's bullets whole. A task or result past a slot travels in a region of its
-# own.
+# own. The rings and slots are 1 MB of shared memory a daemon.
 .pool_shape <- list(
   max_submitters = 1L,
-  injection_cap = 128L,
-  per_worker_cap = 128L,
-  result_slots = 256L,
+  injection_cap = 64L,
+  per_worker_cap = 64L,
+  result_slots = 128L,
   slot_size = 4096L
 )
 
