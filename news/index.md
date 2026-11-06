@@ -239,6 +239,21 @@
 
 ### Performance
 
+- A warp of one remote file, or of a local VRT of remote files, fetches
+  a window’s source tiles in a few batched reads where its blocks would
+  fetch them piecemeal. Each 512 x 128 block of the warped VRT was a
+  source read of its own, a round trip for the tiles it was first to
+  touch: a day of MUR SST onto a 1000 x 1000 polar grid took 36 requests
+  in 7 trips. The window is now warped whole first, in strips, and the
+  values dropped, so its tiles sit in the block cache when the blocks
+  read, and the cells are the blocks’ as before. It does so where the
+  trips saved outweigh the second warp, the tiles fit half the block
+  cache and every sampled point of a strip lies on the source. On two
+  CPUs, ten days of MUR SST took 15 s on two readers against 38 s, 7 s
+  against 14 s on eight, 18 s against 37 s at 500 m, and 43 s against 64
+  s as one classic VRT. A Copernicus DEM tile onto UTM took 1.5 s
+  against 1.9 s, its nine large tiles now fetched in one batch.
+
 - On the CPU a mask or band task of the direct route’s pipeline reads
   its batch or strip into C memory that XLA takes with no copy, and
   frees it on exit with no gc, where a read in R’s heap needs a full
