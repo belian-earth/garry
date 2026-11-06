@@ -492,6 +492,9 @@ drawings, and run reports.
 - [`plan_view()`](https://belian-earth.github.io/garry/reference/plan_view.md)
   : Interactive Plan viewer.
 
+- [`plan_reads()`](https://belian-earth.github.io/garry/reference/plan_reads.md)
+  : Where a plan reads its sources
+
 - [`garry_last_route()`](https://belian-earth.github.io/garry/reference/garry_last_route.md)
   :
 

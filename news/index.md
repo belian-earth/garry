@@ -132,6 +132,22 @@
 
 ### New features
 
+- [`plan_reads()`](https://belian-earth.github.io/garry/reference/plan_reads.md)
+  lists where a plan reads its sources, without reading a pixel: each
+  read window of each read stage, the source pixels behind it (the box
+  of its footprint, padded for the kernel, for a warp) and the source
+  tiles it touches. `tiles = TRUE` gives one row per tile with its byte
+  offset and length in the file, from its TIFF metadata, ready to join
+  to a table of byte references. For ten days of MUR SST warped onto a
+  polar grid it gives the windows that were rebuilt by hand from
+  [`chunk_iter()`](https://belian-earth.github.io/garry/reference/chunk_iter.md)
+  and `transform_bounds()`, 70 tiles and about 2 MB a day. A classic VRT
+  of one file a band resolves to its files; reads of several files, GTI
+  mosaics, Zarr arrays and coarsened warps list their windows with no
+  source window. A read onto a coarse grid lists the overview it reads,
+  the level gdalwarp picked for a warp or the one RasterIO takes for a
+  decimating read, with that overview’s pixels and tiles.
+
 - `coarsen(x, factor)` maps a read onto the grid `factor` times coarser
   by block means of its valid values. Its read assembles each window’s
   finer cells from the sources as their nearest-neighbour read does
@@ -147,8 +163,10 @@
   OlmoEarth window (128 bands, through a false-origin shift) in 6.8 s
   instead of 9.7 s. Cells warped from a reprojected source match the 10
   m read’s under `garry.warp_exact = TRUE`.
+
 - `lazy_dataset(decode = )` takes several sources and Zarr arrays, one
   lookup-table VRT each.
+
 - `lazy_dataset(decode = )` decodes a file’s 8-bit codes before any
   resampling: each code goes through a table made by evaluating the
   decode (for example
@@ -165,17 +183,20 @@
   by at most 6e-8 (GDAL averages in an order garry does not reproduce).
   A `mask_asset` band is read as stored, and bands must share one nodata
   code.
+
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   reads N-D arrays such as a `(time, band, y, x)` Zarr array
   (`ZARR:"<store>":/<array>`) as dataset bands by time slice, using the
   dimension tags GDAL puts on each band; `bands` indexes the band
   dimension. A bare `ZARR:"https://..."` store is read over `/vsicurl/`.
+
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   over several Zarr arrays (one per UTM zone, as OlmoEarth stores them)
   mosaics them onto the target grid: each window warps every zone and
   every band of a slice in one pass, the later source winning where
   zones overlap. The arrays must agree on their bands and dimension
   coordinates.
+
 - [`lazy_dataset()`](https://belian-earth.github.io/garry/reference/lazy_dataset.md)
   reads a Zarr store from its root: given the store (a `.zarr` path or
   URL, or `ZARR:"<root>"`) and a grid, it reads the store’s arrays whose
@@ -200,6 +221,7 @@
   more than one name. In a vector of sources, a store of one array reads
   as that array, as before, and a store of several aborts with a classed
   error: give it alone.
+
 - Building the Jasper dataset of the OlmoEarth vignette from the store
   took 18 requests to source.coop against 8 for zone 11’s array named by
   hand, and 13 to 18 s against 7 to 12 s at about 0.75 s a request;
@@ -215,12 +237,15 @@
   daemon included, pays that again: on a local server, opening one array
   of a test store of 60, each with a `band` dimension, took 188 requests
   and 7 s, against 11 requests and 0.2 s through its group.
+
 - [`band_sel()`](https://belian-earth.github.io/garry/reference/band_sel.md),
   [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
   and per-slice operations work on a stack after it has been collected
   (the planner rewrites collected stacks in place).
+
 - [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
   takes a dataset and keeps the matching slices of every band.
+
 - `lazy_dataset(time = )` builds only the selected time slices of an N-D
   source, selected as
   [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
@@ -228,13 +253,16 @@
   (about 2 s) before
   [`time_sel()`](https://belian-earth.github.io/garry/reference/time_sel.md)
   kept 128; with `time = "2024"` it builds those 128 (0.25 s).
+
 - [`dequantize_signed_power()`](https://belian-earth.github.io/garry/reference/dequantize_signed_power.md)
   decodes signed-power Int8 embeddings, and
   [`dequantize_olmoearth()`](https://belian-earth.github.io/garry/reference/dequantize_olmoearth.md)
   decodes the OlmoEarth v1.3 embeddings (the same scheme as
   [`dequantize_aef()`](https://belian-earth.github.io/garry/reference/dequantize_aef.md)).
+
 - [`extract_points()`](https://belian-earth.github.io/garry/reference/extract_points.md)
   reads a materialised `(band, y, x)` cube, one column per band.
+
 - New vignette: OlmoEarth embeddings from Zarr.
 
 ### Performance
