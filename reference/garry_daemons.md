@@ -9,14 +9,17 @@ masks within a pool are mostly disjoint, while read and compute masks
 overlap), so an XLA client created anywhere is narrow rather than
 all-cores; the scheduler's live-RAM byte budgets decide how many tasks
 are actually in flight; excess daemons idle lean. Called with no
-arguments it sizes the pools to the machine: `read` = all logical cores
-(remote fetch is latency-bound, so a wide read pool keeps the network
-drain full) and `compute` = a third of the logical cores, capped at 8
+arguments it sizes the pools to the CPUs this process may use: `read` =
+one per CPU (remote fetch is latency-bound, so a wide read pool keeps
+the network drain full) and `compute` = a third of them, capped at 8
 with a floor of 2; on CUDA the compute pool is 2, since concurrent
-clients share one card. `collect(distributed = TRUE)` detects the pools
-automatically and pre-compiles stage kernels on idle daemons at run
-start, scan kernels on the `garry_opt("scan_profiles")` designated
-profiles only.
+clients share one card. On Linux those CPUs are the process's affinity
+list, which a container's cpuset, a systemd scope's `AllowedCPUs` or a
+`taskset` narrows, counted no higher than a cgroup CPU quota such as
+`docker --cpus`; the masks name only CPUs on that list.
+`collect(distributed = TRUE)` detects the pools automatically and
+pre-compiles stage kernels on idle daemons at run start, scan kernels on
+the `garry_opt("scan_profiles")` designated profiles only.
 
 ## Usage
 
@@ -33,14 +36,14 @@ garry_daemons(
 
 - read:
 
-  Read-pool daemon count; `NULL` (default) uses all logical cores. `0`
-  tears the pool down.
+  Read-pool daemon count; `NULL` (default) uses one per CPU this process
+  may use. `0` tears the pool down.
 
 - compute:
 
-  Compute-pool daemon count; `NULL` (default) uses a third of the
-  logical cores, capped at 8 with a floor of 2 (2 on CUDA: concurrent
-  clients share one card). Scan tasks run only on the first
+  Compute-pool daemon count; `NULL` (default) uses a third of those
+  CPUs, capped at 8 with a floor of 2 (2 on CUDA: concurrent clients
+  share one card). Scan tasks run only on the first
   `garry_opt("scan_profiles")` daemons, so width adds neither scan
   compiles nor scan memory. Larger pools are SAFE at any width
   (per-daemon affinity masks and byte admission) and pay off for fleets
