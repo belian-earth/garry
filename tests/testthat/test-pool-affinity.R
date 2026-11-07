@@ -28,9 +28,10 @@ skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
 }
 
 test_that("each pool's daemons get disjoint bounded CPU sets and the cap is recorded", {
-  # masks name real CPUs, so a mocked core count must not exceed them
-  skip_if(garry:::.garry_cores()$logical < 6L, "needs 6 cores")
-  testthat::local_mocked_bindings(.garry_cores = function() list(logical = 6L, physical = 6L))
+  # masks name real CPUs, so the mocked ones are this process's own
+  own <- garry:::.garry_cores()$cpus
+  skip_if(length(own) < 6L, "needs 6 CPUs")
+  testthat::local_mocked_bindings(.garry_cores = function() list(logical = 6L, cpus = own[1:6]))
   local_pools(2, 2)
   expect_identical(garry:::.garry_state$reader_threads, 3L)
   expect_identical(garry:::.garry_state$comp_threads, 3L)
@@ -63,7 +64,7 @@ test_that("a uniform plan re-masks a pool a mixed scan plan left behind", {
       calls <<- calls + 1L
       k
     },
-    .garry_cores = function() list(logical = 8L, physical = 8L)
+    .garry_cores = function() list(logical = 8L, cpus = 0:7)
   )
   assign("comp_pids", 1:4, envir = st)
   assign("comp_threads", 2L, envir = st)
@@ -79,7 +80,7 @@ test_that("a uniform plan re-masks a pool a mixed scan plan left behind", {
 
 test_that("a mask that cannot be set says so", {
   # an empty PATH would lose the core count too: not what this test is about
-  testthat::local_mocked_bindings(.garry_cores = function() list(logical = 8L, physical = 8L))
+  testthat::local_mocked_bindings(.garry_cores = function() list(logical = 8L, cpus = 0:7))
   bin <- withr::local_tempdir()
   fake <- file.path(bin, "taskset")
   writeLines(c("#!/bin/sh", "echo 'CPU not allowed' >&2", "exit 1"), fake)
@@ -98,4 +99,36 @@ test_that("a mask that cannot be set says so", {
     class = "garry_affinity_warning"
   )
   expect_null(v)
+})
+
+test_that("pools keep to the CPUs this process may use", {
+  # A container's cpuset or a parent's taskset narrows them. Masks drawn
+  # from the whole machine either named none of them, failing and
+  # leaving the pool unpinned, or moved daemons onto CPUs never given.
+  own <- garry:::.cpus_allowed()
+  skip_if(length(own) < 4L, "needs 4 CPUs")
+  sub <- own[seq_len(length(own) %/% 2L)]
+  pid <- Sys.getpid()
+  set <- function(cpus) {
+    out <- system2("taskset", c("-a", "-cp", paste(cpus, collapse = ","), pid), stdout = TRUE)
+    expect_null(attr(out, "status"))
+  }
+  set(sub)
+  withr::defer(set(own))
+  expect_identical(garry:::.garry_cores()$cpus, sub)
+  k <- max(2L, garry:::.garry_cores()$logical %/% 2L)
+  want <- if (k >= length(sub)) NULL else k
+  here <- environment()
+  expect_no_warning(local_pools(2, 2, env = here), class = "garry_affinity_warning")
+  expect_identical(garry:::.garry_state$reader_threads, want)
+  expect_identical(garry:::.garry_state$comp_threads, want)
+  pools <- list(.cpu_lists("garry_read"), unlist(lapply(garry:::.comp_profiles(), .cpu_lists)))
+  for (lists in pools) {
+    sets <- lapply(lists, .cpus)
+    expect_true(all(unlist(sets) %in% sub))
+    if (!is.null(want)) {
+      expect_identical(lengths(sets, use.names = FALSE), c(k, k))
+      expect_length(intersect(sets[[1L]], sets[[2L]]), 0L)
+    }
+  }
 })

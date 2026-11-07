@@ -166,7 +166,7 @@ test_that("a fanned-out band reduce fed by a source keeps its own single-export 
 local({
   skip_if(Sys.info()[["sysname"]] != "Linux", "affinity is Linux-only")
   skip_if(!nzchar(Sys.which("taskset")), "taskset not available")
-  skip_if(parallel::detectCores() < 3L, "a reader cap is a no-op below 3 cores")
+  skip_if(garry:::.garry_cores()$logical < 3L, "a reader cap is a no-op below 3 CPUs")
 
   local_pools(4, 1, gdal_config = TRUE)
 

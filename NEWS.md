@@ -420,6 +420,26 @@
 
 ## Bug fixes
 
+* garry sizes and pins its pools to the CPUs this process may use, not the
+  whole machine. On Linux these are the process's affinity list, which a
+  container's cpuset, a systemd scope's `AllowedCPUs` or a `taskset` narrows,
+  counted no higher than a cgroup CPU quota such as `docker --cpus`.
+  `detectCores()` counts every CPU on the host: in `docker --cpuset-cpus=16-19`
+  on a 20-CPU host, `garry_daemons()` started 20 readers and 6 compute daemons
+  and spread their masks over CPUs 0-19. Most masks fell outside 16-19 and
+  failed, so garry warned and treated both pools as unpinned. Under a
+  `taskset`, the masks moved daemons onto CPUs the run was never given. The
+  placement pass's widths follow the same count.
+* Work sent to daemons no longer carries package source text. A srcref holds
+  its package's whole source, and where garry's source is kept
+  (`devtools::load_all()`, covr, `R_KEEP_PKG_SOURCE=yes`) a `{` quoted from
+  garry's code, a closure it wrote and every S7 object carried one, 21.6 MB
+  each. Every S7 object also carries S7's own base class, which holds S7's
+  source wherever S7 was installed from source keeping it, as on CI's R-devel:
+  4 to 21 MB per object there, with garry itself installed plain. A small
+  distributed collect sent 688 MB against 0.9 MB, and the test suite took
+  1403 s against 214 s. Tasks and broadcasts now cross without srcrefs; a
+  value without any crosses as it is.
 * `stage_merge = "auto"` no longer folds a stage that could run on its read's
   tasks, and exports fewer planes than it reads, into its consumer. A predict
   per year, stacked along time, had become one compute stage holding every

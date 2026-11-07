@@ -58,6 +58,8 @@ test_that("a reset connection reads as a lost daemon", {
 })
 
 test_that("an unknown core count is said, not assumed in silence", {
+  # off Linux, where detectCores() is the only count
+  testthat::local_mocked_bindings(.cpus_allowed = function(...) NULL)
   testthat::local_mocked_bindings(
     detectCores = function(...) NA_integer_,
     .package = "parallel"
@@ -66,6 +68,7 @@ test_that("an unknown core count is said, not assumed in silence", {
   withr::defer(rlang::reset_warning_verbosity("garry_cores_unknown"))
   expect_warning(cr <- garry:::.garry_cores(), class = "garry_cores_warning")
   expect_identical(cr$logical, 4L)
+  expect_identical(cr$cpus, 0:3)
 })
 
 test_that("a bare error value names itself", {
@@ -551,6 +554,104 @@ test_that("a task carries its expression and no source text", {
     )
     expect_lt(length(serialize(e, NULL)), 1e4)
   }
+})
+
+# Objects as garry's kept source makes them: a closure, a quoted `{` and
+# an S7 object whose class has a validator, each with srcrefs. Closures
+# live in the base environment, so none drags this test's frame along.
+.with_srcrefs <- function() {
+  src <- function(text) {
+    eval(parse(text = text, keep.source = TRUE)[[1L]], baseenv())
+  }
+  val <- src(
+    "function(self) {\n  if (length(self@v) != 1L) \"v must be one number\"\n}"
+  )
+  # made in an empty environment, which its constructor keeps
+  K <- eval(
+    bquote(S7::new_class(
+      "K",
+      package = "garrytest",
+      properties = list(v = S7::class_double),
+      validator = .(val)
+    )),
+    new.env(parent = baseenv())
+  )
+  list(
+    f = src("function(x) {\n  y <- x + 1\n  y * 2\n}"),
+    e = parse(text = "{\n  a <- 2\n  a + 1\n}", keep.source = TRUE)[[1L]],
+    obj = K(v = 2),
+    m = matrix(1:6, 2),
+    n = list(call = quote(g(x, , 1)), g = src("function(m) {\n  m[1, ]\n}"))
+  )
+}
+
+.carries_src <- function(x) {
+  grepl("srcref|srcfile", rawToChar(serialize(x, NULL, ascii = TRUE)))
+}
+
+test_that("a payload loses its srcrefs and nothing else", {
+  x <- .with_srcrefs()
+  expect_true(.carries_src(x))
+  y <- garry:::.unsrc(x)
+  expect_false(.carries_src(y))
+  expect_identical(y$f(1), x$f(1))
+  expect_identical(eval(y$e), eval(x$e))
+  expect_identical(y$m, x$m)
+  expect_identical(y$n$call, x$n$call)
+  expect_identical(y$n$g(diag(2)), c(1, 0))
+  # the object keeps its class, properties and validator
+  expect_true(S7::S7_inherits(y$obj))
+  expect_identical(class(y$obj), class(x$obj))
+  expect_identical(y$obj@v, 2)
+  expect_error(y$obj@v <- c(1, 2), "v must be one number")
+  # what carries none comes back as NULL, and is never copied
+  expect_null(garry:::.unsrc(list(1, "a", matrix(1:4, 2), quote(f(x, , 1)))))
+  expect_null(garry:::.unsrc(y))
+})
+
+test_that("tasks and broadcasts cross without srcrefs", {
+  sent <- list()
+  testthat::local_mocked_bindings(
+    mirai = function(.expr, ...) {
+      sent <<- c(sent, list(list(expr = .expr, data = ..1)))
+      NULL
+    },
+    everywhere = function(.expr, ..., .compute) {
+      sent <<- c(sent, list(list(expr = substitute(.expr), data = list(...))))
+      NULL
+    },
+    .package = "mirai"
+  )
+  x <- .with_srcrefs()
+  garry:::.task_mirai(x$e, obj = x$obj, f = x$f, .compute = "garry_read")
+  garry:::.pool_send(x$e, "garry_read", obj = x$obj)
+  expect_length(sent, 2L)
+  expect_false(.carries_src(sent))
+  task <- as.list(sent[[1L]]$data)
+  expect_identical(sort(names(task)), c("f", "obj"))
+  expect_identical(task$f(1), x$f(1))
+  expect_identical(task$obj@v, 2)
+  expect_identical(sent[[2L]]$data$obj@v, 2)
+  # data without srcrefs crosses as it is
+  sent <- list()
+  garry:::.task_mirai(quote(m), m = x$m, n = x$n$call, .compute = "garry_read")
+  task <- as.list(sent[[1L]]$data)
+  expect_identical(task$m, x$m)
+  expect_identical(task$n, x$n$call)
+})
+
+test_that("garry's own S7 objects cross small", {
+  # Every garry class's parent is S7's base class, as built with S7's
+  # source wherever S7 was installed keeping it (CI's R-devel: 21 MB). This
+  # fails without the stripping there, or where garry's source is kept; on
+  # an install keeping neither it cannot fail.
+  g <- grid_spec(
+    "EPSG:3857",
+    extent = c(0, 0, 600, 400),
+    dims = c(60L, 40L),
+    dtype = "f32"
+  )
+  expect_lt(length(serialize(garry:::.wire(list(g = g)), NULL)), 1e5)
 })
 
 test_that("a cancel lets a running task run to its end", {
